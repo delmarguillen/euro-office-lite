@@ -1,0 +1,18 @@
+# Rust / Tauri
+src-tauri/target/
+Cargo.lock
+
+# Node
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs
+*.log

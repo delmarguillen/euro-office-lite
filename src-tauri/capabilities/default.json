@@ -1,0 +1,13 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for Euro-Office",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "shell:allow-open",
+    "shell:default"
+  ]
+}

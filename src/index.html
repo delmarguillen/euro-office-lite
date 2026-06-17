@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Euro-Office</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+    .start {
+      text-align: center;
+    }
+    h1 {
+      font-size: 2rem;
+      font-weight: 300;
+      margin-bottom: 0.5rem;
+    }
+    .version {
+      font-size: 0.85rem;
+      color: #6c7086;
+      margin-bottom: 2rem;
+    }
+    .actions {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      background: #313244;
+      border: 1px solid #45475a;
+      color: #cdd6f4;
+      padding: 1rem 1.5rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.95rem;
+      transition: background 0.15s;
+      min-width: 140px;
+    }
+    .btn:hover {
+      background: #45475a;
+    }
+    .btn .icon {
+      font-size: 1.5rem;
+      display: block;
+      margin-bottom: 0.4rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="start">
+    <h1>Euro-Office</h1>
+    <p class="version">v0.1.0 — Desktop</p>
+    <div class="actions">
+      <button class="btn" onclick="createNew('word')">
+        <span class="icon">W</span>
+        Documento
+      </button>
+      <button class="btn" onclick="createNew('cell')">
+        <span class="icon">X</span>
+        Hoja de cálculo
+      </button>
+      <button class="btn" onclick="createNew('slide')">
+        <span class="icon">P</span>
+        Presentación
+      </button>
+      <button class="btn" onclick="openFile()">
+        <span class="icon">...</span>
+        Abrir archivo
+      </button>
+    </div>
+  </div>
+
+  <script src="bridge.js"></script>
+  <script>
+    async function createNew(type) {
+      if (window.AscDesktopEditor) {
+        await window.AscDesktopEditor.LocalFileCreate(type);
+      }
+    }
+    async function openFile() {
+      if (window.AscDesktopEditor) {
+        await window.AscDesktopEditor.LocalFileOpen();
+      }
+    }
+  </script>
+</body>
+</html>
