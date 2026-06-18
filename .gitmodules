@@ -1,0 +1,6 @@
+[submodule "src/sdkjs"]
+	path = src/sdkjs
+	url = https://github.com/Euro-Office/sdkjs.git
+[submodule "src/web-apps"]
+	path = src/web-apps
+	url = https://github.com/Euro-Office/web-apps.git

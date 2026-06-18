@@ -14,5 +14,8 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# Docs locales
+docs/
+
 # Logs
 *.log

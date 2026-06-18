@@ -8,7 +8,7 @@ use file_ops::AppState;
 use std::sync::Mutex;
 
 fn main() {
-    let temp_dir = std::env::temp_dir().join("euro-office");
+    let temp_dir = std::env::temp_dir().join("euro-office-lite");
     std::fs::create_dir_all(&temp_dir).ok();
 
     tauri::Builder::default()
@@ -31,5 +31,5 @@ fn main() {
             converter::convert_file,
         ])
         .run(tauri::generate_context!())
-        .expect("error running Euro-Office");
+        .expect("error running Euro-Office Lite");
 }

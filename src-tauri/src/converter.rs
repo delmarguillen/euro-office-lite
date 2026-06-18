@@ -19,7 +19,7 @@ pub async fn convert_file(
     format_from: i32,
     format_to: i32,
 ) -> Result<String, String> {
-    let temp_dir = std::env::temp_dir().join("euro-office");
+    let temp_dir = std::env::temp_dir().join("euro-office-lite");
     std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
     let params_path = temp_dir.join("convert_params.xml");

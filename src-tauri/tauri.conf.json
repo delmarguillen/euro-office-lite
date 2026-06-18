@@ -1,21 +1,22 @@
 {
-  "productName": "Euro-Office",
+  "productName": "Euro-Office Lite",
   "version": "0.1.0",
-  "identifier": "org.euro-office.desktop",
+  "identifier": "org.euro-office.lite",
   "build": {
     "frontendDist": "../src"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Euro-Office",
+        "title": "Euro-Office Lite",
         "width": 1280,
         "height": 800,
         "resizable": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:"
     }
   },
   "bundle": {

@@ -8,7 +8,7 @@ pub fn exec_command(cmd: String, param: Option<String>) -> Result<String, String
 #[tauri::command]
 pub fn set_window_title(window: WebviewWindow, name: String) -> Result<(), String> {
     window
-        .set_title(&format!("Euro-Office — {}", name))
+        .set_title(&format!("Euro-Office Lite — {}", name))
         .map_err(|e| e.to_string())
 }
 
