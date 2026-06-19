@@ -22,6 +22,12 @@ window.AscDesktopEditor = {
   IsLocalFile: () => true,
   GetEditorId: () => 'euro-office-lite',
 
+  getFontsSprite: function(suffix) {
+    suffix = suffix || '';
+    return '../../../../sdkjs/common/Images/fonts_thumbnail' + suffix + '.png';
+  },
+  isSupportBinaryFontsSprite: false,
+
   _editorWindow: null,
 
   CreateEditorApi: function(api) {

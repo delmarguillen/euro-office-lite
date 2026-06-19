@@ -165,44 +165,68 @@
         if (!list || list.length === 0) return;
 
         var proto = Object.getPrototypeOf(list[list.length - 1]);
-        var variants = [
-          { file: 'LiberationSans-Regular.ttf',    bold: false, italic: false, weight: 400, panose2: 6, panose7: 2, avgW: 1187, desc: -431 },
-          { file: 'LiberationSans-Italic.ttf',     bold: false, italic: true,  weight: 400, panose2: 6, panose7: 9, avgW: 1185, desc: -425 },
-          { file: 'LiberationSans-Bold.ttf',       bold: true,  italic: false, weight: 700, panose2: 7, panose7: 2, avgW: 1248, desc: -431 },
-          { file: 'LiberationSans-BoldItalic.ttf', bold: true,  italic: true,  weight: 700, panose2: 7, panose7: 9, avgW: 1249, desc: -431 }
+
+        var fontFamilies = [
+          { name: 'Liberation Sans', fixed: false, familyClass: 2053, variants: [
+            { file: 'LiberationSans-Regular.ttf',    bold: false, italic: false, weight: 400, panose: [2,11,6,4,2,2,2,2,2,4], avgW: 1187, asc: 1491, desc: -431, lineGap: 307, xH: 1082, capH: 1409, ur1: 0xE0000AFF, ur2: 0x500078FF, ur3: 0x00000021, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 },
+            { file: 'LiberationSans-Italic.ttf',     bold: false, italic: true,  weight: 400, panose: [2,11,6,4,2,2,2,9,2,4], avgW: 1185, asc: 1491, desc: -425, lineGap: 307, xH: 1082, capH: 1409, ur1: 0xE0000AFF, ur2: 0x500078FF, ur3: 0x00000021, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 },
+            { file: 'LiberationSans-Bold.ttf',       bold: true,  italic: false, weight: 700, panose: [2,11,7,4,2,2,2,2,2,4], avgW: 1248, asc: 1491, desc: -431, lineGap: 307, xH: 1082, capH: 1409, ur1: 0xE0000AFF, ur2: 0x500078FF, ur3: 0x00000021, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 },
+            { file: 'LiberationSans-BoldItalic.ttf', bold: true,  italic: true,  weight: 700, panose: [2,11,7,4,2,2,2,9,2,4], avgW: 1249, asc: 1491, desc: -431, lineGap: 307, xH: 1082, capH: 1409, ur1: 0xE0000AFF, ur2: 0x500078FF, ur3: 0x00000021, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 }
+          ]},
+          { name: 'Liberation Serif', fixed: false, familyClass: 261, variants: [
+            { file: 'LiberationSerif-Regular.ttf',    bold: false, italic: false, weight: 400, panose: [2,2,6,3,5,4,5,2,3,4], avgW: 1124, asc: 1420, desc: -442, lineGap: 307, xH: 940, capH: 1341, ur1: 0xE0000AFF, ur2: 0x500078FF, ur3: 0x00000021, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 },
+            { file: 'LiberationSerif-Italic.ttf',     bold: false, italic: true,  weight: 400, panose: [2,2,5,3,5,4,5,9,3,4], avgW: 1098, asc: 1422, desc: -442, lineGap: 307, xH: 940, capH: 1341, ur1: 0xE0000AFF, ur2: 0x500078FF, ur3: 0x00000021, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 },
+            { file: 'LiberationSerif-Bold.ttf',       bold: true,  italic: false, weight: 700, panose: [2,2,8,3,7,5,5,2,3,4], avgW: 1180, asc: 1387, desc: -442, lineGap: 307, xH: 940, capH: 1341, ur1: 0xE0000AFF, ur2: 0x500078FF, ur3: 0x00000021, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 },
+            { file: 'LiberationSerif-BoldItalic.ttf', bold: true,  italic: true,  weight: 700, panose: [2,2,7,3,6,5,5,9,3,4], avgW: 1141, asc: 1387, desc: -442, lineGap: 307, xH: 940, capH: 1341, ur1: 0xE0000AFF, ur2: 0x500078FF, ur3: 0x00000021, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 }
+          ]},
+          { name: 'Liberation Mono', fixed: true, familyClass: 2053, variants: [
+            { file: 'LiberationMono-Regular.ttf',    bold: false, italic: false, weight: 400, panose: [2,7,4,9,2,2,5,2,4,4], avgW: 1229, asc: 1255, desc: -386, lineGap: 0, xH: 1082, capH: 1349, ur1: 0xE0000AFF, ur2: 0x400078FF, ur3: 0x00000001, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 },
+            { file: 'LiberationMono-Italic.ttf',     bold: false, italic: true,  weight: 400, panose: [2,7,4,9,2,2,5,9,4,4], avgW: 1229, asc: 1255, desc: -386, lineGap: 0, xH: 1082, capH: 1349, ur1: 0xE0000AFF, ur2: 0x400078FF, ur3: 0x00000001, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 },
+            { file: 'LiberationMono-Bold.ttf',       bold: true,  italic: false, weight: 700, panose: [2,7,7,9,2,2,5,2,4,4], avgW: 1229, asc: 1297, desc: -428, lineGap: 0, xH: 1082, capH: 1349, ur1: 0xE0000AFF, ur2: 0x400078FF, ur3: 0x00000001, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 },
+            { file: 'LiberationMono-BoldItalic.ttf', bold: true,  italic: true,  weight: 700, panose: [2,7,7,9,2,2,5,9,4,4], avgW: 1229, asc: 1297, desc: -428, lineGap: 0, xH: 1082, capH: 1349, ur1: 0xE0000AFF, ur2: 0x400078FF, ur3: 0x00000001, ur4: 0, cp1: 0x600001BF, cp2: 0xDFF70000 }
+          ]},
+          { name: 'Carlito', fixed: false, familyClass: 0, variants: [
+            { file: 'Carlito-Regular.ttf',    bold: false, italic: false, weight: 400, panose: [2,15,5,2,2,2,4,3,2,4], avgW: 1048, asc: 1536, desc: -512, lineGap: 452, xH: 978, capH: 1314, ur1: 0xE10002FF, ur2: 0x5000ECFF, ur3: 0x00000009, ur4: 0, cp1: 0x2000019F, cp2: 0x00000000 },
+            { file: 'Carlito-Italic.ttf',     bold: false, italic: true,  weight: 400, panose: [2,15,5,2,2,2,4,3,2,4], avgW: 1041, asc: 1536, desc: -512, lineGap: 452, xH: 983, capH: 1314, ur1: 0xE10002FF, ur2: 0x5000ECFF, ur3: 0x00000009, ur4: 0, cp1: 0x2000019F, cp2: 0x00000000 },
+            { file: 'Carlito-Bold.ttf',       bold: true,  italic: false, weight: 700, panose: [2,15,5,2,2,2,4,3,2,4], avgW: 1074, asc: 1536, desc: -512, lineGap: 452, xH: 993, capH: 1328, ur1: 0xE10002FF, ur2: 0x5000ECFF, ur3: 0x00000009, ur4: 0, cp1: 0x2000019F, cp2: 0x00000000 },
+            { file: 'Carlito-BoldItalic.ttf', bold: true,  italic: true,  weight: 700, panose: [2,15,5,2,2,2,4,3,2,4], avgW: 1066, asc: 1536, desc: -512, lineGap: 452, xH: 993, capH: 1328, ur1: 0xE10002FF, ur2: 0x5000ECFF, ur3: 0x00000009, ur4: 0, cp1: 0x2000019F, cp2: 0x00000000 }
+          ]}
         ];
 
-        for (var i = 0; i < variants.length; i++) {
-          var v = variants[i];
-          var fs = Object.create(proto);
-          fs.m_wsFontName = 'Liberation Sans';
-          fs.m_wsFontPath = v.file;
-          fs.m_lIndex = 0;
-          fs.m_bBold = v.bold;
-          fs.m_bItalic = v.italic;
-          fs.m_bIsFixed = false;
-          fs.m_aPanose = new Int8Array([2, 11, v.panose2, 4, 2, 2, 2, v.panose7, 2, 4]);
-          fs.m_ulUnicodeRange1 = 0xE0000AFF;
-          fs.m_ulUnicodeRange2 = 0x500078FF;
-          fs.m_ulUnicodeRange3 = 0x00000021;
-          fs.m_ulUnicodeRange4 = 0x00000000;
-          fs.m_ulCodePageRange1 = 0x600001BF;
-          fs.m_ulCodePageRange2 = 0xDFF70000;
-          fs.m_usWeigth = v.weight;
-          fs.m_usWidth = 5;
-          fs.m_sFamilyClass = 2053;
-          fs.m_eFontFormat = 0;
-          fs.m_shAvgCharWidth = v.avgW;
-          fs.m_shAscent = 1491;
-          fs.m_shDescent = v.desc;
-          fs.m_shLineGap = 307;
-          fs.m_shXHeight = 1082;
-          fs.m_shCapHeight = 1409;
-          fs.m_usType = 0;
-          fs.m_names = null;
+        for (var fi = 0; fi < fontFamilies.length; fi++) {
+          var fam = fontFamilies[fi];
+          for (var vi = 0; vi < fam.variants.length; vi++) {
+            var v = fam.variants[vi];
+            var fs = Object.create(proto);
+            fs.m_wsFontName = fam.name;
+            fs.m_wsFontPath = v.file;
+            fs.m_lIndex = 0;
+            fs.m_bBold = v.bold;
+            fs.m_bItalic = v.italic;
+            fs.m_bIsFixed = fam.fixed;
+            fs.m_aPanose = new Int8Array(v.panose);
+            fs.m_ulUnicodeRange1 = v.ur1;
+            fs.m_ulUnicodeRange2 = v.ur2;
+            fs.m_ulUnicodeRange3 = v.ur3;
+            fs.m_ulUnicodeRange4 = v.ur4;
+            fs.m_ulCodePageRange1 = v.cp1;
+            fs.m_ulCodePageRange2 = v.cp2;
+            fs.m_usWeigth = v.weight;
+            fs.m_usWidth = 5;
+            fs.m_sFamilyClass = fam.familyClass;
+            fs.m_eFontFormat = 0;
+            fs.m_shAvgCharWidth = v.avgW;
+            fs.m_shAscent = v.asc;
+            fs.m_shDescent = v.desc;
+            fs.m_shLineGap = v.lineGap;
+            fs.m_shXHeight = v.xH;
+            fs.m_shCapHeight = v.capH;
+            fs.m_usType = 0;
+            fs.m_names = null;
 
-          list.splice(list.length - 1, 0, fs);
-          gfa.g_fontSelections.ListMap[v.file] = list.length - 2;
+            list.splice(list.length - 1, 0, fs);
+            gfa.g_fontSelections.ListMap[v.file] = list.length - 2;
+          }
         }
 
         var oSelect = { wsName: 'Arial' };

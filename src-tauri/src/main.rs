@@ -56,6 +56,8 @@ fn main() {
                         "font/ttf"
                     } else if path.ends_with(".js") {
                         "application/javascript"
+                    } else if path.ends_with(".png") {
+                        "image/png"
                     } else {
                         "application/octet-stream"
                     };
