@@ -16,7 +16,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:"
+      "csp": "default-src 'self' ascdesktop:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-src 'self'; img-src 'self' data: blob:; font-src 'self' data: ascdesktop:; connect-src 'self' data: blob: ascdesktop:"
     }
   },
   "bundle": {

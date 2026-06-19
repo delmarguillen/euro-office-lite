@@ -93,15 +93,175 @@
   <script>
     const startScreen = document.getElementById('start-screen');
 
-    // Recursively inject AscDesktopEditor into all iframes (same-origin)
+    var _log = function() {
+      if (window._eoLog) { window._eoLog.apply(null, arguments); }
+      else { console.log.apply(console, arguments); }
+    };
+
+    function _patchLoadFontAsync(win) {
+      win.AscFonts.CFontFileLoader.prototype.LoadFontAsync = function(basePath, callback) {
+        this.callback = callback;
+        if (-1 !== this.Status) return true;
+
+        this.Status = 2;
+        var xhr = new XMLHttpRequest();
+        xhr.fontFile = this;
+        xhr.open('GET', '/fonts/' + this.Id, true);
+        xhr.responseType = 'arraybuffer';
+
+        xhr.onload = function() {
+          if (this.status !== 200) {
+            this.fontFile.Status = 1;
+            return;
+          }
+          this.fontFile.Status = 0;
+          var fontStreams = win.AscFonts.g_fonts_streams;
+          var streamIndex = fontStreams.length;
+          var data = new Uint8Array(this.response);
+          fontStreams[streamIndex] = new win.AscFonts.FontStream(data, data.length);
+          this.fontFile.SetStreamIndex(streamIndex);
+          if (null != this.fontFile.callback) this.fontFile.callback();
+          if (this.fontFile["externalCallback"]) this.fontFile["externalCallback"]();
+        };
+
+        xhr.send(null);
+        return false;
+      };
+      win.AscFonts.CFontFileLoader.prototype["LoadFontAsync"] = win.AscFonts.CFontFileLoader.prototype.LoadFontAsync;
+    }
+
+    function _preloadAllFonts(win) {
+      var ff = win.AscFonts.g_font_files;
+      if (!ff) return 0;
+      var loaded = 0;
+      for (var i = 0; i < ff.length; i++) {
+        if (ff[i].Status !== -1) continue;
+        var fontId = ff[i].Id;
+        if (!fontId) continue;
+        try {
+          var xhr = new XMLHttpRequest();
+          xhr.open('GET', '/fonts/' + fontId, false);
+          xhr.overrideMimeType('text/plain; charset=x-user-defined');
+          xhr.send(null);
+          if (xhr.status === 200) {
+            var text = xhr.responseText;
+            var data = new Uint8Array(text.length);
+            for (var j = 0; j < text.length; j++) data[j] = text.charCodeAt(j) & 0xFF;
+            ff[i].LoadFontFromData(data);
+            loaded++;
+          }
+        } catch(e) {}
+      }
+      return loaded;
+    }
+
+    function _injectFontSelections(win) {
+      try {
+        var gfa = win.AscFonts && win.AscFonts.g_fontApplication;
+        if (!gfa || !gfa.g_fontSelections || !gfa.g_fontSelections.IsInit) return;
+        if (win._eoFontSelectionsInjected) return;
+
+        var list = gfa.g_fontSelections.List;
+        if (!list || list.length === 0) return;
+
+        var proto = Object.getPrototypeOf(list[list.length - 1]);
+        var variants = [
+          { file: 'LiberationSans-Regular.ttf',    bold: false, italic: false, weight: 400, panose2: 6, panose7: 2, avgW: 1187, desc: -431 },
+          { file: 'LiberationSans-Italic.ttf',     bold: false, italic: true,  weight: 400, panose2: 6, panose7: 9, avgW: 1185, desc: -425 },
+          { file: 'LiberationSans-Bold.ttf',       bold: true,  italic: false, weight: 700, panose2: 7, panose7: 2, avgW: 1248, desc: -431 },
+          { file: 'LiberationSans-BoldItalic.ttf', bold: true,  italic: true,  weight: 700, panose2: 7, panose7: 9, avgW: 1249, desc: -431 }
+        ];
+
+        for (var i = 0; i < variants.length; i++) {
+          var v = variants[i];
+          var fs = Object.create(proto);
+          fs.m_wsFontName = 'Liberation Sans';
+          fs.m_wsFontPath = v.file;
+          fs.m_lIndex = 0;
+          fs.m_bBold = v.bold;
+          fs.m_bItalic = v.italic;
+          fs.m_bIsFixed = false;
+          fs.m_aPanose = new Int8Array([2, 11, v.panose2, 4, 2, 2, 2, v.panose7, 2, 4]);
+          fs.m_ulUnicodeRange1 = 0xE0000AFF;
+          fs.m_ulUnicodeRange2 = 0x500078FF;
+          fs.m_ulUnicodeRange3 = 0x00000021;
+          fs.m_ulUnicodeRange4 = 0x00000000;
+          fs.m_ulCodePageRange1 = 0x600001BF;
+          fs.m_ulCodePageRange2 = 0xDFF70000;
+          fs.m_usWeigth = v.weight;
+          fs.m_usWidth = 5;
+          fs.m_sFamilyClass = 2053;
+          fs.m_eFontFormat = 0;
+          fs.m_shAvgCharWidth = v.avgW;
+          fs.m_shAscent = 1491;
+          fs.m_shDescent = v.desc;
+          fs.m_shLineGap = 307;
+          fs.m_shXHeight = 1082;
+          fs.m_shCapHeight = 1409;
+          fs.m_usType = 0;
+          fs.m_names = null;
+
+          list.splice(list.length - 1, 0, fs);
+          gfa.g_fontSelections.ListMap[v.file] = list.length - 2;
+        }
+
+        var oSelect = { wsName: 'Arial' };
+        gfa.DefaultIndex = gfa.g_fontDictionary.GetFontIndex(oSelect, list, undefined);
+
+        win._eoFontSelectionsInjected = true;
+      } catch(e) {}
+    }
+
     function injectBridgeDeep(win) {
       try {
-        if (win && !win.AscDesktopEditor) {
-          win.AscDesktopEditor = window.AscDesktopEditor;
+        var hasADE = false;
+        try { hasADE = !!win.AscDesktopEditor; } catch(e) {}
+
+        if (win && !hasADE) {
+          try {
+            win.NATIVE_EDITOR_ENJINE = undefined;
+            win.IS_NATIVE_EDITOR = undefined;
+            delete win['native'];
+          } catch(e) {}
+
+          var ade = {};
+          for (var k in window.AscDesktopEditor) {
+            ade[k] = window.AscDesktopEditor[k];
+          }
+          win.AscDesktopEditor = ade;
           win.RendererProcessVariable = window.RendererProcessVariable;
+          win._eoLog = window._eoLog;
           window._patchButtonHint(win);
+
+          var fontPatched = false;
+          var fontsPreloaded = false;
+          var fontPatchInterval = setInterval(function() {
+            try {
+              if (win.AscFonts && win.AscFonts.CFontFileLoader) {
+                if (!fontPatched) {
+                  var currentFn = String(win.AscFonts.CFontFileLoader.prototype.LoadFontAsync);
+                  if (currentFn.indexOf('/fonts/') === -1 || currentFn.indexOf('ascdesktop://') !== -1) {
+                    _patchLoadFontAsync(win);
+                  }
+                  fontPatched = true;
+                }
+                if (!fontsPreloaded && win.AscFonts.g_font_files && win.AscFonts.g_font_files.length > 0) {
+                  _preloadAllFonts(win);
+                  fontsPreloaded = true;
+                }
+                if (win.AscFonts.g_fontApplication && win.AscFonts.g_fontApplication.g_fontSelections) {
+                  _injectFontSelections(win);
+                }
+              }
+            } catch(e) {
+              clearInterval(fontPatchInterval);
+            }
+          }, 5);
+          setTimeout(function() { clearInterval(fontPatchInterval); }, 30000);
         }
-      } catch(e) {}
+      } catch(e) {
+        _log('[INJECT] ERROR:', e.message);
+      }
     }
 
     // Patch createElement to intercept iframe creation and inject bridge early
@@ -186,7 +346,16 @@
         },
         events: {
           onAppReady: function() {
-            console.log('[EO] Editor app ready');
+            var allFrames = document.querySelectorAll('iframe');
+            for (var fi = 0; fi < allFrames.length; fi++) {
+              try {
+                var fw = allFrames[fi].contentWindow;
+                if (!fw || !fw.AscFonts || !fw.AscFonts.CFontFileLoader) continue;
+                _patchLoadFontAsync(fw);
+                _preloadAllFonts(fw);
+                _injectFontSelections(fw);
+              } catch(e) {}
+            }
           },
           onDocumentReady: function() {
             console.log('[EO] Document ready');

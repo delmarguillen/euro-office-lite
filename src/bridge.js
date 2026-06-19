@@ -1,6 +1,23 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+window._eoLogBuffer = [];
+window._eoLog = function() {
+  var parts = [];
+  for (var i = 0; i < arguments.length; i++) {
+    try { parts.push(String(arguments[i])); } catch(e) { parts.push('[?]'); }
+  }
+  var msg = parts.join(' ');
+  console.log(msg);
+  window._eoLogBuffer.push(msg);
+  try {
+    invoke('js_log', { msg: msg });
+  } catch(e) {
+    // fallback: try top window invoke
+    try { window.top.__TAURI__.core.invoke('js_log', { msg: msg }); } catch(e2) {}
+  }
+};
+
 window.AscDesktopEditor = {
   IsLocalFile: () => true,
   GetEditorId: () => 'euro-office-lite',
@@ -39,27 +56,33 @@ window.AscDesktopEditor = {
   },
 
   LocalStartOpen: function() {
+    window._eoLog('[EO] LocalStartOpen called');
     var ew = window.AscDesktopEditor._editorWindow || window;
     var editor = ew.Asc && ew.Asc.editor;
 
+    window._eoLog('[EO] LocalStartOpen: editorWindow:', !!ew, 'editor:', !!editor);
+
     if (!editor) {
-      console.error('[EO] LocalStartOpen: no editor found');
+      window._eoLog('[EO] LocalStartOpen: no editor found');
       return;
     }
 
-    setTimeout(function() {
+    var doOpen = function() {
       try {
+        window._eoLog('[EO] LocalStartOpen: opening empty document...');
         var emptyData = ew.AscCommon.getEmpty();
         var file = new ew.AscCommon.OpenFileResult();
         file.data = emptyData;
         file.bSerFormat = true;
         editor.openDocument(file);
         ew.AscCommon.History.UserSaveMode = true;
-        console.log('[EO] Empty document opened via openDocument');
+        window._eoLog('[EO] Empty document opened via openDocument');
       } catch(e) {
-        console.error('[EO] LocalStartOpen error:', e);
+        window._eoLog('[EO] LocalStartOpen error: ' + e.message);
       }
-    }, 100);
+    };
+
+    setTimeout(doOpen, 100);
   },
 
   CheckUserId: () => 'local-user',
@@ -118,9 +141,23 @@ window.AscDesktopEditor = {
     return '';
   },
 
-  LoadFontBase64: async (name) => {
-    return await invoke('load_font', { name });
+  LoadFontBase64: function(fontId) {
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', '/fonts/' + fontId, false);
+      xhr.responseType = 'arraybuffer';
+      xhr.send(null);
+      if (xhr.status === 200) {
+        var bytes = new Uint8Array(xhr.response);
+        var binary = '';
+        for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        window[fontId] = bytes.length + ';' + btoa(binary);
+      }
+    } catch(e) {}
   },
+
+  LocalFileSaveChanges: function(changes, deleteIndex, count) {},
+  OnSave: function() {},
 
   GetInstallPlugins: () => JSON.stringify([
     { url: '', pluginsData: [] },
@@ -152,6 +189,7 @@ window.RendererProcessVariable = {
   theme: { current: 'light', system: 'disabled' },
   localthemes: [],
 };
+
 
 // Stub for DesktopAfterOpen callback
 window.DesktopAfterOpen = window.DesktopAfterOpen || function(editor) {

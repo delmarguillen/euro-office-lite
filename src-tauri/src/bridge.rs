@@ -28,3 +28,13 @@ pub fn set_document_modified(window: WebviewWindow, modified: bool) -> Result<()
 pub fn load_font(_name: String) -> Result<Option<String>, String> {
     Ok(None)
 }
+
+#[tauri::command]
+pub fn js_log(msg: String) {
+    println!("[JS] {}", msg);
+    use std::io::Write;
+    let log_path = std::env::temp_dir().join("euro-office-lite").join("js-debug.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+        let _ = writeln!(f, "{}", msg);
+    }
+}

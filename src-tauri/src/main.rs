@@ -11,6 +11,15 @@ fn main() {
     let temp_dir = std::env::temp_dir().join("euro-office-lite");
     std::fs::create_dir_all(&temp_dir).ok();
 
+    {
+        use std::io::Write;
+        let log_path = temp_dir.join("js-debug.log");
+        if let Ok(mut f) = std::fs::File::create(&log_path) {
+            let _ = writeln!(f, "[RUST] App started at {:?}", std::time::SystemTime::now());
+            let _ = writeln!(f, "[RUST] Log path: {:?}", log_path);
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -28,8 +37,41 @@ fn main() {
             bridge::set_window_title,
             bridge::set_document_modified,
             bridge::load_font,
+            bridge::js_log,
             converter::convert_file,
         ])
+        .register_uri_scheme_protocol("ascdesktop", |_ctx, request| {
+            let uri = request.uri().to_string();
+            let path = uri
+                .strip_prefix("ascdesktop://")
+                .or_else(|| uri.strip_prefix("ascdesktop:///"))
+                .unwrap_or("");
+
+            let src_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src");
+            let file_path = src_dir.join(path);
+
+            match std::fs::read(&file_path) {
+                Ok(data) => {
+                    let mime = if path.ends_with(".ttf") || path.ends_with(".otf") {
+                        "font/ttf"
+                    } else if path.ends_with(".js") {
+                        "application/javascript"
+                    } else {
+                        "application/octet-stream"
+                    };
+                    tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", mime)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(data)
+                        .unwrap()
+                }
+                Err(_) => tauri::http::Response::builder()
+                    .status(404)
+                    .body(b"Not Found".to_vec())
+                    .unwrap(),
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error running Euro-Office Lite");
 }
