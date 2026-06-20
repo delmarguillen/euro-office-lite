@@ -257,6 +257,45 @@
           win._eoLog = window._eoLog;
           window._patchButtonHint(win);
 
+          var saveAsPatched = false;
+          var savePatchInterval = setInterval(function() {
+            try {
+              if (!saveAsPatched && win.Asc && win.Asc.editor) {
+                var api = win.Asc.editor;
+
+                var origDownloadAs = api.asc_DownloadAs;
+                api.asc_DownloadAs = api['asc_DownloadAs'] = function(options) {
+                  if (options && options.isNaturalDownload) {
+                    return origDownloadAs.call(api, options);
+                  }
+                  api.asc_Save(false, true, undefined, options);
+                };
+
+                if (typeof win.DesktopOfflineAppDocumentStartSave !== 'function') {
+                  win.DesktopOfflineAppDocumentStartSave = win['DesktopOfflineAppDocumentStartSave'] = function(isSaveAs) {
+                    var _param = isSaveAs ? 'saveas=true;' : '';
+                    win.AscDesktopEditor.LocalFileSave(_param, api.currentPassword || '', undefined, 0,
+                      JSON.stringify(api['getAdditionalSaveParams'] ? api['getAdditionalSaveParams']() : {}));
+                  };
+                }
+
+                win.document.addEventListener('keydown', function(e) {
+                  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    api.asc_DownloadAs();
+                  }
+                }, true);
+
+                saveAsPatched = true;
+                clearInterval(savePatchInterval);
+              }
+            } catch(e) {
+              clearInterval(savePatchInterval);
+            }
+          }, 50);
+          setTimeout(function() { clearInterval(savePatchInterval); }, 30000);
+
           var fontPatched = false;
           var fontsPreloaded = false;
           var fontPatchInterval = setInterval(function() {
@@ -390,6 +429,19 @@
         }
       });
     }
+
+    document.addEventListener('keydown', function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
+        e.preventDefault();
+        e.stopPropagation();
+        var ref = _findEditorWindow(window);
+        if (ref && ref.Asc && ref.Asc.editor) {
+          ref.Asc.editor.asc_DownloadAs();
+        } else {
+          window.AscDesktopEditor.LocalFileSave('saveas=true;', '', undefined, 0, '{}');
+        }
+      }
+    }, true);
 
     document.querySelectorAll('.btn[data-type]').forEach(function(btn) {
       btn.addEventListener('click', function() {

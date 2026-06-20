@@ -138,6 +138,7 @@ window.AscDesktopEditor = {
   },
 
   LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
+    var isSaveAs = param && param.indexOf('saveas=true') !== -1;
     var ref = _getEditor();
     if (!ref.editor) return;
 
@@ -157,7 +158,7 @@ window.AscDesktopEditor = {
 
       await invoke('write_editor_bin', { data: b64 });
 
-      if (param && param.indexOf('saveas=true') !== -1) {
+      if (isSaveAs) {
         var dialog = window.__TAURI__.dialog;
         var savePath = await dialog.save({
           filters: [
@@ -182,7 +183,7 @@ window.AscDesktopEditor = {
       }
     } catch(e) {
       window._eoLog('[EO] Error saving file:', e);
-      if (ref.ew.DesktopOfflineAppDocumentEndSave) {
+      if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
         ref.ew.DesktopOfflineAppDocumentEndSave(1);
       }
     }
@@ -219,6 +220,9 @@ window.AscDesktopEditor = {
   },
 
   execCommand: function(cmd, param) {
+    if (cmd === 'saveas') {
+      window.AscDesktopEditor.LocalFileSave('saveas=true;', '', undefined, 0, '{}');
+    }
     return '';
   },
 
