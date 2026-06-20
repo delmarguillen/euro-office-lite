@@ -23,6 +23,7 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
-    "resources": []
+    "externalBin": ["binaries/x2t"],
+    "resources": ["binaries/*.dll", "binaries/*.config", "binaries/*.dat"]
   }
 }

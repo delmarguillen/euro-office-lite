@@ -13,10 +13,51 @@ window._eoLog = function() {
   try {
     invoke('js_log', { msg: msg });
   } catch(e) {
-    // fallback: try top window invoke
     try { window.top.__TAURI__.core.invoke('js_log', { msg: msg }); } catch(e2) {}
   }
 };
+
+function _findEditorWindow(win) {
+  try { if (win.AscCommon) return win; } catch(e) {}
+  for (var i = 0; i < win.frames.length; i++) {
+    var found = _findEditorWindow(win.frames[i]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function _getEditor() {
+  var ew = window.AscDesktopEditor._editorWindow || _findEditorWindow(window);
+  if (ew) window.AscDesktopEditor._editorWindow = ew;
+  var editor = ew && ew.Asc && ew.Asc.editor;
+  return { ew: ew, editor: editor };
+}
+
+function _loadEditorBin(b64data, fileName) {
+  var ref = _getEditor();
+  if (!ref.editor) return;
+
+  try {
+    var binaryStr = atob(b64data);
+    var bytes = new Uint8Array(binaryStr.length);
+    for (var i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+
+    var file = new ref.ew.AscCommon.OpenFileResult();
+    file.data = bytes;
+    file.bSerFormat = true;
+    ref.editor.openDocument(file);
+    ref.ew.AscCommon.History.UserSaveMode = true;
+
+    if (fileName) {
+      var name = fileName.replace(/\\/g, '/').split('/').pop();
+      invoke('set_window_title', { name: name }).catch(function(){});
+    }
+  } catch(e) {
+    window._eoLog('[EO] Error loading document:', e.message);
+  }
+}
 
 window.AscDesktopEditor = {
   IsLocalFile: () => true,
@@ -31,7 +72,6 @@ window.AscDesktopEditor = {
   _editorWindow: null,
 
   CreateEditorApi: function(api) {
-    // Store reference to the editor's window (the iframe where sdkjs lives)
     try {
       var frames = document.querySelectorAll('iframe');
       for (var i = 0; i < frames.length; i++) {
@@ -44,47 +84,31 @@ window.AscDesktopEditor = {
       }
     } catch(e) {}
 
-    // Also set it in the calling context
     if (!window.AscDesktopEditor._editorWindow) {
-      // Find the window that has AscCommon
-      var findEditorWindow = function(win) {
-        try { if (win.AscCommon) return win; } catch(e) {}
-        for (var i = 0; i < win.frames.length; i++) {
-          var found = findEditorWindow(win.frames[i]);
-          if (found) return found;
-        }
-        return null;
-      };
-      window.AscDesktopEditor._editorWindow = findEditorWindow(window);
+      window.AscDesktopEditor._editorWindow = _findEditorWindow(window);
     }
-
-    console.log('[EO] Editor API registered, editorWindow found:', !!window.AscDesktopEditor._editorWindow);
   },
 
   LocalStartOpen: function() {
-    window._eoLog('[EO] LocalStartOpen called');
-    var ew = window.AscDesktopEditor._editorWindow || window;
-    var editor = ew.Asc && ew.Asc.editor;
-
-    window._eoLog('[EO] LocalStartOpen: editorWindow:', !!ew, 'editor:', !!editor);
-
-    if (!editor) {
-      window._eoLog('[EO] LocalStartOpen: no editor found');
-      return;
-    }
+    var ref = _getEditor();
+    if (!ref.editor) return;
 
     var doOpen = function() {
       try {
-        window._eoLog('[EO] LocalStartOpen: opening empty document...');
-        var emptyData = ew.AscCommon.getEmpty();
-        var file = new ew.AscCommon.OpenFileResult();
-        file.data = emptyData;
-        file.bSerFormat = true;
-        editor.openDocument(file);
-        ew.AscCommon.History.UserSaveMode = true;
-        window._eoLog('[EO] Empty document opened via openDocument');
+        if (window._pendingFileData) {
+          var pending = window._pendingFileData;
+          window._pendingFileData = null;
+          _loadEditorBin(pending.data, pending.path);
+        } else {
+          var emptyData = ref.ew.AscCommon.getEmpty();
+          var file = new ref.ew.AscCommon.OpenFileResult();
+          file.data = emptyData;
+          file.bSerFormat = true;
+          ref.editor.openDocument(file);
+          ref.ew.AscCommon.History.UserSaveMode = true;
+        }
       } catch(e) {
-        window._eoLog('[EO] LocalStartOpen error: ' + e.message);
+        window._eoLog('[EO] LocalStartOpen error:', e.message);
       }
     };
 
@@ -93,23 +117,75 @@ window.AscDesktopEditor = {
 
   CheckUserId: () => 'local-user',
 
-  LocalFileOpen: async (path) => {
+  LocalFileOpen: async function(path) {
     if (!path) {
-      const { open } = window.__TAURI__.dialog;
-      path = await open({
+      var dialog = window.__TAURI__.dialog;
+      path = await dialog.open({
         filters: [
           { name: 'Documentos', extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pdf'] },
           { name: 'Todos', extensions: ['*'] }
         ]
       });
     }
-    if (path) {
-      return await invoke('open_file', { path });
+    if (!path) return;
+
+    try {
+      var b64data = await invoke('open_file', { path: path });
+      _loadEditorBin(b64data, path);
+    } catch(e) {
+      window._eoLog('[EO] Error opening file:', e);
     }
   },
 
-  LocalFileSave: async (data) => {
-    return await invoke('save_file', { data: data || '' });
+  LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
+    var ref = _getEditor();
+    if (!ref.editor) return;
+
+    try {
+      var binData = ref.editor.asc_nativeGetFile();
+      if (!binData) return;
+
+      var b64;
+      if (typeof binData === 'string') {
+        b64 = btoa(binData);
+      } else {
+        var binary = '';
+        var bytes = new Uint8Array(binData);
+        for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        b64 = btoa(binary);
+      }
+
+      await invoke('write_editor_bin', { data: b64 });
+
+      if (param && param.indexOf('saveas=true') !== -1) {
+        var dialog = window.__TAURI__.dialog;
+        var savePath = await dialog.save({
+          filters: [
+            { name: 'Word', extensions: ['docx'] },
+            { name: 'Excel', extensions: ['xlsx'] },
+            { name: 'PowerPoint', extensions: ['pptx'] },
+            { name: 'PDF', extensions: ['pdf'] },
+            { name: 'OpenDocument Text', extensions: ['odt'] },
+            { name: 'Rich Text', extensions: ['rtf'] },
+          ]
+        });
+
+        if (savePath) {
+          await invoke('save_file_as', { path: savePath });
+        }
+      } else {
+        await invoke('save_file', { data: '' });
+      }
+
+      if (ref.ew.DesktopOfflineAppDocumentEndSave) {
+        ref.ew.DesktopOfflineAppDocumentEndSave(0);
+      }
+    } catch(e) {
+      window._eoLog('[EO] Error saving file:', e);
+      if (ref.ew.DesktopOfflineAppDocumentEndSave) {
+        ref.ew.DesktopOfflineAppDocumentEndSave(1);
+      }
+    }
   },
 
   LocalFileCreate: async (type) => {
@@ -143,7 +219,6 @@ window.AscDesktopEditor = {
   },
 
   execCommand: function(cmd, param) {
-    console.log('[EO] execCommand:', cmd);
     return '';
   },
 
@@ -162,7 +237,14 @@ window.AscDesktopEditor = {
     } catch(e) {}
   },
 
-  LocalFileSaveChanges: function(changes, deleteIndex, count) {},
+  LocalFileSaveChanges: function(changes, deleteIndex, count) {
+    invoke('save_changes', {
+      changes: typeof changes === 'string' ? changes : JSON.stringify(changes),
+      deleteIndex: deleteIndex,
+      count: count
+    }).catch(function(){});
+  },
+
   OnSave: function() {},
 
   GetInstallPlugins: () => JSON.stringify([
@@ -174,7 +256,6 @@ window.AscDesktopEditor = {
   IsProtectionSupport: () => false,
   ConsoleLog: (msg) => console.log('[EO]', msg),
 
-  // Stubs for desktop integration
   NativeViewerOpen: function() {},
   SetAdvancedOptions: function() {},
   LocalFileRecoverFolder: () => '',
@@ -190,23 +271,17 @@ window.AscDesktopEditor = {
   IsViewer: function() { return false; },
 };
 
-// Desktop theme/renderer variables
 window.RendererProcessVariable = {
   theme: { current: 'light', system: 'disabled' },
   localthemes: [],
 };
 
+window.DesktopAfterOpen = window.DesktopAfterOpen || function(editor) {};
 
-// Stub for DesktopAfterOpen callback
-window.DesktopAfterOpen = window.DesktopAfterOpen || function(editor) {
-  console.log('[EO] Document opened in editor');
-};
-
-// Stub for UpdateInstallPlugins
 window.UpdateInstallPlugins = window.UpdateInstallPlugins || function() {};
 
 listen('file-opened', (event) => {
-  if (window.AscDesktopEditor._onFileOpened) {
-    window.AscDesktopEditor._onFileOpened(event.payload);
+  if (event.payload && event.payload.data) {
+    _loadEditorBin(event.payload.data, event.payload.path);
   }
 });

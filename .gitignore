@@ -19,3 +19,6 @@ docs/
 
 # Logs
 *.log
+
+# x2t sidecar binaries (download via scripts/get-x2t.ps1)
+src-tauri/binaries/

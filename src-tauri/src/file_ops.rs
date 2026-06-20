@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD, Engine};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State};
@@ -20,19 +21,16 @@ pub async fn open_file(
     let format_from = detect_format(&input);
     let format_to = 8192;
 
-    super::converter::convert_file(
-        app,
-        path,
-        output.to_string_lossy().to_string(),
-        format_from,
-        format_to,
-    )
-    .await?;
+    super::converter::convert_file(&app, &path, &output.to_string_lossy(), format_from, format_to)
+        .await?;
+
+    let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
+    let b64 = STANDARD.encode(&bin_data);
 
     *state.current_file.lock().unwrap() = Some(input);
     *state.modified.lock().unwrap() = false;
 
-    Ok(output.to_string_lossy().to_string())
+    Ok(b64)
 }
 
 #[tauri::command]
@@ -42,22 +40,74 @@ pub async fn save_file(
     _data: String,
 ) -> Result<String, String> {
     let current = state.current_file.lock().unwrap().clone();
-    let dest = current.ok_or("No hay archivo abierto")?;
+    let dest = current.ok_or("No file is currently open")?;
 
     let input = state.temp_dir.join("Editor.bin");
     let format_from = 8192;
     let format_to = detect_format(&dest);
 
     super::converter::convert_file(
-        app,
-        input.to_string_lossy().to_string(),
-        dest.to_string_lossy().to_string(),
+        &app,
+        &input.to_string_lossy(),
+        &dest.to_string_lossy(),
         format_from,
         format_to,
     )
     .await?;
 
     *state.modified.lock().unwrap() = false;
+    Ok("ok".to_string())
+}
+
+#[tauri::command]
+pub async fn save_file_as(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    let dest = PathBuf::from(&path);
+    let input = state.temp_dir.join("Editor.bin");
+    let format_from = 8192;
+    let format_to = detect_format(&dest);
+
+    super::converter::convert_file(
+        &app,
+        &input.to_string_lossy(),
+        &dest.to_string_lossy(),
+        format_from,
+        format_to,
+    )
+    .await?;
+
+    *state.current_file.lock().unwrap() = Some(dest);
+    *state.modified.lock().unwrap() = false;
+    Ok("ok".to_string())
+}
+
+#[tauri::command]
+pub async fn save_changes(
+    state: State<'_, AppState>,
+    changes: String,
+    _delete_index: Option<i32>,
+    count: i32,
+) -> Result<String, String> {
+    let changes_dir = state.temp_dir.join("changes");
+    std::fs::create_dir_all(&changes_dir).map_err(|e| e.to_string())?;
+
+    let filename = format!("change_{}.json", count);
+    std::fs::write(changes_dir.join(&filename), &changes).map_err(|e| e.to_string())?;
+
+    Ok("ok".to_string())
+}
+
+#[tauri::command]
+pub async fn write_editor_bin(
+    state: State<'_, AppState>,
+    data: String,
+) -> Result<String, String> {
+    let bin_data = STANDARD.decode(&data).map_err(|e| e.to_string())?;
+    let output = state.temp_dir.join("Editor.bin");
+    std::fs::write(&output, &bin_data).map_err(|e| e.to_string())?;
     Ok("ok".to_string())
 }
 
@@ -81,7 +131,7 @@ pub async fn create_new(
         "word" => "templates/blank.docx",
         "cell" => "templates/blank.xlsx",
         "slide" => "templates/blank.pptx",
-        _ => return Err(format!("Tipo desconocido: {}", doc_type)),
+        _ => return Err(format!("Unknown type: {}", doc_type)),
     };
 
     let template_path = app

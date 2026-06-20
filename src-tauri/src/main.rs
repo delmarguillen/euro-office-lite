@@ -31,6 +31,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
             file_ops::save_file,
+            file_ops::save_file_as,
+            file_ops::save_changes,
+            file_ops::write_editor_bin,
             file_ops::create_new,
             file_ops::get_current_path,
             bridge::exec_command,
@@ -38,7 +41,6 @@ fn main() {
             bridge::set_document_modified,
             bridge::load_font,
             bridge::js_log,
-            converter::convert_file,
         ])
         .register_uri_scheme_protocol("ascdesktop", |_ctx, request| {
             let uri = request.uri().to_string();

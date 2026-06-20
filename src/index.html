@@ -345,7 +345,7 @@
         height: '100%',
         documentType: docType,
         document: {
-          title: 'Nuevo documento',
+          title: (window._pendingFileData && window._pendingFileData.name) || 'Nuevo documento',
           url: '_offline_',
           fileType: docType === 'word' ? 'docx' : docType === 'cell' ? 'xlsx' : 'pptx',
           key: 'local-' + Date.now(),
@@ -398,8 +398,31 @@
     });
 
     document.querySelector('.btn[data-open]').addEventListener('click', async function() {
-      if (window.AscDesktopEditor) {
-        await window.AscDesktopEditor.LocalFileOpen();
+      if (!window.AscDesktopEditor) return;
+
+      var dialog = window.__TAURI__.dialog;
+      var path = await dialog.open({
+        filters: [
+          { name: 'Documentos', extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pdf'] },
+          { name: 'Todos', extensions: ['*'] }
+        ]
+      });
+      if (!path) return;
+
+      var ext = path.split('.').pop().toLowerCase();
+      var docType = 'word';
+      if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) docType = 'cell';
+      if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) docType = 'slide';
+
+      window._eoLog('[EO] Opening file from start screen:', path, 'docType:', docType);
+
+      try {
+        var b64data = await window.__TAURI__.core.invoke('open_file', { path: path });
+        var fileName = path.replace(/\\/g, '/').split('/').pop();
+        window._pendingFileData = { data: b64data, path: path, name: fileName };
+        openEditor(docType);
+      } catch(e) {
+        window._eoLog('[EO] Error opening file:', e);
       }
     });
   </script>
