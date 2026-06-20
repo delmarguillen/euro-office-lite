@@ -62,6 +62,7 @@ function _loadEditorBin(b64data, fileName) {
 window.AscDesktopEditor = {
   IsLocalFile: () => true,
   GetEditorId: () => 'euro-office-lite',
+  CheckNeedWheel: function() { return true; },
 
   getFontsSprite: function(suffix) {
     suffix = suffix || '';
