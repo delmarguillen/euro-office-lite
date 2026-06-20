@@ -321,6 +321,50 @@
             }
           }, 5);
           setTimeout(function() { clearInterval(fontPatchInterval); }, 30000);
+
+          // ── TABS FIX: strip Tauri dev-server HTML wrapper from templates ──
+          // Tauri dev server wraps served files in <html><head><script>...
+          // This corrupts RequireJS text! plugin loads (.template files).
+          // Fix: patch _.template to strip the wrapper before compiling.
+          var _tabsTemplatePatched = false;
+          var tabsTemplateInterval = setInterval(function() {
+            if (_tabsTemplatePatched) return;
+            try {
+              if (!win._ || !win._.template) return;
+
+              var origTemplate = win._.template;
+              var headEndTag = '<' + '/head>';
+              var htmlEndTag = '<' + '/html>';
+              var bodyOpenRe = new RegExp('^\\s*<body[^>]*>\\s*', 'i');
+              var bodyCloseRe = new RegExp('\\s*<' + '/body>\\s*$', 'i');
+
+              win._.template = function(text, settings, oldSettings) {
+                if (typeof text === 'string' && text.indexOf(headEndTag) !== -1 && text.substring(0, 5) === '<html') {
+                  var headEnd = text.indexOf(headEndTag);
+                  if (headEnd !== -1) {
+                    var stripped = text.substring(headEnd + headEndTag.length);
+                    var htmlEnd = stripped.lastIndexOf(htmlEndTag);
+                    if (htmlEnd !== -1) {
+                      stripped = stripped.substring(0, htmlEnd);
+                    }
+                    stripped = stripped.replace(bodyOpenRe, '').replace(bodyCloseRe, '');
+                    if (stripped.indexOf('&lt;%') !== -1 || stripped.indexOf('%&gt;') !== -1) {
+                      stripped = stripped
+                        .replace(/&lt;%/g, '<%')
+                        .replace(/%&gt;/g, '%>');
+                    }
+                    text = stripped;
+                  }
+                }
+                return origTemplate.call(this, text, settings, oldSettings);
+              };
+
+              _tabsTemplatePatched = true;
+              clearInterval(tabsTemplateInterval);
+            } catch(e) {}
+          }, 5);
+          setTimeout(function() { clearInterval(tabsTemplateInterval); }, 30000);
+          // ── END TABS FIX ──────────────────────────────────────────────
         }
       } catch(e) {
         _log('[INJECT] ERROR:', e.message);
