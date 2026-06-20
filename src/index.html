@@ -285,6 +285,11 @@
                     e.stopPropagation();
                     api.asc_DownloadAs();
                   }
+                  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'o') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    window.AscDesktopEditor.LocalFileOpen();
+                  }
                 }, true);
 
                 saveAsPatched = true;
@@ -419,6 +424,7 @@
     };
 
     function openEditor(docType) {
+      window.AscDesktopEditor._currentDocType = docType;
       startScreen.classList.add('hidden');
       document.getElementById('placeholder').classList.add('active');
 
@@ -485,6 +491,11 @@
           window.AscDesktopEditor.LocalFileSave('saveas=true;', '', undefined, 0, '{}');
         }
       }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'o') {
+        e.preventDefault();
+        e.stopPropagation();
+        window.AscDesktopEditor.LocalFileOpen();
+      }
     }, true);
 
     document.querySelectorAll('.btn[data-type]').forEach(function(btn) {
@@ -521,6 +532,30 @@
         window._eoLog('[EO] Error opening file:', e);
       }
     });
+
+    (function checkPendingOpenPath() {
+      var pendingPath = localStorage.getItem('eo-pending-open-path');
+      if (!pendingPath) return;
+      localStorage.removeItem('eo-pending-open-path');
+
+      startScreen.classList.add('hidden');
+
+      var ext = pendingPath.split('.').pop().toLowerCase();
+      var docType = 'word';
+      if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) docType = 'cell';
+      if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) docType = 'slide';
+
+      window._eoLog('[EO] Reopening file:', pendingPath, 'docType:', docType);
+
+      window.__TAURI__.core.invoke('open_file', { path: pendingPath }).then(function(b64data) {
+        var fileName = pendingPath.replace(/\\/g, '/').split('/').pop();
+        window._pendingFileData = { data: b64data, path: pendingPath, name: fileName };
+        openEditor(docType);
+      }).catch(function(e) {
+        window._eoLog('[EO] Error reopening file:', e);
+        startScreen.classList.remove('hidden');
+      });
+    })();
   </script>
 </body>
 </html>

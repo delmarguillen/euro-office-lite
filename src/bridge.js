@@ -26,6 +26,13 @@ function _findEditorWindow(win) {
   return null;
 }
 
+function _forceReload() {
+  window.onbeforeunload = null;
+  var iframes = document.querySelectorAll('iframe');
+  for (var i = 0; i < iframes.length; i++) iframes[i].remove();
+  window.location.reload();
+}
+
 function _getEditor() {
   var ew = window.AscDesktopEditor._editorWindow || _findEditorWindow(window);
   if (ew) window.AscDesktopEditor._editorWindow = ew;
@@ -71,6 +78,8 @@ window.AscDesktopEditor = {
   isSupportBinaryFontsSprite: false,
 
   _editorWindow: null,
+  _currentDocType: null,
+  _isModified: false,
 
   CreateEditorApi: function(api) {
     try {
@@ -130,11 +139,25 @@ window.AscDesktopEditor = {
     }
     if (!path) return;
 
+    if (window.AscDesktopEditor._currentDocType) {
+      if (window.AscDesktopEditor._isModified) {
+        var discard = await window.__TAURI__.dialog.confirm(
+          'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y abrir otro archivo?',
+          { title: 'Cambios sin guardar', kind: 'warning' }
+        );
+        if (!discard) return;
+      }
+      window._eoLog('[EO] LocalFileOpen: editor active, reloading with pending path: ' + path);
+      localStorage.setItem('eo-pending-open-path', path);
+      _forceReload();
+      return;
+    }
+
     try {
       var b64data = await invoke('open_file', { path: path });
       _loadEditorBin(b64data, path);
     } catch(e) {
-      window._eoLog('[EO] Error opening file:', e);
+      window._eoLog('[EO] Error opening file: ' + e);
     }
   },
 
@@ -197,8 +220,9 @@ window.AscDesktopEditor = {
   LocalFileGetSourcePath: () => '',
   LocalFileGetSaved: () => false,
   LocalFileGetImageUrl: (url) => url,
-  LocalFileGetModified: () => false,
+  LocalFileGetModified: function() { return window.AscDesktopEditor._isModified; },
   LocalFileSetModified: function(modified) {
+    window.AscDesktopEditor._isModified = modified;
     invoke('set_document_modified', { modified }).catch(function(){});
   },
 
@@ -213,7 +237,8 @@ window.AscDesktopEditor = {
   },
   IsSupportNativePrint: () => true,
 
-  onDocumentModifiedChanged: (modified) => {
+  onDocumentModifiedChanged: function(modified) {
+    window.AscDesktopEditor._isModified = modified;
     invoke('set_document_modified', { modified }).catch(function(){});
   },
   SetDocumentName: (name) => {
@@ -223,6 +248,26 @@ window.AscDesktopEditor = {
   execCommand: function(cmd, param) {
     if (cmd === 'saveas') {
       window.AscDesktopEditor.LocalFileSave('saveas=true;', '', undefined, 0, '{}');
+    } else if (cmd === 'editor:event') {
+      try {
+        var evt = JSON.parse(param);
+        if (evt.action === 'file:open') {
+          window.AscDesktopEditor.LocalFileOpen();
+        } else if (evt.action === 'file:close') {
+          (async function() {
+            if (window.AscDesktopEditor._isModified) {
+              var discard = await window.__TAURI__.dialog.confirm(
+                'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
+                { title: 'Cambios sin guardar', kind: 'warning' }
+              );
+              if (!discard) return;
+            }
+            _forceReload();
+          })();
+        }
+      } catch(e) {
+        window._eoLog('[EO] execCommand parse error: ' + e.message);
+      }
     }
     return '';
   },
