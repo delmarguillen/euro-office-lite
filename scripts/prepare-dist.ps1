@@ -163,3 +163,5 @@ Log ("Total size:   {0:N1} MB" -f ($totalBytes / 1MB))
 Log ("Elapsed:      {0:N1} s" -f $sw.Elapsed.TotalSeconds)
 Log "========================================"
 Log "Done. frontendDist should point to ../src-dist"
+
+exit 0
