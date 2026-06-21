@@ -20,5 +20,8 @@ docs/
 # Logs
 *.log
 
+# Staged frontend (built by scripts/prepare-dist.ps1)
+src-dist/
+
 # x2t sidecar binaries (download via scripts/get-x2t.ps1)
 src-tauri/binaries/

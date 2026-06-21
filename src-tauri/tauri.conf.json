@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "identifier": "org.euro-office.lite",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../src-dist",
+    "beforeDevCommand": "powershell -Command \"$d='../src-dist'; if (Test-Path $d) { $i=Get-Item $d -Force; if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) { $i.Delete() } else { Remove-Item $d -Recurse -Force } }; cmd /c mklink /J ..\\src-dist ..\\src\""
   },
   "app": {
     "withGlobalTauri": true,
