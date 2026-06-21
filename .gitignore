@@ -25,3 +25,4 @@ src-dist/
 
 # x2t sidecar binaries (download via scripts/get-x2t.ps1)
 src-tauri/binaries/
+x2t-binaries.zip

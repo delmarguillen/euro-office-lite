@@ -1,0 +1,101 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  RUST_BACKTRACE: "1"
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Download x2t binaries
+        shell: pwsh
+        run: .\scripts\get-x2t-ci.ps1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage frontend distribution
+        shell: pwsh
+        run: |
+          echo "::group::prepare-dist"
+          .\scripts\prepare-dist.ps1
+          echo "::endgroup::"
+          $logFile = Join-Path $env:TEMP "euro-office-lite\prepare-dist.log"
+          if (Test-Path $logFile) { Get-Content $logFile }
+
+      - name: Build Tauri installer
+        shell: pwsh
+        run: |
+          echo "::group::tauri-build"
+          npx tauri build --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -FilePath (Join-Path $env:TEMP "tauri-build.log")
+          echo "::endgroup::"
+
+      - name: Show installer info
+        shell: pwsh
+        run: |
+          $nsisDir = "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis"
+          if (Test-Path $nsisDir) {
+            Get-ChildItem $nsisDir -Recurse | Select-Object Name, @{N='Size(MB)';E={[math]::Round($_.Length/1MB,2)}}
+          } else {
+            Write-Host "NSIS output directory not found at $nsisDir"
+            Get-ChildItem "src-tauri\target" -Directory | Select-Object Name
+          }
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ${{ runner.temp }}/euro-office-lite/prepare-dist.log
+            ${{ runner.temp }}/tauri-build.log
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Euro-Office Lite ${{ github.ref_name }}
+          generate_release_notes: true
+          files: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
