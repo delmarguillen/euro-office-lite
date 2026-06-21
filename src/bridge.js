@@ -199,21 +199,64 @@ window.AscDesktopEditor = {
 
       await invoke('write_editor_bin', { data: b64 });
 
+      var currentPath = await invoke('get_current_path');
+      window._eoLog('[EO] LocalFileSave: currentPath=' + currentPath);
+
+      if (!isSaveAs && !currentPath) {
+        window._eoLog('[EO] LocalFileSave: new document, redirecting Save to Save As');
+        isSaveAs = true;
+      }
+
       if (isSaveAs) {
-        var dialog = window.__TAURI__.dialog;
-        var savePath = await dialog.save({
-          filters: [
-            { name: 'Word', extensions: ['docx'] },
+        var docType = window.AscDesktopEditor._currentDocType || 'word';
+        window._eoLog('[EO] SaveAs: _currentDocType=' + docType);
+
+        var filters;
+        if (docType === 'cell') {
+          filters = [
             { name: 'Excel', extensions: ['xlsx'] },
-            { name: 'PowerPoint', extensions: ['pptx'] },
+            { name: 'OpenDocument Spreadsheet', extensions: ['ods'] },
+            { name: 'CSV', extensions: ['csv'] },
             { name: 'PDF', extensions: ['pdf'] },
+          ];
+        } else if (docType === 'slide') {
+          filters = [
+            { name: 'PowerPoint', extensions: ['pptx'] },
+            { name: 'OpenDocument Presentation', extensions: ['odp'] },
+            { name: 'PDF', extensions: ['pdf'] },
+          ];
+        } else {
+          filters = [
+            { name: 'Word', extensions: ['docx'] },
             { name: 'OpenDocument Text', extensions: ['odt'] },
             { name: 'Rich Text', extensions: ['rtf'] },
-          ]
-        });
+            { name: 'Texto plano', extensions: ['txt'] },
+            { name: 'PDF', extensions: ['pdf'] },
+          ];
+        }
+        window._eoLog('[EO] SaveAs: filters=' + JSON.stringify(filters.map(function(f) { return f.extensions[0]; })));
+
+        var dialog = window.__TAURI__.dialog;
+        var savePath = await dialog.save({ filters: filters });
+        window._eoLog('[EO] SaveAs: savePath=' + savePath);
 
         if (savePath) {
-          await invoke('save_file_as', { path: savePath });
+          var ext = savePath.split('.').pop().toLowerCase();
+          window._eoLog('[EO] SaveAs: target extension=' + ext);
+          try {
+            await invoke('save_file_as', { path: savePath });
+            window._eoLog('[EO] SaveAs: save_file_as OK');
+          } catch(saveErr) {
+            window._eoLog('[EO] SaveAs: save_file_as FAILED: ' + saveErr);
+            await window.__TAURI__.dialog.message(
+              'No se pudo guardar el archivo.\n\nFormato de destino no compatible con este tipo de documento.',
+              { title: 'Error al guardar', kind: 'error' }
+            );
+            if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
+              ref.ew.DesktopOfflineAppDocumentEndSave(1);
+            }
+            return;
+          }
         }
       } else {
         await invoke('save_file', { data: '' });
@@ -249,20 +292,31 @@ window.AscDesktopEditor = {
   Paste: () => document.execCommand('paste'),
   Cut: () => document.execCommand('cut'),
 
-  Print: async function() {
+  _pendingPrinter: null,
+
+  Print: async function(optionsJson) {
     window._eoLog('[EO] Print: === PRINT CALLED ===');
-    window._eoLog('[EO] Print: caller=' + (new Error().stack || 'no stack'));
+    window._eoLog('[EO] Print: optionsJson=' + (optionsJson || 'none'));
+
+    var printerName = window.AscDesktopEditor._pendingPrinter;
+    if (optionsJson) {
+      try {
+        var parsed = JSON.parse(optionsJson);
+        if (parsed.nativeOptions && parsed.nativeOptions.printer) {
+          printerName = parsed.nativeOptions.printer;
+        }
+      } catch(e) {}
+    }
+    window._eoLog('[EO] Print: printerName=' + printerName);
+
     var ref = _getEditor();
-    window._eoLog('[EO] Print: editor ref exists=' + !!ref.editor + ', ew exists=' + !!ref.ew);
     if (!ref.editor) {
       window._eoLog('[EO] Print: no editor, aborting');
       return;
     }
     try {
       window.AscDesktopEditor._isPrinting = true;
-      window._eoLog('[EO] Print: calling asc_nativeGetFile...');
       var binData = ref.editor.asc_nativeGetFile();
-      window._eoLog('[EO] Print: binData type=' + typeof binData + ', length=' + (binData ? (binData.length || binData.byteLength || '?') : 'null'));
       if (!binData) {
         window._eoLog('[EO] Print: asc_nativeGetFile returned null/empty');
         return;
@@ -276,12 +330,26 @@ window.AscDesktopEditor = {
         for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
         b64 = btoa(binary);
       }
-      window._eoLog('[EO] Print: base64 encoded, length=' + b64.length);
-      window._eoLog('[EO] Print: calling write_editor_bin...');
       await invoke('write_editor_bin', { data: b64 });
-      window._eoLog('[EO] Print: write_editor_bin OK, calling print_document...');
-      var result = await invoke('print_document');
-      window._eoLog('[EO] Print: print_document result=' + result);
+      window._eoLog('[EO] Print: write_editor_bin OK, generating PDF...');
+      var pdfPath = await invoke('print_document');
+      window._eoLog('[EO] Print: PDF generated at ' + pdfPath);
+
+      if (printerName) {
+        window._eoLog('[EO] Print: sending to printer via plugin: ' + printerName);
+        var printResult = await invoke('plugin:printer|print_pdf', {
+          id: printerName,
+          path: pdfPath,
+          printer: printerName,
+          print_settings: '{}',
+          remove_after_print: true
+        });
+        window._eoLog('[EO] Print: plugin print result=' + printResult);
+      } else {
+        window._eoLog('[EO] Print: no printer selected, opening PDF in viewer...');
+        await invoke('open_pdf_viewer', { path: pdfPath });
+      }
+
       if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
         ref.ew.DesktopOfflineAppDocumentEndSave(0);
       }

@@ -182,17 +182,21 @@ pub async fn print_document(
         return Err("PDF file is empty".to_string());
     }
 
-    log_print(&state, "Opening PDF with system viewer...");
     let pdf_str = pdf_path.to_string_lossy().to_string();
+    log_print(&state, &format!("Returning PDF path: {}", pdf_str));
+    Ok(pdf_str)
+}
+
+#[tauri::command]
+pub fn open_pdf_viewer(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    log_print(&state, &format!("Opening PDF in system viewer: {}", path));
     std::process::Command::new("cmd")
-        .args(["/c", "start", "", &pdf_str])
+        .args(["/c", "start", "", &path])
         .spawn()
         .map_err(|e| {
             log_print(&state, &format!("Failed to open PDF: {}", e));
             e.to_string()
         })?;
-
-    log_print(&state, "PDF opened successfully");
     Ok("ok".to_string())
 }
 
@@ -230,6 +234,7 @@ pub async fn create_new(
 
     open_file(app, state, template_path.to_string_lossy().to_string()).await
 }
+
 
 fn detect_format(path: &PathBuf) -> i32 {
     match path.extension().and_then(|e| e.to_str()) {

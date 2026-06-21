@@ -2469,6 +2469,204 @@
           "markdownDescription": "Denies the save command without any pre-configured scope."
         },
         {
+          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-create-temp-file`\n- `allow-remove-temp-file`\n- `allow-get-printers`\n- `allow-get-printers-by-name`\n- `allow-print-pdf`\n- `allow-get-jobs`\n- `allow-get-jobs-by-id`\n- `allow-resume-job`\n- `allow-restart-job`\n- `allow-pause-job`\n- `allow-remove-job`\n- `allow-print-pdf-from-url`",
+          "type": "string",
+          "const": "printer:default",
+          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-create-temp-file`\n- `allow-remove-temp-file`\n- `allow-get-printers`\n- `allow-get-printers-by-name`\n- `allow-print-pdf`\n- `allow-get-jobs`\n- `allow-get-jobs-by-id`\n- `allow-resume-job`\n- `allow-restart-job`\n- `allow-pause-job`\n- `allow-remove-job`\n- `allow-print-pdf-from-url`"
+        },
+        {
+          "description": "Enables the create_temp_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-create-temp-file",
+          "markdownDescription": "Enables the create_temp_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the custom_get_printers_by_name command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-custom-get-printers-by-name",
+          "markdownDescription": "Enables the custom_get_printers_by_name command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the custom_print_pdf command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-custom-print-pdf",
+          "markdownDescription": "Enables the custom_print_pdf command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_jobs command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-get-jobs",
+          "markdownDescription": "Enables the get_jobs command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_jobs_by_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-get-jobs-by-id",
+          "markdownDescription": "Enables the get_jobs_by_id command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_printers command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-get-printers",
+          "markdownDescription": "Enables the get_printers command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_printers_by_name command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-get-printers-by-name",
+          "markdownDescription": "Enables the get_printers_by_name command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pause_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-pause-job",
+          "markdownDescription": "Enables the pause_job command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ping command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-ping",
+          "markdownDescription": "Enables the ping command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the print_html command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-print-html",
+          "markdownDescription": "Enables the print_html command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the print_pdf command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-print-pdf",
+          "markdownDescription": "Enables the print_pdf command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the print_pdf_from_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-print-pdf-from-url",
+          "markdownDescription": "Enables the print_pdf_from_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-remove-job",
+          "markdownDescription": "Enables the remove_job command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_temp_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-remove-temp-file",
+          "markdownDescription": "Enables the remove_temp_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the restart_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-restart-job",
+          "markdownDescription": "Enables the restart_job command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the resume_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:allow-resume-job",
+          "markdownDescription": "Enables the resume_job command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_temp_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-create-temp-file",
+          "markdownDescription": "Denies the create_temp_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the custom_get_printers_by_name command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-custom-get-printers-by-name",
+          "markdownDescription": "Denies the custom_get_printers_by_name command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the custom_print_pdf command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-custom-print-pdf",
+          "markdownDescription": "Denies the custom_print_pdf command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_jobs command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-get-jobs",
+          "markdownDescription": "Denies the get_jobs command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_jobs_by_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-get-jobs-by-id",
+          "markdownDescription": "Denies the get_jobs_by_id command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_printers command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-get-printers",
+          "markdownDescription": "Denies the get_printers command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_printers_by_name command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-get-printers-by-name",
+          "markdownDescription": "Denies the get_printers_by_name command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pause_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-pause-job",
+          "markdownDescription": "Denies the pause_job command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ping command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-ping",
+          "markdownDescription": "Denies the ping command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the print_html command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-print-html",
+          "markdownDescription": "Denies the print_html command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the print_pdf command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-print-pdf",
+          "markdownDescription": "Denies the print_pdf command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the print_pdf_from_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-print-pdf-from-url",
+          "markdownDescription": "Denies the print_pdf_from_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-remove-job",
+          "markdownDescription": "Denies the remove_job command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_temp_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-remove-temp-file",
+          "markdownDescription": "Denies the remove_temp_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restart_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-restart-job",
+          "markdownDescription": "Denies the restart_job command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the resume_job command without any pre-configured scope.",
+          "type": "string",
+          "const": "printer:deny-resume-job",
+          "markdownDescription": "Denies the resume_job command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures which\nshell functionality is exposed by default.\n\n#### Granted Permissions\n\nIt allows to use the `open` functionality with a reasonable\nscope pre-configured. It will allow opening `http(s)://`,\n`tel:` and `mailto:` links.\n\n#### This default permission set includes:\n\n- `allow-open`",
           "type": "string",
           "const": "shell:default",

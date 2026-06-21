@@ -28,7 +28,8 @@ pub async fn convert_file(
         Ok("ok".to_string())
     } else {
         let stderr = String::from_utf8_lossy(&result.stderr);
-        Err(format!("x2t failed ({:?}): {}", result.status, stderr))
+        let code = result.status.code().unwrap_or(-1);
+        Err(format!("x2t conversion failed (exit code {}): {}", code, stderr))
     }
 }
 
@@ -79,7 +80,8 @@ fn convert_to_pdf(
         Ok("ok".to_string())
     } else {
         let stderr = String::from_utf8_lossy(&result.stderr);
-        Err(format!("x2t failed ({:?}): {}", result.status, stderr))
+        let code = result.status.code().unwrap_or(-1);
+        Err(format!("x2t conversion failed (exit code {}): {}", code, stderr))
     }
 }
 

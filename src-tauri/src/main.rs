@@ -23,6 +23,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_printer_v2::init())
         .manage(AppState {
             current_file: Mutex::new(None),
             temp_dir,
@@ -37,6 +38,7 @@ fn main() {
             file_ops::print_document,
             file_ops::create_new,
             file_ops::get_current_path,
+            file_ops::open_pdf_viewer,
             bridge::exec_command,
             bridge::set_window_title,
             bridge::set_document_modified,

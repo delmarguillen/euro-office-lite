@@ -306,6 +306,74 @@
           }, 50);
           setTimeout(function() { clearInterval(savePatchInterval); }, 30000);
 
+          // Supply printer list to print preview panel
+          var printSetupDone = false;
+          var printSetupInterval = setInterval(function() {
+            if (printSetupDone) return;
+            try {
+              var apps = [win.DE, win.SSE, win.PE];
+              var names = ['DE', 'SSE', 'PE'];
+              for (var ai = 0; ai < apps.length; ai++) {
+                var app = apps[ai];
+                if (!app || !app.getController) continue;
+                try {
+                  var lm = app.getController('LeftMenu');
+                  if (lm && lm.mode) {
+                    window._eoLog('[EO] Print: app=' + names[ai]
+                      + ' canPreviewPrint=' + lm.mode.canPreviewPrint
+                      + ' canPrint=' + lm.mode.canPrint
+                      + ' isDesktopApp=' + lm.mode.isDesktopApp);
+
+                    if (lm.leftMenu && lm.leftMenu.showMenu) {
+                      var origShowMenu = lm.leftMenu.showMenu;
+                      lm.leftMenu.showMenu = function(tag) {
+                        window._eoLog('[EO] Print: showMenu tag=' + tag);
+                        if (tag === 'file:printpreview') {
+                          window._eoLog('[EO] Print: print preview opened, fetching printers via plugin...');
+                          window.__TAURI__.core.invoke('plugin:printer|get_printers').then(function(rawJson) {
+                            window._eoLog('[EO] Print: plugin printers raw=' + String(rawJson).substring(0, 300));
+                            try {
+                              var pluginPrinters = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
+                              if (!Array.isArray(pluginPrinters)) pluginPrinters = [pluginPrinters];
+                              var defaultPrinter = null;
+                              var printers = [];
+                              for (var pi = 0; pi < pluginPrinters.length; pi++) {
+                                var pp = pluginPrinters[pi];
+                                var pName = pp.Name || pp.name || pp.id || ('Printer ' + pi);
+                                printers.push({
+                                  name: pName,
+                                  color_supported: pp.ColorSupported || pp.color_supported || false,
+                                  duplex_supported: pp.DuplexSupported || pp.duplex_supported || false
+                                });
+                                if (pp.IsDefault || pp.is_default) defaultPrinter = pName;
+                              }
+                              if (!defaultPrinter && printers.length > 0) defaultPrinter = printers[0].name;
+                              var configJson = JSON.stringify({ printers: printers, current_printer: defaultPrinter });
+                              window._eoLog('[EO] Print: sending printer:config with ' + printers.length + ' printers, default=' + defaultPrinter);
+                              if (win.on_native_message) {
+                                win.on_native_message('printer:config', configJson);
+                              }
+                            } catch(pe) {
+                              window._eoLog('[EO] Print: error parsing plugin printers: ' + pe);
+                            }
+                          }).catch(function(err) {
+                            window._eoLog('[EO] Print: plugin get_printers error: ' + err);
+                          });
+                        }
+                        return origShowMenu.apply(this, arguments);
+                      };
+                    }
+
+                    printSetupDone = true;
+                    clearInterval(printSetupInterval);
+                    return;
+                  }
+                } catch(e2) {}
+              }
+            } catch(e) {}
+          }, 200);
+          setTimeout(function() { clearInterval(printSetupInterval); }, 30000);
+
           var fontPatched = false;
           var fontsPreloaded = false;
           var fontPatchInterval = setInterval(function() {
