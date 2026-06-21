@@ -290,6 +290,11 @@
                     e.stopPropagation();
                     window.AscDesktopEditor.LocalFileOpen();
                   }
+                  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'p') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    window.AscDesktopEditor.Print();
+                  }
                 }, true);
 
                 saveAsPatched = true;
@@ -495,6 +500,11 @@
         e.preventDefault();
         e.stopPropagation();
         window.AscDesktopEditor.LocalFileOpen();
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'p') {
+        e.preventDefault();
+        e.stopPropagation();
+        window.AscDesktopEditor.Print();
       }
     }, true);
 

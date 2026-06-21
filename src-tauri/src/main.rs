@@ -34,6 +34,7 @@ fn main() {
             file_ops::save_file_as,
             file_ops::save_changes,
             file_ops::write_editor_bin,
+            file_ops::print_document,
             file_ops::create_new,
             file_ops::get_current_path,
             bridge::exec_command,

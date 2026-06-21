@@ -80,6 +80,7 @@ window.AscDesktopEditor = {
   _editorWindow: null,
   _currentDocType: null,
   _isModified: false,
+  _isPrinting: false,
 
   CreateEditorApi: function(api) {
     try {
@@ -162,13 +163,29 @@ window.AscDesktopEditor = {
   },
 
   LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
+    window._eoLog('[EO] LocalFileSave: === CALLED ===');
+    window._eoLog('[EO] LocalFileSave: param=' + param + ', fileType=' + fileType);
+    window._eoLog('[EO] LocalFileSave: caller=' + (new Error().stack || 'no stack'));
     var isSaveAs = param && param.indexOf('saveas=true') !== -1;
+    window._eoLog('[EO] LocalFileSave: isSaveAs=' + isSaveAs);
+
+    if (isSaveAs && fileType === 513 && !window.AscDesktopEditor._isPrinting) {
+      window._eoLog('[EO] LocalFileSave: PDF print requested, redirecting to Print()');
+      window.AscDesktopEditor.Print();
+      return;
+    }
+    if (window.AscDesktopEditor._isPrinting) {
+      window._eoLog('[EO] LocalFileSave: skipped (print in progress)');
+      return;
+    }
+
     var ref = _getEditor();
-    if (!ref.editor) return;
+    if (!ref.editor) { window._eoLog('[EO] LocalFileSave: no editor, aborting'); return; }
 
     try {
       var binData = ref.editor.asc_nativeGetFile();
-      if (!binData) return;
+      window._eoLog('[EO] LocalFileSave: binData type=' + typeof binData + ', length=' + (binData ? (binData.length || binData.byteLength || '?') : 'null'));
+      if (!binData) { window._eoLog('[EO] LocalFileSave: no binData, aborting'); return; }
 
       var b64;
       if (typeof binData === 'string') {
@@ -232,8 +249,50 @@ window.AscDesktopEditor = {
   Paste: () => document.execCommand('paste'),
   Cut: () => document.execCommand('cut'),
 
-  Print: async () => {
-    return await invoke('print_document');
+  Print: async function() {
+    window._eoLog('[EO] Print: === PRINT CALLED ===');
+    window._eoLog('[EO] Print: caller=' + (new Error().stack || 'no stack'));
+    var ref = _getEditor();
+    window._eoLog('[EO] Print: editor ref exists=' + !!ref.editor + ', ew exists=' + !!ref.ew);
+    if (!ref.editor) {
+      window._eoLog('[EO] Print: no editor, aborting');
+      return;
+    }
+    try {
+      window.AscDesktopEditor._isPrinting = true;
+      window._eoLog('[EO] Print: calling asc_nativeGetFile...');
+      var binData = ref.editor.asc_nativeGetFile();
+      window._eoLog('[EO] Print: binData type=' + typeof binData + ', length=' + (binData ? (binData.length || binData.byteLength || '?') : 'null'));
+      if (!binData) {
+        window._eoLog('[EO] Print: asc_nativeGetFile returned null/empty');
+        return;
+      }
+      var b64;
+      if (typeof binData === 'string') {
+        b64 = btoa(binData);
+      } else {
+        var binary = '';
+        var bytes = new Uint8Array(binData);
+        for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        b64 = btoa(binary);
+      }
+      window._eoLog('[EO] Print: base64 encoded, length=' + b64.length);
+      window._eoLog('[EO] Print: calling write_editor_bin...');
+      await invoke('write_editor_bin', { data: b64 });
+      window._eoLog('[EO] Print: write_editor_bin OK, calling print_document...');
+      var result = await invoke('print_document');
+      window._eoLog('[EO] Print: print_document result=' + result);
+      if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
+        ref.ew.DesktopOfflineAppDocumentEndSave(0);
+      }
+    } catch(e) {
+      window._eoLog('[EO] Print: ERROR: ' + (e.message || e));
+      if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
+        ref.ew.DesktopOfflineAppDocumentEndSave(1);
+      }
+    } finally {
+      window.AscDesktopEditor._isPrinting = false;
+    }
   },
   IsSupportNativePrint: () => true,
 
@@ -246,6 +305,7 @@ window.AscDesktopEditor = {
   },
 
   execCommand: function(cmd, param) {
+    window._eoLog('[EO] execCommand: cmd=' + cmd + ', param=' + (param ? param.substring(0, 200) : 'null'));
     if (cmd === 'saveas') {
       window.AscDesktopEditor.LocalFileSave('saveas=true;', '', undefined, 0, '{}');
     } else if (cmd === 'editor:event') {
