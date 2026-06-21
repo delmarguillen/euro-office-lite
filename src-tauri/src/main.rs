@@ -124,6 +124,11 @@ fn main() {
 
             run_font_generation(&temp_dir, &binaries_dir);
 
+            #[cfg(feature = "devtools")]
+            if let Some(w) = app.get_webview_window("main") {
+                w.open_devtools();
+            }
+
             if let Some(ref file_path) = file_to_open {
                 let handle = app.handle().clone();
                 let fp = file_path.clone();
