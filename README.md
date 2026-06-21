@@ -23,7 +23,7 @@ npx tauri dev
 
 `setup.ps1` runs `grunt develop` inside sdkjs to generate the JS module loaders (`scripts.js`) that each editor needs at runtime. Run it again after updating the sdkjs submodule.
 
-`get-x2t.ps1` installs ONLYOFFICE Desktop Editors silently to extract the x2t converter and its dependencies into `src-tauri/binaries/`. You can uninstall ONLYOFFICE afterwards.
+`get-x2t.ps1` downloads the x2t converter binaries (~60 MB) from the repo's `dependencies` release into `src-tauri/binaries/`. Requires [GitHub CLI](https://cli.github.com/) (`gh`) authenticated.
 
 ## Build installer
 

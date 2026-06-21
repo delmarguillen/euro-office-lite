@@ -1,43 +1,44 @@
 param(
-    [string]$Version = "v9.4.0"
+    [string]$Repo = "delmarguillen/euro-office-lite"
 )
 
 $ErrorActionPreference = "Stop"
 $targetDir = Join-Path $PSScriptRoot "..\src-tauri\binaries"
-$installerUrl = "https://github.com/ONLYOFFICE/DesktopEditors/releases/download/$Version/DesktopEditors_x64.exe"
-$tempInstaller = Join-Path $env:TEMP "DesktopEditors_x64.exe"
+$zipName = "x2t-binaries.zip"
+$tempZip = Join-Path $env:TEMP $zipName
 
 if (Test-Path (Join-Path $targetDir "x2t-*.exe")) {
     Write-Host "x2t already exists in $targetDir"
     exit 0
 }
 
-Write-Host "Downloading ONLYOFFICE Desktop Editors $Version..."
-if (-not (Test-Path $tempInstaller)) {
-    Invoke-WebRequest -Uri $installerUrl -OutFile $tempInstaller -UseBasicParsing
-}
-
-Write-Host "Installing silently (will require admin)..."
-Start-Process -FilePath $tempInstaller -ArgumentList "/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES" -Wait -Verb RunAs
-
-$converterDir = Join-Path $env:ProgramFiles "ONLYOFFICE\DesktopEditors\converter"
-if (-not (Test-Path $converterDir)) {
-    Write-Error "ONLYOFFICE converter not found at $converterDir"
-    exit 1
-}
+Write-Host "Downloading x2t binaries from '$Repo' dependencies release..."
+gh release download dependencies --repo $Repo --pattern $zipName --output $tempZip --clobber
 
 if (-not (Test-Path $targetDir)) {
     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
 }
 
-Write-Host "Copying x2t and dependencies..."
-Get-ChildItem $converterDir -File | ForEach-Object {
-    Copy-Item $_.FullName -Destination $targetDir -Force
-}
+Write-Host "Extracting to $targetDir..."
+Expand-Archive -Path $tempZip -DestinationPath $targetDir -Force
+Remove-Item $tempZip -Force
 
 $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq "Arm64") { "aarch64" } else { "x86_64" }
 $triple = "$arch-pc-windows-msvc"
-Rename-Item (Join-Path $targetDir "x2t.exe") "x2t-$triple.exe" -Force
 
-Write-Host "x2t installed to $targetDir (target: $triple)"
-Write-Host "You can now uninstall ONLYOFFICE Desktop Editors if desired."
+$x2tTarget = Join-Path $targetDir "x2t-$triple.exe"
+if (-not (Test-Path $x2tTarget)) {
+    $x2tX64 = Join-Path $targetDir "x2t-x86_64-pc-windows-msvc.exe"
+    $x2tPlain = Join-Path $targetDir "x2t.exe"
+    if (Test-Path $x2tX64) {
+        Rename-Item $x2tX64 "x2t-$triple.exe" -Force
+    } elseif (Test-Path $x2tPlain) {
+        Rename-Item $x2tPlain "x2t-$triple.exe" -Force
+    } else {
+        Write-Error "x2t binary not found after extraction"
+        exit 1
+    }
+}
+
+$count = (Get-ChildItem $targetDir -Recurse -File).Count
+Write-Host "x2t ready: $count files in $targetDir (target: $triple)"
