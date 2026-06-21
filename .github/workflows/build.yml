@@ -48,6 +48,23 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Generate sdkjs develop scripts
+        shell: pwsh
+        run: |
+          echo "::group::grunt-develop"
+          Push-Location src\sdkjs\build
+          npm ci
+          npx grunt develop --desktop=true
+          Pop-Location
+          $wordScripts = "src\sdkjs\develop\sdkjs\word\scripts.js"
+          $content = Get-Content $wordScripts -Raw -Encoding utf8
+          if ($content -notmatch 'word/document/editor\.js') {
+            Write-Host "Patching word/scripts.js with editor.js..."
+            $content = $content -replace '\];$', ",`n`t`"../../../../sdkjs/word/document/editor.js`"`n];"
+            Set-Content $wordScripts -Value $content -Encoding utf8 -NoNewline
+          }
+          echo "::endgroup::"
+
       - name: Download x2t binaries
         shell: pwsh
         run: .\scripts\get-x2t-ci.ps1
