@@ -1,4 +1,5 @@
 use tauri::AppHandle;
+use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
 pub async fn convert_file(
@@ -8,7 +9,8 @@ pub async fn convert_file(
     _format_from: i32,
     format_to: i32,
 ) -> Result<String, String> {
-    let binaries_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let binaries_dir = resource_dir.join("binaries");
 
     if format_to == 513 {
         return convert_to_pdf(&binaries_dir, input, output);
@@ -86,13 +88,19 @@ fn convert_to_pdf(
 }
 
 fn find_x2t_exe(binaries_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    for entry in std::fs::read_dir(binaries_dir).map_err(|e| e.to_string())? {
-        if let Ok(entry) = entry {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("x2t-") && name.ends_with(".exe") {
-                return Ok(entry.path());
+    let search_dirs = [
+        binaries_dir.to_path_buf(),
+        binaries_dir.parent().unwrap_or(binaries_dir).to_path_buf(),
+    ];
+    for dir in &search_dirs {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if (name.starts_with("x2t-") || name == "x2t.exe") && name.ends_with(".exe") {
+                    return Ok(entry.path());
+                }
             }
         }
     }
-    Err("x2t executable not found in binaries directory".to_string())
+    Err("x2t executable not found".to_string())
 }

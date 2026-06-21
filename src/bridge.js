@@ -17,6 +17,31 @@ window._eoLog = function() {
   }
 };
 
+window.addEventListener('error', function(e) {
+  window._eoLog('[JS-ERROR] ' + e.message + ' at ' + (e.filename || '') + ':' + (e.lineno || ''));
+});
+window.addEventListener('unhandledrejection', function(e) {
+  window._eoLog('[JS-REJECT] ' + (e.reason && (e.reason.message || e.reason) || 'unknown'));
+});
+var _origConsoleError = console.error;
+console.error = function() {
+  var parts = [];
+  for (var i = 0; i < arguments.length; i++) {
+    try { parts.push(String(arguments[i])); } catch(e) { parts.push('[?]'); }
+  }
+  window._eoLog('[CONSOLE-ERROR] ' + parts.join(' '));
+  _origConsoleError.apply(console, arguments);
+};
+var _origConsoleWarn = console.warn;
+console.warn = function() {
+  var parts = [];
+  for (var i = 0; i < arguments.length; i++) {
+    try { parts.push(String(arguments[i])); } catch(e) { parts.push('[?]'); }
+  }
+  window._eoLog('[CONSOLE-WARN] ' + parts.join(' '));
+  _origConsoleWarn.apply(console, arguments);
+};
+
 function _findEditorWindow(win) {
   try { if (win.AscCommon) return win; } catch(e) {}
   for (var i = 0; i < win.frames.length; i++) {
@@ -163,29 +188,20 @@ window.AscDesktopEditor = {
   },
 
   LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
-    window._eoLog('[EO] LocalFileSave: === CALLED ===');
-    window._eoLog('[EO] LocalFileSave: param=' + param + ', fileType=' + fileType);
-    window._eoLog('[EO] LocalFileSave: caller=' + (new Error().stack || 'no stack'));
     var isSaveAs = param && param.indexOf('saveas=true') !== -1;
-    window._eoLog('[EO] LocalFileSave: isSaveAs=' + isSaveAs);
 
     if (isSaveAs && fileType === 513 && !window.AscDesktopEditor._isPrinting) {
-      window._eoLog('[EO] LocalFileSave: PDF print requested, redirecting to Print()');
       window.AscDesktopEditor.Print();
       return;
     }
-    if (window.AscDesktopEditor._isPrinting) {
-      window._eoLog('[EO] LocalFileSave: skipped (print in progress)');
-      return;
-    }
+    if (window.AscDesktopEditor._isPrinting) return;
 
     var ref = _getEditor();
-    if (!ref.editor) { window._eoLog('[EO] LocalFileSave: no editor, aborting'); return; }
+    if (!ref.editor) return;
 
     try {
       var binData = ref.editor.asc_nativeGetFile();
-      window._eoLog('[EO] LocalFileSave: binData type=' + typeof binData + ', length=' + (binData ? (binData.length || binData.byteLength || '?') : 'null'));
-      if (!binData) { window._eoLog('[EO] LocalFileSave: no binData, aborting'); return; }
+      if (!binData) return;
 
       var b64;
       if (typeof binData === 'string') {
@@ -200,16 +216,10 @@ window.AscDesktopEditor = {
       await invoke('write_editor_bin', { data: b64 });
 
       var currentPath = await invoke('get_current_path');
-      window._eoLog('[EO] LocalFileSave: currentPath=' + currentPath);
-
-      if (!isSaveAs && !currentPath) {
-        window._eoLog('[EO] LocalFileSave: new document, redirecting Save to Save As');
-        isSaveAs = true;
-      }
+      if (!isSaveAs && !currentPath) isSaveAs = true;
 
       if (isSaveAs) {
         var docType = window.AscDesktopEditor._currentDocType || 'word';
-        window._eoLog('[EO] SaveAs: _currentDocType=' + docType);
 
         var filters;
         if (docType === 'cell') {
@@ -234,20 +244,27 @@ window.AscDesktopEditor = {
             { name: 'PDF', extensions: ['pdf'] },
           ];
         }
-        window._eoLog('[EO] SaveAs: filters=' + JSON.stringify(filters.map(function(f) { return f.extensions[0]; })));
-
         var dialog = window.__TAURI__.dialog;
         var savePath = await dialog.save({ filters: filters });
-        window._eoLog('[EO] SaveAs: savePath=' + savePath);
 
         if (savePath) {
-          var ext = savePath.split('.').pop().toLowerCase();
-          window._eoLog('[EO] SaveAs: target extension=' + ext);
           try {
             await invoke('save_file_as', { path: savePath });
-            window._eoLog('[EO] SaveAs: save_file_as OK');
+            var savedName = savePath.replace(/\\/g, '/').split('/').pop();
+            invoke('set_window_title', { name: savedName }).catch(function(){});
+            try {
+              var frames = document.querySelectorAll('iframe');
+              for (var fi = 0; fi < frames.length; fi++) {
+                try {
+                  var titleInput = frames[fi].contentDocument.querySelector('#title-doc-name');
+                  if (titleInput) titleInput.value = savedName;
+                  var ribInput = frames[fi].contentDocument.querySelector('#rib-doc-name');
+                  if (ribInput) ribInput.value = savedName;
+                } catch(te) {}
+              }
+            } catch(te) {}
           } catch(saveErr) {
-            window._eoLog('[EO] SaveAs: save_file_as FAILED: ' + saveErr);
+            window._eoLog('[EO] SaveAs failed: ' + saveErr);
             await window.__TAURI__.dialog.message(
               'No se pudo guardar el archivo.\n\nFormato de destino no compatible con este tipo de documento.',
               { title: 'Error al guardar', kind: 'error' }
@@ -295,9 +312,6 @@ window.AscDesktopEditor = {
   _pendingPrinter: null,
 
   Print: async function(optionsJson) {
-    window._eoLog('[EO] Print: === PRINT CALLED ===');
-    window._eoLog('[EO] Print: optionsJson=' + (optionsJson || 'none'));
-
     var printerName = window.AscDesktopEditor._pendingPrinter;
     if (optionsJson) {
       try {
@@ -307,20 +321,15 @@ window.AscDesktopEditor = {
         }
       } catch(e) {}
     }
-    window._eoLog('[EO] Print: printerName=' + printerName);
 
     var ref = _getEditor();
-    if (!ref.editor) {
-      window._eoLog('[EO] Print: no editor, aborting');
-      return;
-    }
+    if (!ref.editor) return;
+
     try {
       window.AscDesktopEditor._isPrinting = true;
       var binData = ref.editor.asc_nativeGetFile();
-      if (!binData) {
-        window._eoLog('[EO] Print: asc_nativeGetFile returned null/empty');
-        return;
-      }
+      if (!binData) return;
+
       var b64;
       if (typeof binData === 'string') {
         b64 = btoa(binData);
@@ -331,12 +340,9 @@ window.AscDesktopEditor = {
         b64 = btoa(binary);
       }
       await invoke('write_editor_bin', { data: b64 });
-      window._eoLog('[EO] Print: write_editor_bin OK, generating PDF...');
       var pdfPath = await invoke('print_document');
-      window._eoLog('[EO] Print: PDF generated at ' + pdfPath);
 
       if (printerName) {
-        window._eoLog('[EO] Print: sending to printer via plugin: ' + printerName);
         var printResult = await invoke('plugin:printer|print_pdf', {
           id: printerName,
           path: pdfPath,
@@ -344,9 +350,7 @@ window.AscDesktopEditor = {
           print_settings: '{}',
           remove_after_print: true
         });
-        window._eoLog('[EO] Print: plugin print result=' + printResult);
       } else {
-        window._eoLog('[EO] Print: no printer selected, opening PDF in viewer...');
         await invoke('open_pdf_viewer', { path: pdfPath });
       }
 
@@ -373,7 +377,6 @@ window.AscDesktopEditor = {
   },
 
   execCommand: function(cmd, param) {
-    window._eoLog('[EO] execCommand: cmd=' + cmd + ', param=' + (param ? param.substring(0, 200) : 'null'));
     if (cmd === 'saveas') {
       window.AscDesktopEditor.LocalFileSave('saveas=true;', '', undefined, 0, '{}');
     } else if (cmd === 'editor:event') {
@@ -432,6 +435,19 @@ window.AscDesktopEditor = {
 
   IsSignaturesSupport: () => false,
   IsProtectionSupport: () => false,
+  isBlockchainSupport: () => false,
+  SpellCheck: function() {},
+  SetFullscreen: function(fullscreen) {
+    var win = window.__TAURI__.window.getCurrentWindow();
+    var fs = !!fullscreen;
+    win.setFullscreen(fs).catch(function(){});
+    win.setAlwaysOnTop(fs).catch(function(){});
+  },
+  endReporter: function() {
+    var win = window.__TAURI__.window.getCurrentWindow();
+    win.setFullscreen(false).catch(function(){});
+    win.setAlwaysOnTop(false).catch(function(){});
+  },
   ConsoleLog: (msg) => console.log('[EO]', msg),
 
   NativeViewerOpen: function() {},
@@ -461,5 +477,32 @@ window.UpdateInstallPlugins = window.UpdateInstallPlugins || function() {};
 listen('file-opened', (event) => {
   if (event.payload && event.payload.data) {
     _loadEditorBin(event.payload.data, event.payload.path);
+  }
+});
+
+listen('open-file', async (event) => {
+  if (!event.payload) return;
+  var filePath = event.payload;
+  window._eoLog('[EO] open-file event received: ' + filePath);
+
+  var ext = filePath.split('.').pop().toLowerCase();
+  var docType = 'word';
+  if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) docType = 'cell';
+  else if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) docType = 'slide';
+
+  try {
+    var b64data = await invoke('open_file', { path: filePath });
+    var fileName = filePath.replace(/\\/g, '/').split('/').pop();
+    window._pendingFileData = { data: b64data, path: filePath, name: fileName };
+    window._eoLog('[EO] open-file: converted OK, opening editor as ' + docType);
+
+    if (window._openEditor) {
+      window._openEditor(docType);
+    } else {
+      window._eoLog('[EO] open-file: _openEditor not available, trying LocalFileOpen');
+      window.AscDesktopEditor.LocalFileOpen(filePath);
+    }
+  } catch(e) {
+    window._eoLog('[EO] open-file: conversion failed: ' + (e.message || e));
   }
 });

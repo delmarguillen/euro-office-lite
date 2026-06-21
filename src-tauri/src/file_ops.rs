@@ -232,7 +232,9 @@ pub async fn create_new(
     *state.current_file.lock().unwrap() = None;
     *state.modified.lock().unwrap() = false;
 
-    open_file(app, state, template_path.to_string_lossy().to_string()).await
+    let result = open_file(app, state.clone(), template_path.to_string_lossy().to_string()).await;
+    *state.current_file.lock().unwrap() = None;
+    result
 }
 
 

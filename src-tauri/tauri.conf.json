@@ -16,7 +16,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ascdesktop:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-src 'self'; img-src 'self' data: blob:; font-src 'self' data: ascdesktop:; connect-src 'self' data: blob: ascdesktop:"
+      "csp": "default-src * 'unsafe-eval' 'unsafe-inline' data: blob: ascdesktop: ipc: http://ipc.localhost; script-src * 'unsafe-eval' 'unsafe-inline'; style-src * 'unsafe-inline'",
+      "dangerousDisableAssetCspModification": true
     }
   },
   "bundle": {
@@ -24,6 +25,41 @@
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
     "externalBin": ["binaries/x2t"],
-    "resources": ["binaries/*.dll", "binaries/*.config", "binaries/*.dat"]
+    "resources": [
+      "binaries/*.dll",
+      "binaries/*.config",
+      "binaries/*.dat",
+      "binaries/*.ttf",
+      "binaries/*.js",
+      "binaries/*.bin",
+      "binaries/fonts/*",
+      "binaries/core-fonts/*",
+      "binaries/fontdata/*",
+      "templates/*"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["docx", "doc", "odt", "rtf", "txt"],
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "description": "Document"
+      },
+      {
+        "ext": ["xlsx", "xls", "ods", "csv"],
+        "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "description": "Spreadsheet"
+      },
+      {
+        "ext": ["pptx", "ppt", "odp"],
+        "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "description": "Presentation"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": true,
+        "languages": ["Spanish", "English"]
+      }
+    }
   }
 }

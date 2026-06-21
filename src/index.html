@@ -496,7 +496,17 @@
       return el;
     };
 
-    function openEditor(docType) {
+    window._openEditor = openEditor;
+    async function openEditor(docType) {
+      if (!window._pendingFileData) {
+        try {
+          var b64 = await window.__TAURI__.core.invoke('create_new', { docType: docType });
+          var defaultName = docType === 'cell' ? 'Nueva hoja de cálculo' : docType === 'slide' ? 'Nueva presentación' : 'Nuevo documento';
+          window._pendingFileData = { data: b64, path: null, name: defaultName };
+        } catch(e) {
+          window._eoLog('[EO] create_new failed: ' + (e.message || e));
+        }
+      }
       window.AscDesktopEditor._currentDocType = docType;
       startScreen.classList.add('hidden');
       document.getElementById('placeholder').classList.add('active');
