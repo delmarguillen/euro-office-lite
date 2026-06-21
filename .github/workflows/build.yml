@@ -65,6 +65,14 @@ jobs:
           }
           echo "::endgroup::"
 
+      - name: Prepare fonts and AllFonts.js
+        shell: pwsh
+        run: |
+          echo "::group::prepare-fonts"
+          pip install Pillow --quiet
+          .\scripts\prepare-fonts.ps1
+          echo "::endgroup::"
+
       - name: Download x2t binaries
         shell: pwsh
         run: .\scripts\get-x2t-ci.ps1
