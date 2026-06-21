@@ -1,5 +1,8 @@
 {
   "dependencies": {
     "tauri-plugin-printer-v2": "^0.2.4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2"
   }
 }
