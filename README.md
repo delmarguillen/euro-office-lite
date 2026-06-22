@@ -1,8 +1,14 @@
 # Euro-Office Lite
 
-Desktop office suite built on Tauri v2 (WebView2 on Windows) with sdkjs-based document editors.
+Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. ~96 MB installer, no cloud, no telemetry.
 
 Supports Word, Excel, and PowerPoint documents with native file operations and direct printing.
+
+<p align="center">
+  <img src="assets/demo.gif" alt="Euro-Office Lite demo" width="800">
+  <br><br>
+  <a href="https://github.com/delmarguillen/euro-office-lite/releases"><strong>Download the latest release</strong></a>
+</p>
 
 ## Requirements
 
