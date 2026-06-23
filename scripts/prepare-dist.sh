@@ -42,7 +42,8 @@ copy_tree() {
     local dest_path="$2"
     local label="$3"
     shift 3
-    local excludes=("$@")
+    local excludes=()
+    if [ $# -gt 0 ]; then excludes=("$@"); fi
 
     if [ ! -d "$src_path" ]; then
         log "SKIP (not found): $label -> $src_path"
@@ -51,9 +52,11 @@ copy_tree() {
 
     local rsync_args=(-a --quiet)
     rsync_args+=(--exclude '.git')
-    for excl in "${excludes[@]}"; do
-        rsync_args+=(--exclude "$excl")
-    done
+    if [ ${#excludes[@]} -gt 0 ]; then
+        for excl in "${excludes[@]}"; do
+            rsync_args+=(--exclude "$excl")
+        done
+    fi
 
     mkdir -p "$dest_path"
     rsync "${rsync_args[@]}" "$src_path/" "$dest_path/"
