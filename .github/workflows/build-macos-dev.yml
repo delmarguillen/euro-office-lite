@@ -185,6 +185,37 @@ jobs:
           fi
           echo "::endgroup::"
 
+      - name: Fix dylib paths in app bundle
+        run: |
+          APP_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
+          APP_NAME=$(ls "$APP_DIR" | grep '\.app$' | head -1)
+          APP_PATH="$APP_DIR/$APP_NAME"
+          MACOS_DIR="$APP_PATH/Contents/MacOS"
+          FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
+          RESOURCES_BINARIES="$APP_PATH/Contents/Resources/binaries"
+
+          echo "::group::Fix dylib locations"
+          # x2t expects dylibs in Contents/Frameworks/ (@rpath = @executable_path/../Frameworks)
+          mkdir -p "$FRAMEWORKS_DIR"
+          if [ -d "$RESOURCES_BINARIES" ]; then
+            cp "$RESOURCES_BINARIES"/*.dylib "$FRAMEWORKS_DIR/" 2>/dev/null || true
+            echo "Copied dylibs to Frameworks/:"
+            ls -lh "$FRAMEWORKS_DIR/"
+          fi
+          echo "::endgroup::"
+
+          # Regenerate DMG with fixed app bundle
+          echo "::group::Regenerate DMG"
+          DMG_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          DMG_FILE=$(ls "$DMG_DIR"/*.dmg 2>/dev/null | head -1)
+          if [ -n "$DMG_FILE" ]; then
+            rm "$DMG_FILE"
+            hdiutil create -volname "Euro-Office Lite" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_FILE"
+            echo "Regenerated DMG:"
+            ls -lh "$DMG_FILE"
+          fi
+          echo "::endgroup::"
+
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
