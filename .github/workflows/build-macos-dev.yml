@@ -159,6 +159,17 @@ jobs:
             echo "::endgroup::"
           fi
 
+      - name: Fix x2t dylib rpath
+        run: |
+          echo "::group::Patch x2t rpath before bundling"
+          X2T="src-tauri/binaries/x2t-${{ matrix.target }}"
+          if [ -f "$X2T" ]; then
+            install_name_tool -add_rpath "@executable_path/../Resources/binaries" "$X2T" 2>/dev/null || true
+            echo "Updated rpaths for x2t:"
+            otool -l "$X2T" | grep -A2 LC_RPATH
+          fi
+          echo "::endgroup::"
+
       - name: Build Tauri app
         run: |
           set -o pipefail
@@ -182,42 +193,6 @@ jobs:
             ls -lh "$APP_DIR/"
           else
             echo "No .app directory found at $APP_DIR"
-          fi
-          echo "::endgroup::"
-
-      - name: Fix dylib paths in app bundle
-        run: |
-          APP_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
-          APP_NAME=$(ls "$APP_DIR" | grep '\.app$' | head -1)
-          APP_PATH="$APP_DIR/$APP_NAME"
-          MACOS_DIR="$APP_PATH/Contents/MacOS"
-          FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
-          RESOURCES_BINARIES="$APP_PATH/Contents/Resources/binaries"
-
-          echo "::group::Fix dylib locations"
-          # x2t expects dylibs in Contents/Frameworks/ (@rpath = @executable_path/../Frameworks)
-          mkdir -p "$FRAMEWORKS_DIR"
-          if [ -d "$RESOURCES_BINARIES" ]; then
-            cp "$RESOURCES_BINARIES"/*.dylib "$FRAMEWORKS_DIR/" 2>/dev/null || true
-            echo "Copied dylibs to Frameworks/:"
-            ls -lh "$FRAMEWORKS_DIR/"
-          fi
-          echo "::endgroup::"
-
-          # Regenerate DMG with fixed app bundle
-          echo "::group::Regenerate DMG"
-          DMG_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
-          DMG_FILE=$(ls "$DMG_DIR"/*.dmg 2>/dev/null | head -1)
-          if [ -n "$DMG_FILE" ]; then
-            rm "$DMG_FILE"
-            # Stage the .app in a temp folder so hdiutil preserves the .app structure
-            STAGING=$(mktemp -d)
-            cp -r "$APP_PATH" "$STAGING/"
-            ln -s /Applications "$STAGING/Applications"
-            hdiutil create -volname "Euro-Office Lite" -srcfolder "$STAGING" -ov -format UDZO "$DMG_FILE"
-            rm -rf "$STAGING"
-            echo "Regenerated DMG:"
-            ls -lh "$DMG_FILE"
           fi
           echo "::endgroup::"
 
