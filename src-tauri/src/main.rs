@@ -49,11 +49,16 @@ fn main() {
         }
     };
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_printer_v2::init())
-        .manage(AppState {
+        .plugin(tauri_plugin_shell::init());
+
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.plugin(tauri_plugin_printer_v2::init());
+    }
+
+    builder.manage(AppState {
             current_file: Mutex::new(None),
             temp_dir: temp_dir.clone(),
             modified: Mutex::new(false),
