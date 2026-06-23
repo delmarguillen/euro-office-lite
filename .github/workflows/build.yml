@@ -12,7 +12,7 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-latest
     strategy:
       matrix:
@@ -129,8 +129,121 @@ jobs:
             ${{ runner.temp }}/euro-office-lite/prepare-dist.log
             ${{ runner.temp }}/tauri-build.log
 
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [aarch64-apple-darwin]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Generate sdkjs develop scripts
+        run: |
+          echo "::group::grunt-develop"
+          cd src/sdkjs/build
+          npm ci
+          npx grunt develop --desktop=true
+          cd "$GITHUB_WORKSPACE"
+
+          WORD_SCRIPTS="src/sdkjs/develop/sdkjs/word/scripts.js"
+          if ! grep -q 'word/document/editor\.js' "$WORD_SCRIPTS" 2>/dev/null; then
+            echo "Patching word/scripts.js with editor.js..."
+            sed -i '' 's/\];$/,\n\t"..\/..\/..\/..\/sdkjs\/word\/document\/editor.js"\n];/' "$WORD_SCRIPTS"
+          fi
+          echo "::endgroup::"
+
+      - name: Prepare fonts and AllFonts.js
+        run: |
+          echo "::group::prepare-fonts"
+          pip3 install Pillow --quiet --break-system-packages || pip3 install Pillow --quiet
+          chmod +x scripts/prepare-fonts.sh
+          bash scripts/prepare-fonts.sh
+          echo "::endgroup::"
+
+      - name: Generate macOS icons
+        run: |
+          echo "::group::generate-icons"
+          chmod +x scripts/generate-icons.sh
+          bash scripts/generate-icons.sh
+          echo "::endgroup::"
+
+      - name: Download x2t macOS binaries
+        run: |
+          chmod +x scripts/get-x2t-ci.sh
+          bash scripts/get-x2t-ci.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fix x2t binary (rpath + ad-hoc re-sign)
+        run: |
+          echo "::group::Patch x2t rpath and re-sign"
+          X2T="src-tauri/binaries/x2t-${{ matrix.target }}"
+          if [ -f "$X2T" ]; then
+            install_name_tool -add_rpath "@executable_path/../Resources/binaries" "$X2T" 2>/dev/null || true
+            codesign --force --sign - "$X2T"
+            echo "Updated rpaths:"
+            otool -l "$X2T" | grep -A2 LC_RPATH
+          fi
+          echo "::endgroup::"
+
+      - name: Stage frontend distribution
+        run: |
+          echo "::group::prepare-dist"
+          chmod +x scripts/prepare-dist.sh
+          bash scripts/prepare-dist.sh
+          echo "::endgroup::"
+
+      - name: Build Tauri app
+        run: |
+          set -o pipefail
+          npx tauri build \
+            --target ${{ matrix.target }} \
+            --config '{"bundle":{"targets":["dmg"],"icon":["icons/icon.icns","icons/icon.png","icons/128x128.png","icons/32x32.png"],"resources":["binaries/*.dylib","binaries/*.config","templates/*"]}}' \
+            2>&1 | tee /tmp/tauri-build.log
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.target }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-macos-${{ matrix.target }}
+          path: /tmp/tauri-build.log
+
   release:
-    needs: build
+    needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
 
     steps:
@@ -150,4 +263,6 @@ jobs:
           name: Euro-Office Lite ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
           generate_release_notes: true
-          files: installers/*.exe
+          files: |
+            installers/*.exe
+            installers/*.dmg
