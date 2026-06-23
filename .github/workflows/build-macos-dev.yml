@@ -210,7 +210,12 @@ jobs:
           DMG_FILE=$(ls "$DMG_DIR"/*.dmg 2>/dev/null | head -1)
           if [ -n "$DMG_FILE" ]; then
             rm "$DMG_FILE"
-            hdiutil create -volname "Euro-Office Lite" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_FILE"
+            # Stage the .app in a temp folder so hdiutil preserves the .app structure
+            STAGING=$(mktemp -d)
+            cp -r "$APP_PATH" "$STAGING/"
+            ln -s /Applications "$STAGING/Applications"
+            hdiutil create -volname "Euro-Office Lite" -srcfolder "$STAGING" -ov -format UDZO "$DMG_FILE"
+            rm -rf "$STAGING"
             echo "Regenerated DMG:"
             ls -lh "$DMG_FILE"
           fi
