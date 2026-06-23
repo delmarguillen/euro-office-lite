@@ -1,0 +1,172 @@
+name: Extract x2t macOS binaries (one-shot)
+
+on:
+  workflow_dispatch:
+    inputs:
+      onlyoffice_version:
+        description: 'ONLYOFFICE Desktop Editors version to download'
+        type: string
+        default: 'v8.2.0'
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Diagnose environment
+        run: |
+          echo "::group::System info"
+          uname -a
+          sw_vers
+          echo "Arch: $(uname -m)"
+          df -h /
+          echo "::endgroup::"
+
+      - name: Download ONLYOFFICE DMG
+        run: |
+          VERSION="${{ github.event.inputs.onlyoffice_version }}"
+          URL="https://github.com/ONLYOFFICE/DesktopEditors/releases/download/${VERSION}/ONLYOFFICE-arm.dmg"
+          echo "Downloading: $URL"
+          curl -L -o /tmp/onlyoffice.dmg "$URL"
+          ls -lh /tmp/onlyoffice.dmg
+
+      - name: Mount DMG and explore contents
+        run: |
+          echo "::group::Mount DMG"
+          hdiutil attach /tmp/onlyoffice.dmg -mountpoint /tmp/onlyoffice -nobrowse
+          echo "::endgroup::"
+
+          echo "::group::Top-level contents"
+          ls -la /tmp/onlyoffice/
+          echo "::endgroup::"
+
+          echo "::group::Find .app bundle"
+          find /tmp/onlyoffice -maxdepth 1 -name "*.app" -print
+          echo "::endgroup::"
+
+          echo "::group::App bundle structure (depth 3)"
+          APP=$(find /tmp/onlyoffice -maxdepth 1 -name "*.app" -print | head -1)
+          if [ -n "$APP" ]; then
+            find "$APP" -maxdepth 3 -type d | head -50
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Find x2t binary"
+          find /tmp/onlyoffice -name "x2t" -type f 2>/dev/null
+          find /tmp/onlyoffice -name "x2t*" -type f 2>/dev/null
+          echo "::endgroup::"
+
+          echo "::group::Find converter directory"
+          find /tmp/onlyoffice -type d -name "converter" 2>/dev/null
+          echo "::endgroup::"
+
+          echo "::group::Find dylibs"
+          find /tmp/onlyoffice -name "*.dylib" -type f 2>/dev/null | head -30
+          echo "::endgroup::"
+
+          echo "::group::Find all binaries in Frameworks"
+          APP=$(find /tmp/onlyoffice -maxdepth 1 -name "*.app" -print | head -1)
+          if [ -d "$APP/Contents/Frameworks" ]; then
+            echo "Contents/Frameworks:"
+            ls -la "$APP/Contents/Frameworks/" | head -30
+          fi
+          if [ -d "$APP/Contents/Resources" ]; then
+            echo "Contents/Resources (dirs only):"
+            find "$APP/Contents/Resources" -maxdepth 2 -type d | head -30
+          fi
+          echo "::endgroup::"
+
+      - name: Extract x2t and dependencies
+        run: |
+          APP=$(find /tmp/onlyoffice -maxdepth 1 -name "*.app" -print | head -1)
+          echo "App bundle: $APP"
+
+          STAGING="/tmp/x2t-staging"
+          mkdir -p "$STAGING"
+
+          # Find x2t binary
+          X2T_PATH=$(find "$APP" -name "x2t" -type f | head -1)
+          if [ -z "$X2T_PATH" ]; then
+            echo "ERROR: x2t binary not found in app bundle"
+            echo "Full file listing:"
+            find "$APP" -type f | grep -i x2t || echo "No x2t files at all"
+            exit 1
+          fi
+
+          X2T_DIR=$(dirname "$X2T_PATH")
+          echo "x2t found at: $X2T_PATH"
+          echo "x2t directory: $X2T_DIR"
+
+          echo "::group::x2t directory contents"
+          ls -la "$X2T_DIR/"
+          echo "::endgroup::"
+
+          # Copy x2t binary
+          cp "$X2T_PATH" "$STAGING/x2t"
+          chmod +x "$STAGING/x2t"
+
+          # Copy all dylibs from the same directory
+          find "$X2T_DIR" -name "*.dylib" -exec cp {} "$STAGING/" \;
+
+          # Copy config files if present
+          find "$X2T_DIR" -name "*.config" -exec cp {} "$STAGING/" \;
+          find "$X2T_DIR" -name "*.xml" -exec cp {} "$STAGING/" \;
+          find "$X2T_DIR" -name "*.dat" -exec cp {} "$STAGING/" \;
+
+          # Check for DoctRenderer config
+          if [ -f "$X2T_DIR/DoctRenderer.config" ]; then
+            cp "$X2T_DIR/DoctRenderer.config" "$STAGING/"
+          fi
+
+          # Copy core-fonts directory if it exists alongside x2t
+          CONVERTER_DIR=$(dirname "$X2T_DIR")
+          if [ -d "$CONVERTER_DIR/core-fonts" ]; then
+            cp -r "$CONVERTER_DIR/core-fonts" "$STAGING/core-fonts"
+            echo "Copied core-fonts directory"
+          fi
+
+          echo "::group::Staging directory contents"
+          ls -la "$STAGING/"
+          echo "File count: $(find "$STAGING" -type f | wc -l | tr -d ' ')"
+          echo "Total size: $(du -sh "$STAGING" | cut -f1)"
+          echo "::endgroup::"
+
+          echo "::group::x2t binary verification"
+          file "$STAGING/x2t"
+          otool -L "$STAGING/x2t"
+          echo "::endgroup::"
+
+      - name: Create zip
+        run: |
+          cd /tmp/x2t-staging
+          zip -r /tmp/x2t-binaries-macos-arm64.zip .
+          echo "::group::Zip info"
+          ls -lh /tmp/x2t-binaries-macos-arm64.zip
+          unzip -l /tmp/x2t-binaries-macos-arm64.zip
+          echo "::endgroup::"
+
+      - name: Upload zip as artifact (for inspection)
+        uses: actions/upload-artifact@v4
+        with:
+          name: x2t-binaries-macos-arm64
+          path: /tmp/x2t-binaries-macos-arm64.zip
+
+      - name: Upload to dependencies release
+        run: |
+          echo "Uploading x2t-binaries-macos-arm64.zip to 'dependencies' release..."
+          gh release upload dependencies /tmp/x2t-binaries-macos-arm64.zip --clobber
+          echo "Done. Verifying..."
+          gh release view dependencies
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Unmount DMG
+        if: always()
+        run: |
+          hdiutil detach /tmp/onlyoffice 2>/dev/null || true
+          rm -f /tmp/onlyoffice.dmg
