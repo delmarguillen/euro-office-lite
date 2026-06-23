@@ -190,13 +190,26 @@ pub async fn print_document(
 #[tauri::command]
 pub fn open_pdf_viewer(state: State<'_, AppState>, path: String) -> Result<String, String> {
     log_print(&state, &format!("Opening PDF in system viewer: {}", path));
-    std::process::Command::new("cmd")
+
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd")
         .args(["/c", "start", "", &path])
-        .spawn()
-        .map_err(|e| {
-            log_print(&state, &format!("Failed to open PDF: {}", e));
-            e.to_string()
-        })?;
+        .spawn();
+
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open")
+        .arg(&path)
+        .spawn();
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open")
+        .arg(&path)
+        .spawn();
+
+    result.map_err(|e| {
+        log_print(&state, &format!("Failed to open PDF: {}", e));
+        e.to_string()
+    })?;
     Ok("ok".to_string())
 }
 

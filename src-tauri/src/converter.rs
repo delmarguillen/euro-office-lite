@@ -96,11 +96,19 @@ fn find_x2t_exe(binaries_dir: &std::path::Path) -> Result<std::path::PathBuf, St
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if (name.starts_with("x2t-") || name == "x2t.exe") && name.ends_with(".exe") {
+                if is_x2t_binary(&name) {
                     return Ok(entry.path());
                 }
             }
         }
     }
     Err("x2t executable not found".to_string())
+}
+
+pub fn is_x2t_binary(name: &str) -> bool {
+    if cfg!(target_os = "windows") {
+        (name.starts_with("x2t-") || name == "x2t.exe") && name.ends_with(".exe")
+    } else {
+        (name.starts_with("x2t-") && !name.contains('.')) || name == "x2t"
+    }
 }

@@ -162,7 +162,7 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
         std::fs::read_dir(dir).ok().and_then(|rd| {
             rd.filter_map(|e| e.ok()).find(|e| {
                 let n = e.file_name().to_string_lossy().to_string();
-                (n.starts_with("x2t-") || n == "x2t.exe") && n.ends_with(".exe")
+                converter::is_x2t_binary(&n)
             })
         })
     }).map(|e| e.path());

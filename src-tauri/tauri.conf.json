@@ -28,6 +28,7 @@
     "externalBin": ["binaries/x2t"],
     "resources": [
       "binaries/*.dll",
+      "binaries/*.dylib",
       "binaries/*.config",
       "binaries/*.dat",
       "binaries/*.ttf",

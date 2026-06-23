@@ -1,0 +1,2 @@
+# Force LF for shell scripts (required for macOS/Linux execution)
+*.sh text eol=lf
