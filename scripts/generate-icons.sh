@@ -15,6 +15,9 @@ if [ ! -f "$ICO_FILE" ]; then
     exit 1
 fi
 
+# Create iconset directory before Python writes to it
+mkdir -p "$ICONSET_DIR"
+
 # Extract largest PNG from .ico using Python/Pillow
 python3 -c "
 from PIL import Image
@@ -55,10 +58,6 @@ for size in [32, 128, 256]:
 print('[icons] Generated all PNG sizes')
 "
 
-# Create .iconset directory
-mkdir -p "$ICONSET_DIR"
-
-# Re-run the Python to ensure iconset files are there (they were created above)
 # Generate .icns using macOS iconutil
 if command -v iconutil &>/dev/null; then
     iconutil -c icns "$ICONSET_DIR" -o "$ICONS_DIR/icon.icns"
