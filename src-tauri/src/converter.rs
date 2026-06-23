@@ -88,10 +88,25 @@ fn convert_to_pdf(
 }
 
 fn find_x2t_exe(binaries_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    let search_dirs = [
+    let mut search_dirs = vec![
         binaries_dir.to_path_buf(),
         binaries_dir.parent().unwrap_or(binaries_dir).to_path_buf(),
     ];
+    // Tauri places sidecars in Contents/MacOS/ on macOS
+    if let Some(resources) = binaries_dir.parent() {
+        if let Some(contents) = resources.parent() {
+            let macos_dir = contents.join("MacOS");
+            if macos_dir.exists() {
+                search_dirs.push(macos_dir);
+            }
+        }
+    }
+    // Also check next to the current executable
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            search_dirs.push(exe_dir.to_path_buf());
+        }
+    }
     for dir in &search_dirs {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {

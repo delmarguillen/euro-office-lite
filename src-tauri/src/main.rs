@@ -159,10 +159,23 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
 
     log_startup(temp_dir, "First-run font generation starting...");
 
-    let search_dirs = [
+    let mut search_dirs = vec![
         binaries_dir.to_path_buf(),
         binaries_dir.parent().unwrap_or(binaries_dir).to_path_buf(),
     ];
+    if let Some(resources) = binaries_dir.parent() {
+        if let Some(contents) = resources.parent() {
+            let macos_dir = contents.join("MacOS");
+            if macos_dir.exists() {
+                search_dirs.push(macos_dir);
+            }
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            search_dirs.push(exe_dir.to_path_buf());
+        }
+    }
     let x2t_exe = search_dirs.iter().find_map(|dir| {
         std::fs::read_dir(dir).ok().and_then(|rd| {
             rd.filter_map(|e| e.ok()).find(|e| {
