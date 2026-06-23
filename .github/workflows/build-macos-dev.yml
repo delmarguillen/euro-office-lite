@@ -159,13 +159,16 @@ jobs:
             echo "::endgroup::"
           fi
 
-      - name: Fix x2t dylib rpath
+      - name: Fix x2t binary (rpath + ad-hoc re-sign)
         run: |
-          echo "::group::Patch x2t rpath before bundling"
+          echo "::group::Patch x2t rpath and re-sign"
           X2T="src-tauri/binaries/x2t-${{ matrix.target }}"
           if [ -f "$X2T" ]; then
+            # Add rpath so x2t finds dylibs in Resources/binaries/ at runtime
             install_name_tool -add_rpath "@executable_path/../Resources/binaries" "$X2T" 2>/dev/null || true
-            echo "Updated rpaths for x2t:"
+            # Strip ONLYOFFICE signature and re-sign ad-hoc (hardened runtime blocks execution otherwise)
+            codesign --force --sign - "$X2T"
+            echo "Updated rpaths:"
             otool -l "$X2T" | grep -A2 LC_RPATH
           fi
           echo "::endgroup::"
