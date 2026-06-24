@@ -242,8 +242,141 @@ jobs:
           name: build-logs-macos-${{ matrix.target }}
           path: /tmp/tauri-build.log
 
+  build-linux:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Diagnose environment
+        run: |
+          echo "::group::System info"
+          uname -a
+          lsb_release -a 2>/dev/null || cat /etc/os-release
+          echo "Arch: $(uname -m)"
+          echo "glibc: $(ldd --version | head -1)"
+          echo "::endgroup::"
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf \
+            python3-pip
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Generate sdkjs develop scripts
+        run: |
+          echo "::group::grunt-develop"
+          cd src/sdkjs/build
+          npm ci
+          npx grunt develop --desktop=true
+          cd "$GITHUB_WORKSPACE"
+
+          WORD_SCRIPTS="src/sdkjs/develop/sdkjs/word/scripts.js"
+          if ! grep -q 'word/document/editor\.js' "$WORD_SCRIPTS" 2>/dev/null; then
+            echo "Patching word/scripts.js with editor.js..."
+            sed -i 's/\];$/,\n\t"..\/..\/..\/..\/sdkjs\/word\/document\/editor.js"\n];/' "$WORD_SCRIPTS"
+          fi
+          echo "::endgroup::"
+
+      - name: Prepare fonts and AllFonts.js
+        run: |
+          echo "::group::prepare-fonts"
+          pip3 install Pillow --quiet --break-system-packages || pip3 install Pillow --quiet
+          chmod +x scripts/prepare-fonts.sh
+          bash scripts/prepare-fonts.sh
+          echo "::endgroup::"
+
+      - name: Download x2t Linux binaries
+        run: |
+          chmod +x scripts/get-x2t-ci.sh
+          bash scripts/get-x2t-ci.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify x2t binary
+        run: |
+          echo "::group::x2t binary info"
+          X2T="src-tauri/binaries/x2t-${{ matrix.target }}"
+          if [ -f "$X2T" ]; then
+            file "$X2T"
+            echo "Shared library dependencies:"
+            ldd "$X2T" || true
+            echo "With LD_LIBRARY_PATH:"
+            LD_LIBRARY_PATH="src-tauri/binaries" ldd "$X2T" || true
+          else
+            echo "WARNING: x2t binary not found at $X2T"
+            ls -la src-tauri/binaries/x2t* 2>/dev/null || echo "No x2t files found"
+          fi
+          echo "::endgroup::"
+
+      - name: Stage frontend distribution
+        run: |
+          echo "::group::prepare-dist"
+          chmod +x scripts/prepare-dist.sh
+          bash scripts/prepare-dist.sh
+          echo "::endgroup::"
+
+      - name: Build Tauri app
+        run: |
+          set -o pipefail
+          npx tauri build \
+            --target ${{ matrix.target }} \
+            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.ttf","binaries/*.js","binaries/*.bin","binaries/fonts/*","binaries/core-fonts/*","binaries/fontdata/*","templates/*"]}}' \
+            2>&1 | tee /tmp/tauri-build.log
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.target }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-linux-${{ matrix.target }}
+          path: /tmp/tauri-build.log
+
   release:
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
 
     steps:
@@ -266,3 +399,4 @@ jobs:
           files: |
             installers/*.exe
             installers/*.dmg
+            installers/*.deb
