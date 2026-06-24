@@ -2,9 +2,9 @@
 
 Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. ~96 MB installer, no cloud, no telemetry.
 
-Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64) and macOS (Apple Silicon).
+Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon), and Linux (x64 .deb).
 
-> **Alpha**: This project is in early development. Core features work (create, open, edit, save), but expect rough edges. Printing is currently Windows-only. Linux support is planned.
+> **Alpha**: This project is in early development. Core features work (create, open, edit, save), but expect rough edges. Printing is currently Windows-only.
 
 <p align="center">
   <img src="assets/demo.gif" alt="Euro-Office Lite demo" width="800">
@@ -58,12 +58,22 @@ User <-> Tauri WebView2 <-> sdkjs/web-apps (editor UI)
 
 ## CI/CD
 
-Pushing a tag `v*` triggers the GitHub Actions workflow which builds Windows (x64, ARM64) and macOS (Apple Silicon) installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
+Pushing a tag `v*` triggers the GitHub Actions workflow which builds Windows (x64, ARM64), macOS (Apple Silicon), and Linux (x64) installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
+
+## Installing on Linux
+
+Install the `.deb` with `apt` so dependencies are resolved automatically:
+
+```bash
+sudo apt install ./Euro-Office-Lite_0.1.0-alpha_amd64.deb
+```
+
+Do **not** use `dpkg -i` directly — it will not install the required `libwebkit2gtk-4.1-0` dependency.
 
 ## Log files
 
-- Runtime: `%TEMP%\euro-office-lite\js-debug.log`
-- Build staging: `%TEMP%\euro-office-lite\prepare-dist.log`
+- **Windows**: `%TEMP%\euro-office-lite\js-debug.log`
+- **macOS / Linux**: `/tmp/euro-office-lite/js-debug.log`
 
 ## License
 

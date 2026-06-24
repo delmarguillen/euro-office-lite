@@ -199,13 +199,14 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
 
     log_startup(temp_dir, &format!("Running: {:?} -create-allfonts {} {}", x2t_exe, binaries_str, fonts_str));
 
-    match std::process::Command::new(&x2t_exe)
-        .current_dir(binaries_dir)
+    let mut cmd = std::process::Command::new(&x2t_exe);
+    cmd.current_dir(binaries_dir)
         .arg("-create-allfonts")
         .arg(&binaries_str)
-        .arg(&fonts_str)
-        .output()
-    {
+        .arg(&fonts_str);
+    #[cfg(target_os = "linux")]
+    cmd.env("LD_LIBRARY_PATH", binaries_dir);
+    match cmd.output() {
         Ok(result) => {
             let code = result.status.code().unwrap_or(-1);
             log_startup(temp_dir, &format!("Font generation exit code: {}", code));

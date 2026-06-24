@@ -16,12 +16,17 @@ pub async fn convert_file(
         return convert_to_pdf(&binaries_dir, input, output);
     }
 
-    let result = app
+    let mut sidecar = app
         .shell()
         .sidecar("x2t")
         .map_err(|e| e.to_string())?
         .current_dir(&binaries_dir)
-        .args([input, output])
+        .args([input, output]);
+    #[cfg(target_os = "linux")]
+    {
+        sidecar = sidecar.envs([("LD_LIBRARY_PATH", binaries_dir.to_string_lossy().as_ref())]);
+    }
+    let result = sidecar
         .output()
         .await
         .map_err(|e| e.to_string())?;
@@ -72,10 +77,12 @@ fn convert_to_pdf(
     );
     std::fs::write(&params_xml, &xml).map_err(|e| e.to_string())?;
 
-    let result = std::process::Command::new(&x2t_exe)
-        .current_dir(binaries_dir)
-        .arg(params_xml.to_string_lossy().as_ref())
-        .output()
+    let mut cmd = std::process::Command::new(&x2t_exe);
+    cmd.current_dir(binaries_dir)
+        .arg(params_xml.to_string_lossy().as_ref());
+    #[cfg(target_os = "linux")]
+    cmd.env("LD_LIBRARY_PATH", binaries_dir);
+    let result = cmd.output()
         .map_err(|e| format!("Failed to spawn x2t: {}", e))?;
 
     if result.status.success() {

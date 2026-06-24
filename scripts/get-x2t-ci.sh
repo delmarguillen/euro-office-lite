@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Downloads macOS x2t binaries from the 'dependencies' release for CI.
+# Downloads x2t binaries from the 'dependencies' release for CI.
+# Supports macOS and Linux.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET_DIR="$SCRIPT_DIR/../src-tauri/binaries"
 REPO="${GITHUB_REPOSITORY:-delmarguillen/euro-office-lite}"
-ZIP_NAME="x2t-binaries-macos-arm64.zip"
-TEMP_ZIP="${TMPDIR:-/tmp}/$ZIP_NAME"
+OS="$(uname -s)"
+ARCH="$(uname -m)"
 
 log() {
     echo "[$(date '+%H:%M:%S')] $1"
@@ -17,9 +18,34 @@ log "System: $(uname -ms)"
 log "Repo: $REPO"
 log "Target dir: $TARGET_DIR"
 
+if [ "$OS" = "Darwin" ]; then
+    ZIP_NAME="x2t-binaries-macos-arm64.zip"
+    if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+        TRIPLE="aarch64-apple-darwin"
+    else
+        TRIPLE="x86_64-apple-darwin"
+    fi
+    CHECK_PATTERN="x2t-*-apple-darwin"
+    VERIFY_CMD="otool -L"
+elif [ "$OS" = "Linux" ]; then
+    ZIP_NAME="x2t-binaries-linux-x64.zip"
+    if [ "$ARCH" = "aarch64" ]; then
+        TRIPLE="aarch64-unknown-linux-gnu"
+    else
+        TRIPLE="x86_64-unknown-linux-gnu"
+    fi
+    CHECK_PATTERN="x2t-*-linux-gnu"
+    VERIFY_CMD="ldd"
+else
+    log "ERROR: Unsupported OS: $OS"
+    exit 1
+fi
+
+TEMP_ZIP="${TMPDIR:-/tmp}/$ZIP_NAME"
+
 # Check if already present
-if ls "$TARGET_DIR"/x2t-*-apple-darwin 1>/dev/null 2>&1; then
-    log "x2t macOS binary already present, skipping download"
+if ls "$TARGET_DIR"/$CHECK_PATTERN 1>/dev/null 2>&1; then
+    log "x2t binary already present, skipping download"
     ls -la "$TARGET_DIR"/x2t-*
     exit 0
 fi
@@ -32,14 +58,6 @@ mkdir -p "$TARGET_DIR"
 log "Extracting to $TARGET_DIR..."
 unzip -o "$TEMP_ZIP" -d "$TARGET_DIR"
 rm -f "$TEMP_ZIP"
-
-# Determine target triple
-ARCH=$(uname -m)
-if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
-    TRIPLE="aarch64-apple-darwin"
-else
-    TRIPLE="x86_64-apple-darwin"
-fi
 
 SIDECAR="$TARGET_DIR/x2t-$TRIPLE"
 
@@ -63,7 +81,13 @@ chmod +x "$SIDECAR"
 log "Binary verification:"
 file "$SIDECAR"
 log "Dependencies:"
-otool -L "$SIDECAR" 2>/dev/null || log "(otool not available)"
+$VERIFY_CMD "$SIDECAR" 2>/dev/null || log "($VERIFY_CMD not available or failed)"
+
+# On Linux, verify with LD_LIBRARY_PATH pointing to extracted libs
+if [ "$OS" = "Linux" ]; then
+    log "Library resolution with LD_LIBRARY_PATH:"
+    LD_LIBRARY_PATH="$TARGET_DIR" ldd "$SIDECAR" 2>/dev/null || log "(ldd with LD_LIBRARY_PATH failed)"
+fi
 
 COUNT=$(find "$TARGET_DIR" -type f | wc -l | tr -d ' ')
 SIZE=$(du -sh "$TARGET_DIR" | cut -f1)
