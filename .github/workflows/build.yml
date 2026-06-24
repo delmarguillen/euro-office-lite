@@ -359,7 +359,7 @@ jobs:
           set -o pipefail
           npx tauri build \
             --target ${{ matrix.target }} \
-            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/fonts/*","binaries/core-fonts/*","binaries/fontdata/*","templates/*"]}}' \
+            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","templates/*"]}}' \
             2>&1 | tee /tmp/tauri-build.log
 
       - name: Upload .deb artifact
