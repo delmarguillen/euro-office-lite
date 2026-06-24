@@ -2,7 +2,7 @@
 
 Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. ~96 MB installer, no cloud, no telemetry.
 
-Supports Word, Excel, and PowerPoint documents with native file operations and direct printing.
+Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64) and macOS (Apple Silicon).
 
 <p align="center">
   <img src="assets/demo.gif" alt="Euro-Office Lite demo" width="800">
@@ -56,7 +56,7 @@ User <-> Tauri WebView2 <-> sdkjs/web-apps (editor UI)
 
 ## CI/CD
 
-Pushing a tag `v*` triggers the GitHub Actions workflow which builds x64 and ARM64 installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
+Pushing a tag `v*` triggers the GitHub Actions workflow which builds Windows (x64, ARM64) and macOS (Apple Silicon) installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
 
 ## Log files
 
