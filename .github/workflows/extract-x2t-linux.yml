@@ -1,0 +1,173 @@
+name: Extract x2t Linux binaries (one-shot)
+
+on:
+  workflow_dispatch:
+    inputs:
+      onlyoffice_version:
+        description: 'ONLYOFFICE Desktop Editors version to download'
+        type: string
+        default: 'v8.2.0'
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Diagnose environment
+        run: |
+          echo "::group::System info"
+          uname -a
+          lsb_release -a 2>/dev/null || cat /etc/os-release
+          echo "Arch: $(uname -m)"
+          df -h /
+          echo "::endgroup::"
+
+      - name: Download ONLYOFFICE .deb
+        run: |
+          VERSION="${{ github.event.inputs.onlyoffice_version }}"
+          URL="https://github.com/ONLYOFFICE/DesktopEditors/releases/download/${VERSION}/onlyoffice-desktopeditors_amd64.deb"
+          echo "Downloading: $URL"
+          curl -L -o /tmp/onlyoffice.deb "$URL"
+          ls -lh /tmp/onlyoffice.deb
+
+      - name: Extract .deb and explore contents
+        run: |
+          mkdir -p /tmp/onlyoffice-extracted
+          cd /tmp/onlyoffice-extracted
+
+          echo "::group::Extract .deb (ar + tar)"
+          ar x /tmp/onlyoffice.deb
+          ls -la
+          echo "::endgroup::"
+
+          echo "::group::Extract data tarball"
+          if [ -f data.tar.xz ]; then
+            tar xf data.tar.xz
+          elif [ -f data.tar.gz ]; then
+            tar xzf data.tar.gz
+          elif [ -f data.tar.zst ]; then
+            zstd -d data.tar.zst -o data.tar && tar xf data.tar
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Find converter directory"
+          find . -type d -name "converter" 2>/dev/null
+          echo "::endgroup::"
+
+          echo "::group::Find x2t binary"
+          find . -name "x2t" -type f 2>/dev/null
+          find . -name "x2t*" -type f 2>/dev/null
+          echo "::endgroup::"
+
+          echo "::group::Find shared libraries"
+          find . -name "*.so" -type f 2>/dev/null | head -40
+          find . -name "*.so.*" -type f -o -name "*.so.*" -type l 2>/dev/null | head -40
+          echo "::endgroup::"
+
+          echo "::group::Converter directory contents"
+          CONVERTER_DIR=$(find . -type d -name "converter" | head -1)
+          if [ -n "$CONVERTER_DIR" ]; then
+            ls -la "$CONVERTER_DIR/"
+          fi
+          echo "::endgroup::"
+
+      - name: Extract x2t and dependencies
+        run: |
+          cd /tmp/onlyoffice-extracted
+          CONVERTER_DIR=$(find . -type d -name "converter" | head -1)
+
+          if [ -z "$CONVERTER_DIR" ]; then
+            echo "ERROR: converter directory not found"
+            echo "Full directory listing:"
+            find . -maxdepth 5 -type d | head -50
+            exit 1
+          fi
+
+          echo "Converter dir: $CONVERTER_DIR"
+
+          STAGING="/tmp/x2t-staging"
+          mkdir -p "$STAGING"
+
+          # Find and copy x2t binary
+          X2T_PATH=$(find "$CONVERTER_DIR" -name "x2t" -type f | head -1)
+          if [ -z "$X2T_PATH" ]; then
+            echo "ERROR: x2t binary not found in converter directory"
+            ls -laR "$CONVERTER_DIR/"
+            exit 1
+          fi
+
+          echo "x2t found at: $X2T_PATH"
+          X2T_DIR=$(dirname "$X2T_PATH")
+
+          cp "$X2T_PATH" "$STAGING/x2t"
+          chmod +x "$STAGING/x2t"
+
+          # Copy all shared libraries (.so and .so.* symlinks/files)
+          find "$X2T_DIR" -name "*.so" -exec cp -P {} "$STAGING/" \;
+          find "$X2T_DIR" -name "*.so.*" -exec cp -P {} "$STAGING/" \;
+
+          # Copy config and data files
+          find "$X2T_DIR" -name "*.config" -exec cp {} "$STAGING/" \;
+          find "$X2T_DIR" -name "*.xml" -exec cp {} "$STAGING/" \;
+          find "$X2T_DIR" -name "*.dat" -exec cp {} "$STAGING/" \;
+
+          # Copy DoctRenderer config
+          if [ -f "$X2T_DIR/DoctRenderer.config" ]; then
+            cp "$X2T_DIR/DoctRenderer.config" "$STAGING/"
+          fi
+
+          # Copy core-fonts if present
+          PARENT_DIR=$(dirname "$X2T_DIR")
+          if [ -d "$PARENT_DIR/core-fonts" ]; then
+            cp -r "$PARENT_DIR/core-fonts" "$STAGING/core-fonts"
+            echo "Copied core-fonts directory"
+          fi
+
+          echo "::group::Staging directory contents"
+          ls -la "$STAGING/"
+          echo "File count: $(find "$STAGING" -type f | wc -l | tr -d ' ')"
+          echo "Total size: $(du -sh "$STAGING" | cut -f1)"
+          echo "::endgroup::"
+
+          echo "::group::x2t binary verification"
+          file "$STAGING/x2t"
+          echo "::endgroup::"
+
+          echo "::group::Shared library dependencies"
+          ldd "$STAGING/x2t" || echo "(ldd failed — may need LD_LIBRARY_PATH)"
+          LD_LIBRARY_PATH="$STAGING" ldd "$STAGING/x2t" || echo "(still failed with LD_LIBRARY_PATH)"
+          echo "::endgroup::"
+
+      - name: Create zip
+        run: |
+          cd /tmp/x2t-staging
+          zip -r /tmp/x2t-binaries-linux-x64.zip .
+          echo "::group::Zip info"
+          ls -lh /tmp/x2t-binaries-linux-x64.zip
+          unzip -l /tmp/x2t-binaries-linux-x64.zip
+          echo "::endgroup::"
+
+      - name: Upload zip as artifact (for inspection)
+        uses: actions/upload-artifact@v4
+        with:
+          name: x2t-binaries-linux-x64
+          path: /tmp/x2t-binaries-linux-x64.zip
+
+      - name: Upload to dependencies release
+        run: |
+          echo "Uploading x2t-binaries-linux-x64.zip to 'dependencies' release..."
+          gh release upload dependencies /tmp/x2t-binaries-linux-x64.zip --clobber
+          echo "Done. Verifying..."
+          gh release view dependencies
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf /tmp/onlyoffice.deb /tmp/onlyoffice-extracted /tmp/x2t-staging
