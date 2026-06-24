@@ -4,6 +4,8 @@ Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. ~96 
 
 Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64) and macOS (Apple Silicon).
 
+> **Alpha**: This project is in early development. Core features work (create, open, edit, save), but expect rough edges. Printing is currently Windows-only. Linux support is planned.
+
 <p align="center">
   <img src="assets/demo.gif" alt="Euro-Office Lite demo" width="800">
   <br><br>
