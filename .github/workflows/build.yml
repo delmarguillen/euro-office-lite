@@ -324,6 +324,13 @@ jobs:
           bash scripts/prepare-fonts.sh
           echo "::endgroup::"
 
+      - name: Generate Linux icons
+        run: |
+          echo "::group::generate-icons"
+          chmod +x scripts/generate-icons.sh
+          bash scripts/generate-icons.sh
+          echo "::endgroup::"
+
       - name: Download x2t Linux binaries
         run: |
           chmod +x scripts/get-x2t-ci.sh
