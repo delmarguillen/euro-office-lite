@@ -302,6 +302,15 @@ fn convert_to_pdf(
         log_file_access(&sdk_in_editors, "editors/sdkjs/word/sdk-all-min.js");
     }
 
+    // Copy font_selection.bin also to work_binaries/fonts/ since x2t looks there too
+    let work_fonts_fontsel = work_fonts.join("font_selection.bin");
+    if fontsel_src.exists() && !work_fonts_fontsel.exists() {
+        match std::fs::copy(&fontsel_src, &work_fonts_fontsel) {
+            Ok(b) => log_pdf(&format!("Copied font_selection.bin to work fonts/: {} bytes", b)),
+            Err(e) => log_pdf(&format!("FAILED copy font_selection.bin to work fonts/: {}", e)),
+        }
+    }
+
     // --- STEP 9: Build XML params ---
     log_pdf("--- STEP 9: XML params ---");
     let params_xml = std::path::PathBuf::from(output)
@@ -309,8 +318,9 @@ fn convert_to_pdf(
         .unwrap_or(std::path::Path::new("."))
         .join("x2t_params.xml");
 
-    let fonts_dir_abs = std::fs::canonicalize(&fonts_dir)
-        .unwrap_or_else(|_| fonts_dir.clone());
+    // Point m_sFontDir to work_binaries so x2t finds font_selection.bin there
+    let fonts_dir_for_xml = std::fs::canonicalize(&work_binaries)
+        .unwrap_or_else(|_| work_binaries.clone());
     let allfonts_abs = std::fs::canonicalize(&work_allfonts)
         .unwrap_or_else(|_| work_allfonts.clone());
 
@@ -327,7 +337,7 @@ fn convert_to_pdf(
 </TaskQueueDataConvert>"#,
         input,
         output,
-        fonts_dir_abs.to_string_lossy().replace('\\', "/"),
+        fonts_dir_for_xml.to_string_lossy().replace('\\', "/"),
         allfonts_abs.to_string_lossy().replace('\\', "/"),
     );
 
