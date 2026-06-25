@@ -246,7 +246,7 @@ fn convert_to_pdf(
         Err(e) => log_pdf(&format!("FAILED copy AllFonts.js to work editors: {}", e)),
     }
 
-    // Write DoctRenderer.config with correct paths
+    // Write DoctRenderer.config with DoctSdk section (loads sdk-all-min.js + sdk-all.js)
     let work_config = work_binaries.join("DoctRenderer.config");
     let config_content = r#"<Settings>
 <file>../editors/sdkjs/common/Native/native.js</file>
@@ -255,18 +255,26 @@ fn convert_to_pdf(
 <file>../editors/web-apps/vendor/xregexp/xregexp-all-min.js</file>
 <sdkjs>../editors/sdkjs</sdkjs>
 <dictionaries>../dictionaries</dictionaries>
+<DoctSdk>
+<file>../editors/sdkjs/word/sdk-all-min.js</file>
+<file>../editors/sdkjs/common/libfont/engine/fonts_native.js</file>
+<file>../editors/sdkjs/word/sdk-all.js</file>
+</DoctSdk>
 </Settings>"#;
     match std::fs::write(&work_config, config_content) {
         Ok(()) => log_pdf("Wrote DoctRenderer.config to work dir"),
         Err(e) => log_pdf(&format!("FAILED write DoctRenderer.config: {}", e)),
     }
+    log_pdf(&format!("DoctRenderer.config content:\n{}", config_content));
 
     // Symlink/copy JS files to work editors/
+    let _ = std::fs::create_dir_all(work_editors.join("sdkjs/word"));
     let editor_file_mappings = [
         (editors_dir.join("sdkjs/common/Native/native.js"), work_editors.join("sdkjs/common/Native/native.js")),
         (editors_dir.join("sdkjs/common/Native/jquery_native.js"), work_editors.join("sdkjs/common/Native/jquery_native.js")),
         (editors_dir.join("sdkjs/common/libfont/engine/fonts_native.js"), work_editors.join("sdkjs/common/libfont/engine/fonts_native.js")),
         (editors_dir.join("sdkjs/word/sdk-all-min.js"), work_editors.join("sdkjs/word/sdk-all-min.js")),
+        (editors_dir.join("sdkjs/word/sdk-all.js"), work_editors.join("sdkjs/word/sdk-all.js")),
         (editors_dir.join("web-apps/vendor/xregexp/xregexp-all-min.js"), work_editors.join("web-apps/vendor/xregexp/xregexp-all-min.js")),
     ];
     for (src, dst) in &editor_file_mappings {
