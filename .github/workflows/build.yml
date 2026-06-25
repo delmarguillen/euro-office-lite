@@ -195,6 +195,11 @@ jobs:
           echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
           echo "::endgroup::"
 
+      - name: Generate sdk-word-bundle.js for DoctRenderer
+        run: |
+          chmod +x scripts/generate-sdk-bundle.sh
+          bash scripts/generate-sdk-bundle.sh
+
       - name: Generate macOS icons
         run: |
           echo "::group::generate-icons"
@@ -337,6 +342,11 @@ jobs:
           cp src/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
           echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
           echo "::endgroup::"
+
+      - name: Generate sdk-word-bundle.js for DoctRenderer
+        run: |
+          chmod +x scripts/generate-sdk-bundle.sh
+          bash scripts/generate-sdk-bundle.sh
 
       - name: Generate Linux icons
         run: |

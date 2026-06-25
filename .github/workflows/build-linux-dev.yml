@@ -138,6 +138,11 @@ jobs:
           echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
           echo "::endgroup::"
 
+      - name: Generate sdk-word-bundle.js for DoctRenderer
+        run: |
+          chmod +x scripts/generate-sdk-bundle.sh
+          bash scripts/generate-sdk-bundle.sh
+
       - name: Generate Linux icons
         run: |
           echo "::group::generate-icons"
