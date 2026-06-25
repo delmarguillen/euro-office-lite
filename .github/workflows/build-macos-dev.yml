@@ -121,23 +121,6 @@ jobs:
           fi
           echo "::endgroup::"
 
-          echo "::group::Copy fonts to binaries for bundling"
-          mkdir -p src-tauri/binaries/fonts
-          cp src/fonts/*.ttf src-tauri/binaries/fonts/
-          cp src/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
-          echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
-          echo "::endgroup::"
-
-      - name: Generate sdk-word-bundle.js for DoctRenderer
-        run: |
-          chmod +x scripts/generate-sdk-bundle.sh
-          bash scripts/generate-sdk-bundle.sh
-
-      - name: Prepare DoctRenderer directory structure
-        run: |
-          chmod +x scripts/prepare-doctrenderer.sh
-          bash scripts/prepare-doctrenderer.sh
-
       - name: Generate macOS icons
         run: |
           echo "::group::generate-icons"
@@ -194,6 +177,25 @@ jobs:
         run: |
           cp "src-tauri/binaries/x2t-${{ matrix.target }}" "src-tauri/binaries/x2t"
           echo "x2t resource copy created ($(wc -c < src-tauri/binaries/x2t) bytes)"
+
+      - name: Prepare DoctRenderer resources
+        run: |
+          echo "::group::Copy fonts to binaries"
+          mkdir -p src-tauri/binaries/fonts
+          cp src/fonts/*.ttf src-tauri/binaries/fonts/
+          cp src/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
+          echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
+          echo "::endgroup::"
+
+          echo "::group::Generate sdk-word-bundle.js"
+          chmod +x scripts/generate-sdk-bundle.sh
+          bash scripts/generate-sdk-bundle.sh
+          echo "::endgroup::"
+
+          echo "::group::Create DoctRenderer directory structure"
+          chmod +x scripts/prepare-doctrenderer.sh
+          bash scripts/prepare-doctrenderer.sh
+          echo "::endgroup::"
 
       - name: Build Tauri app
         run: |
