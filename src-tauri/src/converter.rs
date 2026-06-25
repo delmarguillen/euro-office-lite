@@ -49,6 +49,14 @@ fn convert_to_pdf(
     let fonts_dir = binaries_dir.join("fonts");
     let allfonts_js = binaries_dir.join("AllFonts.js");
 
+    eprintln!("[convert_to_pdf] binaries_dir={}", binaries_dir.display());
+    eprintln!("[convert_to_pdf] x2t={}", x2t_exe.display());
+    for name in &["DoctRenderer.config", "AllFonts.js", "xregexp-all-min.js", "sdk-word-bundle.js"] {
+        let p = binaries_dir.join(name);
+        eprintln!("[convert_to_pdf] {} exists={}", name, p.exists());
+    }
+    eprintln!("[convert_to_pdf] fonts/ exists={}", fonts_dir.exists());
+
     let params_xml = std::path::PathBuf::from(output)
         .parent()
         .unwrap_or(std::path::Path::new("."))
