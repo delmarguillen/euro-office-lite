@@ -194,15 +194,17 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
     };
 
     let fonts_dir = binaries_dir.join("fonts");
-    let binaries_str = binaries_dir.to_string_lossy().to_string();
+    let fontdata_dir = temp_dir.join("fontdata");
+    let _ = std::fs::create_dir_all(&fontdata_dir);
+    let fontdata_str = fontdata_dir.to_string_lossy().to_string();
     let fonts_str = fonts_dir.to_string_lossy().to_string();
 
-    log_startup(temp_dir, &format!("Running: {:?} -create-allfonts {} {}", x2t_exe, binaries_str, fonts_str));
+    log_startup(temp_dir, &format!("Running: {:?} -create-allfonts {} {}", x2t_exe, fontdata_str, fonts_str));
 
     let mut cmd = std::process::Command::new(&x2t_exe);
     cmd.current_dir(binaries_dir)
         .arg("-create-allfonts")
-        .arg(&binaries_str)
+        .arg(&fontdata_str)
         .arg(&fonts_str);
     #[cfg(target_os = "linux")]
     cmd.env("LD_LIBRARY_PATH", binaries_dir);

@@ -47,7 +47,12 @@ fn convert_to_pdf(
 ) -> Result<String, String> {
     let x2t_exe = find_x2t_exe(binaries_dir)?;
     let fonts_dir = binaries_dir.join("fonts");
-    let allfonts_js = binaries_dir.join("AllFonts.js");
+    let fontdata_dir = std::env::temp_dir().join("euro-office-lite").join("fontdata");
+    let allfonts_js = if fontdata_dir.join("AllFonts.js").exists() {
+        fontdata_dir.join("AllFonts.js")
+    } else {
+        binaries_dir.join("AllFonts.js")
+    };
 
     eprintln!("[convert_to_pdf] binaries_dir={}", binaries_dir.display());
     eprintln!("[convert_to_pdf] x2t={}", x2t_exe.display());
