@@ -161,6 +161,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Copy x2t to binaries for DoctRenderer PDF path
+        run: |
+          cp "src-tauri/binaries/x2t-${{ matrix.target }}" "src-tauri/binaries/x2t"
+          echo "x2t resource copy created ($(wc -c < src-tauri/binaries/x2t) bytes)"
+
       - name: Verify x2t binary
         run: |
           echo "::group::x2t binary info"
@@ -203,7 +208,7 @@ jobs:
           echo "Building for ${{ matrix.target }}..."
           npx tauri build \
             --target ${{ matrix.target }} \
-            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/fonts/*","templates/*"]}}' \
+            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/x2t","binaries/fonts/*","templates/*"]}}' \
             2>&1 | tee /tmp/tauri-build.log
 
           echo "::group::Build output"
