@@ -221,6 +221,22 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
             if result.status.success() {
                 let _ = std::fs::write(&marker, "generated");
                 log_startup(temp_dir, "Font generation complete, marker written");
+                if let Ok(entries) = std::fs::read_dir(&fontdata_dir) {
+                    for entry in entries.flatten() {
+                        let size = std::fs::metadata(entry.path()).map(|m| m.len()).unwrap_or(0);
+                        log_startup(temp_dir, &format!("  fontdata/{}: {} bytes",
+                            entry.file_name().to_string_lossy(), size));
+                    }
+                }
+                let generated_allfonts = fontdata_dir.join("AllFonts.js");
+                if let Ok(content) = std::fs::read_to_string(&generated_allfonts) {
+                    log_startup(temp_dir, &format!("Generated AllFonts.js: {} lines, {} bytes",
+                        content.lines().count(), content.len()));
+                    for line in content.lines().take(3) {
+                        let truncated = &line[..line.len().min(150)];
+                        log_startup(temp_dir, &format!("  {}", truncated));
+                    }
+                }
             }
         }
         Err(e) => {

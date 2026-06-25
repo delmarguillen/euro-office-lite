@@ -49,3 +49,22 @@ find "$EDITORS" -type f | while read -r f; do
     size=$(wc -c < "$f")
     echo "  ${f#$BINARIES/} ($size bytes)"
 done
+
+echo ""
+echo "=== Verification ==="
+echo "DoctRenderer.config contents:"
+cat "$BINARIES/DoctRenderer.config" 2>/dev/null || echo "NOT FOUND"
+echo ""
+echo "All files in editors/ with sizes:"
+find "$EDITORS" -type f -exec ls -la {} \;
+echo ""
+echo "JS and config files in binaries/:"
+ls -la "$BINARIES"/*.js "$BINARIES"/*.config "$BINARIES"/*.bin 2>/dev/null || true
+echo ""
+echo "dictionaries/ directory:"
+DICT_DIR="$(dirname "$BINARIES")/dictionaries"
+if [ -d "$DICT_DIR" ]; then
+    echo "  exists at $DICT_DIR"
+else
+    echo "  NOT FOUND at $DICT_DIR"
+fi
