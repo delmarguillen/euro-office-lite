@@ -142,31 +142,18 @@ fn convert_to_pdf(
         log_pdf(&content);
     }
 
-    // --- STEP 5: font_selection.bin — check, verify readability, copy if needed ---
+    // --- STEP 5: font_selection.bin — check readability ---
     log_pdf("--- STEP 5: font_selection.bin ---");
     let fontsel_src = fontdata_dir.join("font_selection.bin");
-    let fontsel_dst = binaries_dir.join("font_selection.bin");
     log_file_access(&fontsel_src, "font_selection.bin (fontdata)");
-    log_file_access(&fontsel_dst, "font_selection.bin (binaries)");
 
-    if fontsel_src.exists() && !fontsel_dst.exists() {
-        log_pdf("FIX: Copying font_selection.bin from fontdata/ to binaries/");
-        match std::fs::copy(&fontsel_src, &fontsel_dst) {
-            Ok(bytes) => log_pdf(&format!("FIX: Copied {} bytes OK", bytes)),
-            Err(e) => log_pdf(&format!("FIX: Copy FAILED: {}", e)),
-        }
-        log_file_access(&fontsel_dst, "font_selection.bin (binaries, after copy)");
-    }
-
-    // --- STEP 6: AllFonts.js — pick server version, copy to editors/ ---
+    // --- STEP 6: AllFonts.js ---
     log_pdf("--- STEP 6: AllFonts.js ---");
     let allfonts_fontdata = fontdata_dir.join("AllFonts.js");
     let allfonts_binaries = binaries_dir.join("AllFonts.js");
-    let allfonts_editors = editors_dir.join("sdkjs").join("common").join("AllFonts.js");
 
     log_file_access(&allfonts_fontdata, "AllFonts.js (fontdata/server)");
     log_file_access(&allfonts_binaries, "AllFonts.js (binaries)");
-    log_file_access(&allfonts_editors, "AllFonts.js (editors)");
 
     let allfonts_js = if allfonts_fontdata.exists() {
         allfonts_fontdata.clone()
@@ -184,29 +171,123 @@ fn convert_to_pdf(
         log_pdf(&format!("  ... total {} lines", content.lines().count()));
     }
 
-    // DoctRenderer.config points to ../editors/sdkjs/common/AllFonts.js (web version 1KB)
-    // Copy server version there so DoctRenderer uses font paths
-    let editors_allfonts_size = std::fs::metadata(&allfonts_editors).map(|m| m.len()).unwrap_or(0);
-    if allfonts_size > 10000 && editors_allfonts_size < 10000 {
-        log_pdf("FIX: editors/AllFonts.js is web version, replacing with server version");
-        match std::fs::copy(&allfonts_js, &allfonts_editors) {
-            Ok(bytes) => log_pdf(&format!("FIX: Copied {} bytes OK", bytes)),
-            Err(e) => log_pdf(&format!("FIX: Copy FAILED: {}", e)),
+    // --- STEP 7: Build writable mirror in /tmp for files DoctRenderer needs ---
+    // /usr/lib/ is read-only. DoctRenderer.config uses relative paths from x2t binary.
+    // We create a writable work dir that mirrors the expected layout and run x2t from there.
+    log_pdf("--- STEP 7: Build writable work directory ---");
+    let work_dir = std::env::temp_dir().join("euro-office-lite").join("x2t-workdir");
+    let work_binaries = work_dir.join("binaries");
+    let work_editors = work_dir.join("editors");
+    let work_dictionaries = work_dir.join("dictionaries");
+
+    let _ = std::fs::create_dir_all(&work_binaries);
+    let _ = std::fs::create_dir_all(&work_editors.join("sdkjs/common/Native"));
+    let _ = std::fs::create_dir_all(&work_editors.join("sdkjs/common/libfont/engine"));
+    let _ = std::fs::create_dir_all(&work_editors.join("sdkjs/word"));
+    let _ = std::fs::create_dir_all(&work_editors.join("web-apps/vendor/xregexp"));
+    let _ = std::fs::create_dir_all(&work_dictionaries);
+    log_pdf(&format!("work_dir: {:?}", work_dir));
+
+    // Symlink x2t binary
+    let work_x2t = work_binaries.join("x2t");
+    if !work_x2t.exists() {
+        #[cfg(target_os = "linux")]
+        { let _ = std::os::unix::fs::symlink(&x2t_exe, &work_x2t); }
+        #[cfg(not(target_os = "linux"))]
+        { let _ = std::fs::copy(&x2t_exe, &work_x2t); }
+    }
+    log_file_access(&work_x2t, "work x2t");
+
+    // Symlink all .so libs from binaries/
+    if let Ok(entries) = std::fs::read_dir(binaries_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".so") || name.contains(".so.") || name.ends_with(".dat") || name == "package.config" {
+                let dst = work_binaries.join(&name);
+                if !dst.exists() {
+                    #[cfg(target_os = "linux")]
+                    { let _ = std::os::unix::fs::symlink(entry.path(), &dst); }
+                    #[cfg(not(target_os = "linux"))]
+                    { let _ = std::fs::copy(entry.path(), &dst); }
+                }
+            }
         }
-        log_file_access(&allfonts_editors, "AllFonts.js (editors, after copy)");
     }
 
-    // --- STEP 7: dictionaries/ — create if missing ---
-    log_pdf("--- STEP 7: dictionaries/ ---");
-    let dictionaries_dir = binaries_dir.parent().unwrap_or(binaries_dir).join("dictionaries");
-    log_pdf(&format!("dictionaries/ exists: {} (at {:?})", dictionaries_dir.exists(), dictionaries_dir));
-    if !dictionaries_dir.exists() {
-        log_pdf("FIX: Creating empty dictionaries/ directory");
-        match std::fs::create_dir_all(&dictionaries_dir) {
-            Ok(()) => log_pdf("FIX: Created dictionaries/ OK"),
-            Err(e) => log_pdf(&format!("FIX: Create FAILED: {}", e)),
-        }
+    // Symlink fonts/ directory
+    let work_fonts = work_binaries.join("fonts");
+    if !work_fonts.exists() {
+        #[cfg(target_os = "linux")]
+        { let _ = std::os::unix::fs::symlink(&fonts_dir, &work_fonts); }
+        #[cfg(not(target_os = "linux"))]
+        { /* on Windows the original binaries_dir is used */ }
     }
+    log_file_access(&work_fonts.join("Carlito-Regular.ttf"), "work fonts/Carlito");
+
+    // Copy font_selection.bin to work binaries
+    if fontsel_src.exists() {
+        let dst = work_binaries.join("font_selection.bin");
+        match std::fs::copy(&fontsel_src, &dst) {
+            Ok(b) => log_pdf(&format!("Copied font_selection.bin to work dir: {} bytes", b)),
+            Err(e) => log_pdf(&format!("FAILED copy font_selection.bin: {}", e)),
+        }
+        log_file_access(&dst, "work font_selection.bin");
+    }
+
+    // Copy server AllFonts.js to work binaries AND to work editors/
+    let work_allfonts = work_binaries.join("AllFonts.js");
+    match std::fs::copy(&allfonts_js, &work_allfonts) {
+        Ok(b) => log_pdf(&format!("Copied AllFonts.js (server) to work binaries: {} bytes", b)),
+        Err(e) => log_pdf(&format!("FAILED copy AllFonts.js to work binaries: {}", e)),
+    }
+    let work_editors_allfonts = work_editors.join("sdkjs/common/AllFonts.js");
+    match std::fs::copy(&allfonts_js, &work_editors_allfonts) {
+        Ok(b) => log_pdf(&format!("Copied AllFonts.js (server) to work editors: {} bytes", b)),
+        Err(e) => log_pdf(&format!("FAILED copy AllFonts.js to work editors: {}", e)),
+    }
+
+    // Write DoctRenderer.config with correct paths
+    let work_config = work_binaries.join("DoctRenderer.config");
+    let config_content = r#"<Settings>
+<file>../editors/sdkjs/common/Native/native.js</file>
+<file>../editors/sdkjs/common/Native/jquery_native.js</file>
+<allfonts>../editors/sdkjs/common/AllFonts.js</allfonts>
+<file>../editors/web-apps/vendor/xregexp/xregexp-all-min.js</file>
+<sdkjs>../editors/sdkjs</sdkjs>
+<dictionaries>../dictionaries</dictionaries>
+</Settings>"#;
+    match std::fs::write(&work_config, config_content) {
+        Ok(()) => log_pdf("Wrote DoctRenderer.config to work dir"),
+        Err(e) => log_pdf(&format!("FAILED write DoctRenderer.config: {}", e)),
+    }
+
+    // Symlink/copy JS files to work editors/
+    let editor_file_mappings = [
+        (editors_dir.join("sdkjs/common/Native/native.js"), work_editors.join("sdkjs/common/Native/native.js")),
+        (editors_dir.join("sdkjs/common/Native/jquery_native.js"), work_editors.join("sdkjs/common/Native/jquery_native.js")),
+        (editors_dir.join("sdkjs/common/libfont/engine/fonts_native.js"), work_editors.join("sdkjs/common/libfont/engine/fonts_native.js")),
+        (editors_dir.join("sdkjs/word/sdk-all-min.js"), work_editors.join("sdkjs/word/sdk-all-min.js")),
+        (editors_dir.join("web-apps/vendor/xregexp/xregexp-all-min.js"), work_editors.join("web-apps/vendor/xregexp/xregexp-all-min.js")),
+    ];
+    for (src, dst) in &editor_file_mappings {
+        if src.exists() && !dst.exists() {
+            #[cfg(target_os = "linux")]
+            { let _ = std::os::unix::fs::symlink(src, dst); }
+            #[cfg(not(target_os = "linux"))]
+            { let _ = std::fs::copy(src, dst); }
+        }
+        let ok = dst.exists();
+        let size = std::fs::metadata(dst).map(|m| m.len()).unwrap_or(0);
+        let rel = dst.strip_prefix(&work_dir).unwrap_or(dst);
+        log_pdf(&format!("  work {} — exists={}, size={}", rel.display(), ok, size));
+    }
+
+    // Log full work dir structure
+    log_pdf("=== Work directory structure ===");
+    log_dir_recursive(&work_dir, &work_dir);
+
+    log_pdf("--- dictionaries/ ---");
+    log_pdf(&format!("work dictionaries/ exists: {}", work_dictionaries.exists()));
 
     // --- STEP 8: SDK bundle ---
     log_pdf("--- STEP 8: SDK bundle ---");
@@ -230,8 +311,8 @@ fn convert_to_pdf(
 
     let fonts_dir_abs = std::fs::canonicalize(&fonts_dir)
         .unwrap_or_else(|_| fonts_dir.clone());
-    let allfonts_abs = std::fs::canonicalize(&allfonts_js)
-        .unwrap_or_else(|_| allfonts_js.clone());
+    let allfonts_abs = std::fs::canonicalize(&work_allfonts)
+        .unwrap_or_else(|_| work_allfonts.clone());
 
     let xml = format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
@@ -257,11 +338,13 @@ fn convert_to_pdf(
     // --- STEP 10: Verify all critical files one last time before spawn ---
     log_pdf("--- STEP 10: Pre-spawn verification ---");
     let critical_files: Vec<(&str, std::path::PathBuf)> = vec![
-        ("x2t", x2t_exe.clone()),
+        ("x2t", work_x2t.clone()),
         ("Editor.bin", std::path::PathBuf::from(input)),
-        ("DoctRenderer.config", config_path.clone()),
+        ("DoctRenderer.config", work_config.clone()),
         ("AllFonts.js (XML param)", allfonts_abs.clone()),
-        ("font_selection.bin", fontsel_dst.clone()),
+        ("AllFonts.js (editors)", work_editors_allfonts.clone()),
+        ("font_selection.bin", work_binaries.join("font_selection.bin")),
+        ("sdk-all-min.js", work_editors.join("sdkjs/word/sdk-all-min.js")),
         ("params.xml", params_xml.clone()),
     ];
     for (label, path) in &critical_files {
@@ -271,10 +354,12 @@ fn convert_to_pdf(
             if ok { "OK" } else { "FAIL" }, label, ok, size));
     }
 
-    // --- STEP 11: Spawn x2t ---
+    // --- STEP 11: Spawn x2t from writable work directory ---
     log_pdf("--- STEP 11: Spawning x2t ---");
-    let mut cmd = std::process::Command::new(&x2t_exe);
-    cmd.current_dir(binaries_dir)
+    log_pdf(&format!("cwd: {:?}", work_binaries));
+    log_pdf(&format!("LD_LIBRARY_PATH: {:?}", binaries_dir));
+    let mut cmd = std::process::Command::new(&work_x2t);
+    cmd.current_dir(&work_binaries)
         .arg(params_xml.to_string_lossy().as_ref());
     #[cfg(target_os = "linux")]
     cmd.env("LD_LIBRARY_PATH", binaries_dir);
