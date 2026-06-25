@@ -143,6 +143,11 @@ jobs:
           chmod +x scripts/generate-sdk-bundle.sh
           bash scripts/generate-sdk-bundle.sh
 
+      - name: Prepare DoctRenderer directory structure
+        run: |
+          chmod +x scripts/prepare-doctrenderer.sh
+          bash scripts/prepare-doctrenderer.sh
+
       - name: Generate Linux icons
         run: |
           echo "::group::generate-icons"
@@ -208,7 +213,7 @@ jobs:
           echo "Building for ${{ matrix.target }}..."
           npx tauri build \
             --target ${{ matrix.target }} \
-            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/x2t","binaries/fonts/*","templates/*"]}}' \
+            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/x2t","binaries/fonts/*","binaries/editors/**","templates/*"]}}' \
             2>&1 | tee /tmp/tauri-build.log
 
           echo "::group::Build output"
