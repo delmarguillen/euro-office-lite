@@ -131,6 +131,13 @@ jobs:
           fi
           echo "::endgroup::"
 
+          echo "::group::Copy fonts to binaries for bundling"
+          mkdir -p src-tauri/binaries/fonts
+          cp src/fonts/*.ttf src-tauri/binaries/fonts/
+          cp src/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
+          echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
+          echo "::endgroup::"
+
       - name: Generate Linux icons
         run: |
           echo "::group::generate-icons"
@@ -191,7 +198,7 @@ jobs:
           echo "Building for ${{ matrix.target }}..."
           npx tauri build \
             --target ${{ matrix.target }} \
-            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/fonts/*","binaries/core-fonts/*","binaries/fontdata/*","templates/*"]}}' \
+            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/fonts/*","templates/*"]}}' \
             2>&1 | tee /tmp/tauri-build.log
 
           echo "::group::Build output"
