@@ -37,11 +37,20 @@ fi
 
 cp "$WEBAPPS/vendor/xregexp/xregexp-all-min.js" "$EDITORS/web-apps/vendor/xregexp/"
 
-if [ -f "$BINARIES/sdk-word-bundle.js" ]; then
+if [ -f "$BINARIES/sdk-all-min.js" ]; then
+    cp "$BINARIES/sdk-all-min.js" "$EDITORS/sdkjs/word/sdk-all-min.js"
+    echo "Using compiled sdk-all-min.js"
+elif [ -f "$BINARIES/sdk-word-bundle.js" ]; then
     cp "$BINARIES/sdk-word-bundle.js" "$EDITORS/sdkjs/word/sdk-all-min.js"
+    echo "WARNING: Using concatenated sdk-word-bundle.js (not compiled)"
 else
-    echo "ERROR: sdk-word-bundle.js not found, run generate-sdk-bundle.sh first"
+    echo "ERROR: No SDK bundle found (sdk-all-min.js or sdk-word-bundle.js)"
     exit 1
+fi
+
+if [ -f "$BINARIES/sdk-all.js" ]; then
+    cp "$BINARIES/sdk-all.js" "$EDITORS/sdkjs/word/sdk-all.js"
+    echo "Copied sdk-all.js"
 fi
 
 echo "DoctRenderer structure created:"

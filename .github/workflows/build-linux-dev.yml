@@ -43,6 +43,7 @@ jobs:
           rustc --version && cargo --version
           node --version && npm --version
           python3 --version
+          java -version 2>&1 || echo "WARNING: Java not found (needed for Closure Compiler)"
           echo "::endgroup::"
 
           echo "::group::Disk space"
@@ -163,9 +164,28 @@ jobs:
           echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
           echo "::endgroup::"
 
-          echo "::group::Generate sdk-word-bundle.js"
-          chmod +x scripts/generate-sdk-bundle.sh
-          bash scripts/generate-sdk-bundle.sh
+          echo "::group::Compile sdk-all-min.js with Closure Compiler"
+          cd src/sdkjs/build
+          npx grunt compile-word --desktop=true --level=WHITESPACE_ONLY --no-color
+          cd "$GITHUB_WORKSPACE"
+
+          COMPILED="src/sdkjs/deploy/sdkjs/word/sdk-all-min.js"
+          if [ -f "$COMPILED" ]; then
+            SIZE=$(wc -c < "$COMPILED")
+            echo "sdk-all-min.js compiled: $SIZE bytes"
+            cp "$COMPILED" src-tauri/binaries/sdk-all-min.js
+          else
+            echo "ERROR: sdk-all-min.js not found after compilation"
+            ls -la src/sdkjs/deploy/sdkjs/word/ 2>/dev/null || echo "deploy dir not found"
+            exit 1
+          fi
+
+          SDK_ALL="src/sdkjs/deploy/sdkjs/word/sdk-all.js"
+          if [ -f "$SDK_ALL" ]; then
+            SIZE=$(wc -c < "$SDK_ALL")
+            echo "sdk-all.js compiled: $SIZE bytes"
+            cp "$SDK_ALL" src-tauri/binaries/sdk-all.js
+          fi
           echo "::endgroup::"
 
           echo "::group::Create DoctRenderer directory structure"
