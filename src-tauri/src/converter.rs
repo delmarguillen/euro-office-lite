@@ -373,14 +373,18 @@ fn convert_to_pdf(
     }
 
     // --- STEP 11: Spawn x2t from writable work directory ---
+    // LD_LIBRARY_PATH: work_binaries FIRST so libdoctrenderer.so loads from there
+    // and reads our DoctRenderer.config (with DoctSdk section), then binaries_dir
+    // as fallback for any libs not symlinked to work dir.
     log_pdf("--- STEP 11: Spawning x2t ---");
     log_pdf(&format!("cwd: {:?}", work_binaries));
-    log_pdf(&format!("LD_LIBRARY_PATH: {:?}", binaries_dir));
+    let ld_path = format!("{}:{}", work_binaries.display(), binaries_dir.display());
+    log_pdf(&format!("LD_LIBRARY_PATH: {}", ld_path));
     let mut cmd = std::process::Command::new(&work_x2t);
     cmd.current_dir(&work_binaries)
         .arg(params_xml.to_string_lossy().as_ref());
     #[cfg(target_os = "linux")]
-    cmd.env("LD_LIBRARY_PATH", binaries_dir);
+    cmd.env("LD_LIBRARY_PATH", &ld_path);
 
     let result = cmd.output()
         .map_err(|e| format!("Failed to spawn x2t: {}", e))?;
