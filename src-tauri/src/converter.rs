@@ -66,6 +66,9 @@ fn convert_to_pdf(
         .unwrap_or_else(|_| fonts_dir.clone());
     let allfonts_abs = std::fs::canonicalize(&allfonts_js)
         .unwrap_or_else(|_| allfonts_js.clone());
+    let binaries_abs = std::fs::canonicalize(binaries_dir)
+        .unwrap_or_else(|_| binaries_dir.to_path_buf());
+    let doctrenderer_abs = binaries_abs.join("DoctRenderer.config");
 
     let xml = format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
@@ -77,11 +80,13 @@ fn convert_to_pdf(
 <m_bEmbeddedFonts>true</m_bEmbeddedFonts>
 <m_sFontDir>{}</m_sFontDir>
 <m_sAllFontsPath>{}</m_sAllFontsPath>
+<m_sDoctRendererPath>{}</m_sDoctRendererPath>
 </TaskQueueDataConvert>"#,
         input,
         output,
         fonts_dir_abs.to_string_lossy().replace('\\', "/"),
         allfonts_abs.to_string_lossy().replace('\\', "/"),
+        doctrenderer_abs.to_string_lossy().replace('\\', "/"),
     );
     std::fs::write(&params_xml, &xml).map_err(|e| e.to_string())?;
 
