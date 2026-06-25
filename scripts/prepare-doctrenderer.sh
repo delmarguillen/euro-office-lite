@@ -14,7 +14,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SDKJS="$PROJECT_ROOT/src/sdkjs"
 WEBAPPS="$PROJECT_ROOT/src/web-apps"
 BINARIES="$PROJECT_ROOT/src-tauri/binaries"
-EDITORS="$BINARIES/editors"
+EDITORS="$PROJECT_ROOT/src-tauri/editors"
 
 echo "=== prepare-doctrenderer.sh ==="
 

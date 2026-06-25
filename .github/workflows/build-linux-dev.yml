@@ -215,7 +215,7 @@ jobs:
           echo "Building for ${{ matrix.target }}..."
           npx tauri build \
             --target ${{ matrix.target }} \
-            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/x2t","binaries/fonts/*","binaries/editors/sdkjs/word/*","binaries/editors/sdkjs/common/Native/*","binaries/editors/sdkjs/common/AllFonts.js","binaries/editors/sdkjs/common/libfont/engine/*","binaries/editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
+            --config '{"bundle":{"targets":["deb"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
             2>&1 | tee /tmp/tauri-build.log
 
           echo "::group::Build output"
