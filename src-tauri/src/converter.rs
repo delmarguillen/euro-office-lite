@@ -98,8 +98,8 @@ fn convert_to_pdf(
         .unwrap_or(std::path::Path::new("."))
         .join("x2t_params.xml");
 
-    let fonts_dir_for_xml = std::fs::canonicalize(&run_dir)
-        .unwrap_or_else(|_| run_dir.clone());
+    let fonts_dir_for_xml = std::fs::canonicalize(&fonts_dir)
+        .unwrap_or_else(|_| fonts_dir.clone());
     let allfonts_abs = std::fs::canonicalize(&run_allfonts)
         .unwrap_or_else(|_| run_allfonts.clone());
 
@@ -173,7 +173,10 @@ fn setup_windows_direct(
     editors_dir: &std::path::Path,
     allfonts_js: &std::path::Path,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
-    log_pdf("[WIN] Using direct binaries_dir (no work directory)");
+    // x2t.exe lives in the app root (not binaries/), so DoctRenderer resolves
+    // its config relative to the exe location = app root.
+    let app_root = binaries_dir.parent().unwrap_or(binaries_dir);
+    log_pdf(&format!("[WIN] app_root={}", app_root.display()));
 
     // Copy server AllFonts.js over the web version in binaries/ and editors/
     let bin_allfonts = binaries_dir.join("AllFonts.js");
@@ -190,24 +193,26 @@ fn setup_windows_direct(
         let _ = std::fs::copy(&fontsel_src, fonts_dir.join("font_selection.bin"));
     }
 
-    // Write DoctRenderer.config
-    let config_path = binaries_dir.join("DoctRenderer.config");
+    // Write DoctRenderer.config next to x2t.exe (app root).
+    // Paths are relative to x2t.exe location, so ./editors/ not ../editors/.
+    let config_path = app_root.join("DoctRenderer.config");
     let config_content = r#"<Settings>
-<file>../editors/sdkjs/common/Native/native.js</file>
-<file>../editors/sdkjs/common/Native/jquery_native.js</file>
-<allfonts>../editors/sdkjs/common/AllFonts.js</allfonts>
-<file>../editors/web-apps/vendor/xregexp/xregexp-all-min.js</file>
-<sdkjs>../editors/sdkjs</sdkjs>
-<dictionaries>../dictionaries</dictionaries>
+<file>./editors/sdkjs/common/Native/native.js</file>
+<file>./editors/sdkjs/common/Native/jquery_native.js</file>
+<allfonts>./editors/sdkjs/common/AllFonts.js</allfonts>
+<file>./editors/web-apps/vendor/xregexp/xregexp-all-min.js</file>
+<sdkjs>./editors/sdkjs</sdkjs>
+<dictionaries>./dictionaries</dictionaries>
 <DoctSdk>
-<file>../editors/sdkjs/word/sdk-all-min.js</file>
-<file>../editors/sdkjs/common/libfont/engine/fonts_native.js</file>
-<file>../editors/sdkjs/word/sdk-all.js</file>
+<file>./editors/sdkjs/word/sdk-all-min.js</file>
+<file>./editors/sdkjs/common/libfont/engine/fonts_native.js</file>
+<file>./editors/sdkjs/word/sdk-all.js</file>
 </DoctSdk>
 </Settings>"#;
     let _ = std::fs::write(&config_path, config_content);
 
-    Ok((binaries_dir.to_path_buf(), x2t_exe.to_path_buf(), bin_allfonts))
+    // Run from app root where x2t.exe and DoctRenderer.config live
+    Ok((app_root.to_path_buf(), x2t_exe.to_path_buf(), bin_allfonts))
 }
 
 /// Linux: build writable work directory (/usr/lib/ is read-only at runtime).
