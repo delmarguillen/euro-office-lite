@@ -480,6 +480,24 @@ listen('file-opened', (event) => {
   }
 });
 
+var _closeDialogOpen = false;
+listen('confirm-close', async () => {
+  if (_closeDialogOpen) return;
+  _closeDialogOpen = true;
+  try {
+    if (window.AscDesktopEditor._isModified) {
+      var discard = await window.__TAURI__.dialog.confirm(
+        'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
+        { title: 'Cambios sin guardar', kind: 'warning' }
+      );
+      if (!discard) return;
+    }
+    await invoke('force_close');
+  } finally {
+    _closeDialogOpen = false;
+  }
+});
+
 listen('open-file', async (event) => {
   if (!event.payload) return;
   var filePath = event.payload;

@@ -1,6 +1,6 @@
 {
   "productName": "Euro-Office Lite",
-  "version": "0.4.0-alpha",
+  "version": "0.5.0-alpha",
   "identifier": "org.euro-office.lite",
   "build": {
     "frontendDist": "../src-dist",
@@ -36,7 +36,12 @@
       "binaries/fonts/*",
       "binaries/core-fonts/*",
       "binaries/fontdata/*",
-      "templates/*"
+      "templates/*",
+      "editors/sdkjs/word/*",
+      "editors/sdkjs/common/Native/*",
+      "editors/sdkjs/common/AllFonts.js",
+      "editors/sdkjs/common/libfont/engine/*",
+      "editors/web-apps/vendor/xregexp/*"
     ],
     "fileAssociations": [
       {

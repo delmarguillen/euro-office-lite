@@ -1,0 +1,178 @@
+name: Windows Dev Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'feat/17-close-save-and-pdf-win'
+    paths:
+      - 'src-tauri/**'
+      - 'scripts/**'
+      - '.github/workflows/build-windows-dev.yml'
+
+permissions:
+  contents: write
+
+env:
+  RUST_BACKTRACE: "1"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Generate sdkjs develop scripts
+        shell: pwsh
+        run: |
+          echo "::group::grunt-develop"
+          Push-Location src\sdkjs\build
+          npm ci
+          npx grunt develop --desktop=true
+          Pop-Location
+          $wordScripts = "src\sdkjs\develop\sdkjs\word\scripts.js"
+          $content = Get-Content $wordScripts -Raw -Encoding utf8
+          if ($content -notmatch 'word/document/editor\.js') {
+            Write-Host "Patching word/scripts.js with editor.js..."
+            $content = $content -replace '\];$', ",`n`t`"../../../../sdkjs/word/document/editor.js`"`n];"
+            Set-Content $wordScripts -Value $content -Encoding utf8 -NoNewline
+          }
+          echo "::endgroup::"
+
+      - name: Prepare fonts and AllFonts.js
+        shell: pwsh
+        run: |
+          echo "::group::prepare-fonts"
+          pip install Pillow --quiet
+          .\scripts\prepare-fonts.ps1
+          echo "::endgroup::"
+
+      - name: Download x2t binaries
+        shell: pwsh
+        run: .\scripts\get-x2t-ci.ps1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare DoctRenderer resources
+        shell: bash
+        run: |
+          echo "::group::Copy fonts to binaries"
+          mkdir -p src-tauri/binaries/fonts
+          cp src/fonts/*.ttf src-tauri/binaries/fonts/
+          cp src/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
+          echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
+          echo "::endgroup::"
+
+          echo "::group::Compile sdkjs with Closure Compiler"
+          SDKJS_UI_REF=$(git -C src/sdkjs rev-parse HEAD)
+          git -C src/sdkjs fetch origin tag v8.2.0.147 --no-tags
+          git -C src/sdkjs checkout v8.2.0.147
+          cd src/sdkjs/build
+          npm ci
+          npx grunt compile-word --desktop=true --level=SIMPLE --no-color
+          cd "$GITHUB_WORKSPACE"
+
+          COMPILED="src/sdkjs/deploy/sdkjs/word/sdk-all-min.js"
+          if [ -f "$COMPILED" ]; then
+            echo "sdk-all-min.js: $(wc -c < "$COMPILED") bytes"
+            cp "$COMPILED" src-tauri/binaries/sdk-all-min.js
+          else
+            echo "ERROR: sdk-all-min.js not found"
+            exit 1
+          fi
+
+          SDK_ALL="src/sdkjs/deploy/sdkjs/word/sdk-all.js"
+          if [ -f "$SDK_ALL" ]; then
+            echo "sdk-all.js: $(wc -c < "$SDK_ALL") bytes"
+            cp "$SDK_ALL" src-tauri/binaries/sdk-all.js
+          fi
+
+          # Stage v8.2.0 support files before restoring UI version
+          DOCTRENDERER_STAGING="$RUNNER_TEMP/doctrenderer-sdkjs"
+          mkdir -p "$DOCTRENDERER_STAGING/common/Native"
+          mkdir -p "$DOCTRENDERER_STAGING/common/libfont/engine"
+          cp src/sdkjs/common/Native/native.js "$DOCTRENDERER_STAGING/common/Native/"
+          cp src/sdkjs/common/Native/jquery_native.js "$DOCTRENDERER_STAGING/common/Native/"
+          cp src/sdkjs/common/AllFonts.js "$DOCTRENDERER_STAGING/common/"
+          cp src/sdkjs/common/libfont/engine/fonts_native.js "$DOCTRENDERER_STAGING/common/libfont/engine/"
+          echo "Staged v8.2.0 support files to $DOCTRENDERER_STAGING"
+
+          git -C src/sdkjs checkout "$SDKJS_UI_REF"
+          echo "::endgroup::"
+
+          echo "::group::Create DoctRenderer directory structure"
+          DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
+          echo "::endgroup::"
+
+      - name: Stage frontend distribution
+        shell: pwsh
+        run: |
+          echo "::group::prepare-dist"
+          .\scripts\prepare-dist.ps1
+          echo "::endgroup::"
+          $logFile = Join-Path $env:TEMP "euro-office-lite\prepare-dist.log"
+          if (Test-Path $logFile) { Get-Content $logFile }
+
+      - name: Build Tauri installer
+        shell: pwsh
+        run: |
+          echo "::group::tauri-build"
+          npx tauri build --target ${{ matrix.target }} 2>&1 | Tee-Object -FilePath (Join-Path $env:TEMP "tauri-build.log")
+          echo "::endgroup::"
+
+      - name: Show installer info
+        shell: pwsh
+        run: |
+          $nsisDir = "src-tauri\target\${{ matrix.target }}\release\bundle\nsis"
+          if (Test-Path $nsisDir) {
+            Get-ChildItem $nsisDir -Recurse | Select-Object Name, @{N='Size(MB)';E={[math]::Round($_.Length/1MB,2)}}
+          } else {
+            Write-Host "NSIS output directory not found at $nsisDir"
+            Get-ChildItem "src-tauri\target" -Directory | Select-Object Name
+          }
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.target }}
+          path: src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/euro-office-lite/prepare-dist.log
+            ${{ runner.temp }}/tauri-build.log

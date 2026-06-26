@@ -78,6 +78,7 @@ fn main() {
             bridge::set_document_modified,
             bridge::load_font,
             bridge::js_log,
+            bridge::force_close,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let uri = request.uri().to_string();
@@ -129,9 +130,22 @@ fn main() {
 
             run_font_generation(&temp_dir, &binaries_dir);
 
-            #[cfg(feature = "devtools")]
-            if let Some(w) = app.get_webview_window("main") {
-                w.open_devtools();
+            let handle = app.handle().clone();
+            if let Some(window) = app.get_webview_window("main") {
+                #[cfg(feature = "devtools")]
+                window.open_devtools();
+
+                let h = handle.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        let state = h.state::<AppState>();
+                        let modified = *state.modified.lock().unwrap();
+                        if modified {
+                            api.prevent_close();
+                            let _ = h.emit("confirm-close", ());
+                        }
+                    }
+                });
             }
 
             if let Some(ref file_path) = file_to_open {
@@ -152,9 +166,13 @@ fn main() {
 fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Path) {
     let marker = temp_dir.join(".fonts_generated");
 
-    if marker.exists() {
+    let allfonts_server = temp_dir.join("fontdata").join("AllFonts.js");
+    if marker.exists() && allfonts_server.exists() {
         log_startup(temp_dir, "Font generation marker found, skipping regeneration");
         return;
+    }
+    if marker.exists() && !allfonts_server.exists() {
+        log_startup(temp_dir, "Marker exists but fontdata/AllFonts.js missing, regenerating");
     }
 
     log_startup(temp_dir, "First-run font generation starting...");

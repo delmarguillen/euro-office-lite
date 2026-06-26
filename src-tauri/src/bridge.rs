@@ -1,4 +1,5 @@
-use tauri::WebviewWindow;
+use crate::file_ops::AppState;
+use tauri::{State, WebviewWindow};
 
 #[tauri::command]
 pub fn exec_command(cmd: String, param: Option<String>) -> Result<String, String> {
@@ -13,7 +14,12 @@ pub fn set_window_title(window: WebviewWindow, name: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-pub fn set_document_modified(window: WebviewWindow, modified: bool) -> Result<(), String> {
+pub fn set_document_modified(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    modified: bool,
+) -> Result<(), String> {
+    *state.modified.lock().unwrap() = modified;
     let current = window.title().map_err(|e| e.to_string())?;
     let base = current.trim_start_matches("● ");
     let title = if modified {
@@ -22,6 +28,12 @@ pub fn set_document_modified(window: WebviewWindow, modified: bool) -> Result<()
         base.to_string()
     };
     window.set_title(&title).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn force_close(app_handle: tauri::AppHandle) -> Result<(), String> {
+    app_handle.exit(0);
+    Ok(())
 }
 
 #[tauri::command]

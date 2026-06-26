@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - 'feat/15-linux-build'
+      - 'feat/17-close-save-and-pdf-win'
     paths:
       - 'src-tauri/**'
       - 'scripts/**'
