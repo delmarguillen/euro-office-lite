@@ -35,7 +35,7 @@ jobs:
         run: |
           cd src/sdkjs/build
           echo "Compiling sdk-all-min.js (word, desktop)..."
-          npx grunt compile-word --desktop=true --level=WHITESPACE_ONLY --no-color
+          npx grunt compile-word --desktop=true --level=SIMPLE --no-color
           echo ""
           echo "=== Output ==="
           ls -lh ../deploy/sdkjs/word/
@@ -44,7 +44,7 @@ jobs:
         run: |
           cd src/sdkjs/build
           echo "Compiling sdk-all-min.js (cell, desktop)..."
-          npx grunt compile-cell --desktop=true --level=WHITESPACE_ONLY --no-color
+          npx grunt compile-cell --desktop=true --level=SIMPLE --no-color
           echo ""
           echo "=== Output ==="
           ls -lh ../deploy/sdkjs/cell/
@@ -53,7 +53,7 @@ jobs:
         run: |
           cd src/sdkjs/build
           echo "Compiling sdk-all-min.js (slide, desktop)..."
-          npx grunt compile-slide --desktop=true --level=WHITESPACE_ONLY --no-color
+          npx grunt compile-slide --desktop=true --level=SIMPLE --no-color
           echo ""
           echo "=== Output ==="
           ls -lh ../deploy/sdkjs/slide/

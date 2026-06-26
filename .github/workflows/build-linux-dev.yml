@@ -167,7 +167,7 @@ jobs:
           echo "::group::Compile sdkjs with Closure Compiler"
           cd src/sdkjs/build
           npm ci
-          npx grunt compile-word --desktop=true --level=WHITESPACE_ONLY --no-color
+          npx grunt compile-word --desktop=true --level=SIMPLE --no-color
           cd "$GITHUB_WORKSPACE"
 
           COMPILED="src/sdkjs/deploy/sdkjs/word/sdk-all-min.js"
