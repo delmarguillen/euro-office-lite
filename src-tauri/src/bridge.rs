@@ -1,5 +1,5 @@
 use crate::file_ops::AppState;
-use tauri::{Manager, State, WebviewWindow};
+use tauri::{State, WebviewWindow};
 
 #[tauri::command]
 pub fn exec_command(cmd: String, param: Option<String>) -> Result<String, String> {
@@ -33,12 +33,9 @@ pub fn set_document_modified(
 
 #[tauri::command]
 pub fn force_close(app_handle: tauri::AppHandle) -> Result<(), String> {
-    js_log("[CLOSE] force_close command received, closing window".to_string());
-    if let Some(window) = app_handle.get_webview_window("main") {
-        window.destroy().map_err(|e| e.to_string())
-    } else {
-        Ok(())
-    }
+    js_log("[CLOSE] force_close command received, exiting app".to_string());
+    app_handle.exit(0);
+    Ok(())
 }
 
 #[tauri::command]
