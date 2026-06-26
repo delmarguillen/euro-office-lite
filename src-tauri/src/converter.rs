@@ -211,8 +211,9 @@ fn setup_windows_direct(
 </Settings>"#;
     let _ = std::fs::write(&config_path, config_content);
 
-    // Run from app root where x2t.exe and DoctRenderer.config live
-    Ok((app_root.to_path_buf(), x2t_exe.to_path_buf(), bin_allfonts))
+    // current_dir must be binaries/ so Windows finds DLLs there.
+    // DoctRenderer.config is next to x2t.exe (app root) — resolved by exe location.
+    Ok((binaries_dir.to_path_buf(), x2t_exe.to_path_buf(), bin_allfonts))
 }
 
 /// Linux: build writable work directory (/usr/lib/ is read-only at runtime).
