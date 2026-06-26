@@ -100,7 +100,7 @@ fn convert_to_pdf(
     if let Ok(entries) = std::fs::read_dir(binaries_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.ends_with(".so") || name.contains(".so.") || name.ends_with(".dat") || name == "package.config" {
+            if name.ends_with(".so") || name.contains(".so.") || name.ends_with(".dll") || name.ends_with(".dat") || name == "package.config" {
                 let dst = work_binaries.join(&name);
                 if !dst.exists() {
                     #[cfg(target_os = "linux")]
@@ -118,7 +118,17 @@ fn convert_to_pdf(
         #[cfg(target_os = "linux")]
         { let _ = std::os::unix::fs::symlink(&fonts_dir, &work_fonts); }
         #[cfg(not(target_os = "linux"))]
-        { /* on Windows the original binaries_dir is used */ }
+        {
+            let _ = std::fs::create_dir_all(&work_fonts);
+            if let Ok(font_entries) = std::fs::read_dir(&fonts_dir) {
+                for fe in font_entries.flatten() {
+                    let dst = work_fonts.join(fe.file_name());
+                    if !dst.exists() {
+                        let _ = std::fs::copy(fe.path(), &dst);
+                    }
+                }
+            }
+        }
     }
 
     // Copy font_selection.bin to work dir (x2t looks for it next to AllFonts.js)
