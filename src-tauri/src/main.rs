@@ -180,9 +180,13 @@ fn main() {
 fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Path) {
     let marker = temp_dir.join(".fonts_generated");
 
-    if marker.exists() {
+    let allfonts_server = temp_dir.join("fontdata").join("AllFonts.js");
+    if marker.exists() && allfonts_server.exists() {
         log_startup(temp_dir, "Font generation marker found, skipping regeneration");
         return;
+    }
+    if marker.exists() && !allfonts_server.exists() {
+        log_startup(temp_dir, "Marker exists but fontdata/AllFonts.js missing, regenerating");
     }
 
     log_startup(temp_dir, "First-run font generation starting...");
