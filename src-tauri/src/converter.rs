@@ -52,6 +52,15 @@ fn log_pdf(msg: &str) {
     }
 }
 
+fn strip_extended_prefix(p: &std::path::Path) -> std::path::PathBuf {
+    let s = p.to_string_lossy();
+    if s.starts_with("\\\\?\\") {
+        std::path::PathBuf::from(&s[4..])
+    } else {
+        p.to_path_buf()
+    }
+}
+
 fn convert_to_pdf(
     binaries_dir: &std::path::Path,
     input: &str,
@@ -59,6 +68,7 @@ fn convert_to_pdf(
 ) -> Result<String, String> {
     log_pdf("=== convert_to_pdf START ===");
 
+    let binaries_dir = &strip_extended_prefix(binaries_dir);
     let x2t_exe = find_x2t_exe(binaries_dir)?;
     let fonts_dir = binaries_dir.join("fonts");
     let fontdata_dir = std::env::temp_dir().join("euro-office-lite").join("fontdata");
