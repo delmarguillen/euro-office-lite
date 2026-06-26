@@ -66,8 +66,6 @@ fn convert_to_pdf(
     input: &str,
     output: &str,
 ) -> Result<String, String> {
-    log_pdf("=== convert_to_pdf START ===");
-
     let binaries_dir = &strip_extended_prefix(binaries_dir);
     let x2t_exe = find_x2t_exe(binaries_dir)?;
     let fonts_dir = binaries_dir.join("fonts");
@@ -121,11 +119,6 @@ fn convert_to_pdf(
     );
     std::fs::write(&params_xml, &xml).map_err(|e| e.to_string())?;
 
-    log_pdf(&format!("run_dir={}", run_dir.display()));
-    log_pdf(&format!("run_x2t={}", run_x2t.display()));
-    log_pdf(&format!("allfonts={} ({}b)", run_allfonts.display(),
-        std::fs::metadata(&run_allfonts).map(|m| m.len()).unwrap_or(0)));
-
     let mut cmd = std::process::Command::new(&run_x2t);
     cmd.current_dir(&run_dir)
         .arg(params_xml.to_string_lossy().as_ref());
@@ -138,7 +131,12 @@ fn convert_to_pdf(
     let code = result.status.code().unwrap_or(-999);
     let pdf_exists = std::path::Path::new(output).exists();
     let pdf_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
-    log_pdf(&format!("x2t exit={} pdf_exists={} pdf_size={}", code, pdf_exists, pdf_size));
+    if !result.status.success() {
+        log_pdf(&format!("x2t exit={} pdf_exists={} pdf_size={}", code, pdf_exists, pdf_size));
+        if !result.stderr.is_empty() {
+            log_pdf(&format!("x2t stderr: {}", String::from_utf8_lossy(&result.stderr)));
+        }
+    }
 
     #[cfg(target_os = "linux")]
     {
@@ -147,12 +145,6 @@ fn convert_to_pdf(
             log_pdf(&format!("x2t killed by signal {}", sig));
         }
     }
-
-    if !result.stderr.is_empty() {
-        log_pdf(&format!("x2t stderr: {}", String::from_utf8_lossy(&result.stderr)));
-    }
-
-    log_pdf("=== convert_to_pdf END ===");
 
     if result.status.success() {
         Ok("ok".to_string())
@@ -176,8 +168,6 @@ fn setup_windows_direct(
     // x2t.exe lives in the app root (not binaries/), so DoctRenderer resolves
     // its config relative to the exe location = app root.
     let app_root = binaries_dir.parent().unwrap_or(binaries_dir);
-    log_pdf(&format!("[WIN] app_root={}", app_root.display()));
-
     // Copy server AllFonts.js over the web version in binaries/ and editors/
     let bin_allfonts = binaries_dir.join("AllFonts.js");
     let _ = std::fs::copy(allfonts_js, &bin_allfonts);
@@ -227,8 +217,6 @@ fn setup_linux_workdir(
     editors_dir: &std::path::Path,
     allfonts_js: &std::path::Path,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf), String> {
-    log_pdf("[LINUX] Building writable work directory");
-
     let work_dir = std::env::temp_dir().join("euro-office-lite").join("x2t-workdir");
     let work_binaries = work_dir.join("binaries");
     let work_editors = work_dir.join("editors");

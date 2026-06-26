@@ -20,7 +20,6 @@ pub fn set_document_modified(
     modified: bool,
 ) -> Result<(), String> {
     *state.modified.lock().unwrap() = modified;
-    js_log(format!("[CLOSE] set_document_modified: {}", modified));
     let current = window.title().map_err(|e| e.to_string())?;
     let base = current.trim_start_matches("● ");
     let title = if modified {
@@ -33,7 +32,6 @@ pub fn set_document_modified(
 
 #[tauri::command]
 pub fn force_close(app_handle: tauri::AppHandle) -> Result<(), String> {
-    js_log("[CLOSE] force_close command received, exiting app".to_string());
     app_handle.exit(0);
     Ok(())
 }

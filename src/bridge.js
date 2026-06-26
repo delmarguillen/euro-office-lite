@@ -482,24 +482,16 @@ listen('file-opened', (event) => {
 
 var _closeDialogOpen = false;
 listen('confirm-close', async () => {
-  window._eoLog('[CLOSE] confirm-close event received from Rust');
-  window._eoLog('[CLOSE] _isModified: ' + window.AscDesktopEditor._isModified);
-  if (_closeDialogOpen) {
-    window._eoLog('[CLOSE] Dialog already open, ignoring');
-    return;
-  }
+  if (_closeDialogOpen) return;
   _closeDialogOpen = true;
   try {
     if (window.AscDesktopEditor._isModified) {
-      window._eoLog('[CLOSE] Showing confirmation dialog');
       var discard = await window.__TAURI__.dialog.confirm(
         'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
         { title: 'Cambios sin guardar', kind: 'warning' }
       );
-      window._eoLog('[CLOSE] User chose: ' + (discard ? 'discard' : 'cancel'));
       if (!discard) return;
     }
-    window._eoLog('[CLOSE] Calling force_close');
     await invoke('force_close');
   } finally {
     _closeDialogOpen = false;

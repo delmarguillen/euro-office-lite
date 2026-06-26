@@ -8,18 +8,6 @@ use file_ops::AppState;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
-fn log_to_file(_handle: &tauri::AppHandle, msg: &str) {
-    use std::io::Write;
-    let log_path = std::env::temp_dir().join("euro-office-lite").join("js-debug.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
-        let _ = writeln!(f, "{}", msg);
-    }
-}
-
 fn log_startup(temp_dir: &std::path::Path, msg: &str) {
     use std::io::Write;
     let log_path = temp_dir.join("js-debug.log");
@@ -152,10 +140,8 @@ fn main() {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         let state = h.state::<AppState>();
                         let modified = *state.modified.lock().unwrap();
-                        log_to_file(&h, &format!("[CLOSE] CloseRequested event, modified: {}", modified));
                         if modified {
                             api.prevent_close();
-                            log_to_file(&h, "[CLOSE] Preventing close, emitting confirm-close to JS");
                             let _ = h.emit("confirm-close", ());
                         }
                     }
