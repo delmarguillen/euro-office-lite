@@ -169,6 +169,7 @@ jobs:
           # files. Checkout temporarily, compile and stage, then restore
           # v9.3.1 for the editor UI.
           SDKJS_UI_REF=$(git -C src/sdkjs rev-parse HEAD)
+          git -C src/sdkjs fetch origin tag v8.2.0.147 --no-tags
           git -C src/sdkjs checkout v8.2.0.147
           cd src/sdkjs/build
           npm ci
