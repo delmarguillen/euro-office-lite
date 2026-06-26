@@ -4,7 +4,7 @@ Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. ~96 
 
 Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon), and Linux (x64 .deb).
 
-> **Alpha**: This project is in early development. Core features work (create, open, edit, save), but expect rough edges. Printing is currently Windows-only.
+> **Alpha**: This project is in early development. Core features work (create, open, edit, save), but expect rough edges. Printing works on Windows; PDF export works on Windows and Linux (Word documents).
 
 <p align="center">
   <img src="assets/demo.gif" alt="Euro-Office Lite demo" width="800">
@@ -54,7 +54,7 @@ User <-> Tauri WebView2 <-> sdkjs/web-apps (editor UI)
 - **sdkjs / web-apps**: Editor frontend (submodules, do not modify)
 - **bridge.js**: Implements the `AscDesktopEditor` API that sdkjs expects from a desktop host
 - **x2t**: Converts between DOCX/XLSX/PPTX and Editor.bin (sdkjs internal format)
-- **Printing**: Generates PDF via x2t, sends to printer via bundled SumatraPDF (embedded in plugin binary, no extra files needed)
+- **Printing**: Generates PDF via x2t + DoctRenderer. On Windows, sends to printer via bundled SumatraPDF. On Linux, opens PDF with the system viewer via xdg-open
 
 ## CI/CD
 
