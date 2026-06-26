@@ -1,0 +1,117 @@
+name: Compile sdkjs bundles (one-shot)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  compile:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify tools
+        run: |
+          node --version
+          npm --version
+          java -version 2>&1
+
+      - name: Install sdkjs build dependencies
+        run: |
+          cd src/sdkjs/build
+          npm ci
+
+      - name: Compile word SDK
+        run: |
+          cd src/sdkjs/build
+          echo "Compiling sdk-all-min.js (word, desktop)..."
+          npx grunt compile-word --desktop=true --level=SIMPLE --no-color
+          echo ""
+          echo "=== Output ==="
+          ls -lh ../deploy/sdkjs/word/
+
+      - name: Compile cell SDK
+        run: |
+          cd src/sdkjs/build
+          echo "Compiling sdk-all-min.js (cell, desktop)..."
+          npx grunt compile-cell --desktop=true --level=SIMPLE --no-color
+          echo ""
+          echo "=== Output ==="
+          ls -lh ../deploy/sdkjs/cell/
+
+      - name: Compile slide SDK
+        run: |
+          cd src/sdkjs/build
+          echo "Compiling sdk-all-min.js (slide, desktop)..."
+          npx grunt compile-slide --desktop=true --level=SIMPLE --no-color
+          echo ""
+          echo "=== Output ==="
+          ls -lh ../deploy/sdkjs/slide/
+
+      - name: Copy other SDK files
+        run: |
+          cd src/sdkjs/build
+          npx grunt copy-other --no-color
+
+      - name: Package SDK bundles
+        run: |
+          STAGING="/tmp/sdkjs-compiled"
+          mkdir -p "$STAGING"
+
+          DEPLOY="src/sdkjs/deploy/sdkjs"
+
+          for mod in word cell slide; do
+            mkdir -p "$STAGING/$mod"
+            if [ -f "$DEPLOY/$mod/sdk-all-min.js" ]; then
+              cp "$DEPLOY/$mod/sdk-all-min.js" "$STAGING/$mod/"
+              echo "$mod/sdk-all-min.js: $(wc -c < "$DEPLOY/$mod/sdk-all-min.js") bytes"
+            fi
+            if [ -f "$DEPLOY/$mod/sdk-all.js" ]; then
+              cp "$DEPLOY/$mod/sdk-all.js" "$STAGING/$mod/"
+              echo "$mod/sdk-all.js: $(wc -c < "$DEPLOY/$mod/sdk-all.js") bytes"
+            fi
+          done
+
+          # Copy common files that DoctRenderer needs
+          mkdir -p "$STAGING/common/Native"
+          mkdir -p "$STAGING/common/libfont/engine"
+          cp "$DEPLOY/common/Native/"*.js "$STAGING/common/Native/" 2>/dev/null || true
+          cp "$DEPLOY/common/libfont/engine/"*.js "$STAGING/common/libfont/engine/" 2>/dev/null || true
+
+          # Copy vendor files
+          mkdir -p "$STAGING/vendor"
+          cp -r "$DEPLOY/vendor/"* "$STAGING/vendor/" 2>/dev/null || true
+
+          echo ""
+          echo "=== Staging contents ==="
+          find "$STAGING" -type f -exec ls -lh {} \;
+
+          cd "$STAGING"
+          zip -r /tmp/sdkjs-compiled.zip .
+          echo ""
+          ls -lh /tmp/sdkjs-compiled.zip
+
+      - name: Upload as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdkjs-compiled
+          path: /tmp/sdkjs-compiled.zip
+
+      - name: Upload to dependencies release
+        run: |
+          echo "Uploading sdkjs-compiled.zip to 'dependencies' release..."
+          gh release upload dependencies /tmp/sdkjs-compiled.zip --clobber
+          echo "Done."
+          gh release view dependencies
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
