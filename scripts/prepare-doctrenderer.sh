@@ -11,7 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SDKJS="$PROJECT_ROOT/src/sdkjs"
+SDKJS="${DOCTRENDERER_SDKJS:-$PROJECT_ROOT/src/sdkjs}"
 WEBAPPS="$PROJECT_ROOT/src/web-apps"
 BINARIES="$PROJECT_ROOT/src-tauri/binaries"
 EDITORS="$PROJECT_ROOT/src-tauri/editors"

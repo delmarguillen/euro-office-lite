@@ -165,6 +165,11 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Compile sdkjs with Closure Compiler"
+          # DoctRenderer/x2t v8.2.0 needs sdkjs v8.2.0 bundles and support
+          # files. Checkout temporarily, compile and stage, then restore
+          # v9.3.1 for the editor UI.
+          SDKJS_UI_REF=$(git -C src/sdkjs rev-parse HEAD)
+          git -C src/sdkjs checkout v8.2.0.147
           cd src/sdkjs/build
           npm ci
           npx grunt compile-word --desktop=true --level=SIMPLE --no-color
@@ -184,11 +189,23 @@ jobs:
             echo "sdk-all.js: $(wc -c < "$SDK_ALL") bytes"
             cp "$SDK_ALL" src-tauri/binaries/sdk-all.js
           fi
+
+          # Stage v8.2.0 support files before restoring v9.3.1
+          DOCTRENDERER_STAGING="/tmp/doctrenderer-sdkjs"
+          mkdir -p "$DOCTRENDERER_STAGING/common/Native"
+          mkdir -p "$DOCTRENDERER_STAGING/common/libfont/engine"
+          cp src/sdkjs/common/Native/native.js "$DOCTRENDERER_STAGING/common/Native/"
+          cp src/sdkjs/common/Native/jquery_native.js "$DOCTRENDERER_STAGING/common/Native/"
+          cp src/sdkjs/common/AllFonts.js "$DOCTRENDERER_STAGING/common/"
+          cp src/sdkjs/common/libfont/engine/fonts_native.js "$DOCTRENDERER_STAGING/common/libfont/engine/"
+          echo "Staged v8.2.0 support files to $DOCTRENDERER_STAGING"
+
+          git -C src/sdkjs checkout "$SDKJS_UI_REF"
           echo "::endgroup::"
 
           echo "::group::Create DoctRenderer directory structure"
           chmod +x scripts/prepare-doctrenderer.sh
-          bash scripts/prepare-doctrenderer.sh
+          DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
           echo "::endgroup::"
 
       - name: Verify x2t binary
