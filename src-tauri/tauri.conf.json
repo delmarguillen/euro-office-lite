@@ -36,7 +36,12 @@
       "binaries/fonts/*",
       "binaries/core-fonts/*",
       "binaries/fontdata/*",
-      "templates/*"
+      "templates/*",
+      "editors/sdkjs/word/*",
+      "editors/sdkjs/common/Native/*",
+      "editors/sdkjs/common/AllFonts.js",
+      "editors/sdkjs/common/libfont/engine/*",
+      "editors/web-apps/vendor/xregexp/*"
     ],
     "fileAssociations": [
       {
