@@ -162,12 +162,8 @@ var _UI_STRINGS = {
 
 function _detectLang() {
   var stored = localStorage.getItem('eo-ui-lang');
-  if (stored) {
-    window._eoLog('[LANG] User preference loaded from localStorage: ' + stored);
-    return stored;
-  }
+  if (stored) return stored;
   var nav = (navigator.language || navigator.userLanguage || 'en').toLowerCase();
-  window._eoLog('[LANG] navigator.language: ' + nav);
   var found = null;
   for (var i = 0; i < _SUPPORTED_LANGS.length; i++) {
     if (_SUPPORTED_LANGS[i].code === nav) { found = _SUPPORTED_LANGS[i]; break; }
@@ -179,7 +175,7 @@ function _detectLang() {
     }
   }
   var detected = found ? found.code : 'en';
-  window._eoLog('[LANG] Auto-detected language: ' + detected + ' (from navigator: ' + nav + ')');
+  window._eoLog('[LANG] Auto-detected: ' + detected + ' (navigator: ' + nav + ')');
   return detected;
 }
 
@@ -193,13 +189,9 @@ window._eoCurrentLang = _detectLang();
 window._t = _t;
 window._SUPPORTED_LANGS = _SUPPORTED_LANGS;
 window._eoSetLang = function(code) {
-  window._eoLog('[LANG] Language changed: ' + window._eoCurrentLang + ' -> ' + code);
   window._eoCurrentLang = code;
   localStorage.setItem('eo-ui-lang', code);
-  window._eoLog('[LANG] Saved to localStorage: ' + code);
 };
-
-window._eoLog('[LANG] Initialized with lang: ' + window._eoCurrentLang);
 
 // ── end i18n ──
 
@@ -353,7 +345,6 @@ window.AscDesktopEditor = {
 
     if (window.AscDesktopEditor._currentDocType) {
       if (window.AscDesktopEditor._isModified) {
-        window._eoLog('[LANG] Showing unsaved-discard-open dialog in lang=' + window._eoCurrentLang);
         var discard = await window.__TAURI__.dialog.confirm(
           _t('unsavedDiscardOpen'),
           { title: _t('unsavedChanges'), kind: 'warning' }
@@ -452,7 +443,6 @@ window.AscDesktopEditor = {
             } catch(te) {}
           } catch(saveErr) {
             window._eoLog('[EO] SaveAs failed: ' + saveErr);
-            window._eoLog('[LANG] Showing save-error dialog in lang=' + window._eoCurrentLang);
             await window.__TAURI__.dialog.message(
               _t('saveErrorMsg'),
               { title: _t('saveError'), kind: 'error' }
@@ -575,7 +565,6 @@ window.AscDesktopEditor = {
         } else if (evt.action === 'file:close') {
           (async function() {
             if (window.AscDesktopEditor._isModified) {
-              window._eoLog('[LANG] Showing unsaved-discard-close dialog in lang=' + window._eoCurrentLang);
               var discard = await window.__TAURI__.dialog.confirm(
                 _t('unsavedDiscardClose'),
                 { title: _t('unsavedChanges'), kind: 'warning' }
@@ -675,7 +664,6 @@ listen('confirm-close', async () => {
   _closeDialogOpen = true;
   try {
     if (window.AscDesktopEditor._isModified) {
-      window._eoLog('[LANG] Showing confirm-close dialog in lang=' + window._eoCurrentLang);
       var discard = await window.__TAURI__.dialog.confirm(
         _t('unsavedDiscardClose'),
         { title: _t('unsavedChanges'), kind: 'warning' }

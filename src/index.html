@@ -561,7 +561,6 @@
         try {
           var b64 = await window.__TAURI__.core.invoke('create_new', { docType: docType });
           var defaultName = docType === 'cell' ? _t('newSpreadsheet') : docType === 'slide' ? _t('newPresentation') : _t('newDocument');
-          _log('[LANG] Default document name: ' + defaultName);
           window._pendingFileData = { data: b64, path: null, name: defaultName };
         } catch(e) {
           window._eoLog('[EO] create_new failed: ' + (e.message || e));
@@ -570,8 +569,6 @@
       window.AscDesktopEditor._currentDocType = docType;
       startScreen.classList.add('hidden');
       document.getElementById('placeholder').classList.add('active');
-
-      _log('[LANG] Opening editor with lang=' + (window._eoCurrentLang || 'en') + ' docType=' + docType);
 
       new DocsAPI.DocEditor('placeholder', {
         type: 'desktop',
@@ -709,18 +706,15 @@
 
     // ── Language selector initialization ──
     function _updateStartScreenStrings() {
-      _log('[LANG] Updating start screen strings to ' + window._eoCurrentLang);
       document.documentElement.lang = window._eoCurrentLang;
       document.querySelectorAll('[data-i18n]').forEach(function(el) {
         el.textContent = _t(el.dataset.i18n);
       });
       var langLabel = document.getElementById('lang-label');
       if (langLabel) langLabel.textContent = _t('language');
-      _log('[LANG] Start screen strings updated');
     }
 
     (function initLangSelector() {
-      _log('[LANG] Initializing language selector');
       var select = document.getElementById('lang-select');
       var langs = window._SUPPORTED_LANGS || [];
 
@@ -731,12 +725,9 @@
         if (langs[i].code === window._eoCurrentLang) opt.selected = true;
         select.appendChild(opt);
       }
-      _log('[LANG] Dropdown populated with ' + langs.length + ' languages, current=' + window._eoCurrentLang);
 
       select.addEventListener('change', function() {
-        var newLang = select.value;
-        _log('[LANG] User selected language: ' + newLang);
-        window._eoSetLang(newLang);
+        window._eoSetLang(select.value);
         _updateStartScreenStrings();
       });
 
