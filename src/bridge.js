@@ -17,6 +17,184 @@ window._eoLog = function() {
   }
 };
 
+// ── i18n: language detection, UI strings, translation ──
+
+var _SUPPORTED_LANGS = [
+  { code: 'ar', nativeName: 'العربية' },
+  { code: 'az', nativeName: 'Azərbaycan' },
+  { code: 'be', nativeName: 'Беларуская' },
+  { code: 'bg', nativeName: 'Български' },
+  { code: 'ca', nativeName: 'Català' },
+  { code: 'cs', nativeName: 'Čeština' },
+  { code: 'da', nativeName: 'Dansk' },
+  { code: 'de', nativeName: 'Deutsch' },
+  { code: 'el', nativeName: 'Ελληνικά' },
+  { code: 'en', nativeName: 'English' },
+  { code: 'es', nativeName: 'Español' },
+  { code: 'eu', nativeName: 'Euskara' },
+  { code: 'fi', nativeName: 'Suomi' },
+  { code: 'fr', nativeName: 'Français' },
+  { code: 'gl', nativeName: 'Galego' },
+  { code: 'he', nativeName: 'עברית' },
+  { code: 'hu', nativeName: 'Magyar' },
+  { code: 'hy', nativeName: 'Հայերեն' },
+  { code: 'id', nativeName: 'Bahasa Indonesia' },
+  { code: 'it', nativeName: 'Italiano' },
+  { code: 'ja', nativeName: '日本語' },
+  { code: 'ko', nativeName: '한국어' },
+  { code: 'lo', nativeName: 'ລາວ' },
+  { code: 'lv', nativeName: 'Latviešu' },
+  { code: 'ms', nativeName: 'Bahasa Melayu' },
+  { code: 'nl', nativeName: 'Nederlands' },
+  { code: 'no', nativeName: 'Norsk' },
+  { code: 'pl', nativeName: 'Polski' },
+  { code: 'pt', nativeName: 'Português (Brasil)' },
+  { code: 'pt-pt', nativeName: 'Português (Portugal)' },
+  { code: 'ro', nativeName: 'Română' },
+  { code: 'ru', nativeName: 'Русский' },
+  { code: 'si', nativeName: 'සිංහල' },
+  { code: 'sk', nativeName: 'Slovenčina' },
+  { code: 'sl', nativeName: 'Slovenščina' },
+  { code: 'sq', nativeName: 'Shqip' },
+  { code: 'sr', nativeName: 'Srpski' },
+  { code: 'sr-cyrl', nativeName: 'Српски' },
+  { code: 'sv', nativeName: 'Svenska' },
+  { code: 'tr', nativeName: 'Türkçe' },
+  { code: 'uk', nativeName: 'Українська' },
+  { code: 'ur', nativeName: 'اردو' },
+  { code: 'vi', nativeName: 'Tiếng Việt' },
+  { code: 'zh', nativeName: '简体中文' },
+  { code: 'zh-tw', nativeName: '繁體中文' }
+];
+
+var _UI_STRINGS = {
+  en: {
+    document: 'Document', spreadsheet: 'Spreadsheet', presentation: 'Presentation',
+    openFile: 'Open file', newDocument: 'New document', newSpreadsheet: 'New spreadsheet',
+    newPresentation: 'New presentation', unsavedChanges: 'Unsaved changes',
+    unsavedDiscardOpen: 'The current document has unsaved changes. Do you want to discard them and open another file?',
+    unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
+    saveError: 'Save error', saveErrorMsg: 'Could not save the file.\n\nTarget format not compatible with this document type.',
+    documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language'
+  },
+  es: {
+    document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación',
+    openFile: 'Abrir archivo', newDocument: 'Nuevo documento', newSpreadsheet: 'Nueva hoja de cálculo',
+    newPresentation: 'Nueva presentación', unsavedChanges: 'Cambios sin guardar',
+    unsavedDiscardOpen: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y abrir otro archivo?',
+    unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
+    saveError: 'Error al guardar', saveErrorMsg: 'No se pudo guardar el archivo.\n\nFormato de destino no compatible con este tipo de documento.',
+    documents: 'Documentos', all: 'Todos', plainText: 'Texto plano', user: 'Usuario', language: 'Idioma'
+  },
+  fr: {
+    document: 'Document', spreadsheet: 'Feuille de calcul', presentation: 'Présentation',
+    openFile: 'Ouvrir un fichier', newDocument: 'Nouveau document', newSpreadsheet: 'Nouvelle feuille de calcul',
+    newPresentation: 'Nouvelle présentation', unsavedChanges: 'Modifications non enregistrées',
+    unsavedDiscardOpen: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et ouvrir un autre fichier ?',
+    unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
+    saveError: 'Erreur de sauvegarde', saveErrorMsg: 'Impossible d\'enregistrer le fichier.\n\nFormat de destination incompatible avec ce type de document.',
+    documents: 'Documents', all: 'Tous', plainText: 'Texte brut', user: 'Utilisateur', language: 'Langue'
+  },
+  de: {
+    document: 'Dokument', spreadsheet: 'Tabelle', presentation: 'Präsentation',
+    openFile: 'Datei öffnen', newDocument: 'Neues Dokument', newSpreadsheet: 'Neue Tabelle',
+    newPresentation: 'Neue Präsentation', unsavedChanges: 'Ungespeicherte Änderungen',
+    unsavedDiscardOpen: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und eine andere Datei öffnen?',
+    unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
+    saveError: 'Speicherfehler', saveErrorMsg: 'Die Datei konnte nicht gespeichert werden.\n\nZielformat nicht kompatibel mit diesem Dokumenttyp.',
+    documents: 'Dokumente', all: 'Alle', plainText: 'Nur Text', user: 'Benutzer', language: 'Sprache'
+  },
+  it: {
+    document: 'Documento', spreadsheet: 'Foglio di calcolo', presentation: 'Presentazione',
+    openFile: 'Apri file', newDocument: 'Nuovo documento', newSpreadsheet: 'Nuovo foglio di calcolo',
+    newPresentation: 'Nuova presentazione', unsavedChanges: 'Modifiche non salvate',
+    unsavedDiscardOpen: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e aprire un altro file?',
+    unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
+    saveError: 'Errore di salvataggio', saveErrorMsg: 'Impossibile salvare il file.\n\nFormato di destinazione non compatibile con questo tipo di documento.',
+    documents: 'Documenti', all: 'Tutti', plainText: 'Testo normale', user: 'Utente', language: 'Lingua'
+  },
+  pt: {
+    document: 'Documento', spreadsheet: 'Planilha', presentation: 'Apresentação',
+    openFile: 'Abrir arquivo', newDocument: 'Novo documento', newSpreadsheet: 'Nova planilha',
+    newPresentation: 'Nova apresentação', unsavedChanges: 'Alterações não salvas',
+    unsavedDiscardOpen: 'O documento atual tem alterações não salvas. Deseja descartá-las e abrir outro arquivo?',
+    unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
+    saveError: 'Erro ao salvar', saveErrorMsg: 'Não foi possível salvar o arquivo.\n\nFormato de destino não compatível com este tipo de documento.',
+    documents: 'Documentos', all: 'Todos', plainText: 'Texto simples', user: 'Usuário', language: 'Idioma'
+  },
+  ru: {
+    document: 'Документ', spreadsheet: 'Таблица', presentation: 'Презентация',
+    openFile: 'Открыть файл', newDocument: 'Новый документ', newSpreadsheet: 'Новая таблица',
+    newPresentation: 'Новая презентация', unsavedChanges: 'Несохранённые изменения',
+    unsavedDiscardOpen: 'Текущий документ содержит несохранённые изменения. Отменить их и открыть другой файл?',
+    unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
+    saveError: 'Ошибка сохранения', saveErrorMsg: 'Не удалось сохранить файл.\n\nФормат назначения несовместим с этим типом документа.',
+    documents: 'Документы', all: 'Все', plainText: 'Обычный текст', user: 'Пользователь', language: 'Язык'
+  },
+  uk: {
+    document: 'Документ', spreadsheet: 'Таблиця', presentation: 'Презентація',
+    openFile: 'Відкрити файл', newDocument: 'Новий документ', newSpreadsheet: 'Нова таблиця',
+    newPresentation: 'Нова презентація', unsavedChanges: 'Незбережені зміни',
+    unsavedDiscardOpen: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і відкрити інший файл?',
+    unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
+    saveError: 'Помилка збереження', saveErrorMsg: 'Не вдалося зберегти файл.\n\nФормат призначення несумісний із цим типом документа.',
+    documents: 'Документи', all: 'Усі', plainText: 'Звичайний текст', user: 'Користувач', language: 'Мова'
+  },
+  zh: {
+    document: '文档', spreadsheet: '电子表格', presentation: '演示文稿',
+    openFile: '打开文件', newDocument: '新建文档', newSpreadsheet: '新建电子表格',
+    newPresentation: '新建演示文稿', unsavedChanges: '未保存的更改',
+    unsavedDiscardOpen: '当前文档有未保存的更改。是否放弃更改并打开另一个文件？',
+    unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
+    saveError: '保存错误', saveErrorMsg: '无法保存文件。\n\n目标格式与此文档类型不兼容。',
+    documents: '文档', all: '所有文件', plainText: '纯文本', user: '用户', language: '语言'
+  },
+  ja: {
+    document: 'ドキュメント', spreadsheet: 'スプレッドシート', presentation: 'プレゼンテーション',
+    openFile: 'ファイルを開く', newDocument: '新規ドキュメント', newSpreadsheet: '新規スプレッドシート',
+    newPresentation: '新規プレゼンテーション', unsavedChanges: '未保存の変更',
+    unsavedDiscardOpen: '現在のドキュメントには未保存の変更があります。変更を破棄して別のファイルを開きますか？',
+    unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
+    saveError: '保存エラー', saveErrorMsg: 'ファイルを保存できませんでした。\n\n対象の形式はこのドキュメントタイプと互換性がありません。',
+    documents: 'ドキュメント', all: 'すべて', plainText: 'プレーンテキスト', user: 'ユーザー', language: '言語'
+  }
+};
+
+function _detectLang() {
+  var stored = localStorage.getItem('eo-ui-lang');
+  if (stored) return stored;
+  var nav = (navigator.language || navigator.userLanguage || 'en').toLowerCase();
+  var found = null;
+  for (var i = 0; i < _SUPPORTED_LANGS.length; i++) {
+    if (_SUPPORTED_LANGS[i].code === nav) { found = _SUPPORTED_LANGS[i]; break; }
+  }
+  if (!found) {
+    var prefix = nav.split('-')[0];
+    for (var i = 0; i < _SUPPORTED_LANGS.length; i++) {
+      if (_SUPPORTED_LANGS[i].code === prefix) { found = _SUPPORTED_LANGS[i]; break; }
+    }
+  }
+  var detected = found ? found.code : 'en';
+  window._eoLog('[LANG] Auto-detected: ' + detected + ' (navigator: ' + nav + ')');
+  return detected;
+}
+
+function _t(key) {
+  var lang = window._eoCurrentLang || 'en';
+  var strings = _UI_STRINGS[lang] || _UI_STRINGS['en'] || {};
+  return strings[key] || (_UI_STRINGS['en'] && _UI_STRINGS['en'][key]) || key;
+}
+
+window._eoCurrentLang = _detectLang();
+window._t = _t;
+window._SUPPORTED_LANGS = _SUPPORTED_LANGS;
+window._eoSetLang = function(code) {
+  window._eoCurrentLang = code;
+  localStorage.setItem('eo-ui-lang', code);
+};
+
+// ── end i18n ──
+
 window.addEventListener('error', function(e) {
   window._eoLog('[JS-ERROR] ' + e.message + ' at ' + (e.filename || '') + ':' + (e.lineno || ''));
 });
@@ -158,8 +336,8 @@ window.AscDesktopEditor = {
       var dialog = window.__TAURI__.dialog;
       path = await dialog.open({
         filters: [
-          { name: 'Documentos', extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pdf'] },
-          { name: 'Todos', extensions: ['*'] }
+          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pdf'] },
+          { name: _t('all'), extensions: ['*'] }
         ]
       });
     }
@@ -168,8 +346,8 @@ window.AscDesktopEditor = {
     if (window.AscDesktopEditor._currentDocType) {
       if (window.AscDesktopEditor._isModified) {
         var discard = await window.__TAURI__.dialog.confirm(
-          'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y abrir otro archivo?',
-          { title: 'Cambios sin guardar', kind: 'warning' }
+          _t('unsavedDiscardOpen'),
+          { title: _t('unsavedChanges'), kind: 'warning' }
         );
         if (!discard) return;
       }
@@ -240,7 +418,7 @@ window.AscDesktopEditor = {
             { name: 'Word', extensions: ['docx'] },
             { name: 'OpenDocument Text', extensions: ['odt'] },
             { name: 'Rich Text', extensions: ['rtf'] },
-            { name: 'Texto plano', extensions: ['txt'] },
+            { name: _t('plainText'), extensions: ['txt'] },
             { name: 'PDF', extensions: ['pdf'] },
           ];
         }
@@ -266,8 +444,8 @@ window.AscDesktopEditor = {
           } catch(saveErr) {
             window._eoLog('[EO] SaveAs failed: ' + saveErr);
             await window.__TAURI__.dialog.message(
-              'No se pudo guardar el archivo.\n\nFormato de destino no compatible con este tipo de documento.',
-              { title: 'Error al guardar', kind: 'error' }
+              _t('saveErrorMsg'),
+              { title: _t('saveError'), kind: 'error' }
             );
             if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
               ref.ew.DesktopOfflineAppDocumentEndSave(1);
@@ -388,8 +566,8 @@ window.AscDesktopEditor = {
           (async function() {
             if (window.AscDesktopEditor._isModified) {
               var discard = await window.__TAURI__.dialog.confirm(
-                'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
-                { title: 'Cambios sin guardar', kind: 'warning' }
+                _t('unsavedDiscardClose'),
+                { title: _t('unsavedChanges'), kind: 'warning' }
               );
               if (!discard) return;
             }
@@ -487,8 +665,8 @@ listen('confirm-close', async () => {
   try {
     if (window.AscDesktopEditor._isModified) {
       var discard = await window.__TAURI__.dialog.confirm(
-        'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
-        { title: 'Cambios sin guardar', kind: 'warning' }
+        _t('unsavedDiscardClose'),
+        { title: _t('unsavedChanges'), kind: 'warning' }
       );
       if (!discard) return;
     }

@@ -1,6 +1,6 @@
 {
   "productName": "Euro-Office Lite",
-  "version": "0.5.0-alpha",
+  "version": "0.6.0-alpha",
   "identifier": "org.euro-office.lite",
   "build": {
     "frontendDist": "../src-dist",
@@ -64,7 +64,14 @@
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": true,
-        "languages": ["Spanish", "English"]
+        "languages": [
+          "English", "Spanish", "French", "German", "Italian", "Portuguese",
+          "Russian", "Ukrainian", "Arabic", "Bulgarian", "Catalan", "Czech",
+          "Danish", "Dutch", "Finnish", "Greek", "Hebrew", "Hungarian",
+          "Indonesian", "Japanese", "Korean", "Norwegian", "Polish",
+          "PortugueseBR", "Romanian", "SerbianLatin", "Slovak", "Slovenian",
+          "Swedish", "Turkish", "Vietnamese", "SimpChinese", "TradChinese"
+        ]
       }
     }
   }

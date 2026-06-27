@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - 'feat/17-close-save-and-pdf-win'
+      - 'feat/18-language-selector'
     paths:
+      - 'src/**'
       - 'src-tauri/**'
       - 'scripts/**'
       - '.github/workflows/build-windows-dev.yml'
@@ -21,7 +22,8 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        target: [x86_64-pc-windows-msvc]
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+      fail-fast: false
 
     steps:
       - name: Checkout
@@ -134,6 +136,14 @@ jobs:
           echo "::group::Create DoctRenderer directory structure"
           DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
           echo "::endgroup::"
+
+      - name: Rename x2t sidecar for target
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $bin = "src-tauri\binaries"
+          Copy-Item "$bin\x2t-x86_64-pc-windows-msvc.exe" "$bin\x2t-aarch64-pc-windows-msvc.exe"
+          Remove-Item "$bin\x2t-x86_64-pc-windows-msvc.exe"
 
       - name: Stage frontend distribution
         shell: pwsh

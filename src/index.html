@@ -40,25 +40,51 @@
       display: none;
     }
     #placeholder.active { display: block; }
+
+    .lang-selector {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .lang-selector select {
+      background: #313244;
+      border: 1px solid #45475a;
+      color: #cdd6f4;
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      max-width: 200px;
+    }
+    .lang-selector select:hover { border-color: #6c7086; }
+    .lang-selector select:focus { outline: none; border-color: #89b4fa; }
+    .lang-selector label { font-size: 0.8rem; color: #6c7086; }
   </style>
 </head>
 <body>
   <div id="start-screen" class="start">
+    <div class="lang-selector">
+      <label for="lang-select" id="lang-label"></label>
+      <select id="lang-select"></select>
+    </div>
     <div>
       <h1>Euro-Office Lite</h1>
-      <p class="version">v0.5.0-alpha — Desktop</p>
+      <p class="version">v0.6.0-alpha — Desktop</p>
       <div class="actions">
         <button class="btn" data-type="word">
-          <span class="icon">W</span> Documento
+          <span class="icon">W</span> <span data-i18n="document">Document</span>
         </button>
         <button class="btn" data-type="cell">
-          <span class="icon">X</span> Hoja de cálculo
+          <span class="icon">X</span> <span data-i18n="spreadsheet">Spreadsheet</span>
         </button>
         <button class="btn" data-type="slide">
-          <span class="icon">P</span> Presentación
+          <span class="icon">P</span> <span data-i18n="presentation">Presentation</span>
         </button>
         <button class="btn" data-open="true">
-          <span class="icon">...</span> Abrir archivo
+          <span class="icon">...</span> <span data-i18n="openFile">Open file</span>
         </button>
       </div>
     </div>
@@ -255,6 +281,39 @@
           win.AscDesktopEditor = ade;
           win.RendererProcessVariable = window.RendererProcessVariable;
           win._eoLog = window._eoLog;
+
+          // Patch fetch to merge incomplete locale files with en.json fallback
+          if (!win._eoLocalePatchApplied) {
+            win._eoLocalePatchApplied = true;
+            var _origWinFetch = win.fetch;
+            win.fetch = function(url, options) {
+              if (typeof url === 'string' && /locale\/[a-z]([a-z-]*)?\.json$/i.test(url)) {
+                var langMatch = url.match(/locale\/([a-z]([a-z-]*)?)\.json$/i);
+                if (langMatch && langMatch[1] !== 'en') {
+                  var enUrl = url.replace(/locale\/[a-z]([a-z-]*)?\.json$/i, 'locale/en.json');
+                  window._eoLog('[LANG] Intercepted locale fetch: ' + url + ', merging with en.json');
+                  return Promise.all([
+                    _origWinFetch.call(win, enUrl, options).then(function(r) { return r.json(); }),
+                    _origWinFetch.call(win, url, options).then(function(r) { return r.json(); })
+                  ]).then(function(results) {
+                    var merged = {};
+                    var enKeys = Object.keys(results[0]);
+                    var langKeys = Object.keys(results[1]);
+                    for (var i = 0; i < enKeys.length; i++) merged[enKeys[i]] = results[0][enKeys[i]];
+                    for (var i = 0; i < langKeys.length; i++) merged[langKeys[i]] = results[1][langKeys[i]];
+                    var fallbackCount = enKeys.length - langKeys.length;
+                    window._eoLog('[LANG] Locale merged: ' + langKeys.length + ' translated, ' + fallbackCount + ' fallback to en, ' + enKeys.length + ' total');
+                    return new Response(JSON.stringify(merged), {
+                      status: 200,
+                      headers: { 'Content-Type': 'application/json' }
+                    });
+                  });
+                }
+              }
+              return _origWinFetch.call(win, url, options);
+            };
+          }
+
           window._patchButtonHint(win);
 
           var saveAsPatched = false;
@@ -501,7 +560,7 @@
       if (!window._pendingFileData) {
         try {
           var b64 = await window.__TAURI__.core.invoke('create_new', { docType: docType });
-          var defaultName = docType === 'cell' ? 'Nueva hoja de cálculo' : docType === 'slide' ? 'Nueva presentación' : 'Nuevo documento';
+          var defaultName = docType === 'cell' ? _t('newSpreadsheet') : docType === 'slide' ? _t('newPresentation') : _t('newDocument');
           window._pendingFileData = { data: b64, path: null, name: defaultName };
         } catch(e) {
           window._eoLog('[EO] create_new failed: ' + (e.message || e));
@@ -517,7 +576,7 @@
         height: '100%',
         documentType: docType,
         document: {
-          title: (window._pendingFileData && window._pendingFileData.name) || 'Nuevo documento',
+          title: (window._pendingFileData && window._pendingFileData.name) || _t('newDocument'),
           url: '_offline_',
           fileType: docType === 'word' ? 'docx' : docType === 'cell' ? 'xlsx' : 'pptx',
           key: 'local-' + Date.now(),
@@ -529,11 +588,11 @@
         },
         editorConfig: {
           mode: 'edit',
-          lang: 'es',
+          lang: window._eoCurrentLang || 'en',
           targetApp: 'desktop',
           user: {
             id: 'local-user',
-            name: 'Usuario'
+            name: _t('user')
           },
           customization: {
             about: false,
@@ -598,8 +657,8 @@
       var dialog = window.__TAURI__.dialog;
       var path = await dialog.open({
         filters: [
-          { name: 'Documentos', extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pdf'] },
-          { name: 'Todos', extensions: ['*'] }
+          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pdf'] },
+          { name: _t('all'), extensions: ['*'] }
         ]
       });
       if (!path) return;
@@ -643,6 +702,36 @@
         window._eoLog('[EO] Error reopening file:', e);
         startScreen.classList.remove('hidden');
       });
+    })();
+
+    // ── Language selector initialization ──
+    function _updateStartScreenStrings() {
+      document.documentElement.lang = window._eoCurrentLang;
+      document.querySelectorAll('[data-i18n]').forEach(function(el) {
+        el.textContent = _t(el.dataset.i18n);
+      });
+      var langLabel = document.getElementById('lang-label');
+      if (langLabel) langLabel.textContent = _t('language');
+    }
+
+    (function initLangSelector() {
+      var select = document.getElementById('lang-select');
+      var langs = window._SUPPORTED_LANGS || [];
+
+      for (var i = 0; i < langs.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = langs[i].code;
+        opt.textContent = langs[i].nativeName;
+        if (langs[i].code === window._eoCurrentLang) opt.selected = true;
+        select.appendChild(opt);
+      }
+
+      select.addEventListener('change', function() {
+        window._eoSetLang(select.value);
+        _updateStartScreenStrings();
+      });
+
+      _updateStartScreenStrings();
     })();
   </script>
 </body>
