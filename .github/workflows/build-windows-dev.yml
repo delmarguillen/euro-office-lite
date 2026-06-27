@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - 'feat/17-close-save-and-pdf-win'
+      - 'feat/18-language-selector'
     paths:
+      - 'src/**'
       - 'src-tauri/**'
       - 'scripts/**'
       - '.github/workflows/build-windows-dev.yml'
@@ -21,7 +22,7 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        target: [x86_64-pc-windows-msvc]
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
 
     steps:
       - name: Checkout

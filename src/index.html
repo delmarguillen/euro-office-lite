@@ -40,25 +40,51 @@
       display: none;
     }
     #placeholder.active { display: block; }
+
+    .lang-selector {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .lang-selector select {
+      background: #313244;
+      border: 1px solid #45475a;
+      color: #cdd6f4;
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      max-width: 200px;
+    }
+    .lang-selector select:hover { border-color: #6c7086; }
+    .lang-selector select:focus { outline: none; border-color: #89b4fa; }
+    .lang-selector label { font-size: 0.8rem; color: #6c7086; }
   </style>
 </head>
 <body>
   <div id="start-screen" class="start">
+    <div class="lang-selector">
+      <label for="lang-select" id="lang-label"></label>
+      <select id="lang-select"></select>
+    </div>
     <div>
       <h1>Euro-Office Lite</h1>
       <p class="version">v0.5.0-alpha — Desktop</p>
       <div class="actions">
         <button class="btn" data-type="word">
-          <span class="icon">W</span> Documento
+          <span class="icon">W</span> <span data-i18n="document">Document</span>
         </button>
         <button class="btn" data-type="cell">
-          <span class="icon">X</span> Hoja de cálculo
+          <span class="icon">X</span> <span data-i18n="spreadsheet">Spreadsheet</span>
         </button>
         <button class="btn" data-type="slide">
-          <span class="icon">P</span> Presentación
+          <span class="icon">P</span> <span data-i18n="presentation">Presentation</span>
         </button>
         <button class="btn" data-open="true">
-          <span class="icon">...</span> Abrir archivo
+          <span class="icon">...</span> <span data-i18n="openFile">Open file</span>
         </button>
       </div>
     </div>
@@ -501,7 +527,8 @@
       if (!window._pendingFileData) {
         try {
           var b64 = await window.__TAURI__.core.invoke('create_new', { docType: docType });
-          var defaultName = docType === 'cell' ? 'Nueva hoja de cálculo' : docType === 'slide' ? 'Nueva presentación' : 'Nuevo documento';
+          var defaultName = docType === 'cell' ? _t('newSpreadsheet') : docType === 'slide' ? _t('newPresentation') : _t('newDocument');
+          _log('[LANG] Default document name: ' + defaultName);
           window._pendingFileData = { data: b64, path: null, name: defaultName };
         } catch(e) {
           window._eoLog('[EO] create_new failed: ' + (e.message || e));
@@ -511,13 +538,15 @@
       startScreen.classList.add('hidden');
       document.getElementById('placeholder').classList.add('active');
 
+      _log('[LANG] Opening editor with lang=' + (window._eoCurrentLang || 'en') + ' docType=' + docType);
+
       new DocsAPI.DocEditor('placeholder', {
         type: 'desktop',
         width: '100%',
         height: '100%',
         documentType: docType,
         document: {
-          title: (window._pendingFileData && window._pendingFileData.name) || 'Nuevo documento',
+          title: (window._pendingFileData && window._pendingFileData.name) || _t('newDocument'),
           url: '_offline_',
           fileType: docType === 'word' ? 'docx' : docType === 'cell' ? 'xlsx' : 'pptx',
           key: 'local-' + Date.now(),
@@ -529,11 +558,11 @@
         },
         editorConfig: {
           mode: 'edit',
-          lang: 'es',
+          lang: window._eoCurrentLang || 'en',
           targetApp: 'desktop',
           user: {
             id: 'local-user',
-            name: 'Usuario'
+            name: _t('user')
           },
           customization: {
             about: false,
@@ -598,8 +627,8 @@
       var dialog = window.__TAURI__.dialog;
       var path = await dialog.open({
         filters: [
-          { name: 'Documentos', extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pdf'] },
-          { name: 'Todos', extensions: ['*'] }
+          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pdf'] },
+          { name: _t('all'), extensions: ['*'] }
         ]
       });
       if (!path) return;
@@ -643,6 +672,42 @@
         window._eoLog('[EO] Error reopening file:', e);
         startScreen.classList.remove('hidden');
       });
+    })();
+
+    // ── Language selector initialization ──
+    function _updateStartScreenStrings() {
+      _log('[LANG] Updating start screen strings to ' + window._eoCurrentLang);
+      document.documentElement.lang = window._eoCurrentLang;
+      document.querySelectorAll('[data-i18n]').forEach(function(el) {
+        el.textContent = _t(el.dataset.i18n);
+      });
+      var langLabel = document.getElementById('lang-label');
+      if (langLabel) langLabel.textContent = _t('language');
+      _log('[LANG] Start screen strings updated');
+    }
+
+    (function initLangSelector() {
+      _log('[LANG] Initializing language selector');
+      var select = document.getElementById('lang-select');
+      var langs = window._SUPPORTED_LANGS || [];
+
+      for (var i = 0; i < langs.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = langs[i].code;
+        opt.textContent = langs[i].nativeName;
+        if (langs[i].code === window._eoCurrentLang) opt.selected = true;
+        select.appendChild(opt);
+      }
+      _log('[LANG] Dropdown populated with ' + langs.length + ' languages, current=' + window._eoCurrentLang);
+
+      select.addEventListener('change', function() {
+        var newLang = select.value;
+        _log('[LANG] User selected language: ' + newLang);
+        window._eoSetLang(newLang);
+        _updateStartScreenStrings();
+      });
+
+      _updateStartScreenStrings();
     })();
   </script>
 </body>
