@@ -8,6 +8,26 @@ use file_ops::AppState;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
+fn percent_decode_str(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(val) = u8::from_str_radix(
+                &input[i + 1..i + 3], 16
+            ) {
+                out.push(val);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| input.to_string())
+}
+
 fn log_startup(temp_dir: &std::path::Path, msg: &str) {
     use std::io::Write;
     let log_path = temp_dir.join("js-debug.log");
@@ -73,6 +93,8 @@ fn main() {
             file_ops::create_new,
             file_ops::get_current_path,
             file_ops::open_pdf_viewer,
+            file_ops::convert_for_insert,
+            file_ops::write_download_temp,
             bridge::exec_command,
             bridge::set_window_title,
             bridge::set_document_modified,
@@ -87,34 +109,138 @@ fn main() {
                 .or_else(|| uri.strip_prefix("ascdesktop:///"))
                 .unwrap_or("");
 
-            let resource_dir = ctx.app_handle().path().resource_dir().unwrap_or_default();
+            let decoded_path = percent_decode_str(path);
 
-            let candidates = [
-                resource_dir.join(path),
-                resource_dir.join("../src").join(path),
-                resource_dir.join("binaries").join(path),
-            ];
-
-            let result = candidates.iter().find_map(|p| std::fs::read(p).ok());
-
-            match result {
-                Some(data) => {
-                    let mime = if path.ends_with(".ttf") || path.ends_with(".otf") {
-                        "font/ttf"
-                    } else if path.ends_with(".js") {
-                        "application/javascript"
-                    } else if path.ends_with(".png") {
-                        "image/png"
-                    } else {
-                        "application/octet-stream"
-                    };
-                    tauri::http::Response::builder()
+            if decoded_path.starts_with("docmedia/") {
+                let rel_path = &decoded_path[9..];
+                let state = ctx.app_handle().state::<AppState>();
+                let full_path = state.temp_dir.join(rel_path);
+                if let Ok(data) = std::fs::read(&full_path) {
+                    let fp: &str = decoded_path.as_ref();
+                    let ct = if fp.ends_with(".png") { "image/png" }
+                        else if fp.ends_with(".jpg") || fp.ends_with(".jpeg") { "image/jpeg" }
+                        else if fp.ends_with(".gif") { "image/gif" }
+                        else if fp.ends_with(".svg") { "image/svg+xml" }
+                        else if fp.ends_with(".bmp") { "image/bmp" }
+                        else if fp.ends_with(".webp") { "image/webp" }
+                        else { "application/octet-stream" };
+                    return tauri::http::Response::builder()
                         .status(200)
-                        .header("Content-Type", mime)
+                        .header("Content-Type", ct)
                         .header("Access-Control-Allow-Origin", "*")
                         .body(data)
-                        .unwrap()
+                        .unwrap();
                 }
+                return tauri::http::Response::builder()
+                    .status(404)
+                    .body(b"Not Found".to_vec())
+                    .unwrap();
+            }
+
+            if decoded_path.starts_with("copy-to-media/") {
+                let src_path = &decoded_path[14..];
+                let src = std::path::Path::new(src_path);
+                let state = ctx.app_handle().state::<AppState>();
+                let media_dir = state.temp_dir.join("media");
+                let _ = std::fs::create_dir_all(&media_dir);
+                if let Some(file_name) = src.file_name() {
+                    let dest = media_dir.join(file_name);
+                    if std::fs::copy(src, &dest).is_ok() {
+                        let name = file_name.to_string_lossy().to_string();
+                        return tauri::http::Response::builder()
+                            .status(200)
+                            .header("Content-Type", "text/plain")
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body(name.into_bytes())
+                            .unwrap();
+                    }
+                }
+                return tauri::http::Response::builder()
+                    .status(500)
+                    .body(b"Copy failed".to_vec())
+                    .unwrap();
+            }
+
+            if decoded_path.starts_with("download-to-media/") {
+                let url = &decoded_path[18..];
+                let state = ctx.app_handle().state::<AppState>();
+                let downloads_dir = state.temp_dir.join("downloads");
+                let media_dir = state.temp_dir.join("media");
+                let _ = std::fs::create_dir_all(&downloads_dir);
+                let _ = std::fs::create_dir_all(&media_dir);
+                let file_name = url.rsplit('/').next().unwrap_or("download.jpg")
+                    .split('?').next().unwrap_or("download.jpg");
+                let safe_name: String = file_name.chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+                    .collect();
+                let dest_name = if safe_name.is_empty() { "download.jpg".to_string() } else { safe_name };
+                let dest_download = downloads_dir.join(&dest_name);
+                let dest = media_dir.join(&dest_name);
+                if let Ok(resp) = ureq::get(url).call() {
+                    if let Ok(bytes) = resp.into_body().read_to_vec() {
+                        let _ = std::fs::write(&dest, &bytes);
+                        if std::fs::write(&dest_download, &bytes).is_ok() {
+                            let full_path = dest_download.to_string_lossy().to_string();
+                            return tauri::http::Response::builder()
+                                .status(200)
+                                .header("Content-Type", "text/plain")
+                                .header("Access-Control-Allow-Origin", "*")
+                                .body(full_path.into_bytes())
+                                .unwrap();
+                        }
+                    }
+                }
+                return tauri::http::Response::builder()
+                    .status(500)
+                    .body(b"Download failed".to_vec())
+                    .unwrap();
+            }
+
+            let result = if decoded_path.starts_with("abs/") {
+                let abs_path = &decoded_path[4..];
+                std::fs::read(abs_path).ok()
+            } else {
+                let resource_dir = ctx.app_handle().path().resource_dir().unwrap_or_default();
+                let candidates = [
+                    resource_dir.join(path),
+                    resource_dir.join("../src").join(path),
+                    resource_dir.join("binaries").join(path),
+                ];
+                candidates.iter().find_map(|p| std::fs::read(p).ok())
+            };
+
+            let effective_path: &str = decoded_path.as_ref();
+            let mime = if effective_path.ends_with(".ttf") || effective_path.ends_with(".otf") {
+                "font/ttf"
+            } else if effective_path.ends_with(".js") {
+                "application/javascript"
+            } else if effective_path.ends_with(".png") {
+                "image/png"
+            } else if effective_path.ends_with(".jpg") || effective_path.ends_with(".jpeg") {
+                "image/jpeg"
+            } else if effective_path.ends_with(".gif") {
+                "image/gif"
+            } else if effective_path.ends_with(".svg") {
+                "image/svg+xml"
+            } else if effective_path.ends_with(".bmp") {
+                "image/bmp"
+            } else if effective_path.ends_with(".webp") {
+                "image/webp"
+            } else if effective_path.ends_with(".tif") || effective_path.ends_with(".tiff") {
+                "image/tiff"
+            } else if effective_path.ends_with(".ico") {
+                "image/x-icon"
+            } else {
+                "application/octet-stream"
+            };
+
+            match result {
+                Some(data) => tauri::http::Response::builder()
+                    .status(200)
+                    .header("Content-Type", mime)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(data)
+                    .unwrap(),
                 None => tauri::http::Response::builder()
                     .status(404)
                     .body(b"Not Found".to_vec())

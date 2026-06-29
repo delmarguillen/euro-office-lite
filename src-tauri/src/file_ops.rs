@@ -251,6 +251,90 @@ pub async fn create_new(
 }
 
 
+#[tauri::command]
+pub fn write_download_temp(
+    state: State<'_, AppState>,
+    data: String,
+    url: String,
+) -> Result<String, String> {
+    let download_dir = state.temp_dir.join("downloads");
+    let _ = std::fs::create_dir_all(&download_dir);
+
+    let file_name = url
+        .rsplit('/')
+        .next()
+        .unwrap_or("download")
+        .split('?')
+        .next()
+        .unwrap_or("download");
+    let safe_name = file_name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect::<String>();
+    let dest = download_dir.join(if safe_name.is_empty() {
+        "download".to_string()
+    } else {
+        safe_name
+    });
+
+    let bytes = STANDARD.decode(&data).map_err(|e| e.to_string())?;
+    std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn convert_for_insert(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let input = PathBuf::from(&path);
+    let insert_dir = state.temp_dir.join("insert_tmp");
+    let _ = std::fs::create_dir_all(&insert_dir);
+
+    let output = insert_dir.join("Editor.bin");
+
+    let format_from = detect_format(&input);
+    let format_to = 8192;
+
+    super::converter::convert_file(
+        &app,
+        &path,
+        &output.to_string_lossy(),
+        format_from,
+        format_to,
+    )
+    .await?;
+
+    let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
+    let b64 = STANDARD.encode(&bin_data);
+
+    let media_dir = insert_dir.join("media");
+    let mut images = serde_json::Map::new();
+    if media_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&media_dir) {
+            for entry in entries.flatten() {
+                let img_path = entry.path();
+                let name = img_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let img_url = format!(
+                    "ascdesktop://abs/{}",
+                    img_path.to_string_lossy().replace('\\', "/")
+                );
+                images.insert(name, serde_json::Value::String(img_url));
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "data": b64,
+        "images": images
+    }))
+}
+
 fn detect_format(path: &PathBuf) -> i32 {
     match path.extension().and_then(|e| e.to_str()) {
         Some("docx") => 65,

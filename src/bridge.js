@@ -254,6 +254,10 @@ function _loadEditorBin(b64data, fileName) {
       bytes[i] = binaryStr.charCodeAt(i);
     }
 
+    if (ref.ew.AscCommon && ref.ew.AscCommon.g_oDocumentUrls) {
+      ref.ew.AscCommon.g_oDocumentUrls.documentUrl = 'ascdesktop://docmedia';
+    }
+
     var file = new ref.ew.AscCommon.OpenFileResult();
     file.data = bytes;
     file.bSerFormat = true;
@@ -330,6 +334,30 @@ window.AscDesktopEditor = {
   },
 
   CheckUserId: () => 'local-user',
+
+  OpenFilenameDialog: function(filterType, allowMultiple, callback) {
+    var filterMap = {
+      'images':  { name: 'Images',       extensions: ['png','jpg','jpeg','gif','bmp','svg','ico','tif','tiff','webp'] },
+      'word':    { name: 'Documents',     extensions: ['docx','doc','odt','rtf','txt'] },
+      'cell':    { name: 'Spreadsheets',  extensions: ['xlsx','xls','ods','csv'] },
+      'video':   { name: 'Video',         extensions: ['mp4','avi','mov','wmv','mkv','webm'] },
+      'audio':   { name: 'Audio',         extensions: ['mp3','wav','ogg','flac','aac','wma'] },
+      'csv/txt': { name: 'CSV / Text',    extensions: ['csv','txt'] },
+      '(*.xml)': { name: 'XML',           extensions: ['xml'] },
+      'any':     { name: 'All files',     extensions: ['*'] },
+    };
+    var filter = filterMap[filterType] || filterMap['any'];
+    var dialog = window.__TAURI__.dialog;
+    dialog.open({
+      multiple: !!allowMultiple,
+      filters: [filter, { name: 'All files', extensions: ['*'] }]
+    }).then(function(result) {
+      if (result === null) return;
+      if (callback) callback(result);
+    }).catch(function(e) {
+      window._eoLog('[EO] OpenFilenameDialog error: ' + (e.message || e));
+    });
+  },
 
   LocalFileOpen: async function(path) {
     if (!path) {
@@ -477,9 +505,119 @@ window.AscDesktopEditor = {
     return await invoke('create_new', { docType: type });
   },
 
+  DownloadFiles: function(urls, otherParams, callback) {
+    if (!urls || !urls.length) {
+      if (callback) callback({});
+      return;
+    }
+    var fileMap = {};
+    var pending = urls.length;
+    urls.forEach(function(url) {
+      try {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', 'ascdesktop://download-to-media/' + encodeURIComponent(url), false);
+        xhr.send(null);
+        if (xhr.status === 200 && xhr.responseText) {
+          fileMap[url] = xhr.responseText;
+        } else {
+          window._eoLog('[EO] DownloadFiles failed for ' + url + ': status ' + xhr.status);
+        }
+      } catch(e) {
+        window._eoLog('[EO] DownloadFiles error for ' + url + ': ' + (e.message || e));
+      }
+      pending--;
+      if (pending === 0 && callback) callback(fileMap);
+    });
+  },
+
+  convertFile: function(filePath, targetFormat, callback) {
+    invoke('convert_for_insert', { path: filePath }).then(function(result) {
+      var binB64 = result.data;
+      var raw = atob(binB64);
+      var bytes = new Uint8Array(raw.length);
+      for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+      var fileObj = {
+        _data: bytes,
+        _images: result.images || {},
+        get: function() { return this._data; },
+        getImages: function() { return this._images; },
+        close: function() { this._data = null; this._images = null; }
+      };
+      if (callback) callback(fileObj);
+    }).catch(function(e) {
+      window._eoLog('[EO] convertFile error: ' + (e.message || e));
+      if (callback) callback(null);
+    });
+  },
+
+  CompareDocumentFile: function(file, oOptions) {
+    invoke('convert_for_insert', { path: file }).then(function(result) {
+      var ref = _getEditor();
+      if (ref.ew && ref.ew.onDocumentCompare) {
+        ref.ew.onDocumentCompare('', result.data, result.data.length, result.images || {}, oOptions);
+      }
+    }).catch(function(e) {
+      window._eoLog('[EO] CompareDocumentFile error: ' + (e.message || e));
+    });
+  },
+
+  CompareDocumentUrl: function(file, oOptions) {
+    invoke('convert_for_insert', { path: file }).then(function(result) {
+      var ref = _getEditor();
+      if (ref.ew && ref.ew.onDocumentCompare) {
+        ref.ew.onDocumentCompare('', result.data, result.data.length, result.images || {}, oOptions);
+      }
+    }).catch(function(e) {
+      window._eoLog('[EO] CompareDocumentUrl error: ' + (e.message || e));
+    });
+  },
+
+  MergeDocumentFile: function(file, oOptions) {
+    invoke('convert_for_insert', { path: file }).then(function(result) {
+      var ref = _getEditor();
+      if (ref.ew && ref.ew.onDocumentMerge) {
+        ref.ew.onDocumentMerge('', result.data, result.data.length, result.images || {}, oOptions);
+      }
+    }).catch(function(e) {
+      window._eoLog('[EO] MergeDocumentFile error: ' + (e.message || e));
+    });
+  },
+
+  MergeDocumentUrl: function(file, oOptions) {
+    invoke('convert_for_insert', { path: file }).then(function(result) {
+      var ref = _getEditor();
+      if (ref.ew && ref.ew.onDocumentMerge) {
+        ref.ew.onDocumentMerge('', result.data, result.data.length, result.images || {}, oOptions);
+      }
+    }).catch(function(e) {
+      window._eoLog('[EO] MergeDocumentUrl error: ' + (e.message || e));
+    });
+  },
+
   LocalFileGetSourcePath: () => '',
   LocalFileGetSaved: () => false,
-  LocalFileGetImageUrl: (url) => url,
+  LocalFileGetImageUrl: function(url) {
+    if (!url) return url;
+    if (url.indexOf('data:') === 0 || url.indexOf('blob:') === 0) return url;
+    var protocol = (url.indexOf('http://') === 0 || url.indexOf('https://') === 0)
+      ? 'download-to-media' : 'copy-to-media';
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', 'ascdesktop://' + protocol + '/' + encodeURIComponent(url), false);
+      xhr.send(null);
+      if (xhr.status === 200 && xhr.responseText) {
+          var result = xhr.responseText;
+          if (protocol === 'download-to-media') {
+            result = result.replace(/\\/g, '/').split('/').pop();
+          }
+          return result;
+      }
+    } catch(e) {
+      window._eoLog('[EO] LocalFileGetImageUrl error: ' + (e.message || e));
+    }
+    return url;
+  },
   LocalFileGetModified: function() { return window.AscDesktopEditor._isModified; },
   LocalFileSetModified: function(modified) {
     window.AscDesktopEditor._isModified = modified;
