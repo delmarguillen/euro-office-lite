@@ -14,8 +14,9 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Docs locales
-docs/
+# Docs locales (except memory-benchmark)
+docs/*
+!docs/memory-benchmark/
 
 # Logs
 *.log
