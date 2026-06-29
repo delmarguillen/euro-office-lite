@@ -426,6 +426,11 @@ window.AscDesktopEditor = {
         var savePath = await dialog.save({ filters: filters });
 
         if (savePath) {
+          var knownExts = ['docx','doc','odt','rtf','txt','xlsx','xls','ods','csv','pptx','ppt','odp','pdf'];
+          var pathExt = savePath.split('.').pop().toLowerCase();
+          if (savePath.indexOf('.') === -1 || knownExts.indexOf(pathExt) === -1) {
+            savePath += '.' + filters[0].extensions[0];
+          }
           try {
             await invoke('save_file_as', { path: savePath });
             var savedName = savePath.replace(/\\/g, '/').split('/').pop();

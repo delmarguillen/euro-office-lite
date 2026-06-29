@@ -6,6 +6,7 @@ on:
     branches:
       - 'feat/15-linux-build'
       - 'feat/17-close-save-and-pdf-win'
+      - 'feat/19-save-as-extension-fix'
     paths:
       - 'src-tauri/**'
       - 'scripts/**'

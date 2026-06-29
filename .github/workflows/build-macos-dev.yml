@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - 'feat/14-macos-build'
+      - 'feat/19-save-as-extension-fix'
     paths:
       - 'src-tauri/**'
       - 'scripts/**'

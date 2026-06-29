@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - 'feat/18-language-selector'
+      - 'feat/19-save-as-extension-fix'
     paths:
       - 'src/**'
       - 'src-tauri/**'
