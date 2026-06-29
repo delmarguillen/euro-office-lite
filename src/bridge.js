@@ -256,7 +256,14 @@ function _loadEditorBin(b64data, fileName) {
 
     if (ref.ew.AscCommon && ref.ew.AscCommon.g_oDocumentUrls) {
       ref.ew.AscCommon.g_oDocumentUrls.documentUrl = 'ascdesktop://docmedia';
+      window._eoLog('[EO] documentUrl set to ascdesktop://docmedia');
+    } else {
+      window._eoLog('[EO] WARN: g_oDocumentUrls not available at load time');
     }
+
+    invoke('list_media_dir').then(function(r) {
+      window._eoLog('[EO] Media dir contents: ' + r);
+    }).catch(function(){});
 
     var file = new ref.ew.AscCommon.OpenFileResult();
     file.data = bytes;

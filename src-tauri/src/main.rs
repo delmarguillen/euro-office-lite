@@ -99,6 +99,7 @@ fn main() {
             bridge::set_window_title,
             bridge::set_document_modified,
             bridge::load_font,
+            bridge::list_media_dir,
             bridge::js_log,
             bridge::force_close,
         ])

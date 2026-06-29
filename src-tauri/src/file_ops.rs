@@ -27,6 +27,10 @@ fn clear_changes(temp_dir: &std::path::Path) {
     if changes_dir.exists() {
         let _ = std::fs::remove_dir_all(&changes_dir);
     }
+    let media_dir = temp_dir.join("media");
+    if media_dir.exists() {
+        let _ = std::fs::remove_dir_all(&media_dir);
+    }
 }
 
 #[tauri::command]
