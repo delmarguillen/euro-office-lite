@@ -8,6 +8,7 @@ pub async fn convert_file(
     output: &str,
     _format_from: i32,
     format_to: i32,
+    temp_dir: &str,
 ) -> Result<String, String> {
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let binaries_dir = resource_dir.join("binaries");
@@ -16,12 +17,33 @@ pub async fn convert_file(
         return convert_to_pdf(&binaries_dir, input, output);
     }
 
+    let params_dir = std::path::Path::new(output)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    let params_path = params_dir.join("x2t_params_convert.xml");
+
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                      xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<m_sFileFrom>{}</m_sFileFrom>
+<m_sFileTo>{}</m_sFileTo>
+<m_nFormatTo>{}</m_nFormatTo>
+<m_sTempDir>{}</m_sTempDir>
+</TaskQueueDataConvert>"#,
+        input.replace('\\', "/"),
+        output.replace('\\', "/"),
+        format_to,
+        temp_dir.replace('\\', "/"),
+    );
+    std::fs::write(&params_path, &xml).map_err(|e| e.to_string())?;
+
     let mut sidecar = app
         .shell()
         .sidecar("x2t")
         .map_err(|e| e.to_string())?
         .current_dir(&binaries_dir)
-        .args([input, output]);
+        .args([params_path.to_string_lossy().as_ref()]);
     #[cfg(target_os = "linux")]
     {
         sidecar = sidecar.envs([("LD_LIBRARY_PATH", binaries_dir.to_string_lossy().as_ref())]);
@@ -30,6 +52,8 @@ pub async fn convert_file(
         .output()
         .await
         .map_err(|e| e.to_string())?;
+
+    let _ = std::fs::remove_file(&params_path);
 
     if result.status.success() {
         Ok("ok".to_string())

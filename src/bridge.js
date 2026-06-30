@@ -257,6 +257,12 @@ function _loadEditorBin(b64data, fileName) {
     if (ref.ew.AscCommon && ref.ew.AscCommon.g_oDocumentUrls) {
       ref.ew.AscCommon.g_oDocumentUrls.documentUrl = 'ascdesktop://docmedia';
       window._eoLog('[EO] documentUrl set to ascdesktop://docmedia');
+      var origGetImageUrl = ref.ew.AscCommon.g_oDocumentUrls.getImageUrl;
+      ref.ew.AscCommon.g_oDocumentUrls.getImageUrl = function(strPath) {
+        if (strPath && strPath.indexOf('ascdesktop://') === 0)
+          return strPath;
+        return origGetImageUrl.call(this, strPath);
+      };
     } else {
       window._eoLog('[EO] WARN: g_oDocumentUrls not available at load time');
     }

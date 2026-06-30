@@ -7,8 +7,11 @@ on:
       - 'feat/15-linux-build'
       - 'feat/17-close-save-and-pdf-win'
       - 'feat/19-save-as-extension-fix'
+      - 'feat/20-insert-operations'
+      - 'feat/21-spreadsheet-image-fix'
     paths:
       - 'src-tauri/**'
+      - 'src/**'
       - 'scripts/**'
       - '.github/workflows/build-linux-dev.yml'
 

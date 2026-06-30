@@ -42,11 +42,33 @@ pub async fn open_file(
     let input = PathBuf::from(&path);
     let output = state.temp_dir.join("Editor.bin");
 
+    clear_changes(&state.temp_dir);
+
     let format_from = detect_format(&input);
     let format_to = 8192;
 
-    super::converter::convert_file(&app, &path, &output.to_string_lossy(), format_from, format_to)
+    log_print(&state, &format!("[OPEN] Converting {} (format {}) -> Editor.bin", path, format_from));
+
+    super::converter::convert_file(&app, &path, &output.to_string_lossy(), format_from, format_to, &state.temp_dir.to_string_lossy())
         .await?;
+
+    let bin_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+    log_print(&state, &format!("[OPEN] Editor.bin size: {} bytes", bin_size));
+
+    let media_dir = state.temp_dir.join("media");
+    if media_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&media_dir) {
+            let files: Vec<String> = entries.flatten()
+                .map(|e| {
+                    let sz = std::fs::metadata(e.path()).map(|m| m.len()).unwrap_or(0);
+                    format!("{}({})", e.file_name().to_string_lossy(), sz)
+                })
+                .collect();
+            log_print(&state, &format!("[OPEN] media/ after convert: {}", files.join(", ")));
+        }
+    } else {
+        log_print(&state, "[OPEN] media/ dir does not exist after convert");
+    }
 
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
     let b64 = STANDARD.encode(&bin_data);
@@ -76,6 +98,7 @@ pub async fn save_file(
         &dest.to_string_lossy(),
         format_from,
         format_to,
+        &state.temp_dir.to_string_lossy(),
     )
     .await?;
 
@@ -104,6 +127,7 @@ pub async fn save_file_as(
         &dest.to_string_lossy(),
         format_from,
         format_to,
+        &state.temp_dir.to_string_lossy(),
     )
     .await?;
 
@@ -172,6 +196,7 @@ pub async fn print_document(
         &pdf_path.to_string_lossy(),
         8192,
         513,
+        &state.temp_dir.to_string_lossy(),
     )
     .await
     .map_err(|e| {
@@ -307,6 +332,7 @@ pub async fn convert_for_insert(
         &output.to_string_lossy(),
         format_from,
         format_to,
+        &insert_dir.to_string_lossy(),
     )
     .await?;
 

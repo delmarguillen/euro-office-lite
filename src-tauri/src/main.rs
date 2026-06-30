@@ -113,9 +113,16 @@ fn main() {
             let decoded_path = percent_decode_str(path);
 
             if decoded_path.starts_with("docmedia/") {
-                let rel_path = &decoded_path[9..];
+                let raw_path = &decoded_path[9..];
+                let rel_path = if let Some(pos) = raw_path.find("ascdesktop://docmedia/") {
+                    &raw_path[pos + 21..]
+                } else {
+                    raw_path
+                };
+                let rel_path = rel_path.trim_start_matches('/');
+                let rel_path = rel_path.replace("media/media/", "media/");
                 let state = ctx.app_handle().state::<AppState>();
-                let full_path = state.temp_dir.join(rel_path);
+                let full_path = state.temp_dir.join(&rel_path);
                 if let Ok(data) = std::fs::read(&full_path) {
                     let fp: &str = decoded_path.as_ref();
                     let ct = if fp.ends_with(".png") { "image/png" }
