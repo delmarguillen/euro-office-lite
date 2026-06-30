@@ -9,6 +9,7 @@ on:
       - 'feat/19-save-as-extension-fix'
       - 'feat/20-insert-operations'
       - 'feat/21-spreadsheet-image-fix'
+      - 'feat/22-image-paste-fix'
     paths:
       - 'src-tauri/**'
       - 'src/**'

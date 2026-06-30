@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bridge;
+mod clipboard;
 mod converter;
 mod file_ops;
 
@@ -102,6 +103,7 @@ fn main() {
             bridge::list_media_dir,
             bridge::js_log,
             bridge::force_close,
+            clipboard::read_clipboard_image,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let uri = request.uri().to_string();

@@ -1,6 +1,84 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+var ClipboardHelper = (function() {
+  async function readNativeClipboardImage() {
+    try {
+      var result = await window.__TAURI__.core.invoke('read_clipboard_image');
+      return result || null;
+    } catch(e) {
+      window._eoLog('[EO] Clipboard image read failed: ' + (e.message || e));
+      return null;
+    }
+  }
+  function extractImageUriFromPaste(clipboardData) {
+    if (!clipboardData) return null;
+    var uri = clipboardData.getData('text/uri-list');
+    if (!uri) return null;
+    uri = uri.trim().split('\n')[0].trim();
+    if (!uri) return null;
+    var lower = uri.toLowerCase();
+    var imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.tif', '.tiff', '.ico'];
+    var isImage = false;
+    for (var i = 0; i < imageExts.length; i++) {
+      if (lower.endsWith(imageExts[i])) { isImage = true; break; }
+    }
+    if (!isImage) return null;
+    if (uri.indexOf('file://') === 0) {
+      uri = uri.substring(7);
+      uri = decodeURIComponent(uri);
+    }
+    return uri;
+  }
+  function installUrlPipelineOverrides(AscCommon) {
+    if (!AscCommon || !AscCommon.g_oDocumentUrls) return;
+    var origGetUrl = AscCommon.g_oDocumentUrls.getUrl;
+    AscCommon.g_oDocumentUrls.getUrl = function(strPath) {
+      if (strPath && (strPath.indexOf('data:') === 0 || strPath.indexOf('blob:') === 0))
+        return strPath;
+      return origGetUrl.call(this, strPath);
+    };
+    var origGetImageUrl = AscCommon.g_oDocumentUrls.getImageUrl;
+    AscCommon.g_oDocumentUrls.getImageUrl = function(strPath) {
+      if (strPath && (strPath.indexOf('data:') === 0 || strPath.indexOf('blob:') === 0))
+        return strPath;
+      if (strPath && strPath.indexOf('ascdesktop://') === 0)
+        return strPath;
+      return origGetImageUrl.call(this, strPath);
+    };
+    if (AscCommon.sendImgUrls) {
+      var origSendImgUrls = AscCommon.sendImgUrls;
+      AscCommon.sendImgUrls = function(api, images, callback) {
+        var hasSpecialUrls = false;
+        for (var i = 0; i < images.length; i++) {
+          if (images[i] && (images[i].indexOf('data:') === 0 || images[i].indexOf('blob:') === 0)) {
+            hasSpecialUrls = true;
+            break;
+          }
+        }
+        if (!hasSpecialUrls) {
+          return origSendImgUrls.call(this, api, images, callback);
+        }
+        var results = [];
+        for (var i = 0; i < images.length; i++) {
+          var img = images[i];
+          if (img && (img.indexOf('data:') === 0 || img.indexOf('blob:') === 0)) {
+            results.push({ url: img, path: img });
+          } else {
+            results.push({ url: AscCommon.g_oDocumentUrls.getUrl(img), path: img });
+          }
+        }
+        callback(results);
+      };
+    }
+  }
+  return {
+    readNativeClipboardImage: readNativeClipboardImage,
+    extractImageUriFromPaste: extractImageUriFromPaste,
+    installUrlPipelineOverrides: installUrlPipelineOverrides
+  };
+})();
+
 window._eoLogBuffer = [];
 window._eoLog = function() {
   var parts = [];
@@ -265,6 +343,41 @@ function _loadEditorBin(b64data, fileName) {
       };
     } else {
       window._eoLog('[EO] WARN: g_oDocumentUrls not available at load time');
+    }
+
+    ClipboardHelper.installUrlPipelineOverrides(ref.ew.AscCommon);
+
+    var editorDoc = ref.ew.document;
+    var isLinux = navigator.platform && navigator.platform.indexOf('Linux') !== -1;
+    if (editorDoc) {
+      if (isLinux) {
+        editorDoc.addEventListener('keydown', function(e) {
+          if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
+            ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
+              if (imageFile) {
+                window._eoLog('[EO] Clipboard image pasted: ' + imageFile);
+                var ref = _getEditor();
+                if (ref.editor) {
+                  ref.editor.AddImageUrl([imageFile]);
+                }
+              }
+            });
+          }
+        }, true);
+      }
+
+      editorDoc.addEventListener('paste', function(e) {
+        var cd = e.clipboardData;
+        if (!cd) return;
+        var imagePath = ClipboardHelper.extractImageUriFromPaste(cd);
+        if (!imagePath) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var ref = _getEditor();
+        if (ref.editor) {
+          ref.editor.AddImageUrl([imagePath]);
+        }
+      }, true);
     }
 
     invoke('list_media_dir').then(function(r) {
@@ -640,7 +753,20 @@ window.AscDesktopEditor = {
   GetOpenedFile: function(data) { return null; },
 
   Copy: () => document.execCommand('copy'),
-  Paste: () => document.execCommand('paste'),
+  Paste: async () => {
+    try {
+      var imageFile = await ClipboardHelper.readNativeClipboardImage();
+      if (imageFile) {
+        window._eoLog('[EO] Clipboard image pasted: ' + imageFile);
+        var ref = _getEditor();
+        if (ref.editor) {
+          ref.editor.AddImageUrl([imageFile]);
+        }
+        return;
+      }
+    } catch(e) {}
+    document.execCommand('paste');
+  },
   Cut: () => document.execCommand('cut'),
 
   _pendingPrinter: null,
