@@ -839,6 +839,17 @@ window.AscDesktopEditor = {
   execCommand: function(cmd, param) {
     if (cmd === 'saveas') {
       window.AscDesktopEditor.LocalFileSave('saveas=true;', '', undefined, 0, '{}');
+    } else if (cmd === 'go:folder') {
+      (async function() {
+        if (window.AscDesktopEditor._isModified) {
+          var discard = await window.__TAURI__.dialog.confirm(
+            _t('unsavedDiscardClose'),
+            { title: _t('unsavedChanges'), kind: 'warning' }
+          );
+          if (!discard) return;
+        }
+        _forceReload();
+      })();
     } else if (cmd === 'editor:event') {
       try {
         var evt = JSON.parse(param);
