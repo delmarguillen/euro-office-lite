@@ -10,6 +10,7 @@ on:
       - 'feat/20-insert-operations'
       - 'feat/21-spreadsheet-image-fix'
       - 'feat/22-image-paste-fix'
+      - 'feat/24-fix-metadata'
     paths:
       - 'src-tauri/**'
       - 'src/**'
