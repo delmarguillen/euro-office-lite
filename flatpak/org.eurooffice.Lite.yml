@@ -15,6 +15,7 @@ finish-args:
   - --filesystem=/run/media:ro
   - --unshare=network
   - --talk-name=org.freedesktop.portal.*
+  - --env=WEBKIT_DISABLE_DMABUF_RENDERER=1
 
 modules:
   - name: euro-office-lite
