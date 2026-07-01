@@ -46,9 +46,9 @@
   <content_rating type="oars-1.1" />
 
   <releases>
-    <release version="0.11.0" date="2026-06-30">
+    <release version="0.12.0" date="2026-07-01">
       <description>
-        <p>Initial Flatpak release.</p>
+        <p>Add Flatpak packaging with self-hosted repo.</p>
       </description>
     </release>
   </releases>
