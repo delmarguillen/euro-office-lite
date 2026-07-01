@@ -1,0 +1,50 @@
+app-id: org.eurooffice.Lite
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+command: euro-office-lite
+
+finish-args:
+  - --socket=x11
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  - --filesystem=home
+  - --filesystem=/media:ro
+  - --filesystem=/run/media:ro
+  - --unshare=network
+  - --talk-name=org.freedesktop.portal.*
+
+modules:
+  - name: euro-office-lite
+    buildsystem: simple
+    build-options:
+      no-debuginfo: true
+    build-commands:
+      - ar -x euro-office-lite.deb
+      - mkdir deb-extract
+      - tar -C deb-extract -xf data.tar.*
+
+      - mkdir -p /app/lib/Euro-Office-Lite
+      - cp -r deb-extract/usr/lib/Euro-Office-Lite/. /app/lib/Euro-Office-Lite/
+
+      - install -Dm755 deb-extract/usr/bin/euro-office-lite /app/bin/euro-office-lite
+      - install -Dm755 deb-extract/usr/bin/x2t /app/bin/x2t
+
+      - install -Dm644 org.eurooffice.Lite.desktop /app/share/applications/org.eurooffice.Lite.desktop
+      - install -Dm644 icons/256x256.png /app/share/icons/hicolor/256x256/apps/org.eurooffice.Lite.png
+      - install -Dm644 icons/128x128.png /app/share/icons/hicolor/128x128/apps/org.eurooffice.Lite.png
+      - install -Dm644 icons/32x32.png /app/share/icons/hicolor/32x32/apps/org.eurooffice.Lite.png
+      - install -Dm644 org.eurooffice.Lite.xml /app/share/mime/packages/org.eurooffice.Lite.xml
+
+    sources:
+      - type: file
+        path: euro-office-lite.deb
+      - type: file
+        path: org.eurooffice.Lite.desktop
+      - type: file
+        path: org.eurooffice.Lite.xml
+      - type: dir
+        path: icons
+        dest: icons

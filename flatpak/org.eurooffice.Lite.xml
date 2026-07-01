@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+    <comment>Word Document</comment>
+    <glob pattern="*.docx"/>
+  </mime-type>
+  <mime-type type="application/msword">
+    <comment>Word Document (Legacy)</comment>
+    <glob pattern="*.doc"/>
+  </mime-type>
+  <mime-type type="application/vnd.oasis.opendocument.text">
+    <comment>OpenDocument Text</comment>
+    <glob pattern="*.odt"/>
+  </mime-type>
+  <mime-type type="application/rtf">
+    <comment>Rich Text Format</comment>
+    <glob pattern="*.rtf"/>
+  </mime-type>
+
+  <mime-type type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+    <comment>Excel Spreadsheet</comment>
+    <glob pattern="*.xlsx"/>
+  </mime-type>
+  <mime-type type="application/vnd.ms-excel">
+    <comment>Excel Spreadsheet (Legacy)</comment>
+    <glob pattern="*.xls"/>
+  </mime-type>
+  <mime-type type="application/vnd.oasis.opendocument.spreadsheet">
+    <comment>OpenDocument Spreadsheet</comment>
+    <glob pattern="*.ods"/>
+  </mime-type>
+
+  <mime-type type="application/vnd.openxmlformats-officedocument.presentationml.presentation">
+    <comment>PowerPoint Presentation</comment>
+    <glob pattern="*.pptx"/>
+  </mime-type>
+  <mime-type type="application/vnd.ms-powerpoint">
+    <comment>PowerPoint Presentation (Legacy)</comment>
+    <glob pattern="*.ppt"/>
+  </mime-type>
+  <mime-type type="application/vnd.oasis.opendocument.presentation">
+    <comment>OpenDocument Presentation</comment>
+    <glob pattern="*.odp"/>
+  </mime-type>
+</mime-info>

@@ -464,8 +464,91 @@ jobs:
           name: build-logs-linux-${{ matrix.target }}
           path: /tmp/tauri-build.log
 
+  build-flatpak:
+    needs: [build-linux]
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux .deb artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: installer-x86_64-unknown-linux-gnu
+          path: deb-download/
+
+      - name: Copy .deb to flatpak dir
+        run: |
+          ls -la deb-download/
+          find deb-download -name '*.deb' -exec cp {} flatpak/euro-office-lite.deb \;
+
+      - name: Install Flatpak and flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Cache Flatpak runtimes
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/flatpak
+          key: flatpak-runtime-gnome-49-builder-${{ runner.os }}
+
+      - name: Install GNOME runtime and SDK
+        run: |
+          flatpak install -y --noninteractive --user flathub org.gnome.Platform//49 org.gnome.Sdk//49
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.FLATPAK_GPG_KEY }}" | gpg --batch --import
+          GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format long | grep sec | head -1 | awk '{print $2}' | cut -d'/' -f2)
+          echo "GPG_KEY_ID=$GPG_KEY_ID" >> $GITHUB_ENV
+
+      - name: Build Flatpak
+        run: |
+          cd flatpak
+          flatpak-builder --force-clean --user --repo=repo \
+            --gpg-sign=$GPG_KEY_ID \
+            --disable-updates \
+            build-dir org.eurooffice.Lite.yml
+
+      - name: Update repo metadata
+        run: |
+          cd flatpak
+          flatpak build-update-repo repo \
+            --gpg-sign=$GPG_KEY_ID \
+            --generate-static-deltas \
+            --title="Euro-Office Lite"
+
+      - name: Export GPG public key
+        run: gpg --export --armor $GPG_KEY_ID > flatpak/repo/euro-office-flatpak.gpg
+
+      - name: Build single-file bundle
+        run: |
+          cd flatpak
+          flatpak build-bundle repo \
+            euro-office-lite.flatpak \
+            org.eurooffice.Lite
+          ls -lh euro-office-lite.flatpak
+
+      - name: Upload Flatpak bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-flatpak
+          path: flatpak/euro-office-lite.flatpak
+
+      - name: Deploy repo to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: flatpak/repo
+          destination_dir: repo
+          keep_files: false
+
   release:
-    needs: [build-windows, build-macos, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-macos, build-linux, build-flatpak]
     runs-on: ubuntu-latest
 
     steps:
@@ -489,3 +572,4 @@ jobs:
             installers/*.exe
             installers/*.dmg
             installers/*.deb
+            installers/*.flatpak

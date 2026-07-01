@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Euro-Office Lite
+Comment=Lightweight office suite for documents, spreadsheets, and presentations
+Exec=euro-office-lite %F
+Icon=org.eurooffice.Lite
+Terminal=false
+Type=Application
+Categories=Office;WordProcessor;Spreadsheet;Presentation;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/msword;application/vnd.oasis.opendocument.text;application/rtf;text/plain;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.ms-excel;application/vnd.oasis.opendocument.spreadsheet;text/csv;application/vnd.openxmlformats-officedocument.presentationml.presentation;application/vnd.ms-powerpoint;application/vnd.oasis.opendocument.presentation;
+Keywords=office;document;word;excel;spreadsheet;presentation;docx;xlsx;pptx;
+StartupWMClass=Euro-Office Lite
+StartupNotify=true

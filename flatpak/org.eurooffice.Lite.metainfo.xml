@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.eurooffice.Lite</id>
+  <name>Euro-Office Lite</name>
+  <summary>Lightweight office suite for documents, spreadsheets, and presentations</summary>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+
+  <description>
+    <p>
+      Euro-Office Lite is a lightweight desktop office suite that opens and edits
+      DOCX, XLSX, PPTX, and other common office document formats. It works fully
+      offline with no cloud dependencies.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Word processing with DOCX, DOC, ODT, RTF, and TXT support</li>
+      <li>Spreadsheets with XLSX, XLS, ODS, and CSV support</li>
+      <li>Presentations with PPTX, PPT, and ODP support</li>
+      <li>PDF export</li>
+      <li>No internet connection required</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">org.eurooffice.Lite.desktop</launchable>
+
+  <url type="homepage">https://github.com/Euro-Office/DesktopEditors</url>
+  <url type="bugtracker">https://github.com/Euro-Office/DesktopEditors/issues</url>
+
+  <provides>
+    <binary>euro-office-lite</binary>
+    <mediatype>application/vnd.openxmlformats-officedocument.wordprocessingml.document</mediatype>
+    <mediatype>application/msword</mediatype>
+    <mediatype>application/vnd.oasis.opendocument.text</mediatype>
+    <mediatype>application/rtf</mediatype>
+    <mediatype>text/plain</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</mediatype>
+    <mediatype>application/vnd.ms-excel</mediatype>
+    <mediatype>application/vnd.oasis.opendocument.spreadsheet</mediatype>
+    <mediatype>text/csv</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.presentationml.presentation</mediatype>
+    <mediatype>application/vnd.ms-powerpoint</mediatype>
+    <mediatype>application/vnd.oasis.opendocument.presentation</mediatype>
+  </provides>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.11.0" date="2026-06-30">
+      <description>
+        <p>Initial Flatpak release.</p>
+      </description>
+    </release>
+  </releases>
+</component>
