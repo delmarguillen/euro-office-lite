@@ -832,6 +832,10 @@ window.AscDesktopEditor = {
     window.AscDesktopEditor._isModified = modified;
     invoke('set_document_modified', { modified }).catch(function(){});
   },
+  getViewportSettings: function() {
+    return { widgetType: 'window' };
+  },
+
   SetDocumentName: (name) => {
     invoke('set_window_title', { name }).catch(function(){});
   },
@@ -839,6 +843,33 @@ window.AscDesktopEditor = {
   execCommand: function(cmd, param) {
     if (cmd === 'saveas') {
       window.AscDesktopEditor.LocalFileSave('saveas=true;', '', undefined, 0, '{}');
+    } else if (cmd === 'title:button') {
+      try {
+        var btn = JSON.parse(param);
+        if (btn.click === 'home') {
+          (async function() {
+            if (window.AscDesktopEditor._isModified) {
+              var discard = await window.__TAURI__.dialog.confirm(
+                _t('unsavedDiscardClose'),
+                { title: _t('unsavedChanges'), kind: 'warning' }
+              );
+              if (!discard) return;
+            }
+            _forceReload();
+          })();
+        }
+      } catch(e) {}
+    } else if (cmd === 'go:folder') {
+      (async function() {
+        if (window.AscDesktopEditor._isModified) {
+          var discard = await window.__TAURI__.dialog.confirm(
+            _t('unsavedDiscardClose'),
+            { title: _t('unsavedChanges'), kind: 'warning' }
+          );
+          if (!discard) return;
+        }
+        _forceReload();
+      })();
     } else if (cmd === 'editor:event') {
       try {
         var evt = JSON.parse(param);
