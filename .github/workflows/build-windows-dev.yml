@@ -7,6 +7,7 @@ on:
       - 'feat/18-language-selector'
       - 'feat/19-save-as-extension-fix'
       - 'feat/25-add-goback-button'
+      - 'hotfix/**'
     paths:
       - 'src/**'
       - 'src-tauri/**'

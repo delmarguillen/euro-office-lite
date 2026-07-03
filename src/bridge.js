@@ -311,7 +311,9 @@ function _forceReload() {
   window.onbeforeunload = null;
   var iframes = document.querySelectorAll('iframe');
   for (var i = 0; i < iframes.length; i++) iframes[i].remove();
-  window.location.reload();
+  invoke('set_document_modified', { modified: false })
+    .catch(function(){})
+    .finally(function() { window.location.reload(); });
 }
 
 function _getEditor() {

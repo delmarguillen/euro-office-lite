@@ -11,7 +11,9 @@ on:
     branches:
       - 'feat/14-macos-build'
       - 'feat/19-save-as-extension-fix'
+      - 'hotfix/**'
     paths:
+      - 'src/**'
       - 'src-tauri/**'
       - 'scripts/**'
       - '.github/workflows/build-macos-dev.yml'
