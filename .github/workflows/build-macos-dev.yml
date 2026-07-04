@@ -11,6 +11,7 @@ on:
     branches:
       - 'feat/14-macos-build'
       - 'feat/19-save-as-extension-fix'
+      - 'feat/27-macos-codesign'
       - 'hotfix/**'
     paths:
       - 'src/**'
@@ -19,7 +20,7 @@ on:
       - '.github/workflows/build-macos-dev.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   RUST_BACKTRACE: "1"
@@ -33,7 +34,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
@@ -57,18 +58,18 @@ jobs:
           echo "::endgroup::"
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -206,7 +207,7 @@ jobs:
           echo "Building for ${{ matrix.target }}..."
           npx tauri build \
             --target ${{ matrix.target }} \
-            --config '{"bundle":{"targets":["dmg"],"icon":["icons/icon.icns","icons/icon.png","icons/128x128.png","icons/32x32.png"],"resources":["binaries/*.dylib","binaries/*.config","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
+            --config '{"bundle":{"targets":["app","dmg"],"icon":["icons/icon.icns","icons/icon.png","icons/128x128.png","icons/32x32.png"],"resources":["binaries/*.dylib","binaries/*.config","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
             2>&1 | tee /tmp/tauri-build.log
 
           echo "::group::Build output"
@@ -215,19 +216,208 @@ jobs:
           if [ -d "$DMG_DIR" ]; then
             echo "DMG output:"
             ls -lh "$DMG_DIR/"
-          else
-            echo "No DMG directory found at $DMG_DIR"
           fi
           if [ -d "$APP_DIR" ]; then
             echo "App bundle:"
             ls -lh "$APP_DIR/"
-          else
-            echo "No .app directory found at $APP_DIR"
           fi
           echo "::endgroup::"
 
+      - name: Sign and notarize macOS app
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # Not used by the script (identity is derived from keychain), but referencing it
+          # makes GitHub mask the certificate name in logs (Authority= lines in verify step)
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No Apple certificate configured, skipping code signing"
+            exit 0
+          fi
+
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Euro-Office-Lite.app"
+          DMG_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+
+          # --- Import certificate into temporary keychain ---
+          echo "::group::Import certificate"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          trap 'security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true' EXIT
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm "$RUNNER_TEMP/certificate.p12"
+
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+
+          APPLE_SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | sed -n 's/.*"\(.*\)".*/\1/p' | head -1)
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "::error::No codesigning identity found in temporary keychain"
+            exit 1
+          fi
+          echo "Certificate imported"
+          echo "::endgroup::"
+
+          # --- Sign all Mach-O binaries in the .app bundle ---
+          echo "::group::Sign binaries"
+          SIGNED_COUNT=0
+          while IFS= read -r -d '' f; do
+            if file "$f" | grep -qE "Mach-O"; then
+              codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$f"
+              SIGNED_COUNT=$((SIGNED_COUNT + 1))
+              echo "  Signed: ${f#$APP/}"
+            fi
+          done < <(find "$APP/Contents" -type f -print0 2>/dev/null)
+
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$APP"
+          SIGNED_COUNT=$((SIGNED_COUNT + 1))
+          echo "Signed $SIGNED_COUNT items total (nested binaries + .app bundle)"
+          echo "::endgroup::"
+
+          # --- Verify signature before notarization ---
+          echo "::group::Pre-notarization verification"
+          codesign --verify --deep --strict "$APP" 2>&1
+          echo "Signature verification passed"
+          echo "::endgroup::"
+
+          # --- Notarize ---
+          echo "::group::Notarize"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/app-notarize.zip"
+          echo "Submitting for notarization ($(du -h "$RUNNER_TEMP/app-notarize.zip" | cut -f1) zip)..."
+
+          NOTARIZE_OUTPUT=$(xcrun notarytool submit "$RUNNER_TEMP/app-notarize.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 1800 2>&1) || true
+
+          echo "$NOTARIZE_OUTPUT"
+          rm "$RUNNER_TEMP/app-notarize.zip"
+
+          SUBMISSION_ID=$(echo "$NOTARIZE_OUTPUT" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+
+          if echo "$NOTARIZE_OUTPUT" | grep -qi "status: Accepted"; then
+            echo "Notarization accepted"
+          else
+            echo "::error::Notarization failed"
+            if [ -n "$SUBMISSION_ID" ]; then
+              echo "Fetching notarization log for $SUBMISSION_ID..."
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" 2>&1 || true
+            fi
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          # --- Staple ---
+          echo "::group::Staple"
+          xcrun stapler staple "$APP"
+          echo "::endgroup::"
+
+          # --- Recreate DMG with signed+notarized .app ---
+          echo "::group::Recreate DMG"
+          rm -f "$DMG_DIR"/*.dmg
+
+          DMG_STAGING="$RUNNER_TEMP/dmg-staging"
+          mkdir -p "$DMG_STAGING"
+          cp -R "$APP" "$DMG_STAGING/"
+          ln -s /Applications "$DMG_STAGING/Applications"
+
+          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: "\(.*\)".*/\1/')
+          ARCH=$(echo "${{ matrix.target }}" | cut -d'-' -f1)
+          DMG_PATH="$DMG_DIR/Euro-Office-Lite_${VERSION}_${ARCH}.dmg"
+
+          hdiutil create -volname "Euro-Office Lite" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$DMG_PATH"
+
+          echo "Submitting DMG for notarization..."
+          DMG_NOTARIZE_OUTPUT=$(xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 1800 2>&1) || true
+
+          echo "$DMG_NOTARIZE_OUTPUT"
+
+          DMG_SUBMISSION_ID=$(echo "$DMG_NOTARIZE_OUTPUT" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+
+          if echo "$DMG_NOTARIZE_OUTPUT" | grep -qi "status: Accepted"; then
+            echo "DMG notarization accepted"
+          else
+            echo "::error::DMG notarization failed"
+            if [ -n "$DMG_SUBMISSION_ID" ]; then
+              echo "Fetching notarization log for $DMG_SUBMISSION_ID..."
+              xcrun notarytool log "$DMG_SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" 2>&1 || true
+            fi
+            exit 1
+          fi
+
+          xcrun stapler staple "$DMG_PATH"
+
+          rm -rf "$DMG_STAGING"
+          echo "DMG created: $(basename "$DMG_PATH") ($(du -h "$DMG_PATH" | cut -f1))"
+          echo "::endgroup::"
+
+      - name: Verify code signature
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No signing configured, skipping verification"
+            exit 0
+          fi
+
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Euro-Office-Lite.app"
+          DMG_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+
+          echo "::group::Signature details"
+          codesign -dv --verbose=4 "$APP" 2>&1
+          echo "::endgroup::"
+
+          echo "::group::Deep signature verification"
+          codesign --verify --deep --strict "$APP" 2>&1
+          echo "::endgroup::"
+
+          echo "::group::Gatekeeper assessment"
+          spctl -a -t exec -vv "$APP" 2>&1
+          echo "::endgroup::"
+
+          echo "::group::Staple validation (.app)"
+          xcrun stapler validate "$APP" 2>&1
+          echo "::endgroup::"
+
+          DMG=$(find "$DMG_DIR" -name '*.dmg' -print -quit 2>/dev/null)
+          if [ -n "$DMG" ]; then
+            echo "::group::Staple validation (.dmg)"
+            xcrun stapler validate "$DMG" 2>&1
+            echo "::endgroup::"
+          fi
+
+          echo "::group::All Mach-O binaries in bundle"
+          find "$APP" -type f -print0 | xargs -0 file | grep "Mach-O" | while IFS=: read -r path _; do
+            sig=$(codesign -dv "$path" 2>&1 | grep "Authority=" | head -1)
+            echo "  ${path#$APP/}: $sig"
+          done
+          echo "::endgroup::"
+
       - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dmg-${{ matrix.target }}
           path: |
@@ -236,7 +426,7 @@ jobs:
 
       - name: Upload build logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: build-logs-macos-${{ matrix.target }}
           path: |

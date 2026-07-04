@@ -1,7 +1,7 @@
 {
   "productName": "Euro-Office-Lite",
   "mainBinaryName": "euro-office-lite",
-  "version": "0.14.2-alpha",
+  "version": "0.15.0-alpha",
   "identifier": "org.euro-office.lite",
   "build": {
     "frontendDist": "../src-dist",
@@ -61,6 +61,9 @@
         "description": "Presentation"
       }
     ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser",
