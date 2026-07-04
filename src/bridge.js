@@ -391,6 +391,7 @@ function _loadEditorBin(b64data, fileName) {
     file.bSerFormat = true;
     ref.editor.openDocument(file);
     ref.ew.AscCommon.History.UserSaveMode = true;
+    _ensureCoreProps(ref);
 
     if (fileName) {
       var name = fileName.replace(/\\/g, '/').split('/').pop();
@@ -398,6 +399,21 @@ function _loadEditorBin(b64data, fileName) {
     }
   } catch(e) {
     window._eoLog('[EO] Error loading document:', e.message);
+  }
+}
+
+function _ensureCoreProps(ref) {
+  try {
+    var logicDoc = ref.editor.WordControl && ref.editor.WordControl.m_oLogicDocument;
+    if (!logicDoc && ref.editor.wbModel) {
+      logicDoc = ref.editor.wbModel;
+    }
+    if (logicDoc && !logicDoc.Core && ref.ew.AscCommon.CCore) {
+      logicDoc.Core = new ref.ew.AscCommon.CCore();
+      window._eoLog('[EO] Initialized empty Core properties for new document');
+    }
+  } catch(e) {
+    window._eoLog('[EO] _ensureCoreProps error: ' + (e.message || e));
   }
 }
 
@@ -452,6 +468,7 @@ window.AscDesktopEditor = {
           file.bSerFormat = true;
           ref.editor.openDocument(file);
           ref.ew.AscCommon.History.UserSaveMode = true;
+          _ensureCoreProps(ref);
         }
       } catch(e) {
         window._eoLog('[EO] LocalStartOpen error:', e.message);
