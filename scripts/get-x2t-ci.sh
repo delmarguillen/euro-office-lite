@@ -8,6 +8,7 @@ TARGET_DIR="$SCRIPT_DIR/../src-tauri/binaries"
 REPO="${GITHUB_REPOSITORY:-delmarguillen/euro-office-lite}"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
+TARGET_TRIPLE="${1:-}"
 
 log() {
     echo "[$(date '+%H:%M:%S')] $1"
@@ -17,14 +18,23 @@ log "=== get-x2t-ci.sh ==="
 log "System: $(uname -ms)"
 log "Repo: $REPO"
 log "Target dir: $TARGET_DIR"
+[ -n "$TARGET_TRIPLE" ] && log "Target triple (override): $TARGET_TRIPLE"
 
 if [ "$OS" = "Darwin" ]; then
-    ZIP_NAME="x2t-binaries-macos-arm64.zip"
-    if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
-        TRIPLE="aarch64-apple-darwin"
-    else
-        TRIPLE="x86_64-apple-darwin"
-    fi
+    case "$TARGET_TRIPLE" in
+        x86_64-apple-darwin)
+            ZIP_NAME="x2t-binaries-macos-x64.zip"
+            TRIPLE="x86_64-apple-darwin"
+            ;;
+        aarch64-apple-darwin|"")
+            ZIP_NAME="x2t-binaries-macos-arm64.zip"
+            TRIPLE="aarch64-apple-darwin"
+            ;;
+        *)
+            log "ERROR: Unsupported macOS target: $TARGET_TRIPLE"
+            exit 1
+            ;;
+    esac
     CHECK_PATTERN="x2t-*-apple-darwin"
     VERIFY_CMD="otool -L"
 elif [ "$OS" = "Linux" ]; then

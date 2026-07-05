@@ -12,6 +12,7 @@ on:
       - 'feat/14-macos-build'
       - 'feat/19-save-as-extension-fix'
       - 'feat/27-macos-codesign'
+      - 'feat/28-intel-mac-build'
       - 'hotfix/**'
     paths:
       - 'src/**'
@@ -30,7 +31,7 @@ jobs:
     runs-on: macos-latest
     strategy:
       matrix:
-        target: [aarch64-apple-darwin]
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
 
     steps:
       - name: Checkout
@@ -139,7 +140,7 @@ jobs:
       - name: Download x2t macOS binaries
         run: |
           chmod +x scripts/get-x2t-ci.sh
-          bash scripts/get-x2t-ci.sh
+          bash scripts/get-x2t-ci.sh ${{ matrix.target }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

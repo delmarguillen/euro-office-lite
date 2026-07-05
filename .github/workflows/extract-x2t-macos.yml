@@ -7,6 +7,13 @@ on:
         description: 'ONLYOFFICE Desktop Editors version to download'
         type: string
         default: 'v8.2.0'
+      arch:
+        description: 'Target architecture'
+        type: choice
+        options:
+          - arm64
+          - x86_64
+        default: 'arm64'
 
 permissions:
   contents: write
@@ -30,8 +37,16 @@ jobs:
       - name: Download ONLYOFFICE DMG
         run: |
           VERSION="${{ github.event.inputs.onlyoffice_version }}"
-          URL="https://github.com/ONLYOFFICE/DesktopEditors/releases/download/${VERSION}/ONLYOFFICE-arm.dmg"
-          echo "Downloading: $URL"
+          ARCH="${{ github.event.inputs.arch }}"
+
+          if [ "$ARCH" = "arm64" ]; then
+            DMG_ASSET="ONLYOFFICE-arm.dmg"
+          else
+            DMG_ASSET="ONLYOFFICE-x86_64.dmg"
+          fi
+
+          URL="https://github.com/ONLYOFFICE/DesktopEditors/releases/download/${VERSION}/${DMG_ASSET}"
+          echo "Downloading: $URL (arch=$ARCH)"
           curl -L -o /tmp/onlyoffice.dmg "$URL"
           ls -lh /tmp/onlyoffice.dmg
 
@@ -141,25 +156,51 @@ jobs:
           otool -L "$STAGING/x2t"
           echo "::endgroup::"
 
+      - name: Verify deployment target
+        run: |
+          MAX_MINOS="12.0"
+          FAIL=0
+          while IFS= read -r -d '' f; do
+            if file "$f" | grep -q "Mach-O"; then
+              MINOS=$(otool -l "$f" | grep -EA3 "LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX" \
+                | grep -E "minos|version" | head -1 | awk '{print $2}')
+              echo "  $(basename "$f"): minos=$MINOS"
+              if [ -n "$MINOS" ] && [ "$(printf '%s\n' "$MAX_MINOS" "$MINOS" | sort -V | tail -1)" != "$MAX_MINOS" ]; then
+                echo "::error::$(basename "$f") requires macOS $MINOS, above our minimumSystemVersion $MAX_MINOS"
+                FAIL=1
+              fi
+            fi
+          done < <(find /tmp/x2t-staging -type f -print0)
+          exit $FAIL
+
       - name: Create zip
         run: |
+          ARCH="${{ github.event.inputs.arch }}"
+          if [ "$ARCH" = "arm64" ]; then
+            ZIP_NAME="x2t-binaries-macos-arm64.zip"
+          else
+            ZIP_NAME="x2t-binaries-macos-x64.zip"
+          fi
+
           cd /tmp/x2t-staging
-          zip -r /tmp/x2t-binaries-macos-arm64.zip .
+          zip -r "/tmp/${ZIP_NAME}" .
           echo "::group::Zip info"
-          ls -lh /tmp/x2t-binaries-macos-arm64.zip
-          unzip -l /tmp/x2t-binaries-macos-arm64.zip
+          ls -lh "/tmp/${ZIP_NAME}"
+          unzip -l "/tmp/${ZIP_NAME}"
           echo "::endgroup::"
+
+          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
 
       - name: Upload zip as artifact (for inspection)
         uses: actions/upload-artifact@v4
         with:
-          name: x2t-binaries-macos-arm64
-          path: /tmp/x2t-binaries-macos-arm64.zip
+          name: ${{ github.event.inputs.arch == 'arm64' && 'x2t-binaries-macos-arm64' || 'x2t-binaries-macos-x64' }}
+          path: /tmp/${{ env.ZIP_NAME }}
 
       - name: Upload to dependencies release
         run: |
-          echo "Uploading x2t-binaries-macos-arm64.zip to 'dependencies' release..."
-          gh release upload dependencies /tmp/x2t-binaries-macos-arm64.zip --clobber
+          echo "Uploading ${ZIP_NAME} to 'dependencies' release..."
+          gh release upload dependencies "/tmp/${ZIP_NAME}" --clobber
           echo "Done. Verifying..."
           gh release view dependencies
         env:

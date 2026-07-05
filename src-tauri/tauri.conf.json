@@ -1,7 +1,7 @@
 {
   "productName": "Euro-Office-Lite",
   "mainBinaryName": "euro-office-lite",
-  "version": "0.15.0-alpha",
+  "version": "0.16.0-alpha",
   "identifier": "org.euro-office.lite",
   "build": {
     "frontendDist": "../src-dist",
