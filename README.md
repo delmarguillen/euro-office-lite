@@ -1,8 +1,8 @@
 # Euro-Office Lite
 
-Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: 96 MB (Windows), 117 MB (macOS), 134 MB (Linux). No cloud, no telemetry.
+Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~99 MB (Windows), ~130-135 MB (macOS), ~135 MB (Linux). No cloud, no telemetry.
 
-Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon, signed and notarized), and Linux (x64 .deb and Flatpak).
+Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 .deb and Flatpak).
 
 > **Alpha**: This project is in early development. Core features work (create, open, edit, save), but expect rough edges. Printing works on Windows; PDF export works on Windows and Linux (Word documents).
 
@@ -58,11 +58,11 @@ User <-> Tauri WebView2 <-> sdkjs/web-apps (editor UI)
 
 ## CI/CD
 
-Pushing a tag `v*` triggers the GitHub Actions workflow which builds Windows (x64, ARM64), macOS (Apple Silicon), and Linux (x64) installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
+Pushing a tag `v*` triggers the GitHub Actions workflow which builds Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64) installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
 
 ## Installing on macOS
 
-Since v0.15.0-alpha, DMG builds are signed and notarized by Apple: download, open the DMG, drag to Applications and double-click. No Gatekeeper workarounds needed. Requires macOS 12 (Monterey) or later. Apple Silicon only for now; an Intel build is in progress.
+DMG builds are signed and notarized by Apple: download, open the DMG, drag to Applications and double-click. No Gatekeeper workarounds needed. Requires macOS 12 (Monterey) or later. Since v0.16.0-alpha, DMGs are available for both Apple Silicon (`aarch64`) and Intel (`x86_64`) Macs; download the one matching your machine.
 
 ## Installing on Linux
 
