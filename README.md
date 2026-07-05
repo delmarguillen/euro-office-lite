@@ -1,8 +1,8 @@
 # Euro-Office Lite
 
-Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. ~96 MB installer, no cloud, no telemetry.
+Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: 96 MB (Windows), 117 MB (macOS), 134 MB (Linux). No cloud, no telemetry.
 
-Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon), and Linux (x64 .deb).
+Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon, signed and notarized), and Linux (x64 .deb and Flatpak).
 
 > **Alpha**: This project is in early development. Core features work (create, open, edit, save), but expect rough edges. Printing works on Windows; PDF export works on Windows and Linux (Word documents).
 
@@ -60,20 +60,46 @@ User <-> Tauri WebView2 <-> sdkjs/web-apps (editor UI)
 
 Pushing a tag `v*` triggers the GitHub Actions workflow which builds Windows (x64, ARM64), macOS (Apple Silicon), and Linux (x64) installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
 
+## Installing on macOS
+
+Since v0.15.0-alpha, DMG builds are signed and notarized by Apple: download, open the DMG, drag to Applications and double-click. No Gatekeeper workarounds needed. Requires macOS 12 (Monterey) or later. Apple Silicon only for now; an Intel build is in progress.
+
 ## Installing on Linux
 
 Install the `.deb` with `apt` so dependencies are resolved automatically:
 
 ```bash
-sudo apt install ./Euro-Office-Lite_0.1.0-alpha_amd64.deb
+sudo apt install ./Euro-Office-Lite_0.15.0-alpha_amd64.deb
 ```
 
-Do **not** use `dpkg -i` directly — it will not install the required `libwebkit2gtk-4.1-0` dependency.
+Do **not** use `dpkg -i` directly, since it will not install the required `libwebkit2gtk-4.1-0` dependency.
+
+For Fedora, Arch, immutable distros, or any Linux with Flatpak:
+
+```bash
+# Add repository (one-time)
+flatpak remote-add --user --if-not-exists --no-gpg-verify euro-office \
+  https://delmarguillen.github.io/euro-office-lite/repo
+
+# Install
+flatpak install --user euro-office org.eurooffice.Lite
+
+# Update (future releases)
+flatpak update org.eurooffice.Lite
+```
+
+Or download the `.flatpak` bundle from the release assets.
 
 ## Log files
 
 - **Windows**: `%TEMP%\euro-office-lite\js-debug.log`
 - **macOS / Linux**: `/tmp/euro-office-lite/js-debug.log`
+
+## Credits and attribution
+
+Euro-Office Lite is a lightweight desktop shell around the document editors of the [Euro-Office](https://github.com/Euro-Office) project, an independent community fork of the editors originally developed by ONLYOFFICE (Ascensio System SIA). The editing engine ([sdkjs](https://github.com/Euro-Office/sdkjs)) and UI ([web-apps](https://github.com/Euro-Office/web-apps)) are included as unmodified submodules under AGPL-3.0. The x2t document converter binaries are currently taken unmodified from [ONLYOFFICE Desktop Editors](https://github.com/ONLYOFFICE/DesktopEditors) releases; their corresponding source is available at [ONLYOFFICE/core](https://github.com/ONLYOFFICE/core) under the matching version tags (AGPL-3.0). All credit for the editing engine belongs to their respective developers.
+
+What this project adds on top: the Tauri v2 native shell and desktop bridge, macOS support with signed and notarized builds, packaging for Windows (NSIS), Linux (.deb and Flatpak with a self-hosted repo), fully offline operation with no cloud, no accounts and no telemetry, and native file operations, printing and PDF export.
 
 ## License
 
