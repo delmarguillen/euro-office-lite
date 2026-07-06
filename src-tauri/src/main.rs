@@ -104,6 +104,7 @@ fn main() {
             bridge::js_log,
             bridge::force_close,
             clipboard::read_clipboard_image,
+            clipboard::read_clipboard_text,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let uri = request.uri().to_string();

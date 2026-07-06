@@ -2,6 +2,22 @@ use crate::file_ops::AppState;
 use tauri::State;
 
 #[tauri::command]
+pub fn read_clipboard_text() -> Result<Option<String>, String> {
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[clipboard] Failed to open clipboard: {}", e);
+            return Ok(None);
+        }
+    };
+
+    match clipboard.get_text() {
+        Ok(text) => Ok(Some(text)),
+        Err(_) => Ok(None),
+    }
+}
+
+#[tauri::command]
 pub fn read_clipboard_image(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,

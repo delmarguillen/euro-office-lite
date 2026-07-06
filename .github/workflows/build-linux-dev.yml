@@ -11,6 +11,7 @@ on:
       - 'feat/21-spreadsheet-image-fix'
       - 'feat/22-image-paste-fix'
       - 'feat/25-add-goback-button'
+      - 'feat/29-clipboard-fixes'
       - 'hotfix/**'
       - 'feat/24-fix-metadata'
     paths:

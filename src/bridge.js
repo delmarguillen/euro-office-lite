@@ -351,6 +351,26 @@ function _loadEditorBin(b64data, fileName) {
 
     var editorDoc = ref.ew.document;
     var isLinux = navigator.platform && navigator.platform.indexOf('Linux') !== -1;
+
+    var cellClipboard = ref.ew.AscCommonExcel && ref.ew.AscCommonExcel.g_clipboardExcel;
+    if (cellClipboard && cellClipboard.drawSelectedArea && !cellClipboard.__eoTaintGuardInstalled) {
+      var origDrawSelectedArea = cellClipboard.drawSelectedArea;
+      cellClipboard.drawSelectedArea = function() {
+        try {
+          return origDrawSelectedArea.apply(this, arguments);
+        } catch(e) {
+          if (e.name === 'SecurityError') {
+            window._eoLog('[EO] Copy: skipped image flavor (tainted canvas)');
+            return null;
+          }
+          throw e;
+        }
+      };
+      cellClipboard.__eoTaintGuardInstalled = true;
+    } else if ((!cellClipboard || !cellClipboard.drawSelectedArea) && window.AscDesktopEditor._currentDocType === 'cell') {
+      window._eoLog('[EO] WARN: drawSelectedArea taint guard NOT installed');
+    }
+
     if (editorDoc) {
       if (isLinux) {
         editorDoc.addEventListener('keydown', function(e) {
@@ -776,7 +796,7 @@ window.AscDesktopEditor = {
     try {
       var imageFile = await ClipboardHelper.readNativeClipboardImage();
       if (imageFile) {
-        window._eoLog('[EO] Clipboard image pasted: ' + imageFile);
+        window._eoLog('[EO] Context menu paste: image ' + imageFile);
         var ref = _getEditor();
         if (ref.editor) {
           ref.editor.AddImageUrl([imageFile]);
@@ -784,7 +804,19 @@ window.AscDesktopEditor = {
         return;
       }
     } catch(e) {}
-    document.execCommand('paste');
+    try {
+      var text = await invoke('read_clipboard_text');
+      if (text) {
+        window._eoLog('[EO] Context menu paste: text (' + text.length + ' chars)');
+        var ref = _getEditor();
+        if (ref.editor && ref.ew && ref.ew.AscCommon) {
+          ref.editor.asc_PasteData(ref.ew.AscCommon.c_oAscClipboardDataFormat.Text, text);
+        }
+        return;
+      }
+    } catch(e) {
+      window._eoLog('[EO] Context menu paste text failed: ' + (e.message || e));
+    }
   },
   Cut: () => document.execCommand('cut'),
 
