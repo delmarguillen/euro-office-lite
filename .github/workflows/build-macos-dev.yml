@@ -13,6 +13,7 @@ on:
       - 'feat/19-save-as-extension-fix'
       - 'feat/27-macos-codesign'
       - 'feat/28-intel-mac-build'
+      - 'feat/30-context-toolbar-clipboard'
       - 'hotfix/**'
     paths:
       - 'src/**'

@@ -111,7 +111,13 @@ fn main() {
             let path = uri
                 .strip_prefix("ascdesktop://")
                 .or_else(|| uri.strip_prefix("ascdesktop:///"))
+                .or_else(|| uri.strip_prefix("http://ascdesktop.localhost/"))
+                .or_else(|| uri.strip_prefix("https://ascdesktop.localhost/"))
                 .unwrap_or("");
+            let path = path.strip_prefix("localhost/").unwrap_or(path);
+
+            #[cfg(debug_assertions)]
+            eprintln!("[ascdesktop] uri={}", uri);
 
             let decoded_path = percent_decode_str(path);
 
@@ -144,6 +150,7 @@ fn main() {
                 }
                 return tauri::http::Response::builder()
                     .status(404)
+                    .header("Access-Control-Allow-Origin", "*")
                     .body(b"Not Found".to_vec())
                     .unwrap();
             }
@@ -156,7 +163,7 @@ fn main() {
                 let _ = std::fs::create_dir_all(&media_dir);
                 if let Some(file_name) = src.file_name() {
                     let dest = media_dir.join(file_name);
-                    if std::fs::copy(src, &dest).is_ok() {
+                    if dest.exists() || std::fs::copy(src, &dest).is_ok() {
                         let name = file_name.to_string_lossy().to_string();
                         return tauri::http::Response::builder()
                             .status(200)
@@ -168,6 +175,7 @@ fn main() {
                 }
                 return tauri::http::Response::builder()
                     .status(500)
+                    .header("Access-Control-Allow-Origin", "*")
                     .body(b"Copy failed".to_vec())
                     .unwrap();
             }
@@ -203,6 +211,7 @@ fn main() {
                 }
                 return tauri::http::Response::builder()
                     .status(500)
+                    .header("Access-Control-Allow-Origin", "*")
                     .body(b"Download failed".to_vec())
                     .unwrap();
             }
@@ -254,6 +263,7 @@ fn main() {
                     .unwrap(),
                 None => tauri::http::Response::builder()
                     .status(404)
+                    .header("Access-Control-Allow-Origin", "*")
                     .body(b"Not Found".to_vec())
                     .unwrap(),
             }

@@ -42,8 +42,6 @@ var ClipboardHelper = (function() {
     AscCommon.g_oDocumentUrls.getImageUrl = function(strPath) {
       if (strPath && (strPath.indexOf('data:') === 0 || strPath.indexOf('blob:') === 0))
         return strPath;
-      if (strPath && strPath.indexOf('ascdesktop://') === 0)
-        return strPath;
       return origGetImageUrl.call(this, strPath);
     };
     if (AscCommon.sendImgUrls) {
@@ -94,6 +92,10 @@ window._eoLog = function() {
     try { window.top.__TAURI__.core.invoke('js_log', { msg: msg }); } catch(e2) {}
   }
 };
+
+var _isWindows = navigator.platform && navigator.platform.indexOf('Win') !== -1;
+var _isMac = navigator.platform && navigator.platform.indexOf('Mac') === 0;
+var ASC_PROTO_BASE = _isWindows ? 'http://ascdesktop.localhost/' : 'ascdesktop://';
 
 // ── i18n: language detection, UI strings, translation ──
 
@@ -335,11 +337,11 @@ function _loadEditorBin(b64data, fileName) {
     }
 
     if (ref.ew.AscCommon && ref.ew.AscCommon.g_oDocumentUrls) {
-      ref.ew.AscCommon.g_oDocumentUrls.documentUrl = 'ascdesktop://docmedia';
-      window._eoLog('[EO] documentUrl set to ascdesktop://docmedia');
+      ref.ew.AscCommon.g_oDocumentUrls.documentUrl = ASC_PROTO_BASE + 'docmedia';
+      window._eoLog('[EO] documentUrl set to ' + ASC_PROTO_BASE + 'docmedia');
       var origGetImageUrl = ref.ew.AscCommon.g_oDocumentUrls.getImageUrl;
       ref.ew.AscCommon.g_oDocumentUrls.getImageUrl = function(strPath) {
-        if (strPath && strPath.indexOf('ascdesktop://') === 0)
+        if (strPath && strPath.indexOf(ASC_PROTO_BASE) === 0)
           return strPath;
         return origGetImageUrl.call(this, strPath);
       };
@@ -680,7 +682,7 @@ window.AscDesktopEditor = {
     urls.forEach(function(url) {
       try {
         var xhr = new XMLHttpRequest();
-        xhr.open('GET', 'ascdesktop://download-to-media/' + encodeURIComponent(url), false);
+        xhr.open('GET', ASC_PROTO_BASE + 'download-to-media/' + encodeURIComponent(url), false);
         xhr.send(null);
         if (xhr.status === 200 && xhr.responseText) {
           fileMap[url] = xhr.responseText;
@@ -765,11 +767,12 @@ window.AscDesktopEditor = {
   LocalFileGetImageUrl: function(url) {
     if (!url) return url;
     if (url.indexOf('data:') === 0 || url.indexOf('blob:') === 0) return url;
+    if (url.indexOf(ASC_PROTO_BASE) === 0) return url;
     var protocol = (url.indexOf('http://') === 0 || url.indexOf('https://') === 0)
       ? 'download-to-media' : 'copy-to-media';
     try {
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', 'ascdesktop://' + protocol + '/' + encodeURIComponent(url), false);
+      xhr.open('GET', ASC_PROTO_BASE + protocol + '/' + encodeURIComponent(url), false);
       xhr.send(null);
       if (xhr.status === 200 && xhr.responseText) {
           var result = xhr.responseText;
@@ -791,34 +794,93 @@ window.AscDesktopEditor = {
 
   GetOpenedFile: function(data) { return null; },
 
-  Copy: () => document.execCommand('copy'),
-  Paste: async () => {
+  Copy: function() {
+    if (!_isWindows) return;
+    var ref = _getEditor();
+    if (!ref.ew) { window._eoLog('[EO] WARN: Copy - editor context not available'); return; }
+    var cb = ref.ew.AscCommon && ref.ew.AscCommon.g_clipboardBase;
+    if (cb) {
+      if (cb.inputContext && cb.inputContext.HtmlArea) cb.inputContext.HtmlArea.focus();
+      if (cb.CommonDiv_Execute_CopyCut) cb.CommonDiv_Execute_CopyCut();
+    }
     try {
-      var imageFile = await ClipboardHelper.readNativeClipboardImage();
-      if (imageFile) {
-        window._eoLog('[EO] Context menu paste: image ' + imageFile);
+      var ok = ref.ew.document.execCommand('copy');
+      window._eoLog('[EO] Copy: execCommand=' + ok);
+    } catch(e) {
+      window._eoLog('[EO] Copy: execCommand=error ' + (e.message || e));
+    }
+  },
+  Paste: async () => {
+    var platform = _isWindows ? 'win' : _isMac ? 'mac' : 'linux';
+    var order = _isMac ? 'image-first' : 'text-first';
+    window._eoLog('[EO] Paste: start (platform=' + platform + ', order=' + order + ')');
+    var imageFile = null;
+    var text = null;
+    var probeImage = async function() {
+      try {
+        imageFile = await ClipboardHelper.readNativeClipboardImage();
+        window._eoLog('[EO] Paste: image probe -> ' + (imageFile ? 'found (' + imageFile + ')' : 'none'));
+      } catch(e) {
+        window._eoLog('[EO] Paste: image probe -> error ' + (e.message || e));
+      }
+    };
+    var probeText = async function() {
+      try {
+        text = await invoke('read_clipboard_text');
+        window._eoLog('[EO] Paste: text probe -> ' + (text ? 'found (len=' + text.length + ')' : 'none'));
+      } catch(e) {
+        window._eoLog('[EO] Paste: text probe -> error ' + (e.message || e));
+      }
+    };
+    if (_isMac) {
+      await probeImage();
+      if (!imageFile) await probeText();
+    } else {
+      await probeText();
+      if (!text) await probeImage();
+    }
+    if (imageFile && (!text || _isMac)) {
+      try {
         var ref = _getEditor();
         if (ref.editor) {
           ref.editor.AddImageUrl([imageFile]);
+          window._eoLog('[EO] Paste: branch=image -> AddImageUrl ok');
         }
-        return;
+      } catch(e) {
+        window._eoLog('[EO] Paste: branch=image -> error ' + (e.message || e));
       }
-    } catch(e) {}
-    try {
-      var text = await invoke('read_clipboard_text');
-      if (text) {
-        window._eoLog('[EO] Context menu paste: text (' + text.length + ' chars)');
+      return;
+    }
+    if (text) {
+      try {
         var ref = _getEditor();
         if (ref.editor && ref.ew && ref.ew.AscCommon) {
           ref.editor.asc_PasteData(ref.ew.AscCommon.c_oAscClipboardDataFormat.Text, text);
+          window._eoLog('[EO] Paste: branch=text -> asc_PasteData ok');
         }
-        return;
+      } catch(e) {
+        window._eoLog('[EO] Paste: branch=text -> error ' + (e.message || e));
       }
+      return;
+    }
+    window._eoLog('[EO] Paste: branch=none -> empty clipboard');
+  },
+  Cut: function() {
+    if (!_isWindows) return;
+    var ref = _getEditor();
+    if (!ref.ew) { window._eoLog('[EO] WARN: Cut - editor context not available'); return; }
+    var cb = ref.ew.AscCommon && ref.ew.AscCommon.g_clipboardBase;
+    if (cb) {
+      if (cb.inputContext && cb.inputContext.HtmlArea) cb.inputContext.HtmlArea.focus();
+      if (cb.CommonDiv_Execute_CopyCut) cb.CommonDiv_Execute_CopyCut();
+    }
+    try {
+      var ok = ref.ew.document.execCommand('cut');
+      window._eoLog('[EO] Cut: execCommand=' + ok);
     } catch(e) {
-      window._eoLog('[EO] Context menu paste text failed: ' + (e.message || e));
+      window._eoLog('[EO] Cut: execCommand=error ' + (e.message || e));
     }
   },
-  Cut: () => document.execCommand('cut'),
 
   _pendingPrinter: null,
 

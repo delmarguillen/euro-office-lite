@@ -8,6 +8,7 @@ on:
       - 'feat/19-save-as-extension-fix'
       - 'feat/25-add-goback-button'
       - 'feat/29-clipboard-fixes'
+      - 'feat/30-context-toolbar-clipboard'
       - 'hotfix/**'
     paths:
       - 'src/**'
