@@ -42,6 +42,9 @@ fn log_startup(temp_dir: &std::path::Path, msg: &str) {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    let temp_dir = std::path::PathBuf::from("/tmp/euro-office-lite");
+    #[cfg(not(target_os = "macos"))]
     let temp_dir = std::env::temp_dir().join("euro-office-lite");
     std::fs::create_dir_all(&temp_dir).ok();
 
