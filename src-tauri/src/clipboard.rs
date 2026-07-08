@@ -29,7 +29,7 @@ pub fn read_clipboard_image(state: State<'_, AppState>) -> Result<Option<String>
 
     let img = match clipboard.get_image() {
         Ok(img) => img,
-        Err(_) => return Ok(None),
+        Err(_) => return read_clipboard_file_image(&mut clipboard, &state),
     };
 
     let media_dir = state.temp_dir.join("media");
@@ -61,4 +61,48 @@ pub fn read_clipboard_image(state: State<'_, AppState>) -> Result<Option<String>
 
     eprintln!("[clipboard] Saved clipboard image to {:?}", path);
     Ok(Some(filename))
+}
+
+fn read_clipboard_file_image(
+    clipboard: &mut arboard::Clipboard,
+    state: &State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let files = match clipboard.get().file_list() {
+        Ok(f) => f,
+        Err(_) => return Ok(None),
+    };
+
+    const IMAGE_EXTS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "bmp", "svg", "webp", "ico"];
+    let src = files.into_iter().find(|p| {
+        p.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| IMAGE_EXTS.contains(&e.to_lowercase().as_str()))
+            .unwrap_or(false)
+    });
+    let src = match src {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let media_dir = state.temp_dir.join("media");
+    if let Err(e) = std::fs::create_dir_all(&media_dir) {
+        eprintln!("[clipboard] Failed to create media dir: {}", e);
+        return Ok(None);
+    }
+
+    let ext = src.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_else(|| "png".into());
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let dest_name = format!("clipboard_file_{}.{}", timestamp, ext);
+    let dest = media_dir.join(&dest_name);
+
+    if let Err(e) = std::fs::copy(&src, &dest) {
+        eprintln!("[clipboard] Failed to copy clipboard file image: {}", e);
+        return Ok(None);
+    }
+
+    eprintln!("[clipboard] Copied clipboard file-reference image to {:?}", dest);
+    Ok(Some(dest_name))
 }
