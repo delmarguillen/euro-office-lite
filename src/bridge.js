@@ -18,7 +18,7 @@ var ClipboardHelper = (function() {
     uri = uri.trim().split('\n')[0].trim();
     if (!uri) return null;
     var lower = uri.toLowerCase();
-    var imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.tif', '.tiff', '.ico'];
+    var imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.ico'];
     var isImage = false;
     for (var i = 0; i < imageExts.length; i++) {
       if (lower.endsWith(imageExts[i])) { isImage = true; break; }
