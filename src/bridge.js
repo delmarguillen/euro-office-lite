@@ -374,7 +374,7 @@ function _loadEditorBin(b64data, fileName) {
     }
 
     if (editorDoc) {
-      if (isLinux) {
+      if (isLinux || _isMac) {
         editorDoc.addEventListener('keydown', function(e) {
           if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
