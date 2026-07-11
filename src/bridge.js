@@ -374,7 +374,7 @@ function _loadEditorBin(b64data, fileName) {
     }
 
     if (editorDoc) {
-      if (isLinux || _isMac) {
+      if (isLinux) {
         editorDoc.addEventListener('keydown', function(e) {
           if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
@@ -394,12 +394,38 @@ function _loadEditorBin(b64data, fileName) {
         var cd = e.clipboardData;
         if (!cd) return;
         var imagePath = ClipboardHelper.extractImageUriFromPaste(cd);
-        if (!imagePath) return;
-        e.preventDefault();
-        e.stopPropagation();
-        var ref = _getEditor();
-        if (ref.editor) {
-          ref.editor.AddImageUrl([imagePath]);
+        if (imagePath) {
+          e.preventDefault();
+          e.stopPropagation();
+          var ref = _getEditor();
+          if (ref.editor) {
+            ref.editor.AddImageUrl([imagePath]);
+          }
+          return;
+        }
+        // On macOS, WKWebView exposes a Finder-copied file as a File object (not text/uri-list).
+        // preventDefault stops the SDK from also inserting the icon as a duplicate data: URI.
+        if (_isMac && cd.files && cd.files.length > 0) {
+          var hasImageFile = false;
+          for (var i = 0; i < cd.files.length; i++) {
+            if (cd.files[i].type.indexOf('image/') === 0) {
+              hasImageFile = true;
+              break;
+            }
+          }
+          if (hasImageFile) {
+            e.preventDefault();
+            e.stopPropagation();
+            ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
+              if (imageFile) {
+                window._eoLog('[EO] Clipboard image file pasted: ' + imageFile);
+                var ref = _getEditor();
+                if (ref.editor) {
+                  ref.editor.AddImageUrl([imageFile]);
+                }
+              }
+            });
+          }
         }
       }, true);
     }

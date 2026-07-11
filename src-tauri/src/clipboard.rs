@@ -36,14 +36,22 @@ pub fn read_clipboard_image(state: State<'_, AppState>) -> Result<Option<String>
         }
     };
 
+    // Try file_list first: on macOS, get_image() returns the file's icon bitmap,
+    // not the actual image. file_list gives us the real file path.
+    match read_clipboard_file_image(&mut clipboard, &state) {
+        Ok(Some(f)) => return Ok(Some(f)),
+        Ok(None) => clipboard_log(&state, "[clipboard] file_list returned None, trying get_image"),
+        Err(e) => clipboard_log(&state, &format!("[clipboard] file_list error: {}, trying get_image", e)),
+    }
+
     let img = match clipboard.get_image() {
         Ok(img) => {
             clipboard_log(&state, &format!("[clipboard] get_image OK: {}x{}", img.width, img.height));
             img
         }
         Err(e) => {
-            clipboard_log(&state, &format!("[clipboard] get_image failed: {}, trying file_list fallback", e));
-            return read_clipboard_file_image(&mut clipboard, &state);
+            clipboard_log(&state, &format!("[clipboard] get_image failed: {}", e));
+            return Ok(None);
         }
     };
 
