@@ -56,10 +56,10 @@ pub fn list_media_dir(state: tauri::State<'_, AppState>) -> String {
 }
 
 #[tauri::command]
-pub fn js_log(msg: String) {
+pub fn js_log(msg: String, state: tauri::State<'_, AppState>) {
     println!("[JS] {}", msg);
     use std::io::Write;
-    let log_path = std::env::temp_dir().join("euro-office-lite").join("js-debug.log");
+    let log_path = state.temp_dir.join("js-debug.log");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
         let _ = writeln!(f, "{}", msg);
     }
