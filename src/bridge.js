@@ -430,8 +430,6 @@ function _loadEditorBin(b64data, fileName) {
       }, true);
     }
 
-    _installPasteDiagnostics(ref, editorDoc);
-
     invoke('list_media_dir').then(function(r) {
       window._eoLog('[EO] Media dir contents: ' + r);
     }).catch(function(){});
@@ -450,111 +448,6 @@ function _loadEditorBin(b64data, fileName) {
   } catch(e) {
     window._eoLog('[EO] Error loading document:', e.message);
   }
-}
-
-// ── TEMP diagnostics for journal 026 (macOS context-menu paste placeholder) ──
-// Observation only: no preventDefault, no flow changes. Remove after root cause is confirmed.
-function _installPasteDiagnostics(ref, editorDoc) {
-  function dlog(msg) { window._eoLog('[DIAG] ' + msg); }
-  function nn(v) { return (typeof v === 'number' && v !== v) ? 'NaN' : v; }
-
-  function dumpDoc(tag) {
-    try {
-      var api = ref.editor;
-      var led = api.WordControl && api.WordControl.m_oLogicDocument;
-      if (!led) { dlog(tag + ': no LogicDocument'); return; }
-      var dr = led.GetAllDrawingObjects().map(function(d) {
-        var g = d.GraphicObj;
-        var im = g && g.blipFill && g.blipFill.RasterImageId;
-        return { img: im ? im.slice(0, 70) : null, imgLen: im ? im.length : 0,
-                 extentW: nn(d.Extent && d.Extent.W), extentH: nn(d.Extent && d.Extent.H),
-                 extX: nn(g && g.extX), extY: nn(g && g.extY) };
-      });
-      var ca = Object.keys(api.ImageLoader.map_image_index).map(function(k) {
-        var m = api.ImageLoader.map_image_index[k];
-        return { key: k.slice(0, 70), status: m.Status,
-                 w: nn(m.Image && m.Image.width), h: nn(m.Image && m.Image.height),
-                 nw: nn(m.Image && m.Image.naturalWidth), nh: nn(m.Image && m.Image.naturalHeight) };
-      });
-      dlog(tag + ' drawings=' + JSON.stringify(dr));
-      dlog(tag + ' cache=' + JSON.stringify(ca));
-    } catch (e) {
-      dlog(tag + ' dump error: ' + (e.message || e));
-    }
-  }
-
-  // LogicDocument only exists after openDocument, so hook it lazily on first paste
-  function hookLogicDoc() {
-    var led = ref.editor.WordControl && ref.editor.WordControl.m_oLogicDocument;
-    if (!led || led.__eoDiagHooked) return;
-    led.__eoDiagHooked = true;
-
-    var origLock = led.Document_Is_SelectionLocked;
-    led.Document_Is_SelectionLocked = function(checkType) {
-      var r = origLock.apply(this, arguments);
-      if (window.__eoDiagPasteWindow) dlog('SelectionLocked(checkType=' + checkType + ') -> ' + r);
-      return r;
-    };
-
-    var origAdd = led.AddImages;
-    led.AddImages = function(aImages) {
-      try {
-        var api = ref.editor;
-        var cur = this.Content[this.CurPos.ContentPos];
-        var info = (aImages || []).map(function(im) {
-          return { src: im && im.src ? String(im.src).slice(0, 70) : null,
-                   hasImage: !!(im && im.Image),
-                   w: nn(im && im.Image && im.Image.width), h: nn(im && im.Image && im.Image.height),
-                   nw: nn(im && im.Image && im.Image.naturalWidth), nh: nn(im && im.Image && im.Image.naturalHeight) };
-        });
-        dlog('AddImages n=' + (aImages ? aImages.length : 0)
-          + ' selectionUse=' + this.Selection.Use
-          + ' curPos=' + this.CurPos.ContentPos
-          + ' curType=' + (cur && cur.GetType && cur.GetType())
-          + ' focus=' + (api.asc_IsFocus && api.asc_IsFocus())
-          + ' imgs=' + JSON.stringify(info));
-      } catch (e) { dlog('AddImages log error: ' + (e.message || e)); }
-      var r = origAdd.apply(this, arguments);
-      setTimeout(function() { dumpDoc('post-AddImages'); }, 800);
-      return r;
-    };
-    dlog('LogicDocument hooks installed');
-  }
-
-  if (ref.editor && !ref.editor.__eoDiagHooked) {
-    ref.editor.__eoDiagHooked = true;
-    var origAIU = ref.editor.AddImageUrl;
-    ref.editor.AddImageUrl = function(urls) {
-      try {
-        dlog('AddImageUrl urls=' + JSON.stringify(urls)
-          + ' focus=' + (this.asc_IsFocus && this.asc_IsFocus()));
-      } catch (e) {}
-      hookLogicDoc();
-      window.__eoDiagPasteWindow = true;
-      setTimeout(function() { window.__eoDiagPasteWindow = false; }, 5000);
-      return origAIU.apply(this, arguments);
-    };
-  }
-
-  if (editorDoc && !editorDoc.__eoDiagPasteListener) {
-    editorDoc.__eoDiagPasteListener = true;
-    editorDoc.addEventListener('paste', function(e) {
-      try {
-        var cd = e.clipboardData;
-        var types = cd && cd.types ? Array.prototype.slice.call(cd.types) : [];
-        var files = cd && cd.files ? cd.files.length : 0;
-        var items = [];
-        if (cd && cd.items) {
-          for (var i = 0; i < cd.items.length; i++) items.push(cd.items[i].kind + ':' + cd.items[i].type);
-        }
-        dlog('DOM paste event: types=' + JSON.stringify(types) + ' files=' + files
-          + ' items=' + JSON.stringify(items) + ' defaultPrevented=' + e.defaultPrevented);
-      } catch (err) { dlog('DOM paste log error: ' + (err.message || err)); }
-      setTimeout(function() { dumpDoc('post-DOMpaste'); }, 1500);
-    }, true);
-  }
-
-  dlog('Paste diagnostics installed (journal 026)');
 }
 
 function _ensureCoreProps(ref) {
