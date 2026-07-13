@@ -42,6 +42,9 @@ fn log_startup(temp_dir: &std::path::Path, msg: &str) {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    let temp_dir = std::path::PathBuf::from("/tmp/euro-office-lite");
+    #[cfg(not(target_os = "macos"))]
     let temp_dir = std::env::temp_dir().join("euro-office-lite");
     std::fs::create_dir_all(&temp_dir).ok();
 
@@ -141,15 +144,19 @@ fn main() {
                         else if fp.ends_with(".bmp") { "image/bmp" }
                         else if fp.ends_with(".webp") { "image/webp" }
                         else { "application/octet-stream" };
+                    // no-store: x2t names media image1.jpg, image2.jpg... per document, so the
+                    // same URL serves different content across documents (journal 026 follow-up)
                     return tauri::http::Response::builder()
                         .status(200)
                         .header("Content-Type", ct)
+                        .header("Cache-Control", "no-store")
                         .header("Access-Control-Allow-Origin", "*")
                         .body(data)
                         .unwrap();
                 }
                 return tauri::http::Response::builder()
                     .status(404)
+                    .header("Cache-Control", "no-store")
                     .header("Access-Control-Allow-Origin", "*")
                     .body(b"Not Found".to_vec())
                     .unwrap();
@@ -165,9 +172,12 @@ fn main() {
                     let dest = media_dir.join(file_name);
                     if dest.exists() || std::fs::copy(src, &dest).is_ok() {
                         let name = file_name.to_string_lossy().to_string();
+                        // no-store: a cached response would skip the actual copy after media/ is
+                        // cleared on document switch, leaving a dangling reference
                         return tauri::http::Response::builder()
                             .status(200)
                             .header("Content-Type", "text/plain")
+                            .header("Cache-Control", "no-store")
                             .header("Access-Control-Allow-Origin", "*")
                             .body(name.into_bytes())
                             .unwrap();
@@ -175,6 +185,7 @@ fn main() {
                 }
                 return tauri::http::Response::builder()
                     .status(500)
+                    .header("Cache-Control", "no-store")
                     .header("Access-Control-Allow-Origin", "*")
                     .body(b"Copy failed".to_vec())
                     .unwrap();
@@ -203,6 +214,7 @@ fn main() {
                             return tauri::http::Response::builder()
                                 .status(200)
                                 .header("Content-Type", "text/plain")
+                                .header("Cache-Control", "no-store")
                                 .header("Access-Control-Allow-Origin", "*")
                                 .body(full_path.into_bytes())
                                 .unwrap();
@@ -211,6 +223,7 @@ fn main() {
                 }
                 return tauri::http::Response::builder()
                     .status(500)
+                    .header("Cache-Control", "no-store")
                     .header("Access-Control-Allow-Origin", "*")
                     .body(b"Download failed".to_vec())
                     .unwrap();

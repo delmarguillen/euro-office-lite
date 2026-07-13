@@ -9,6 +9,7 @@ on:
       - 'feat/25-add-goback-button'
       - 'feat/29-clipboard-fixes'
       - 'feat/30-context-toolbar-clipboard'
+      - 'feat/31-clipboard-file-paste'
       - 'hotfix/**'
     paths:
       - 'src/**'
