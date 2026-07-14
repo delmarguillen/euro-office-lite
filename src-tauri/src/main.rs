@@ -232,6 +232,18 @@ fn main() {
             let result = if decoded_path.starts_with("abs/") {
                 let abs_path = &decoded_path[4..];
                 std::fs::read(abs_path).ok()
+            } else if decoded_path.ends_with("sdkjs/common/AllFonts.js") {
+                let state = ctx.app_handle().state::<AppState>();
+                let generated = state.temp_dir.join("fontdata").join("AllFonts.js");
+                std::fs::read(&generated).ok().or_else(|| {
+                    let resource_dir = ctx.app_handle().path().resource_dir().unwrap_or_default();
+                    let candidates = [
+                        resource_dir.join(path),
+                        resource_dir.join("../src").join(path),
+                        resource_dir.join("binaries").join(path),
+                    ];
+                    candidates.iter().find_map(|p| std::fs::read(p).ok())
+                })
             } else {
                 let resource_dir = ctx.app_handle().path().resource_dir().unwrap_or_default();
                 let candidates = [

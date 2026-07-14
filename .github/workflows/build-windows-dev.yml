@@ -10,6 +10,7 @@ on:
       - 'feat/29-clipboard-fixes'
       - 'feat/30-context-toolbar-clipboard'
       - 'feat/31-clipboard-file-paste'
+      - 'feat/32-linux-system-fonts'
       - 'hotfix/**'
     paths:
       - 'src/**'
