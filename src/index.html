@@ -79,7 +79,7 @@
     </div>
     <div>
       <h1>Euro-Office Lite</h1>
-      <p class="version">v0.16.3-alpha — Desktop</p>
+      <p class="version">v0.16.4-alpha — Desktop</p>
       <div class="actions">
         <button class="btn" data-type="word">
           <span class="icon">W</span> <span data-i18n="document">Document</span>
@@ -131,6 +131,18 @@
       else { console.log.apply(console, arguments); }
     };
 
+    function _isAbsolutePath(p) {
+      if (!p || p.length < 3) return false;
+      if (p[0] === '/' && p[1] !== '/') return true;
+      if (p[1] === ':' && (p[2] === '/' || p[2] === '\\')) return true;
+      return false;
+    }
+
+    function _normalizeAbsolutePath(p) {
+      // x2t writes Windows extended paths as /?/C:/... in AllFonts.js.
+      return p && /^\/\?\/[A-Za-z]:\//.test(p) ? p.substring(3) : p;
+    }
+
     function _patchLoadFontAsync(win) {
       win.AscFonts.CFontFileLoader.prototype.LoadFontAsync = function(basePath, callback) {
         this.callback = callback;
@@ -139,7 +151,11 @@
         this.Status = 2;
         var xhr = new XMLHttpRequest();
         xhr.fontFile = this;
-        xhr.open('GET', '/fonts/' + this.Id, true);
+        var fontId = _normalizeAbsolutePath(this.Id);
+        var url = _isAbsolutePath(fontId)
+          ? window._eoAscProtoBase + 'abs/' + fontId
+          : '/fonts/' + this.Id;
+        xhr.open('GET', url, true);
         xhr.responseType = 'arraybuffer';
 
         xhr.onload = function() {
@@ -173,7 +189,11 @@
         if (!fontId) continue;
         try {
           var xhr = new XMLHttpRequest();
-          xhr.open('GET', '/fonts/' + fontId, false);
+          var normalizedFontId = _normalizeAbsolutePath(fontId);
+          var furl = _isAbsolutePath(normalizedFontId)
+            ? window._eoAscProtoBase + 'abs/' + normalizedFontId
+            : '/fonts/' + fontId;
+          xhr.open('GET', furl, false);
           xhr.overrideMimeType('text/plain; charset=x-user-defined');
           xhr.send(null);
           if (xhr.status === 200) {
@@ -266,6 +286,229 @@
         gfa.DefaultIndex = gfa.g_fontDictionary.GetFontIndex(oSelect, list, undefined);
 
         win._eoFontSelectionsInjected = true;
+      } catch(e) {}
+    }
+
+    var _systemFontsJs = null;
+    var _systemFontsPromise = null;
+
+    function _prepareSystemFonts() {
+      if (_systemFontsJs) return Promise.resolve(_systemFontsJs);
+      if (_systemFontsPromise) return _systemFontsPromise;
+      _systemFontsPromise = window.__TAURI__.core.invoke('get_system_fonts').then(function(js) {
+        _systemFontsJs = js || '';
+        _log('[EO] get_system_fonts: ' + _systemFontsJs.length + ' bytes');
+        return _systemFontsJs;
+      }).catch(function(e) {
+        _log('[EO] get_system_fonts failed: ' + e.message);
+        return '';
+      });
+      return _systemFontsPromise;
+    }
+
+    function _resetFontSelections(fw) {
+      var gfa = fw.AscFonts && fw.AscFonts.g_fontApplication;
+      var selections = gfa && gfa.g_fontSelections;
+      if (!selections || !fw['g_fonts_selection_bin']) return;
+
+      selections.List = [];
+      selections.ListMap = {};
+      selections.Languages = [];
+      selections.m_pRanges = null;
+      selections.m_pRangesNums = null;
+      selections.IsInit = false;
+      selections.CurrentLoadedObj = null;
+      selections.Init();
+
+      var oSelect = { wsName: 'Arial' };
+      gfa.DefaultIndex = gfa.g_fontDictionary.GetFontIndex(oSelect, selections.List, undefined);
+      // The generated selection binary already includes bundled and system fonts.
+      fw._eoFontSelectionsInjected = true;
+    }
+
+    function _refreshEditorFonts(fw, loader) {
+      if (!loader || !loader.Api || !loader.Api.sync_InitEditorFonts) return;
+
+      // If the UI already consumed the bundled list, reset its collection before
+      // re-emitting the complete list so the original ten entries are not duplicated.
+      var collectionReset = false;
+      var apps = [fw.DE, fw.SSE, fw.PE];
+      for (var ai = 0; ai < apps.length && !collectionReset; ai++) {
+        try {
+          var app = apps[ai];
+          if (!app || !app.getController) continue;
+          var controller = app.getController('Common.Controllers.Fonts') || app.getController('Fonts');
+          var store = controller && controller.getCollection && controller.getCollection('Common.Collections.Fonts');
+          if (store && store.reset) {
+            store.reset();
+            collectionReset = true;
+          }
+        } catch(e) {}
+      }
+
+      // With no collection yet, the normal first LoadDocumentFonts call will emit it.
+      if (!collectionReset) return;
+      var guiFonts = [];
+      for (var i = 0; i < loader.fontInfos.length; i++) {
+        var info = loader.fontInfos[i];
+        if (info.Name !== 'ASCW3') {
+          guiFonts.push(new fw.AscFonts.CFont(info.Name, '', info.Thumbnail));
+        }
+      }
+      loader.Api.sync_InitEditorFonts(guiFonts);
+      _log('[EO] System font UI refreshed: ' + guiFonts.length + ' families');
+    }
+
+    function _installFontThumbnailFallback(fw) {
+      try {
+        var Combo = fw.Common && fw.Common.UI && fw.Common.UI.ComboBoxFonts;
+        if (!Combo || !Combo.prototype || Combo.prototype._eoFontFallbackPatched) return;
+        Combo.prototype._eoFontFallbackPatched = true;
+
+        // Draw thumbnails dark; the editor's CSS filter adapts them to the theme.
+        function drawFontName(combo, fontName, canvas, ctx) {
+          var sprite = combo.spriteThumbs || {};
+          if (!canvas) canvas = fw.document.createElement('canvas');
+          canvas.width = sprite.width || 300;
+          canvas.height = sprite.heightOne || 28;
+          canvas.style.width = '300px';
+          canvas.style.height = '28px';
+          ctx = ctx || canvas.getContext('2d');
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          var scale = canvas.height / 28;
+          ctx.fillStyle = '#333';
+          ctx.textBaseline = 'middle';
+          ctx.font = Math.max(12, Math.round(15 * scale)) + 'px "' +
+            fontName.replace(/["\\]/g, '') + '", sans-serif';
+          ctx.fillText(fontName, Math.round(6 * scale), canvas.height / 2,
+            canvas.width - Math.round(12 * scale));
+          return canvas;
+        }
+
+        var originalLoadSprite = Combo.prototype.loadSprite;
+        Combo.prototype.loadSprite = function(callback) {
+          var combo = this;
+          return originalLoadSprite.call(this, function() {
+            var sprite = combo.spriteThumbs;
+            if (sprite && !sprite._eoFontFallbackPatched) {
+              sprite._eoFontFallbackPatched = true;
+              var originalGetImage = sprite.getImage;
+              sprite.getImage = function(index, canvas, ctx) {
+                var fontName = fw._eoFontThumbnailNames && fw._eoFontThumbnailNames[index];
+                // Every generated thumbnail index belongs to the missing runtime
+                // sprite, including low indexes that overlap the bundled sprite.
+                if (fontName) {
+                  return drawFontName(combo, fontName, canvas, ctx);
+                }
+                return originalGetImage.call(this, index, canvas, ctx);
+              };
+            }
+            callback();
+          });
+        };
+
+        // The generated thumbnail index is not unique (and -1 is shared by many
+        // families), so list rows must use the model's actual name, not an index map.
+        Combo.prototype.updateVisibleFontsTiles = function(e, scrollY) {
+          var combo = this, j = 0, storeCount = combo.store.length;
+          if (!combo.tiles) combo.tiles = [];
+          if (storeCount !== combo.tiles.length) {
+            for (j = combo.tiles.length; j < storeCount; ++j) combo.tiles.unshift(null);
+          }
+          if (typeof scrollY === 'undefined') {
+            scrollY = parseInt(fw.$(combo.el).find('.ps-scrollbar-x-rail').css('bottom'));
+          }
+          var scrollH = fw.$(combo.el).find('.dropdown-menu').height();
+          var itemHeight = combo.getListItemHeight ? combo.getListItemHeight() : 28;
+          var count = Math.max(Math.floor(scrollH / itemHeight) + 3, 0);
+          var from = Math.max(Math.floor(-(scrollY / itemHeight)) - 1, 0);
+          var to = from + count;
+          var listItems = fw.$(combo.el).find('a');
+
+          for (j = 0; j < storeCount; ++j) {
+            if (from <= j && j < to) {
+              if (null === combo.tiles[j]) {
+                var record = combo.store.at(j);
+                var fontName = record && record.get('name');
+                var fontImage = fontName ? drawFontName(combo, fontName) : null;
+                combo.tiles[j] = fontImage;
+                if (fontImage && listItems[j]) listItems[j].appendChild(fontImage);
+              }
+            } else if (combo.tiles[j]) {
+              if (combo.tiles[j].parentNode) combo.tiles[j].parentNode.removeChild(combo.tiles[j]);
+              combo.tiles[j] = null;
+            }
+          }
+        };
+
+        var originalGetImageUri = Combo.prototype.getImageUri;
+        Combo.prototype.getImageUri = function(opts) {
+          if (opts && opts.name && fw._eoSystemFontsInjected) {
+            return drawFontName(this, opts.name).toDataURL();
+          }
+          return originalGetImageUri.call(this, opts);
+        };
+        _log('[EO] Font thumbnail text fallback installed');
+      } catch(e) {
+        _log('[EO] Font thumbnail fallback error: ' + e.message);
+      }
+    }
+
+    function _applySystemFontsToFrame(fw) {
+      if (!_systemFontsJs || !fw || fw._eoSystemFontsInjected ||
+          !fw.AscFonts || !fw.AscFonts.checkAllFonts) return false;
+      try {
+        fw._eoSystemFontsInjected = true;
+        var prevCount = fw.AscFonts.g_font_infos ? fw.AscFonts.g_font_infos.length : 0;
+        new fw.Function(_systemFontsJs)();
+        _log('[EO] AllFonts.js eval ok, __fonts_infos=' +
+          (fw['__fonts_infos'] ? fw['__fonts_infos'].length : 'null'));
+
+        // checkAllFonts is normally called once and does not clear its name map.
+        // A second call must remove stale aliases whose indexes belonged to the
+        // bundled ten-font array.
+        var fontMap = fw.AscFonts.g_map_font_index || {};
+        Object.keys(fontMap).forEach(function(name) { delete fontMap[name]; });
+        fw.AscFonts.checkAllFonts();
+        _patchLoadFontAsync(fw);
+
+        var loader = fw.AscCommon && fw.AscCommon.g_font_loader;
+        if (loader) {
+          loader.fontFiles = fw.AscFonts.g_font_files;
+          loader.fontInfos = fw.AscFonts.g_font_infos;
+          loader.map_font_index = fw.AscFonts.g_map_font_index;
+        }
+        _resetFontSelections(fw);
+
+        fw._eoFontThumbnailNames = {};
+        for (var ti = 0; ti < fw.AscFonts.g_font_infos.length; ti++) {
+          var fontInfo = fw.AscFonts.g_font_infos[ti];
+          fw._eoFontThumbnailNames[fontInfo.Thumbnail] = fontInfo.Name;
+        }
+        _installFontThumbnailFallback(fw);
+        _refreshEditorFonts(fw, loader);
+
+        var newCount = fw.AscFonts.g_font_infos ? fw.AscFonts.g_font_infos.length : 0;
+        _log('[EO] System fonts injected: ' + prevCount + ' -> ' + newCount + ' families');
+        return true;
+      } catch(e) {
+        fw._eoSystemFontsInjected = false;
+        _log('[EO] System fonts inject error: ' + e.message);
+        return false;
+      }
+    }
+
+    async function _loadSystemFonts() {
+      try {
+        var js = await _prepareSystemFonts();
+        if (!js) return;
+        var allFrames = document.querySelectorAll('iframe');
+        for (var fi = 0; fi < allFrames.length; fi++) {
+          try {
+            var fw = allFrames[fi].contentWindow;
+            _applySystemFontsToFrame(fw);
+          } catch(e) {}
+        }
       } catch(e) {}
     }
 
@@ -444,6 +687,8 @@
           var fontsPreloaded = false;
           var fontPatchInterval = setInterval(function() {
             try {
+              _applySystemFontsToFrame(win);
+              _installFontThumbnailFallback(win);
               if (win.AscFonts && win.AscFonts.CFontFileLoader) {
                 if (!fontPatched) {
                   var currentFn = String(win.AscFonts.CFontFileLoader.prototype.LoadFontAsync);
@@ -453,7 +698,9 @@
                   fontPatched = true;
                 }
                 if (!fontsPreloaded && win.AscFonts.g_font_files && win.AscFonts.g_font_files.length > 0) {
-                  _preloadAllFonts(win);
+                  // Preloading the bundled 16 files is cheap; preloading hundreds
+                  // of system fonts synchronously would freeze startup and waste RAM.
+                  if (!win._eoSystemFontsInjected) _preloadAllFonts(win);
                   fontsPreloaded = true;
                 }
                 if (win.AscFonts.g_fontApplication && win.AscFonts.g_fontApplication.g_fontSelections) {
@@ -564,6 +811,9 @@
 
     window._openEditor = openEditor;
     async function openEditor(docType) {
+      // Font generation finishes in Tauri setup. Fetch its result before the
+      // editor iframe is created so injection does not race LoadDocumentFonts.
+      await _prepareSystemFonts();
       if (!window._pendingFileData) {
         try {
           var b64 = await window.__TAURI__.core.invoke('create_new', { docType: docType });
@@ -614,10 +864,11 @@
                 var fw = allFrames[fi].contentWindow;
                 if (!fw || !fw.AscFonts || !fw.AscFonts.CFontFileLoader) continue;
                 _patchLoadFontAsync(fw);
-                _preloadAllFonts(fw);
+                if (!fw._eoSystemFontsInjected) _preloadAllFonts(fw);
                 _injectFontSelections(fw);
               } catch(e) {}
             }
+            _loadSystemFonts();
           },
           onDocumentReady: function() {
             console.log('[EO] Document ready');
