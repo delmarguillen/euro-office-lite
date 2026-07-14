@@ -286,16 +286,19 @@
       try {
         var js = await window.__TAURI__.core.invoke('get_system_fonts');
         if (!js) return;
+        _log('[EO] get_system_fonts: ' + js.length + ' bytes');
         var allFrames = document.querySelectorAll('iframe');
         for (var fi = 0; fi < allFrames.length; fi++) {
           try {
             var fw = allFrames[fi].contentWindow;
             if (!fw || !fw.AscFonts || !fw.AscFonts.checkAllFonts) continue;
-            var fn = new Function(js);
-            fn.call(fw);
+            var prevCount = fw.AscFonts.g_font_infos ? fw.AscFonts.g_font_infos.length : 0;
+            new fw.Function(js)();
+            _log('[EO] AllFonts.js eval ok, __fonts_infos=' + (fw['__fonts_infos'] ? fw['__fonts_infos'].length : 'null'));
             fw.AscFonts.checkAllFonts();
             _patchLoadFontAsync(fw);
-            _log('[EO] System fonts injected: ' + (fw.AscFonts.g_font_infos ? fw.AscFonts.g_font_infos.length : 0) + ' families');
+            var newCount = fw.AscFonts.g_font_infos ? fw.AscFonts.g_font_infos.length : 0;
+            _log('[EO] System fonts injected: ' + prevCount + ' -> ' + newCount + ' families');
           } catch(e) { _log('[EO] System fonts inject error: ' + e.message); }
         }
       } catch(e) { _log('[EO] get_system_fonts failed: ' + e.message); }
