@@ -365,6 +365,7 @@
         if (!Combo || !Combo.prototype || Combo.prototype._eoFontFallbackPatched) return;
         Combo.prototype._eoFontFallbackPatched = true;
 
+        // Draw thumbnails dark; the editor's CSS filter adapts them to the theme.
         function drawFontName(combo, fontName, canvas, ctx) {
           var sprite = combo.spriteThumbs || {};
           if (!canvas) canvas = fw.document.createElement('canvas');
@@ -375,14 +376,7 @@
           ctx = ctx || canvas.getContext('2d');
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           var scale = canvas.height / 28;
-          var element = combo.el && (combo.el.nodeType ? combo.el : combo.el[0]);
-          var bodyStyle = fw.getComputedStyle && fw.document.body ?
-            fw.getComputedStyle(fw.document.body) : null;
-          var themeTextColor = bodyStyle && bodyStyle.getPropertyValue('--text-normal').trim();
-          var isDarkTheme = (fw.uitheme && fw.uitheme.type === 'dark') ||
-            (fw.document.body && fw.document.body.classList.contains('theme-type-dark'));
-          ctx.fillStyle = themeTextColor || (isDarkTheme ? '#f3f3f3' :
-            ((element && fw.getComputedStyle) ? fw.getComputedStyle(element).color : '#333'));
+          ctx.fillStyle = '#333';
           ctx.textBaseline = 'middle';
           ctx.font = Math.max(12, Math.round(15 * scale)) + 'px "' +
             fontName.replace(/["\\]/g, '') + '", sans-serif';
