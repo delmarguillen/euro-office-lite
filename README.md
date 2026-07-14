@@ -1,6 +1,6 @@
 # Euro-Office Lite
 
-Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~99 MB (Windows), ~130-135 MB (macOS), ~135 MB (Linux). No cloud, no telemetry.
+Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~99 MB (Windows), ~129-135 MB (macOS), ~135 MB (Linux). No cloud, no telemetry.
 
 Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 .deb and Flatpak).
 
@@ -11,6 +11,15 @@ Supports Word, Excel, and PowerPoint documents with native file operations and d
   <br><br>
   <a href="https://github.com/delmarguillen/euro-office-lite/releases"><strong>Download the latest release</strong></a>
 </p>
+
+## Known issues
+
+Euro-Office Lite is alpha. A few things you will run into early:
+
+- **Spell check does not work yet** (#6).
+- **No crash recovery.** Closing the window prompts you to save unsaved changes, but if the app crashes or is force-quit mid-edit, that unsaved work is lost. Save often.
+- **Copy and Cut from the right-click menu do nothing on macOS and Linux.** The keyboard shortcuts (Cmd/Ctrl+C and Cmd/Ctrl+X) work on every platform (#17).
+- **Some Linux setups show rendering glitches** such as rough text or a brief gray flash after Ctrl+C in Documents and Slides. The font list and editing itself are not affected, and this is under investigation (#27).
 
 ## Requirements
 
@@ -69,7 +78,7 @@ DMG builds are signed and notarized by Apple: download, open the DMG, drag to Ap
 Install the `.deb` with `apt` so dependencies are resolved automatically:
 
 ```bash
-sudo apt install ./Euro-Office-Lite_0.15.0-alpha_amd64.deb
+sudo apt install ./Euro-Office-Lite_<version>_amd64.deb
 ```
 
 Do **not** use `dpkg -i` directly, since it will not install the required `libwebkit2gtk-4.1-0` dependency.
