@@ -1036,6 +1036,11 @@ window.AscDesktopEditor = {
 
   LoadFontBase64: function(fontId) {
     try {
+      // x2t serializes Windows extended paths as /?/C:/... in AllFonts.js.
+      // Normalize them before routing through the native protocol handler.
+      if (fontId && /^\/\?\/[A-Za-z]:\//.test(fontId)) {
+        fontId = fontId.substring(3);
+      }
       var xhr = new XMLHttpRequest();
       var isAbs = fontId && fontId.length > 2 &&
         ((fontId[0] === '/' && fontId[1] !== '/') || (fontId[1] === ':'));
