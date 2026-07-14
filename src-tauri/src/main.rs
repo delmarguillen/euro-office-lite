@@ -99,6 +99,7 @@ fn main() {
             file_ops::open_pdf_viewer,
             file_ops::convert_for_insert,
             file_ops::write_download_temp,
+            file_ops::get_system_fonts,
             bridge::exec_command,
             bridge::set_window_title,
             bridge::set_document_modified,

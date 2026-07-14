@@ -365,6 +365,12 @@ pub async fn convert_for_insert(
     }))
 }
 
+#[tauri::command]
+pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
+    let path = state.temp_dir.join("fontdata").join("AllFonts.js");
+    std::fs::read_to_string(&path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
+}
+
 fn detect_format(path: &PathBuf) -> i32 {
     match path.extension().and_then(|e| e.to_str()) {
         Some("docx") => 65,

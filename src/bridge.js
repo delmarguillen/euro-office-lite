@@ -96,6 +96,7 @@ window._eoLog = function() {
 var _isWindows = navigator.platform && navigator.platform.indexOf('Win') !== -1;
 var _isMac = navigator.platform && navigator.platform.indexOf('Mac') === 0;
 var ASC_PROTO_BASE = _isWindows ? 'http://ascdesktop.localhost/' : 'ascdesktop://';
+window._eoAscProtoBase = ASC_PROTO_BASE;
 
 // ── i18n: language detection, UI strings, translation ──
 
@@ -1036,7 +1037,10 @@ window.AscDesktopEditor = {
   LoadFontBase64: function(fontId) {
     try {
       var xhr = new XMLHttpRequest();
-      xhr.open('GET', '/fonts/' + fontId, false);
+      var isAbs = fontId && fontId.length > 2 &&
+        ((fontId[0] === '/' && fontId[1] !== '/') || (fontId[1] === ':'));
+      var url = isAbs ? ASC_PROTO_BASE + 'abs/' + fontId : '/fonts/' + fontId;
+      xhr.open('GET', url, false);
       xhr.responseType = 'arraybuffer';
       xhr.send(null);
       if (xhr.status === 200) {

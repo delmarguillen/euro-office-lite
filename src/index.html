@@ -131,6 +131,13 @@
       else { console.log.apply(console, arguments); }
     };
 
+    function _isAbsolutePath(p) {
+      if (!p || p.length < 3) return false;
+      if (p[0] === '/' && p[1] !== '/') return true;
+      if (p[1] === ':' && (p[2] === '/' || p[2] === '\\')) return true;
+      return false;
+    }
+
     function _patchLoadFontAsync(win) {
       win.AscFonts.CFontFileLoader.prototype.LoadFontAsync = function(basePath, callback) {
         this.callback = callback;
@@ -139,7 +146,10 @@
         this.Status = 2;
         var xhr = new XMLHttpRequest();
         xhr.fontFile = this;
-        xhr.open('GET', '/fonts/' + this.Id, true);
+        var url = _isAbsolutePath(this.Id)
+          ? window._eoAscProtoBase + 'abs/' + this.Id
+          : '/fonts/' + this.Id;
+        xhr.open('GET', url, true);
         xhr.responseType = 'arraybuffer';
 
         xhr.onload = function() {
@@ -173,7 +183,10 @@
         if (!fontId) continue;
         try {
           var xhr = new XMLHttpRequest();
-          xhr.open('GET', '/fonts/' + fontId, false);
+          var furl = _isAbsolutePath(fontId)
+            ? window._eoAscProtoBase + 'abs/' + fontId
+            : '/fonts/' + fontId;
+          xhr.open('GET', furl, false);
           xhr.overrideMimeType('text/plain; charset=x-user-defined');
           xhr.send(null);
           if (xhr.status === 200) {
@@ -267,6 +280,25 @@
 
         win._eoFontSelectionsInjected = true;
       } catch(e) {}
+    }
+
+    async function _loadSystemFonts() {
+      try {
+        var js = await window.__TAURI__.core.invoke('get_system_fonts');
+        if (!js) return;
+        var allFrames = document.querySelectorAll('iframe');
+        for (var fi = 0; fi < allFrames.length; fi++) {
+          try {
+            var fw = allFrames[fi].contentWindow;
+            if (!fw || !fw.AscFonts || !fw.AscFonts.checkAllFonts) continue;
+            var fn = new Function(js);
+            fn.call(fw);
+            fw.AscFonts.checkAllFonts();
+            _patchLoadFontAsync(fw);
+            _log('[EO] System fonts injected: ' + (fw.AscFonts.g_font_infos ? fw.AscFonts.g_font_infos.length : 0) + ' families');
+          } catch(e) { _log('[EO] System fonts inject error: ' + e.message); }
+        }
+      } catch(e) { _log('[EO] get_system_fonts failed: ' + e.message); }
     }
 
     function injectBridgeDeep(win) {
@@ -618,6 +650,7 @@
                 _injectFontSelections(fw);
               } catch(e) {}
             }
+            _loadSystemFonts();
           },
           onDocumentReady: function() {
             console.log('[EO] Document ready');
