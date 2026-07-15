@@ -133,8 +133,8 @@ pub async fn save_file_as(
 
     if format_to != 513 {
         *state.current_file.lock().unwrap() = Some(dest);
+        *state.modified.lock().unwrap() = false;
     }
-    *state.modified.lock().unwrap() = false;
     Ok("ok".to_string())
 }
 

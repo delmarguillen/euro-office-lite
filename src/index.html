@@ -638,36 +638,41 @@
                       lm.leftMenu.showMenu = function(tag) {
                         window._eoLog('[EO] Print: showMenu tag=' + tag);
                         if (tag === 'file:printpreview') {
-                          window._eoLog('[EO] Print: print preview opened, fetching printers via plugin...');
-                          window.__TAURI__.core.invoke('plugin:printer|get_printers').then(function(rawJson) {
-                            window._eoLog('[EO] Print: plugin printers raw=' + String(rawJson).substring(0, 300));
-                            try {
-                              var pluginPrinters = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
-                              if (!Array.isArray(pluginPrinters)) pluginPrinters = [pluginPrinters];
-                              var defaultPrinter = null;
-                              var printers = [];
-                              for (var pi = 0; pi < pluginPrinters.length; pi++) {
-                                var pp = pluginPrinters[pi];
-                                var pName = pp.Name || pp.name || pp.id || ('Printer ' + pi);
-                                printers.push({
-                                  name: pName,
-                                  color_supported: pp.ColorSupported || pp.color_supported || false,
-                                  duplex_supported: pp.DuplexSupported || pp.duplex_supported || false
-                                });
-                                if (pp.IsDefault || pp.is_default) defaultPrinter = pName;
+                          var isWindows = navigator.platform && navigator.platform.indexOf('Win') !== -1;
+                          if (isWindows) {
+                            window._eoLog('[EO] Print: print preview opened, fetching printers via plugin...');
+                            window.__TAURI__.core.invoke('plugin:printer|get_printers').then(function(rawJson) {
+                              window._eoLog('[EO] Print: plugin printers raw=' + String(rawJson).substring(0, 300));
+                              try {
+                                var pluginPrinters = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
+                                if (!Array.isArray(pluginPrinters)) pluginPrinters = [pluginPrinters];
+                                var defaultPrinter = null;
+                                var printers = [];
+                                for (var pi = 0; pi < pluginPrinters.length; pi++) {
+                                  var pp = pluginPrinters[pi];
+                                  var pName = pp.Name || pp.name || pp.id || ('Printer ' + pi);
+                                  printers.push({
+                                    name: pName,
+                                    color_supported: pp.ColorSupported || pp.color_supported || false,
+                                    duplex_supported: pp.DuplexSupported || pp.duplex_supported || false
+                                  });
+                                  if (pp.IsDefault || pp.is_default) defaultPrinter = pName;
+                                }
+                                if (!defaultPrinter && printers.length > 0) defaultPrinter = printers[0].name;
+                                var configJson = JSON.stringify({ printers: printers, current_printer: defaultPrinter });
+                                window._eoLog('[EO] Print: sending printer:config with ' + printers.length + ' printers, default=' + defaultPrinter);
+                                if (win.on_native_message) {
+                                  win.on_native_message('printer:config', configJson);
+                                }
+                              } catch(pe) {
+                                window._eoLog('[EO] Print: error parsing plugin printers: ' + pe);
                               }
-                              if (!defaultPrinter && printers.length > 0) defaultPrinter = printers[0].name;
-                              var configJson = JSON.stringify({ printers: printers, current_printer: defaultPrinter });
-                              window._eoLog('[EO] Print: sending printer:config with ' + printers.length + ' printers, default=' + defaultPrinter);
-                              if (win.on_native_message) {
-                                win.on_native_message('printer:config', configJson);
-                              }
-                            } catch(pe) {
-                              window._eoLog('[EO] Print: error parsing plugin printers: ' + pe);
-                            }
-                          }).catch(function(err) {
-                            window._eoLog('[EO] Print: plugin get_printers error: ' + err);
-                          });
+                            }).catch(function(err) {
+                              window._eoLog('[EO] Print: plugin get_printers error: ' + err);
+                            });
+                          } else {
+                            window._eoLog('[EO] Print: native printer plugin unavailable; using PDF viewer fallback');
+                          }
                         }
                         return origShowMenu.apply(this, arguments);
                       };

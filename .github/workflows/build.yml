@@ -620,14 +620,50 @@ jobs:
           echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
           echo "::endgroup::"
 
-          echo "::group::Generate sdk-word-bundle.js"
-          chmod +x scripts/generate-sdk-bundle.sh
-          bash scripts/generate-sdk-bundle.sh
+          echo "::group::Compile sdkjs for DoctRenderer"
+          SDKJS_UI_REF=$(git -C src/sdkjs rev-parse HEAD)
+          DOCTRENDERER_STAGING="$RUNNER_TEMP/doctrenderer-sdkjs"
+          restore_sdkjs() {
+            git -C src/sdkjs checkout --detach "$SDKJS_UI_REF"
+          }
+          trap restore_sdkjs EXIT
+
+          rm -f src-tauri/binaries/sdk-all-min.js \
+            src-tauri/binaries/sdk-all.js \
+            src-tauri/binaries/sdk-word-bundle.js
+          rm -rf "$DOCTRENDERER_STAGING"
+
+          git -C src/sdkjs fetch origin tag v8.2.0.147 --no-tags
+          git -C src/sdkjs checkout --detach v8.2.0.147
+          cd src/sdkjs/build
+          npm ci
+          npx grunt compile-word --desktop=true --level=SIMPLE --no-color
+          cd "$GITHUB_WORKSPACE"
+
+          for bundle in sdk-all-min.js sdk-all.js; do
+            source="src/sdkjs/deploy/sdkjs/word/$bundle"
+            if [ ! -s "$source" ]; then
+              echo "ERROR: Missing compiled DoctRenderer bundle: $source"
+              exit 1
+            fi
+            cp "$source" "src-tauri/binaries/$bundle"
+            echo "$bundle: $(wc -c < "$source") bytes"
+          done
+
+          mkdir -p "$DOCTRENDERER_STAGING/common/Native"
+          mkdir -p "$DOCTRENDERER_STAGING/common/libfont/engine"
+          cp src/sdkjs/common/Native/native.js "$DOCTRENDERER_STAGING/common/Native/"
+          cp src/sdkjs/common/Native/jquery_native.js "$DOCTRENDERER_STAGING/common/Native/"
+          cp src/sdkjs/common/AllFonts.js "$DOCTRENDERER_STAGING/common/"
+          cp src/sdkjs/common/libfont/engine/fonts_native.js "$DOCTRENDERER_STAGING/common/libfont/engine/"
+
+          restore_sdkjs
+          trap - EXIT
           echo "::endgroup::"
 
           echo "::group::Create DoctRenderer directory structure"
           chmod +x scripts/prepare-doctrenderer.sh
-          bash scripts/prepare-doctrenderer.sh
+          DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
           echo "::endgroup::"
 
       - name: Stage frontend distribution
@@ -644,6 +680,29 @@ jobs:
             --target ${{ matrix.target }} \
             --config '{"bundle":{"targets":["deb"],"icon":["icons/icon.png","icons/128x128.png","icons/128x128@2x.png","icons/32x32.png","icons/256x256.png"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
             2>&1 | tee /tmp/tauri-build.log
+
+      - name: Verify packaged Linux PDF conversion
+        run: |
+          DEB=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/deb" -maxdepth 1 -name '*.deb' -print -quit)
+          if [ -z "$DEB" ]; then
+            echo "ERROR: No .deb found for PDF smoke test"
+            exit 1
+          fi
+
+          EXTRACTED="$RUNNER_TEMP/euro-office-lite-deb"
+          rm -rf "$EXTRACTED"
+          mkdir -p "$EXTRACTED"
+          dpkg-deb -x "$DEB" "$EXTRACTED"
+
+          SDK_BUNDLE=$(find "$EXTRACTED" -path '*/editors/sdkjs/word/sdk-all-min.js' -print -quit)
+          if [ -z "$SDK_BUNDLE" ]; then
+            echo "ERROR: sdk-all-min.js not found in packaged .deb"
+            exit 1
+          fi
+          APP_ROOT=${SDK_BUNDLE%/editors/sdkjs/word/sdk-all-min.js}
+
+          chmod +x scripts/smoke-test-linux-pdf-bundle.sh
+          bash scripts/smoke-test-linux-pdf-bundle.sh "$APP_ROOT"
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

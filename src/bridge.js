@@ -589,11 +589,6 @@ window.AscDesktopEditor = {
 
   LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
     var isSaveAs = param && param.indexOf('saveas=true') !== -1;
-
-    if (isSaveAs && fileType === 513 && !window.AscDesktopEditor._isPrinting) {
-      window.AscDesktopEditor.Print();
-      return;
-    }
     if (window.AscDesktopEditor._isPrinting) return;
 
     var ref = _getEditor();
@@ -620,20 +615,29 @@ window.AscDesktopEditor = {
 
       if (isSaveAs) {
         var docType = window.AscDesktopEditor._currentDocType || 'word';
+        var formatExtensions = {
+          65: 'docx', 66: 'doc', 67: 'odt', 68: 'rtf', 69: 'txt',
+          129: 'pptx', 130: 'ppt', 131: 'odp',
+          257: 'xlsx', 258: 'xls', 259: 'ods', 260: 'csv',
+          513: 'pdf'
+        };
+        var requestedExt = formatExtensions[fileType] || null;
 
         var filters;
-        if (docType === 'cell') {
+        if (requestedExt) {
+          filters = [
+            { name: requestedExt === 'pdf' ? 'PDF' : requestedExt.toUpperCase(), extensions: [requestedExt] }
+          ];
+        } else if (docType === 'cell') {
           filters = [
             { name: 'Excel', extensions: ['xlsx'] },
             { name: 'OpenDocument Spreadsheet', extensions: ['ods'] },
             { name: 'CSV', extensions: ['csv'] },
-            { name: 'PDF', extensions: ['pdf'] },
           ];
         } else if (docType === 'slide') {
           filters = [
             { name: 'PowerPoint', extensions: ['pptx'] },
             { name: 'OpenDocument Presentation', extensions: ['odp'] },
-            { name: 'PDF', extensions: ['pdf'] },
           ];
         } else {
           filters = [
@@ -641,7 +645,6 @@ window.AscDesktopEditor = {
             { name: 'OpenDocument Text', extensions: ['odt'] },
             { name: 'Rich Text', extensions: ['rtf'] },
             { name: _t('plainText'), extensions: ['txt'] },
-            { name: 'PDF', extensions: ['pdf'] },
           ];
         }
         var dialog = window.__TAURI__.dialog;
@@ -651,23 +654,26 @@ window.AscDesktopEditor = {
           var knownExts = ['docx','doc','odt','rtf','txt','xlsx','xls','ods','csv','pptx','ppt','odp','pdf'];
           var pathExt = savePath.split('.').pop().toLowerCase();
           if (savePath.indexOf('.') === -1 || knownExts.indexOf(pathExt) === -1) {
-            savePath += '.' + filters[0].extensions[0];
+            savePath += '.' + (requestedExt || filters[0].extensions[0]);
+            pathExt = requestedExt || filters[0].extensions[0];
           }
           try {
             await invoke('save_file_as', { path: savePath });
             var savedName = savePath.replace(/\\/g, '/').split('/').pop();
-            invoke('set_window_title', { name: savedName }).catch(function(){});
-            try {
-              var frames = document.querySelectorAll('iframe');
-              for (var fi = 0; fi < frames.length; fi++) {
-                try {
-                  var titleInput = frames[fi].contentDocument.querySelector('#title-doc-name');
-                  if (titleInput) titleInput.value = savedName;
-                  var ribInput = frames[fi].contentDocument.querySelector('#rib-doc-name');
-                  if (ribInput) ribInput.value = savedName;
-                } catch(te) {}
-              }
-            } catch(te) {}
+            if (pathExt !== 'pdf') {
+              invoke('set_window_title', { name: savedName }).catch(function(){});
+              try {
+                var frames = document.querySelectorAll('iframe');
+                for (var fi = 0; fi < frames.length; fi++) {
+                  try {
+                    var titleInput = frames[fi].contentDocument.querySelector('#title-doc-name');
+                    if (titleInput) titleInput.value = savedName;
+                    var ribInput = frames[fi].contentDocument.querySelector('#rib-doc-name');
+                    if (ribInput) ribInput.value = savedName;
+                  } catch(te) {}
+                }
+              } catch(te) {}
+            }
           } catch(saveErr) {
             window._eoLog('[EO] SaveAs failed: ' + saveErr);
             await window.__TAURI__.dialog.message(

@@ -4,7 +4,8 @@
 #   ../editors/sdkjs/common/Native/native.js
 #   ../editors/sdkjs/common/Native/jquery_native.js
 #   ../editors/web-apps/vendor/xregexp/xregexp-all-min.js
-#   ../editors/sdkjs/word/sdk-all-min.js  (or sdk-all.js)
+#   ../editors/sdkjs/word/sdk-all-min.js
+#   ../editors/sdkjs/word/sdk-all.js
 #   ../editors/sdkjs/common/libfont/engine/fonts_native.js
 #   ../editors/sdkjs/common/AllFonts.js
 set -euo pipefail
@@ -37,21 +38,17 @@ fi
 
 cp "$WEBAPPS/vendor/xregexp/xregexp-all-min.js" "$EDITORS/web-apps/vendor/xregexp/"
 
-if [ -f "$BINARIES/sdk-all-min.js" ]; then
-    cp "$BINARIES/sdk-all-min.js" "$EDITORS/sdkjs/word/sdk-all-min.js"
-    echo "Using compiled sdk-all-min.js"
-elif [ -f "$BINARIES/sdk-word-bundle.js" ]; then
-    cp "$BINARIES/sdk-word-bundle.js" "$EDITORS/sdkjs/word/sdk-all-min.js"
-    echo "WARNING: Using concatenated sdk-word-bundle.js (not compiled)"
-else
-    echo "ERROR: No SDK bundle found (sdk-all-min.js or sdk-word-bundle.js)"
-    exit 1
-fi
+for bundle in sdk-all-min.js sdk-all.js; do
+    if [ ! -s "$BINARIES/$bundle" ]; then
+        echo "ERROR: Missing compiled DoctRenderer bundle: $BINARIES/$bundle"
+        echo "DoctRenderer requires both Closure-compiled chunks; concatenated bundles are unsupported."
+        exit 1
+    fi
+done
 
-if [ -f "$BINARIES/sdk-all.js" ]; then
-    cp "$BINARIES/sdk-all.js" "$EDITORS/sdkjs/word/sdk-all.js"
-    echo "Copied sdk-all.js"
-fi
+cp "$BINARIES/sdk-all-min.js" "$EDITORS/sdkjs/word/sdk-all-min.js"
+cp "$BINARIES/sdk-all.js" "$EDITORS/sdkjs/word/sdk-all.js"
+echo "Copied compiled DoctRenderer bundles"
 
 echo "DoctRenderer structure created:"
 find "$EDITORS" -type f | while read -r f; do
