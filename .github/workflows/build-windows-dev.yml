@@ -11,6 +11,7 @@ on:
       - 'feat/30-context-toolbar-clipboard'
       - 'feat/31-clipboard-file-paste'
       - 'feat/32-linux-system-fonts'
+      - 'feat/33-fix-linux-pdf-release'
       - 'hotfix/**'
     paths:
       - 'src/**'
