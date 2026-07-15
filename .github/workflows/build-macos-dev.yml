@@ -196,14 +196,50 @@ jobs:
           echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
           echo "::endgroup::"
 
-          echo "::group::Generate sdk-word-bundle.js"
-          chmod +x scripts/generate-sdk-bundle.sh
-          bash scripts/generate-sdk-bundle.sh
+          echo "::group::Compile sdkjs for DoctRenderer"
+          SDKJS_UI_REF=$(git -C src/sdkjs rev-parse HEAD)
+          DOCTRENDERER_STAGING="$RUNNER_TEMP/doctrenderer-sdkjs"
+          restore_sdkjs() {
+            git -C src/sdkjs checkout --detach "$SDKJS_UI_REF"
+          }
+          trap restore_sdkjs EXIT
+
+          rm -f src-tauri/binaries/sdk-all-min.js \
+            src-tauri/binaries/sdk-all.js \
+            src-tauri/binaries/sdk-word-bundle.js
+          rm -rf "$DOCTRENDERER_STAGING"
+
+          git -C src/sdkjs fetch origin tag v8.2.0.147 --no-tags
+          git -C src/sdkjs checkout --detach v8.2.0.147
+          cd src/sdkjs/build
+          npm ci
+          npx grunt compile-word --desktop=true --level=SIMPLE --no-color
+          cd "$GITHUB_WORKSPACE"
+
+          for bundle in sdk-all-min.js sdk-all.js; do
+            source="src/sdkjs/deploy/sdkjs/word/$bundle"
+            if [ ! -s "$source" ]; then
+              echo "ERROR: Missing compiled DoctRenderer bundle: $source"
+              exit 1
+            fi
+            cp "$source" "src-tauri/binaries/$bundle"
+            echo "$bundle: $(wc -c < "$source") bytes"
+          done
+
+          mkdir -p "$DOCTRENDERER_STAGING/common/Native"
+          mkdir -p "$DOCTRENDERER_STAGING/common/libfont/engine"
+          cp src/sdkjs/common/Native/native.js "$DOCTRENDERER_STAGING/common/Native/"
+          cp src/sdkjs/common/Native/jquery_native.js "$DOCTRENDERER_STAGING/common/Native/"
+          cp src/sdkjs/common/AllFonts.js "$DOCTRENDERER_STAGING/common/"
+          cp src/sdkjs/common/libfont/engine/fonts_native.js "$DOCTRENDERER_STAGING/common/libfont/engine/"
+
+          restore_sdkjs
+          trap - EXIT
           echo "::endgroup::"
 
           echo "::group::Create DoctRenderer directory structure"
           chmod +x scripts/prepare-doctrenderer.sh
-          bash scripts/prepare-doctrenderer.sh
+          DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
           echo "::endgroup::"
 
       - name: Build Tauri app
