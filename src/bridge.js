@@ -633,11 +633,13 @@ window.AscDesktopEditor = {
             { name: 'Excel', extensions: ['xlsx'] },
             { name: 'OpenDocument Spreadsheet', extensions: ['ods'] },
             { name: 'CSV', extensions: ['csv'] },
+            { name: 'PDF', extensions: ['pdf'] },
           ];
         } else if (docType === 'slide') {
           filters = [
             { name: 'PowerPoint', extensions: ['pptx'] },
             { name: 'OpenDocument Presentation', extensions: ['odp'] },
+            { name: 'PDF', extensions: ['pdf'] },
           ];
         } else {
           filters = [
@@ -645,6 +647,7 @@ window.AscDesktopEditor = {
             { name: 'OpenDocument Text', extensions: ['odt'] },
             { name: 'Rich Text', extensions: ['rtf'] },
             { name: _t('plainText'), extensions: ['txt'] },
+            { name: 'PDF', extensions: ['pdf'] },
           ];
         }
         var dialog = window.__TAURI__.dialog;
