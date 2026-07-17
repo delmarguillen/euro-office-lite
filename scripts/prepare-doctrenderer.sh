@@ -6,6 +6,8 @@
 #   ../editors/web-apps/vendor/xregexp/xregexp-all-min.js
 #   ../editors/sdkjs/word/sdk-all-min.js
 #   ../editors/sdkjs/word/sdk-all.js
+#   ../editors/sdkjs/cell/sdk-all-min.js + sdk-all.js
+#   ../editors/sdkjs/slide/sdk-all-min.js + sdk-all.js
 #   ../editors/sdkjs/common/libfont/engine/fonts_native.js
 #   ../editors/sdkjs/common/AllFonts.js
 set -euo pipefail
@@ -22,7 +24,9 @@ echo "=== prepare-doctrenderer.sh ==="
 rm -rf "$EDITORS"
 mkdir -p "$EDITORS/sdkjs/common/Native"
 mkdir -p "$EDITORS/sdkjs/common/libfont/engine"
-mkdir -p "$EDITORS/sdkjs/word"
+for module in word cell slide; do
+    mkdir -p "$EDITORS/sdkjs/$module"
+done
 mkdir -p "$EDITORS/web-apps/vendor/xregexp"
 
 cp "$SDKJS/common/Native/native.js" "$EDITORS/sdkjs/common/Native/"
@@ -38,17 +42,21 @@ fi
 
 cp "$WEBAPPS/vendor/xregexp/xregexp-all-min.js" "$EDITORS/web-apps/vendor/xregexp/"
 
-for bundle in sdk-all-min.js sdk-all.js; do
-    if [ ! -s "$BINARIES/$bundle" ]; then
-        echo "ERROR: Missing compiled DoctRenderer bundle: $BINARIES/$bundle"
-        echo "DoctRenderer requires both Closure-compiled chunks; concatenated bundles are unsupported."
-        exit 1
-    fi
+for module in word cell slide; do
+    for bundle in sdk-all-min.js sdk-all.js; do
+        source="$SDKJS/$module/$bundle"
+        if [ ! -s "$source" ] && [ "$module" = "word" ] && [ -s "$BINARIES/$bundle" ]; then
+            source="$BINARIES/$bundle"
+        fi
+        if [ ! -s "$source" ]; then
+            echo "ERROR: Missing compiled DoctRenderer bundle: $SDKJS/$module/$bundle"
+            echo "DoctRenderer requires both Closure-compiled chunks for Word, Cell and Slide."
+            exit 1
+        fi
+        cp "$source" "$EDITORS/sdkjs/$module/$bundle"
+        echo "Copied $module/$bundle ($(wc -c < "$source") bytes)"
+    done
 done
-
-cp "$BINARIES/sdk-all-min.js" "$EDITORS/sdkjs/word/sdk-all-min.js"
-cp "$BINARIES/sdk-all.js" "$EDITORS/sdkjs/word/sdk-all.js"
-echo "Copied compiled DoctRenderer bundles"
 
 echo "DoctRenderer structure created:"
 find "$EDITORS" -type f | while read -r f; do

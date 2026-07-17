@@ -6,7 +6,11 @@ set -euo pipefail
 APP_ROOT="${1:?Usage: smoke-test-linux-pdf-bundle.sh <packaged-app-root>}"
 BINARIES="$APP_ROOT/binaries"
 EDITORS="$APP_ROOT/editors"
-TEMPLATE="$APP_ROOT/templates/blank.docx"
+TEMPLATES=(
+    "$APP_ROOT/templates/blank.docx"
+    "$APP_ROOT/templates/blank.xlsx"
+    "$APP_ROOT/templates/blank.pptx"
+)
 
 required=(
     "$BINARIES/x2t"
@@ -16,8 +20,12 @@ required=(
     "$EDITORS/sdkjs/common/libfont/engine/fonts_native.js"
     "$EDITORS/sdkjs/word/sdk-all-min.js"
     "$EDITORS/sdkjs/word/sdk-all.js"
+    "$EDITORS/sdkjs/cell/sdk-all-min.js"
+    "$EDITORS/sdkjs/cell/sdk-all.js"
+    "$EDITORS/sdkjs/slide/sdk-all-min.js"
+    "$EDITORS/sdkjs/slide/sdk-all.js"
     "$EDITORS/web-apps/vendor/xregexp/xregexp-all-min.js"
-    "$TEMPLATE"
+    "${TEMPLATES[@]}"
 )
 
 for path in "${required[@]}"; do
@@ -37,6 +45,8 @@ mkdir -p \
     "$WORK_EDITORS/sdkjs/common/Native" \
     "$WORK_EDITORS/sdkjs/common/libfont/engine" \
     "$WORK_EDITORS/sdkjs/word" \
+    "$WORK_EDITORS/sdkjs/cell" \
+    "$WORK_EDITORS/sdkjs/slide" \
     "$WORK_EDITORS/web-apps/vendor/xregexp" \
     "$WORK_DIR/dictionaries" \
     "$WORK_DIR/tmp"
@@ -73,6 +83,16 @@ cat > "$WORK_BINARIES/DoctRenderer.config" <<'CONFIG'
 <file>../editors/sdkjs/common/libfont/engine/fonts_native.js</file>
 <file>../editors/sdkjs/word/sdk-all.js</file>
 </DoctSdk>
+<PpttSdk>
+<file>../editors/sdkjs/slide/sdk-all-min.js</file>
+<file>../editors/sdkjs/common/libfont/engine/fonts_native.js</file>
+<file>../editors/sdkjs/slide/sdk-all.js</file>
+</PpttSdk>
+<XlstSdk>
+<file>../editors/sdkjs/cell/sdk-all-min.js</file>
+<file>../editors/sdkjs/common/libfont/engine/fonts_native.js</file>
+<file>../editors/sdkjs/cell/sdk-all.js</file>
+</XlstSdk>
 </Settings>
 CONFIG
 
@@ -82,15 +102,24 @@ for relative in \
     sdkjs/common/libfont/engine/fonts_native.js \
     sdkjs/word/sdk-all-min.js \
     sdkjs/word/sdk-all.js \
+    sdkjs/cell/sdk-all-min.js \
+    sdkjs/cell/sdk-all.js \
+    sdkjs/slide/sdk-all-min.js \
+    sdkjs/slide/sdk-all.js \
     web-apps/vendor/xregexp/xregexp-all-min.js; do
     ln -s "$EDITORS/$relative" "$WORK_EDITORS/$relative"
 done
 
-cat > "$WORK_DIR/pdf.xml" <<PARAMS
+for template in "${TEMPLATES[@]}"; do
+    extension="${template##*.}"
+    output="$WORK_DIR/output-$extension.pdf"
+    params="$WORK_DIR/pdf-$extension.xml"
+
+    cat > "$params" <<PARAMS
 <?xml version="1.0" encoding="utf-8"?>
 <TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-<m_sFileFrom>$TEMPLATE</m_sFileFrom>
-<m_sFileTo>$WORK_DIR/output.pdf</m_sFileTo>
+<m_sFileFrom>$template</m_sFileFrom>
+<m_sFileTo>$output</m_sFileTo>
 <m_nFormatTo>513</m_nFormatTo>
 <m_bEmbeddedFonts>true</m_bEmbeddedFonts>
 <m_sFontDir>$BINARIES/fonts</m_sFontDir>
@@ -99,15 +128,16 @@ cat > "$WORK_DIR/pdf.xml" <<PARAMS
 </TaskQueueDataConvert>
 PARAMS
 
-echo "Running packaged DoctRenderer PDF smoke test..."
-(
-    cd "$WORK_BINARIES"
-    LD_LIBRARY_PATH="$WORK_BINARIES:$BINARIES" ./x2t "$WORK_DIR/pdf.xml"
-)
+    echo "Running packaged DoctRenderer PDF smoke test for $extension..."
+    (
+        cd "$WORK_BINARIES"
+        LD_LIBRARY_PATH="$WORK_BINARIES:$BINARIES" ./x2t "$params"
+    )
 
-if [ ! -s "$WORK_DIR/output.pdf" ]; then
-    echo "ERROR: x2t exited successfully but did not produce a PDF"
-    exit 1
-fi
+    if [ ! -s "$output" ]; then
+        echo "ERROR: x2t exited successfully but did not produce a PDF for $extension"
+        exit 1
+    fi
 
-echo "PDF smoke test passed ($(wc -c < "$WORK_DIR/output.pdf") bytes)"
+    echo "PDF smoke test passed for $extension ($(wc -c < "$output") bytes)"
+done

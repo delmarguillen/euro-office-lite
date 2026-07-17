@@ -591,12 +591,21 @@ window.AscDesktopEditor = {
     var isSaveAs = param && param.indexOf('saveas=true') !== -1;
     if (window.AscDesktopEditor._isPrinting) return;
 
+    var docType = window.AscDesktopEditor._currentDocType || 'word';
+    window._eoLog('[EO] LocalFileSave: docType=' + docType + ' saveAs=' + !!isSaveAs + ' fileType=' + fileType);
+
     var ref = _getEditor();
-    if (!ref.editor) return;
+    if (!ref.editor) {
+      window._eoLog('[EO] LocalFileSave aborted: editor API not found');
+      return;
+    }
 
     try {
       var binData = ref.editor.asc_nativeGetFile();
-      if (!binData) return;
+      if (!binData) {
+        window._eoLog('[EO] LocalFileSave aborted: asc_nativeGetFile returned no data');
+        return;
+      }
 
       var b64;
       if (typeof binData === 'string') {
@@ -614,7 +623,6 @@ window.AscDesktopEditor = {
       if (!isSaveAs && !currentPath) isSaveAs = true;
 
       if (isSaveAs) {
-        var docType = window.AscDesktopEditor._currentDocType || 'word';
         var formatExtensions = {
           65: 'docx', 66: 'doc', 67: 'odt', 68: 'rtf', 69: 'txt',
           129: 'pptx', 130: 'ppt', 131: 'odp',
@@ -652,6 +660,7 @@ window.AscDesktopEditor = {
         }
         var dialog = window.__TAURI__.dialog;
         var savePath = await dialog.save({ filters: filters });
+        window._eoLog('[EO] LocalFileSave dialog result: ' + (savePath || 'cancelled'));
 
         if (savePath) {
           var knownExts = ['docx','doc','odt','rtf','txt','xlsx','xls','ods','csv','pptx','ppt','odp','pdf'];
@@ -937,7 +946,10 @@ window.AscDesktopEditor = {
     try {
       window.AscDesktopEditor._isPrinting = true;
       var binData = ref.editor.asc_nativeGetFile();
-      if (!binData) return;
+      if (!binData) {
+        window._eoLog('[EO] Print aborted: asc_nativeGetFile returned no data');
+        return;
+      }
 
       var b64;
       if (typeof binData === 'string') {

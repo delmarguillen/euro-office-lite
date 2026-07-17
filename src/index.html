@@ -577,6 +577,23 @@
                   if (options && options.isNaturalDownload) {
                     return origDownloadAs.call(api, options);
                   }
+
+                  var docType = win.AscDesktopEditor._currentDocType || '';
+                  var fileType = options && options.fileType ? options.fileType : 0;
+                  window._eoLog('[EO] DownloadAs: docType=' + docType + ' fileType=' + fileType);
+
+                  // Cell and Slide gate asc_Save behind canSave. A Save As/export must
+                  // still work for an unmodified document, so enter the desktop save
+                  // bridge directly, preserving the PDF print options.
+                  if ((docType === 'cell' || docType === 'slide') &&
+                      typeof win.DesktopOfflineAppDocumentStartSave === 'function') {
+                    if (docType === 'cell' && typeof api.asc_closeCellEditor === 'function') {
+                      api.asc_closeCellEditor();
+                    }
+                    win.DesktopOfflineAppDocumentStartSave(true, undefined, undefined, undefined, options);
+                    return;
+                  }
+
                   api.asc_Save(false, true, undefined, options);
                 };
 

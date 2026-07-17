@@ -179,6 +179,16 @@ const DOCTRENDERER_CONFIG_PARENT: &str = r#"<Settings>
 <file>../editors/sdkjs/common/libfont/engine/fonts_native.js</file>
 <file>../editors/sdkjs/word/sdk-all.js</file>
 </DoctSdk>
+<PpttSdk>
+<file>../editors/sdkjs/slide/sdk-all-min.js</file>
+<file>../editors/sdkjs/common/libfont/engine/fonts_native.js</file>
+<file>../editors/sdkjs/slide/sdk-all.js</file>
+</PpttSdk>
+<XlstSdk>
+<file>../editors/sdkjs/cell/sdk-all-min.js</file>
+<file>../editors/sdkjs/common/libfont/engine/fonts_native.js</file>
+<file>../editors/sdkjs/cell/sdk-all.js</file>
+</XlstSdk>
 </Settings>"#;
 
 const DOCTRENDERER_CONFIG_CURRENT: &str = r#"<Settings>
@@ -193,8 +203,43 @@ const DOCTRENDERER_CONFIG_CURRENT: &str = r#"<Settings>
 <file>./editors/sdkjs/common/libfont/engine/fonts_native.js</file>
 <file>./editors/sdkjs/word/sdk-all.js</file>
 </DoctSdk>
+<PpttSdk>
+<file>./editors/sdkjs/slide/sdk-all-min.js</file>
+<file>./editors/sdkjs/common/libfont/engine/fonts_native.js</file>
+<file>./editors/sdkjs/slide/sdk-all.js</file>
+</PpttSdk>
+<XlstSdk>
+<file>./editors/sdkjs/cell/sdk-all-min.js</file>
+<file>./editors/sdkjs/common/libfont/engine/fonts_native.js</file>
+<file>./editors/sdkjs/cell/sdk-all.js</file>
+</XlstSdk>
 </Settings>"#;
 
+const DOCTRENDERER_EDITOR_RESOURCES: [&str; 10] = [
+    "sdkjs/common/Native/native.js",
+    "sdkjs/common/Native/jquery_native.js",
+    "sdkjs/common/libfont/engine/fonts_native.js",
+    "sdkjs/word/sdk-all-min.js",
+    "sdkjs/word/sdk-all.js",
+    "sdkjs/cell/sdk-all-min.js",
+    "sdkjs/cell/sdk-all.js",
+    "sdkjs/slide/sdk-all-min.js",
+    "sdkjs/slide/sdk-all.js",
+    "web-apps/vendor/xregexp/xregexp-all-min.js",
+];
+
+fn validate_editor_resources(editors_dir: &std::path::Path) -> Result<(), String> {
+    for relative_path in DOCTRENDERER_EDITOR_RESOURCES {
+        let source = editors_dir.join(relative_path);
+        if !is_nonempty_file(&source) {
+            return Err(format!(
+                "Missing or empty DoctRenderer resource: {}",
+                source.display()
+            ));
+        }
+    }
+    Ok(())
+}
 fn strip_extended_prefix(p: &std::path::Path) -> std::path::PathBuf {
     let s = p.to_string_lossy();
     if s.starts_with("\\\\?\\") {
@@ -270,6 +315,11 @@ fn convert_to_pdf(
             describe_file(&font_selection_source)
         ),
     );
+
+    validate_editor_resources(&editors_dir).map_err(|error| {
+        log_pdf(temp_dir, &format!("setup failed: {}", error));
+        error
+    })?;
 
     #[cfg(target_os = "linux")]
     let runtime = setup_linux_workdir(
@@ -623,24 +673,9 @@ fn link_editor_resources(
     editors_dir: &std::path::Path,
     work_editors: &std::path::Path,
 ) -> Result<(), String> {
-    let resources = [
-        "sdkjs/common/Native/native.js",
-        "sdkjs/common/Native/jquery_native.js",
-        "sdkjs/common/libfont/engine/fonts_native.js",
-        "sdkjs/word/sdk-all-min.js",
-        "sdkjs/word/sdk-all.js",
-        "web-apps/vendor/xregexp/xregexp-all-min.js",
-    ];
-
-    for rel in &resources {
-        let source = editors_dir.join(rel);
-        if !is_nonempty_file(&source) {
-            return Err(format!(
-                "Missing or empty DoctRenderer resource: {}",
-                source.display()
-            ));
-        }
-        symlink_path(&source, &work_editors.join(rel))?;
+    for relative_path in DOCTRENDERER_EDITOR_RESOURCES {
+        let source = editors_dir.join(relative_path);
+        symlink_path(&source, &work_editors.join(relative_path))?;
     }
     Ok(())
 }

@@ -197,46 +197,10 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Compile sdkjs for DoctRenderer"
-          SDKJS_UI_REF=$(git -C src/sdkjs rev-parse HEAD)
-          DOCTRENDERER_STAGING="$RUNNER_TEMP/doctrenderer-sdkjs"
-          restore_sdkjs() {
-            git -C src/sdkjs checkout --detach "$SDKJS_UI_REF"
-          }
-          trap restore_sdkjs EXIT
-
-          rm -f src-tauri/binaries/sdk-all-min.js \
-            src-tauri/binaries/sdk-all.js \
-            src-tauri/binaries/sdk-word-bundle.js
-          rm -rf "$DOCTRENDERER_STAGING"
-
-          git -C src/sdkjs fetch origin tag v8.2.0.147 --no-tags
-          git -C src/sdkjs checkout --detach v8.2.0.147
-          cd src/sdkjs/build
-          npm ci
-          npx grunt compile-word --desktop=true --level=SIMPLE --no-color
-          cd "$GITHUB_WORKSPACE"
-
-          for bundle in sdk-all-min.js sdk-all.js; do
-            source="src/sdkjs/deploy/sdkjs/word/$bundle"
-            if [ ! -s "$source" ]; then
-              echo "ERROR: Missing compiled DoctRenderer bundle: $source"
-              exit 1
-            fi
-            cp "$source" "src-tauri/binaries/$bundle"
-            echo "$bundle: $(wc -c < "$source") bytes"
-          done
-
-          mkdir -p "$DOCTRENDERER_STAGING/common/Native"
-          mkdir -p "$DOCTRENDERER_STAGING/common/libfont/engine"
-          cp src/sdkjs/common/Native/native.js "$DOCTRENDERER_STAGING/common/Native/"
-          cp src/sdkjs/common/Native/jquery_native.js "$DOCTRENDERER_STAGING/common/Native/"
-          cp src/sdkjs/common/AllFonts.js "$DOCTRENDERER_STAGING/common/"
-          cp src/sdkjs/common/libfont/engine/fonts_native.js "$DOCTRENDERER_STAGING/common/libfont/engine/"
-
-          restore_sdkjs
-          trap - EXIT
+          chmod +x scripts/compile-doctrenderer-sdkjs.sh
+          export DOCTRENDERER_STAGING="$RUNNER_TEMP/doctrenderer-sdkjs"
+          bash scripts/compile-doctrenderer-sdkjs.sh
           echo "::endgroup::"
-
           echo "::group::Create DoctRenderer directory structure"
           chmod +x scripts/prepare-doctrenderer.sh
           DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
@@ -248,7 +212,7 @@ jobs:
           echo "Building for ${{ matrix.target }}..."
           npx tauri build \
             --target ${{ matrix.target }} \
-            --config '{"bundle":{"targets":["app","dmg"],"icon":["icons/icon.icns","icons/icon.png","icons/128x128.png","icons/32x32.png"],"resources":["binaries/*.dylib","binaries/*.config","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
+            --config '{"bundle":{"targets":["app","dmg"],"icon":["icons/icon.icns","icons/icon.png","icons/128x128.png","icons/32x32.png"],"resources":["binaries/*.dylib","binaries/*.config","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/cell/*","editors/sdkjs/slide/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
             2>&1 | tee /tmp/tauri-build.log
 
           echo "::group::Build output"

@@ -39,6 +39,8 @@
       "binaries/fontdata/*",
       "templates/*",
       "editors/sdkjs/word/*",
+      "editors/sdkjs/cell/*",
+      "editors/sdkjs/slide/*",
       "editors/sdkjs/common/Native/*",
       "editors/sdkjs/common/AllFonts.js",
       "editors/sdkjs/common/libfont/engine/*",
