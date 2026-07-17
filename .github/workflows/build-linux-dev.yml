@@ -14,6 +14,7 @@ on:
       - 'feat/29-clipboard-fixes'
       - 'feat/30-context-toolbar-clipboard'
       - 'feat/32-linux-system-fonts'
+      - 'feat/33-fix-linux-pdf-release'
       - 'hotfix/**'
       - 'feat/24-fix-metadata'
     paths:
@@ -176,46 +177,11 @@ jobs:
           echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
           echo "::endgroup::"
 
-          echo "::group::Compile sdkjs with Closure Compiler"
-          # DoctRenderer/x2t v8.2.0 needs sdkjs v8.2.0 bundles and support
-          # files. Checkout temporarily, compile and stage, then restore
-          # v9.3.1 for the editor UI.
-          SDKJS_UI_REF=$(git -C src/sdkjs rev-parse HEAD)
-          git -C src/sdkjs fetch origin tag v8.2.0.147 --no-tags
-          git -C src/sdkjs checkout v8.2.0.147
-          cd src/sdkjs/build
-          npm ci
-          npx grunt compile-word --desktop=true --level=SIMPLE --no-color
-          cd "$GITHUB_WORKSPACE"
-
-          COMPILED="src/sdkjs/deploy/sdkjs/word/sdk-all-min.js"
-          if [ -f "$COMPILED" ]; then
-            echo "sdk-all-min.js: $(wc -c < "$COMPILED") bytes"
-            cp "$COMPILED" src-tauri/binaries/sdk-all-min.js
-          else
-            echo "ERROR: sdk-all-min.js not found"
-            exit 1
-          fi
-
-          SDK_ALL="src/sdkjs/deploy/sdkjs/word/sdk-all.js"
-          if [ -f "$SDK_ALL" ]; then
-            echo "sdk-all.js: $(wc -c < "$SDK_ALL") bytes"
-            cp "$SDK_ALL" src-tauri/binaries/sdk-all.js
-          fi
-
-          # Stage v8.2.0 support files before restoring v9.3.1
-          DOCTRENDERER_STAGING="/tmp/doctrenderer-sdkjs"
-          mkdir -p "$DOCTRENDERER_STAGING/common/Native"
-          mkdir -p "$DOCTRENDERER_STAGING/common/libfont/engine"
-          cp src/sdkjs/common/Native/native.js "$DOCTRENDERER_STAGING/common/Native/"
-          cp src/sdkjs/common/Native/jquery_native.js "$DOCTRENDERER_STAGING/common/Native/"
-          cp src/sdkjs/common/AllFonts.js "$DOCTRENDERER_STAGING/common/"
-          cp src/sdkjs/common/libfont/engine/fonts_native.js "$DOCTRENDERER_STAGING/common/libfont/engine/"
-          echo "Staged v8.2.0 support files to $DOCTRENDERER_STAGING"
-
-          git -C src/sdkjs checkout "$SDKJS_UI_REF"
+          echo "::group::Compile sdkjs for DoctRenderer"
+          chmod +x scripts/compile-doctrenderer-sdkjs.sh
+          export DOCTRENDERER_STAGING="$RUNNER_TEMP/doctrenderer-sdkjs"
+          bash scripts/compile-doctrenderer-sdkjs.sh
           echo "::endgroup::"
-
           echo "::group::Create DoctRenderer directory structure"
           chmod +x scripts/prepare-doctrenderer.sh
           DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
@@ -263,7 +229,7 @@ jobs:
           echo "Building for ${{ matrix.target }}..."
           npx tauri build \
             --target ${{ matrix.target }} \
-            --config '{"bundle":{"targets":["deb"],"icon":["icons/icon.png","icons/128x128.png","icons/128x128@2x.png","icons/32x32.png","icons/256x256.png"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
+            --config '{"bundle":{"targets":["deb"],"icon":["icons/icon.png","icons/128x128.png","icons/128x128@2x.png","icons/32x32.png","icons/256x256.png"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/cell/*","editors/sdkjs/slide/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
             2>&1 | tee /tmp/tauri-build.log
 
           echo "::group::Build output"

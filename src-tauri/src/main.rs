@@ -42,6 +42,10 @@ fn log_startup(temp_dir: &std::path::Path, msg: &str) {
 }
 
 fn main() {
+    let context = tauri::generate_context!();
+    // The user-facing version comes from tauri.conf.json; Cargo's crate version stays independent.
+    let app_version = context.package_info().version.clone();
+
     #[cfg(target_os = "macos")]
     let temp_dir = std::path::PathBuf::from("/tmp/euro-office-lite");
     #[cfg(not(target_os = "macos"))]
@@ -52,18 +56,43 @@ fn main() {
         use std::io::Write;
         let log_path = temp_dir.join("js-debug.log");
         if let Ok(mut f) = std::fs::File::create(&log_path) {
-            let _ = writeln!(f, "[STARTUP] App started at {:?}", std::time::SystemTime::now());
-            let _ = writeln!(f, "[STARTUP] Log path: {:?}", log_path);
+            let _ = writeln!(
+                f,
+                "[STARTUP] Euro Office Lite {} platform={} arch={}",
+                app_version,
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+        let distro = os_release
+            .lines()
+            .find_map(|line| line.strip_prefix("PRETTY_NAME="))
+            .map(|value| value.trim_matches('"'))
+            .unwrap_or("unknown");
+        let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP")
+            .unwrap_or_else(|_| "unknown".to_string());
+        log_startup(
+            &temp_dir,
+            &format!("Linux distro={} session={} desktop={}", distro, session, desktop),
+        );
     }
 
     let file_to_open: Option<String> = {
         let args: Vec<String> = std::env::args().collect();
-        log_startup(&temp_dir, &format!("Launch args: {:?}", args));
         if args.len() > 1 {
             let path = &args[1];
             if !path.starts_with('-') && std::path::Path::new(path).exists() {
-                log_startup(&temp_dir, &format!("File association argument: {}", path));
+                let file_name = std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("unknown");
+                log_startup(&temp_dir, &format!("Opening associated file: {}", file_name));
                 Some(path.clone())
             } else {
                 None
@@ -307,8 +336,9 @@ fn main() {
             let resource_dir = app.path().resource_dir().unwrap_or_default();
             let binaries_dir = resource_dir.join("binaries");
 
-            log_startup(&temp_dir, &format!("Resource dir: {:?}", resource_dir));
-            log_startup(&temp_dir, &format!("Binaries dir exists: {}", binaries_dir.exists()));
+            if !binaries_dir.is_dir() {
+                log_startup(&temp_dir, "ERROR: bundled binaries directory is missing");
+            }
 
             run_font_generation(&temp_dir, &binaries_dir);
 
@@ -341,7 +371,7 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error running Euro-Office Lite");
 }
 
@@ -350,7 +380,6 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
 
     let allfonts_server = temp_dir.join("fontdata").join("AllFonts.js");
     if marker.exists() && allfonts_server.exists() {
-        log_startup(temp_dir, "Font generation marker found, skipping regeneration");
         return;
     }
     if marker.exists() && !allfonts_server.exists() {
@@ -399,8 +428,6 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
     let fontdata_str = fontdata_dir.to_string_lossy().to_string();
     let fonts_str = fonts_dir.to_string_lossy().to_string();
 
-    log_startup(temp_dir, &format!("Running: {:?} -create-allfonts {} {}", x2t_exe, fontdata_str, fonts_str));
-
     let mut cmd = std::process::Command::new(&x2t_exe);
     cmd.current_dir(binaries_dir)
         .arg("-create-allfonts")
@@ -411,32 +438,30 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
     match cmd.output() {
         Ok(result) => {
             let code = result.status.code().unwrap_or(-1);
-            log_startup(temp_dir, &format!("Font generation exit code: {}", code));
-            if !result.stdout.is_empty() {
-                log_startup(temp_dir, &format!("stdout: {}", String::from_utf8_lossy(&result.stdout)));
-            }
-            if !result.stderr.is_empty() {
-                log_startup(temp_dir, &format!("stderr: {}", String::from_utf8_lossy(&result.stderr)));
-            }
             if result.status.success() {
                 let _ = std::fs::write(&marker, "generated");
-                log_startup(temp_dir, "Font generation complete, marker written");
-                if let Ok(entries) = std::fs::read_dir(&fontdata_dir) {
-                    for entry in entries.flatten() {
-                        let size = std::fs::metadata(entry.path()).map(|m| m.len()).unwrap_or(0);
-                        log_startup(temp_dir, &format!("  fontdata/{}: {} bytes",
-                            entry.file_name().to_string_lossy(), size));
-                    }
-                }
-                let generated_allfonts = fontdata_dir.join("AllFonts.js");
-                if let Ok(content) = std::fs::read_to_string(&generated_allfonts) {
-                    log_startup(temp_dir, &format!("Generated AllFonts.js: {} lines, {} bytes",
-                        content.lines().count(), content.len()));
-                    for line in content.lines().take(3) {
-                        let truncated = &line[..line.len().min(150)];
-                        log_startup(temp_dir, &format!("  {}", truncated));
-                    }
-                }
+                let allfonts_size = std::fs::metadata(fontdata_dir.join("AllFonts.js"))
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0);
+                let selection_size = std::fs::metadata(fontdata_dir.join("font_selection.bin"))
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0);
+                log_startup(
+                    temp_dir,
+                    &format!(
+                        "Font generation complete: AllFonts.js={} bytes, font_selection.bin={} bytes",
+                        allfonts_size, selection_size
+                    ),
+                );
+            } else {
+                log_startup(
+                    temp_dir,
+                    &format!(
+                        "ERROR: Font generation failed (exit code {}): {}",
+                        code,
+                        String::from_utf8_lossy(&result.stderr).trim()
+                    ),
+                );
             }
         }
         Err(e) => {

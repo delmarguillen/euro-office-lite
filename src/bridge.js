@@ -256,7 +256,6 @@ function _detectLang() {
     }
   }
   var detected = found ? found.code : 'en';
-  window._eoLog('[LANG] Auto-detected: ' + detected + ' (navigator: ' + nav + ')');
   return detected;
 }
 
@@ -290,15 +289,6 @@ console.error = function() {
   }
   window._eoLog('[CONSOLE-ERROR] ' + parts.join(' '));
   _origConsoleError.apply(console, arguments);
-};
-var _origConsoleWarn = console.warn;
-console.warn = function() {
-  var parts = [];
-  for (var i = 0; i < arguments.length; i++) {
-    try { parts.push(String(arguments[i])); } catch(e) { parts.push('[?]'); }
-  }
-  window._eoLog('[CONSOLE-WARN] ' + parts.join(' '));
-  _origConsoleWarn.apply(console, arguments);
 };
 
 function _findEditorWindow(win) {
@@ -339,7 +329,6 @@ function _loadEditorBin(b64data, fileName) {
 
     if (ref.ew.AscCommon && ref.ew.AscCommon.g_oDocumentUrls) {
       ref.ew.AscCommon.g_oDocumentUrls.documentUrl = ASC_PROTO_BASE + 'docmedia';
-      window._eoLog('[EO] documentUrl set to ' + ASC_PROTO_BASE + 'docmedia');
       var origGetImageUrl = ref.ew.AscCommon.g_oDocumentUrls.getImageUrl;
       ref.ew.AscCommon.g_oDocumentUrls.getImageUrl = function(strPath) {
         if (strPath && strPath.indexOf(ASC_PROTO_BASE) === 0)
@@ -380,7 +369,6 @@ function _loadEditorBin(b64data, fileName) {
           if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
               if (imageFile) {
-                window._eoLog('[EO] Clipboard image pasted: ' + imageFile);
                 var ref = _getEditor();
                 if (ref.editor) {
                   ref.editor.AddImageUrl([imageFile]);
@@ -419,7 +407,6 @@ function _loadEditorBin(b64data, fileName) {
             e.stopPropagation();
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
               if (imageFile) {
-                window._eoLog('[EO] Clipboard image file pasted: ' + imageFile);
                 var ref = _getEditor();
                 if (ref.editor) {
                   ref.editor.AddImageUrl([imageFile]);
@@ -430,10 +417,6 @@ function _loadEditorBin(b64data, fileName) {
         }
       }, true);
     }
-
-    invoke('list_media_dir').then(function(r) {
-      window._eoLog('[EO] Media dir contents: ' + r);
-    }).catch(function(){});
 
     var file = new ref.ew.AscCommon.OpenFileResult();
     file.data = bytes;
@@ -459,7 +442,6 @@ function _ensureCoreProps(ref) {
     }
     if (logicDoc && !logicDoc.Core && ref.ew.AscCommon.CCore) {
       logicDoc.Core = new ref.ew.AscCommon.CCore();
-      window._eoLog('[EO] Initialized empty Core properties for new document');
     }
   } catch(e) {
     window._eoLog('[EO] _ensureCoreProps error: ' + (e.message || e));
@@ -573,7 +555,6 @@ window.AscDesktopEditor = {
         );
         if (!discard) return;
       }
-      window._eoLog('[EO] LocalFileOpen: editor active, reloading with pending path: ' + path);
       localStorage.setItem('eo-pending-open-path', path);
       _forceReload();
       return;
@@ -589,19 +570,23 @@ window.AscDesktopEditor = {
 
   LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
     var isSaveAs = param && param.indexOf('saveas=true') !== -1;
-
-    if (isSaveAs && fileType === 513 && !window.AscDesktopEditor._isPrinting) {
-      window.AscDesktopEditor.Print();
-      return;
-    }
     if (window.AscDesktopEditor._isPrinting) return;
 
+    var docType = window.AscDesktopEditor._currentDocType || 'word';
+    window._eoLog('[SAVE] docType=' + docType + ' saveAs=' + !!isSaveAs + ' fileType=' + fileType);
+
     var ref = _getEditor();
-    if (!ref.editor) return;
+    if (!ref.editor) {
+      window._eoLog('[EO] LocalFileSave aborted: editor API not found');
+      return;
+    }
 
     try {
       var binData = ref.editor.asc_nativeGetFile();
-      if (!binData) return;
+      if (!binData) {
+        window._eoLog('[EO] LocalFileSave aborted: asc_nativeGetFile returned no data');
+        return;
+      }
 
       var b64;
       if (typeof binData === 'string') {
@@ -619,10 +604,20 @@ window.AscDesktopEditor = {
       if (!isSaveAs && !currentPath) isSaveAs = true;
 
       if (isSaveAs) {
-        var docType = window.AscDesktopEditor._currentDocType || 'word';
+        var formatExtensions = {
+          65: 'docx', 66: 'doc', 67: 'odt', 68: 'rtf', 69: 'txt',
+          129: 'pptx', 130: 'ppt', 131: 'odp',
+          257: 'xlsx', 258: 'xls', 259: 'ods', 260: 'csv',
+          513: 'pdf'
+        };
+        var requestedExt = formatExtensions[fileType] || null;
 
         var filters;
-        if (docType === 'cell') {
+        if (requestedExt) {
+          filters = [
+            { name: requestedExt === 'pdf' ? 'PDF' : requestedExt.toUpperCase(), extensions: [requestedExt] }
+          ];
+        } else if (docType === 'cell') {
           filters = [
             { name: 'Excel', extensions: ['xlsx'] },
             { name: 'OpenDocument Spreadsheet', extensions: ['ods'] },
@@ -646,28 +641,30 @@ window.AscDesktopEditor = {
         }
         var dialog = window.__TAURI__.dialog;
         var savePath = await dialog.save({ filters: filters });
-
         if (savePath) {
           var knownExts = ['docx','doc','odt','rtf','txt','xlsx','xls','ods','csv','pptx','ppt','odp','pdf'];
           var pathExt = savePath.split('.').pop().toLowerCase();
           if (savePath.indexOf('.') === -1 || knownExts.indexOf(pathExt) === -1) {
-            savePath += '.' + filters[0].extensions[0];
+            savePath += '.' + (requestedExt || filters[0].extensions[0]);
+            pathExt = requestedExt || filters[0].extensions[0];
           }
           try {
             await invoke('save_file_as', { path: savePath });
             var savedName = savePath.replace(/\\/g, '/').split('/').pop();
-            invoke('set_window_title', { name: savedName }).catch(function(){});
-            try {
-              var frames = document.querySelectorAll('iframe');
-              for (var fi = 0; fi < frames.length; fi++) {
-                try {
-                  var titleInput = frames[fi].contentDocument.querySelector('#title-doc-name');
-                  if (titleInput) titleInput.value = savedName;
-                  var ribInput = frames[fi].contentDocument.querySelector('#rib-doc-name');
-                  if (ribInput) ribInput.value = savedName;
-                } catch(te) {}
-              }
-            } catch(te) {}
+            if (pathExt !== 'pdf') {
+              invoke('set_window_title', { name: savedName }).catch(function(){});
+              try {
+                var frames = document.querySelectorAll('iframe');
+                for (var fi = 0; fi < frames.length; fi++) {
+                  try {
+                    var titleInput = frames[fi].contentDocument.querySelector('#title-doc-name');
+                    if (titleInput) titleInput.value = savedName;
+                    var ribInput = frames[fi].contentDocument.querySelector('#rib-doc-name');
+                    if (ribInput) ribInput.value = savedName;
+                  } catch(te) {}
+                }
+              } catch(te) {}
+            }
           } catch(saveErr) {
             window._eoLog('[EO] SaveAs failed: ' + saveErr);
             await window.__TAURI__.dialog.message(
@@ -831,8 +828,7 @@ window.AscDesktopEditor = {
       if (cb.CommonDiv_Execute_CopyCut) cb.CommonDiv_Execute_CopyCut();
     }
     try {
-      var ok = ref.ew.document.execCommand('copy');
-      window._eoLog('[EO] Copy: execCommand=' + ok);
+      ref.ew.document.execCommand('copy');
     } catch(e) {
       window._eoLog('[EO] Copy: execCommand=error ' + (e.message || e));
     }
@@ -840,13 +836,12 @@ window.AscDesktopEditor = {
   Paste: async () => {
     var platform = _isWindows ? 'win' : _isMac ? 'mac' : 'linux';
     var order = _isMac ? 'image-first' : 'text-first';
-    window._eoLog('[EO] Paste: start (platform=' + platform + ', order=' + order + ')');
+    window._eoLog('[CLIPBOARD] paste platform=' + platform + ' order=' + order);
     var imageFile = null;
     var text = null;
     var probeImage = async function() {
       try {
         imageFile = await ClipboardHelper.readNativeClipboardImage();
-        window._eoLog('[EO] Paste: image probe -> ' + (imageFile ? 'found (' + imageFile + ')' : 'none'));
       } catch(e) {
         window._eoLog('[EO] Paste: image probe -> error ' + (e.message || e));
       }
@@ -854,7 +849,6 @@ window.AscDesktopEditor = {
     var probeText = async function() {
       try {
         text = await invoke('read_clipboard_text');
-        window._eoLog('[EO] Paste: text probe -> ' + (text ? 'found (len=' + text.length + ')' : 'none'));
       } catch(e) {
         window._eoLog('[EO] Paste: text probe -> error ' + (e.message || e));
       }
@@ -871,7 +865,7 @@ window.AscDesktopEditor = {
         var ref = _getEditor();
         if (ref.editor) {
           ref.editor.AddImageUrl([imageFile]);
-          window._eoLog('[EO] Paste: branch=image -> AddImageUrl ok');
+          window._eoLog('[CLIPBOARD] paste result=image');
         }
       } catch(e) {
         window._eoLog('[EO] Paste: branch=image -> error ' + (e.message || e));
@@ -883,14 +877,14 @@ window.AscDesktopEditor = {
         var ref = _getEditor();
         if (ref.editor && ref.ew && ref.ew.AscCommon) {
           ref.editor.asc_PasteData(ref.ew.AscCommon.c_oAscClipboardDataFormat.Text, text);
-          window._eoLog('[EO] Paste: branch=text -> asc_PasteData ok');
+          window._eoLog('[CLIPBOARD] paste result=text');
         }
       } catch(e) {
         window._eoLog('[EO] Paste: branch=text -> error ' + (e.message || e));
       }
       return;
     }
-    window._eoLog('[EO] Paste: branch=none -> empty clipboard');
+    window._eoLog('[CLIPBOARD] paste result=empty');
   },
   Cut: function() {
     if (!_isWindows) return;
@@ -902,8 +896,7 @@ window.AscDesktopEditor = {
       if (cb.CommonDiv_Execute_CopyCut) cb.CommonDiv_Execute_CopyCut();
     }
     try {
-      var ok = ref.ew.document.execCommand('cut');
-      window._eoLog('[EO] Cut: execCommand=' + ok);
+      ref.ew.document.execCommand('cut');
     } catch(e) {
       window._eoLog('[EO] Cut: execCommand=error ' + (e.message || e));
     }
@@ -928,7 +921,10 @@ window.AscDesktopEditor = {
     try {
       window.AscDesktopEditor._isPrinting = true;
       var binData = ref.editor.asc_nativeGetFile();
-      if (!binData) return;
+      if (!binData) {
+        window._eoLog('[EO] Print aborted: asc_nativeGetFile returned no data');
+        return;
+      }
 
       var b64;
       if (typeof binData === 'string') {
@@ -1140,8 +1136,6 @@ listen('confirm-close', async () => {
 listen('open-file', async (event) => {
   if (!event.payload) return;
   var filePath = event.payload;
-  window._eoLog('[EO] open-file event received: ' + filePath);
-
   var ext = filePath.split('.').pop().toLowerCase();
   var docType = 'word';
   if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) docType = 'cell';
@@ -1151,12 +1145,10 @@ listen('open-file', async (event) => {
     var b64data = await invoke('open_file', { path: filePath });
     var fileName = filePath.replace(/\\/g, '/').split('/').pop();
     window._pendingFileData = { data: b64data, path: filePath, name: fileName };
-    window._eoLog('[EO] open-file: converted OK, opening editor as ' + docType);
-
     if (window._openEditor) {
       window._openEditor(docType);
     } else {
-      window._eoLog('[EO] open-file: _openEditor not available, trying LocalFileOpen');
+      window._eoLog('[OPEN] WARN: editor launcher unavailable, using fallback');
       window.AscDesktopEditor.LocalFileOpen(filePath);
     }
   } catch(e) {

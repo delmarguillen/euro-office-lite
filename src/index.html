@@ -79,7 +79,7 @@
     </div>
     <div>
       <h1>Euro-Office Lite</h1>
-      <p class="version">v0.16.4-alpha — Desktop</p>
+      <p class="version">v0.16.5-alpha — Desktop</p>
       <div class="actions">
         <button class="btn" data-type="word">
           <span class="icon">W</span> <span data-i18n="document">Document</span>
@@ -297,7 +297,6 @@
       if (_systemFontsPromise) return _systemFontsPromise;
       _systemFontsPromise = window.__TAURI__.core.invoke('get_system_fonts').then(function(js) {
         _systemFontsJs = js || '';
-        _log('[EO] get_system_fonts: ' + _systemFontsJs.length + ' bytes');
         return _systemFontsJs;
       }).catch(function(e) {
         _log('[EO] get_system_fonts failed: ' + e.message);
@@ -356,7 +355,6 @@
         }
       }
       loader.Api.sync_InitEditorFonts(guiFonts);
-      _log('[EO] System font UI refreshed: ' + guiFonts.length + ' families');
     }
 
     function _installFontThumbnailFallback(fw) {
@@ -448,7 +446,6 @@
           }
           return originalGetImageUri.call(this, opts);
         };
-        _log('[EO] Font thumbnail text fallback installed');
       } catch(e) {
         _log('[EO] Font thumbnail fallback error: ' + e.message);
       }
@@ -459,10 +456,7 @@
           !fw.AscFonts || !fw.AscFonts.checkAllFonts) return false;
       try {
         fw._eoSystemFontsInjected = true;
-        var prevCount = fw.AscFonts.g_font_infos ? fw.AscFonts.g_font_infos.length : 0;
         new fw.Function(_systemFontsJs)();
-        _log('[EO] AllFonts.js eval ok, __fonts_infos=' +
-          (fw['__fonts_infos'] ? fw['__fonts_infos'].length : 'null'));
 
         // checkAllFonts is normally called once and does not clear its name map.
         // A second call must remove stale aliases whose indexes belonged to the
@@ -488,8 +482,6 @@
         _installFontThumbnailFallback(fw);
         _refreshEditorFonts(fw, loader);
 
-        var newCount = fw.AscFonts.g_font_infos ? fw.AscFonts.g_font_infos.length : 0;
-        _log('[EO] System fonts injected: ' + prevCount + ' -> ' + newCount + ' families');
         return true;
       } catch(e) {
         fw._eoSystemFontsInjected = false;
@@ -541,7 +533,6 @@
                 var langMatch = url.match(/locale\/([a-z]([a-z-]*)?)\.json$/i);
                 if (langMatch && langMatch[1] !== 'en') {
                   var enUrl = url.replace(/locale\/[a-z]([a-z-]*)?\.json$/i, 'locale/en.json');
-                  window._eoLog('[LANG] Intercepted locale fetch: ' + url + ', merging with en.json');
                   return Promise.all([
                     _origWinFetch.call(win, enUrl, options).then(function(r) { return r.json(); }),
                     _origWinFetch.call(win, url, options).then(function(r) { return r.json(); })
@@ -551,8 +542,6 @@
                     var langKeys = Object.keys(results[1]);
                     for (var i = 0; i < enKeys.length; i++) merged[enKeys[i]] = results[0][enKeys[i]];
                     for (var i = 0; i < langKeys.length; i++) merged[langKeys[i]] = results[1][langKeys[i]];
-                    var fallbackCount = enKeys.length - langKeys.length;
-                    window._eoLog('[LANG] Locale merged: ' + langKeys.length + ' translated, ' + fallbackCount + ' fallback to en, ' + enKeys.length + ' total');
                     return new Response(JSON.stringify(merged), {
                       status: 200,
                       headers: { 'Content-Type': 'application/json' }
@@ -577,6 +566,21 @@
                   if (options && options.isNaturalDownload) {
                     return origDownloadAs.call(api, options);
                   }
+
+                  var docType = win.AscDesktopEditor._currentDocType || '';
+
+                  // Cell and Slide gate asc_Save behind canSave. A Save As/export must
+                  // still work for an unmodified document, so enter the desktop save
+                  // bridge directly, preserving the PDF print options.
+                  if ((docType === 'cell' || docType === 'slide') &&
+                      typeof win.DesktopOfflineAppDocumentStartSave === 'function') {
+                    if (docType === 'cell' && typeof api.asc_closeCellEditor === 'function') {
+                      api.asc_closeCellEditor();
+                    }
+                    win.DesktopOfflineAppDocumentStartSave(true, undefined, undefined, undefined, options);
+                    return;
+                  }
+
                   api.asc_Save(false, true, undefined, options);
                 };
 
@@ -621,53 +625,50 @@
             if (printSetupDone) return;
             try {
               var apps = [win.DE, win.SSE, win.PE];
-              var names = ['DE', 'SSE', 'PE'];
               for (var ai = 0; ai < apps.length; ai++) {
                 var app = apps[ai];
                 if (!app || !app.getController) continue;
                 try {
                   var lm = app.getController('LeftMenu');
                   if (lm && lm.mode) {
-                    window._eoLog('[EO] Print: app=' + names[ai]
-                      + ' canPreviewPrint=' + lm.mode.canPreviewPrint
-                      + ' canPrint=' + lm.mode.canPrint
-                      + ' isDesktopApp=' + lm.mode.isDesktopApp);
 
                     if (lm.leftMenu && lm.leftMenu.showMenu) {
                       var origShowMenu = lm.leftMenu.showMenu;
                       lm.leftMenu.showMenu = function(tag) {
-                        window._eoLog('[EO] Print: showMenu tag=' + tag);
                         if (tag === 'file:printpreview') {
-                          window._eoLog('[EO] Print: print preview opened, fetching printers via plugin...');
-                          window.__TAURI__.core.invoke('plugin:printer|get_printers').then(function(rawJson) {
-                            window._eoLog('[EO] Print: plugin printers raw=' + String(rawJson).substring(0, 300));
-                            try {
-                              var pluginPrinters = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
-                              if (!Array.isArray(pluginPrinters)) pluginPrinters = [pluginPrinters];
-                              var defaultPrinter = null;
-                              var printers = [];
-                              for (var pi = 0; pi < pluginPrinters.length; pi++) {
-                                var pp = pluginPrinters[pi];
-                                var pName = pp.Name || pp.name || pp.id || ('Printer ' + pi);
-                                printers.push({
-                                  name: pName,
-                                  color_supported: pp.ColorSupported || pp.color_supported || false,
-                                  duplex_supported: pp.DuplexSupported || pp.duplex_supported || false
-                                });
-                                if (pp.IsDefault || pp.is_default) defaultPrinter = pName;
+                          var isWindows = navigator.platform && navigator.platform.indexOf('Win') !== -1;
+                          if (isWindows) {
+                            window.__TAURI__.core.invoke('plugin:printer|get_printers').then(function(rawJson) {
+                              try {
+                                var pluginPrinters = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
+                                if (!Array.isArray(pluginPrinters)) pluginPrinters = [pluginPrinters];
+                                var defaultPrinter = null;
+                                var printers = [];
+                                for (var pi = 0; pi < pluginPrinters.length; pi++) {
+                                  var pp = pluginPrinters[pi];
+                                  var pName = pp.Name || pp.name || pp.id || ('Printer ' + pi);
+                                  printers.push({
+                                    name: pName,
+                                    color_supported: pp.ColorSupported || pp.color_supported || false,
+                                    duplex_supported: pp.DuplexSupported || pp.duplex_supported || false
+                                  });
+                                  if (pp.IsDefault || pp.is_default) defaultPrinter = pName;
+                                }
+                                if (!defaultPrinter && printers.length > 0) defaultPrinter = printers[0].name;
+                                var configJson = JSON.stringify({ printers: printers, current_printer: defaultPrinter });
+                                window._eoLog('[PRINT] printers=' + printers.length + ' default=' + (defaultPrinter || 'none'));
+                                if (win.on_native_message) {
+                                  win.on_native_message('printer:config', configJson);
+                                }
+                              } catch(pe) {
+                                window._eoLog('[EO] Print: error parsing plugin printers: ' + pe);
                               }
-                              if (!defaultPrinter && printers.length > 0) defaultPrinter = printers[0].name;
-                              var configJson = JSON.stringify({ printers: printers, current_printer: defaultPrinter });
-                              window._eoLog('[EO] Print: sending printer:config with ' + printers.length + ' printers, default=' + defaultPrinter);
-                              if (win.on_native_message) {
-                                win.on_native_message('printer:config', configJson);
-                              }
-                            } catch(pe) {
-                              window._eoLog('[EO] Print: error parsing plugin printers: ' + pe);
-                            }
-                          }).catch(function(err) {
-                            window._eoLog('[EO] Print: plugin get_printers error: ' + err);
-                          });
+                            }).catch(function(err) {
+                              window._eoLog('[EO] Print: plugin get_printers error: ' + err);
+                            });
+                          } else {
+                            window._eoLog('[EO] Print: native printer plugin unavailable; using PDF viewer fallback');
+                          }
                         }
                         return origShowMenu.apply(this, arguments);
                       };
@@ -926,8 +927,6 @@
       if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) docType = 'cell';
       if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) docType = 'slide';
 
-      window._eoLog('[EO] Opening file from start screen:', path, 'docType:', docType);
-
       try {
         var b64data = await window.__TAURI__.core.invoke('open_file', { path: path });
         var fileName = path.replace(/\\/g, '/').split('/').pop();
@@ -949,8 +948,6 @@
       var docType = 'word';
       if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) docType = 'cell';
       if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) docType = 'slide';
-
-      window._eoLog('[EO] Reopening file:', pendingPath, 'docType:', docType);
 
       window.__TAURI__.core.invoke('open_file', { path: pendingPath }).then(function(b64data) {
         var fileName = pendingPath.replace(/\\/g, '/').split('/').pop();

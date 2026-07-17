@@ -1,7 +1,7 @@
 {
   "productName": "Euro-Office-Lite",
   "mainBinaryName": "euro-office-lite",
-  "version": "0.16.4-alpha",
+  "version": "0.16.5-alpha",
   "identifier": "org.euro-office.lite",
   "build": {
     "frontendDist": "../src-dist",
@@ -39,6 +39,8 @@
       "binaries/fontdata/*",
       "templates/*",
       "editors/sdkjs/word/*",
+      "editors/sdkjs/cell/*",
+      "editors/sdkjs/slide/*",
       "editors/sdkjs/common/Native/*",
       "editors/sdkjs/common/AllFonts.js",
       "editors/sdkjs/common/libfont/engine/*",

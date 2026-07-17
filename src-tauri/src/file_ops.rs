@@ -9,8 +9,8 @@ pub struct AppState {
     pub modified: Mutex<bool>,
 }
 
-fn log_print(state: &AppState, msg: &str) {
-    println!("[PRINT] {}", msg);
+fn log_event(state: &AppState, msg: &str) {
+    println!("{}", msg);
     use std::io::Write;
     let log_path = state.temp_dir.join("js-debug.log");
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -18,7 +18,7 @@ fn log_print(state: &AppState, msg: &str) {
         .append(true)
         .open(&log_path)
     {
-        let _ = writeln!(f, "[PRINT] {}", msg);
+        let _ = writeln!(f, "{}", msg);
     }
 }
 
@@ -46,29 +46,46 @@ pub async fn open_file(
 
     let format_from = detect_format(&input);
     let format_to = 8192;
+    let file_name = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
 
-    log_print(&state, &format!("[OPEN] Converting {} (format {}) -> Editor.bin", path, format_from));
+    log_event(
+        &state,
+        &format!("[OPEN] start file={} format={}", file_name, format_from),
+    );
 
-    super::converter::convert_file(&app, &path, &output.to_string_lossy(), format_from, format_to, &state.temp_dir.to_string_lossy())
-        .await?;
+    super::converter::convert_file(
+        &app,
+        &path,
+        &output.to_string_lossy(),
+        format_from,
+        format_to,
+        &state.temp_dir.to_string_lossy(),
+    )
+    .await
+    .map_err(|error| {
+        log_event(
+            &state,
+            &format!("[OPEN] failed file={} error={}", file_name, error),
+        );
+        error
+    })?;
 
-    let bin_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
-    log_print(&state, &format!("[OPEN] Editor.bin size: {} bytes", bin_size));
-
-    let media_dir = state.temp_dir.join("media");
-    if media_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&media_dir) {
-            let files: Vec<String> = entries.flatten()
-                .map(|e| {
-                    let sz = std::fs::metadata(e.path()).map(|m| m.len()).unwrap_or(0);
-                    format!("{}({})", e.file_name().to_string_lossy(), sz)
-                })
-                .collect();
-            log_print(&state, &format!("[OPEN] media/ after convert: {}", files.join(", ")));
-        }
-    } else {
-        log_print(&state, "[OPEN] media/ dir does not exist after convert");
-    }
+    let bin_size = std::fs::metadata(&output)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let media_count = std::fs::read_dir(state.temp_dir.join("media"))
+        .map(|entries| entries.filter_map(Result::ok).count())
+        .unwrap_or(0);
+    log_event(
+        &state,
+        &format!(
+            "[OPEN] success editor_bin={} bytes media_files={}",
+            bin_size, media_count
+        ),
+    );
 
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
     let b64 = STANDARD.encode(&bin_data);
@@ -133,8 +150,8 @@ pub async fn save_file_as(
 
     if format_to != 513 {
         *state.current_file.lock().unwrap() = Some(dest);
+        *state.modified.lock().unwrap() = false;
     }
-    *state.modified.lock().unwrap() = false;
     Ok("ok".to_string())
 }
 
@@ -171,25 +188,25 @@ pub async fn print_document(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let editor_bin = state.temp_dir.join("Editor.bin");
-    log_print(&state, &format!("Editor.bin path: {:?}, exists: {}", editor_bin, editor_bin.exists()));
-
     if !editor_bin.exists() {
+        log_event(&state, "[PRINT] failed: Editor.bin not found");
         return Err("Editor.bin not found".to_string());
     }
 
-    let bin_size = std::fs::metadata(&editor_bin).map(|m| m.len()).unwrap_or(0);
-    log_print(&state, &format!("Editor.bin size: {} bytes", bin_size));
+    let bin_size = std::fs::metadata(&editor_bin)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    log_event(
+        &state,
+        &format!("[PRINT] start editor_bin={} bytes", bin_size),
+    );
 
     let pdf_path = state.temp_dir.join("print_output.pdf");
     if pdf_path.exists() {
-        log_print(&state, "Removing previous print_output.pdf");
         let _ = std::fs::remove_file(&pdf_path);
     }
-
     clear_changes(&state.temp_dir);
-    log_print(&state, "Cleared changes directory");
 
-    log_print(&state, "Running x2t conversion Editor.bin -> PDF...");
     super::converter::convert_file(
         &app,
         &editor_bin.to_string_lossy(),
@@ -199,27 +216,28 @@ pub async fn print_document(
         &state.temp_dir.to_string_lossy(),
     )
     .await
-    .map_err(|e| {
-        log_print(&state, &format!("x2t conversion failed: {}", e));
-        e
+    .map_err(|error| {
+        log_event(&state, &format!("[PRINT] failed: {}", error));
+        error
     })?;
 
-    let pdf_size = std::fs::metadata(&pdf_path).map(|m| m.len()).unwrap_or(0);
-    log_print(&state, &format!("PDF created: {:?}, size: {} bytes", pdf_path, pdf_size));
-
+    let pdf_size = std::fs::metadata(&pdf_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
     if pdf_size == 0 {
+        log_event(&state, "[PRINT] failed: generated PDF is empty");
         return Err("PDF file is empty".to_string());
     }
 
-    let pdf_str = pdf_path.to_string_lossy().to_string();
-    log_print(&state, &format!("Returning PDF path: {}", pdf_str));
-    Ok(pdf_str)
+    log_event(
+        &state,
+        &format!("[PRINT] success pdf_size={} bytes", pdf_size),
+    );
+    Ok(pdf_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
 pub fn open_pdf_viewer(state: State<'_, AppState>, path: String) -> Result<String, String> {
-    log_print(&state, &format!("Opening PDF in system viewer: {}", path));
-
     #[cfg(target_os = "windows")]
     let result = std::process::Command::new("cmd")
         .args(["/c", "start", "", &path])
@@ -236,7 +254,7 @@ pub fn open_pdf_viewer(state: State<'_, AppState>, path: String) -> Result<Strin
         .spawn();
 
     result.map_err(|e| {
-        log_print(&state, &format!("Failed to open PDF: {}", e));
+        log_event(&state, &format!("[PRINT] viewer failed: {}", e));
         e.to_string()
     })?;
     Ok("ok".to_string())
