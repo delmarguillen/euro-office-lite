@@ -561,6 +561,16 @@
               if (!saveAsPatched && win.Asc && win.Asc.editor) {
                 var api = win.Asc.editor;
 
+                // Euro Office is a local desktop application even though Tauri
+                // serves its assets through a custom http(s) protocol. Production
+                // Web Apps can otherwise snapshot the base SDK's protocol check
+                // before the desktop override and expose the online "Download as"
+                // flow. Keep the API authoritative for all later mode checks.
+                var reportedOffline = 'unavailable';
+                try { reportedOffline = String(api.asc_isOffline()); } catch(e) {}
+                api.asc_isOffline = api['asc_isOffline'] = function() { return true; };
+                win._eoLog('[EO] desktop-offline API override: reported=' + reportedOffline);
+
                 var origDownloadAs = api.asc_DownloadAs;
                 api.asc_DownloadAs = api['asc_DownloadAs'] = function(options) {
                   if (options && options.isNaturalDownload) {
@@ -618,6 +628,64 @@
             }
           }, 50);
           setTimeout(function() { clearInterval(savePatchInterval); }, 30000);
+
+          // The production Web Apps bundle computes File-menu visibility once
+          // while it initializes. Reassert desktop/offline mode on the controller
+          // state as well as the SDK API, then ask the menu to reapply that state.
+          // This hides the online "Download as" entry while preserving the local
+          // "Save as" and PDF export actions gated by canDownload.
+          var desktopModePatched = false;
+          var desktopModeLastError = '';
+          var desktopModeInterval = setInterval(function() {
+            if (desktopModePatched) return;
+            try {
+              var editorApps = [
+                { name: 'word', app: win.DE },
+                { name: 'cell', app: win.SSE },
+                { name: 'slide', app: win.PE }
+              ];
+              for (var ei = 0; ei < editorApps.length; ei++) {
+                var editorApp = editorApps[ei];
+                if (!editorApp.app || !editorApp.app.getController) continue;
+
+                var mainController = editorApp.app.getController('Main');
+                var leftMenuController = editorApp.app.getController('LeftMenu');
+                if (!mainController || !mainController.appOptions ||
+                    !leftMenuController || !leftMenuController.mode) continue;
+
+                var previousDesktop = mainController.appOptions.isDesktopApp;
+                var previousOffline = mainController.appOptions.isOffline;
+                mainController.appOptions.isDesktopApp = true;
+                mainController.appOptions.isOffline = true;
+                leftMenuController.mode.isDesktopApp = true;
+                leftMenuController.mode.isOffline = true;
+
+                if (typeof leftMenuController.setMode === 'function') {
+                  leftMenuController.setMode(leftMenuController.mode);
+                }
+
+                win._eoLog('[EO] desktop-offline UI mode: editor=' + editorApp.name +
+                  ' previousDesktop=' + previousDesktop +
+                  ' previousOffline=' + previousOffline +
+                  ' canDownload=' + leftMenuController.mode.canDownload);
+                desktopModePatched = true;
+                clearInterval(desktopModeInterval);
+                break;
+              }
+            } catch(e) {
+              var modeError = String(e.message || e);
+              if (modeError !== desktopModeLastError) {
+                desktopModeLastError = modeError;
+                win._eoLog('[EO] desktop-offline UI mode retry: ' + modeError);
+              }
+            }
+          }, 50);
+          setTimeout(function() {
+            clearInterval(desktopModeInterval);
+            if (!desktopModePatched) {
+              win._eoLog('[EO] desktop-offline UI mode was not applied before timeout');
+            }
+          }, 30000);
 
           // Supply printer list to print preview panel
           var printSetupDone = false;

@@ -48,6 +48,20 @@ for (const editor of [
 
 required.forEach(requireFile);
 
+const shellHtmlPath = path.join(distRoot, 'index.html');
+if (existsSync(shellHtmlPath)) {
+  const shellHtml = await readFile(shellHtmlPath, 'utf8');
+  for (const marker of [
+    "api.asc_isOffline = api['asc_isOffline']",
+    'mainController.appOptions.isOffline = true',
+    'leftMenuController.setMode(leftMenuController.mode)',
+  ]) {
+    if (!shellHtml.includes(marker)) {
+      fail('index.html is missing desktop-offline integration marker: ' + marker);
+    }
+  }
+}
+
 for (const forbidden of [
   'sdkjs/develop',
   'sdkjs/pdf/src/engine/drawingfile_ie.js',
