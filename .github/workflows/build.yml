@@ -20,6 +20,10 @@ permissions:
 env:
   RUST_BACKTRACE: "1"
 
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
 jobs:
   build-frontend:
     runs-on: ubuntu-latest
@@ -104,6 +108,7 @@ jobs:
     needs: build-frontend
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
 
@@ -219,6 +224,7 @@ jobs:
     needs: build-frontend
     runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
 
@@ -264,6 +270,7 @@ jobs:
       - name: Generate macOS icons
         run: |
           echo "::group::generate-icons"
+          python3 -m pip install Pillow --quiet --break-system-packages || python3 -m pip install Pillow --quiet
           chmod +x scripts/generate-icons.sh
           bash scripts/generate-icons.sh
           echo "::endgroup::"
@@ -609,6 +616,7 @@ jobs:
       - name: Generate Linux icons
         run: |
           echo "::group::generate-icons"
+          python3 -m pip install Pillow --quiet --break-system-packages || python3 -m pip install Pillow --quiet
           chmod +x scripts/generate-icons.sh
           bash scripts/generate-icons.sh
           echo "::endgroup::"

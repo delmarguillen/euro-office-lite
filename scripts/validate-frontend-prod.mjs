@@ -51,6 +51,9 @@ required.forEach(requireFile);
 for (const forbidden of [
   'sdkjs/develop',
   'web-apps/vendor/less',
+  'web-apps/apps/documenteditor/main/resources/help',
+  'web-apps/apps/spreadsheeteditor/main/resources/help',
+  'web-apps/apps/presentationeditor/main/resources/help',
 ]) {
   if (existsSync(path.join(distRoot, forbidden))) {
     fail(`development-only directory was staged: ${forbidden}`);
@@ -109,9 +112,21 @@ async function measure(directory) {
 
 if (existsSync(distRoot)) {
   const { files, bytes } = await measure(distRoot);
+  const mebibytes = bytes / 1024 / 1024;
   console.log(
-    `[frontend-prod] validated ${files.toLocaleString('en-US')} files, ${(bytes / 1024 / 1024).toFixed(1)} MiB`,
+    `[frontend-prod] validated ${files.toLocaleString('en-US')} files, ${mebibytes.toFixed(1)} MiB`,
   );
+
+  // Guard against accidentally reintroducing source trees or offline help
+  // media. The previous develop staging was about 207.7 MiB / 5,662 files.
+  if (files > 6_000) {
+    fail(`production frontend exceeds file budget: ${files} > 6,000`);
+  }
+  if (mebibytes > 250) {
+    fail(
+      `production frontend exceeds size budget: ${mebibytes.toFixed(1)} MiB > 250 MiB`,
+    );
+  }
 }
 
 if (process.exitCode) process.exit(process.exitCode);

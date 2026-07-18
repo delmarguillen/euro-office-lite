@@ -206,6 +206,28 @@ run(
   commonEnv,
 );
 
+// Match the existing desktop staging policy: the embedded help center contains
+// hundreds of megabytes of duplicated GIFs and is not required by the editor
+// runtime. The application already falls back to its configured online help.
+for (const editor of [
+  'documenteditor',
+  'spreadsheeteditor',
+  'presentationeditor',
+]) {
+  await rm(
+    path.join(
+      buildRoot,
+      'web-apps',
+      'apps',
+      editor,
+      'main',
+      'resources',
+      'help',
+    ),
+    { recursive: true, force: true },
+  );
+}
+
 await mkdir(outputRoot, { recursive: true });
 await copyRequired(
   path.join(projectRoot, 'src', 'index.html'),
