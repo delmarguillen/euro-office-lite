@@ -228,6 +228,18 @@ for (const editor of [
   );
 }
 
+// Keep the WebAssembly engines used by fonts and the PDF viewer, but drop their
+// asm.js fallbacks. All supported WebView2, WKWebView and WebKitGTK runtimes
+// provide WebAssembly; the two fallback files add about 25 MiB.
+await rm(
+  path.join(buildRoot, 'sdkjs', 'pdf', 'src', 'engine', 'drawingfile_ie.js'),
+  { force: true },
+);
+await rm(
+  path.join(buildRoot, 'sdkjs', 'common', 'libfont', 'engine', 'fonts_ie.js'),
+  { force: true },
+);
+
 await mkdir(outputRoot, { recursive: true });
 await copyRequired(
   path.join(projectRoot, 'src', 'index.html'),

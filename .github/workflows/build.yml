@@ -329,6 +329,9 @@ jobs:
             2>&1 | tee /tmp/tauri-build.log
 
       - name: Sign and notarize macOS app
+        # Final safety bound for signing and both Apple notarization submissions.
+        # Each notarytool process also has its own watchdog below.
+        timeout-minutes: 75
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -346,6 +349,59 @@ jobs:
 
           APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Euro-Office-Lite.app"
           DMG_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+
+          submit_for_notarization() {
+            local artifact="$1" label="$2" log_file="$3" max_attempts="$4"
+            local attempt=1 watchdog_seconds=1920
+            while [ "$attempt" -le "$max_attempts" ]; do
+              : > "$log_file"
+              echo "::notice::Submitting $label attempt $attempt of $max_attempts"
+              echo "Artifact: $artifact ($(du -h "$artifact" | cut -f1))"
+              date -u +Started:%Y-%m-%dT%H:%M:%SZ
+              xcrun notarytool submit "$artifact" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait --timeout 1800 --verbose > "$log_file" 2>&1 &
+              local submit_pid=$!
+              tail -n +1 -f "$log_file" &
+              local tail_pid=$! started_at=$SECONDS timed_out=false
+              while kill -0 "$submit_pid" 2>/dev/null; do
+                if [ $((SECONDS - started_at)) -ge "$watchdog_seconds" ]; then
+                  timed_out=true
+                  echo ::warning::$label-exceeded-$watchdog_seconds-seconds
+                  kill -TERM "$submit_pid" 2>/dev/null || true
+                  sleep 10
+                  kill -KILL "$submit_pid" 2>/dev/null || true
+                  break
+                fi
+                sleep 15
+              done
+              set +e
+              wait "$submit_pid"
+              local exit_code=$?
+              set -e
+              sleep 1
+              kill "$tail_pid" 2>/dev/null || true
+              wait "$tail_pid" 2>/dev/null || true
+
+              local submission_id
+              submission_id=$(grep -oE '[0-9a-f]{8}-[0-9a-f-]{28}' "$log_file" | head -1 || true)
+              date -u +Finished:%Y-%m-%dT%H:%M:%SZ
+              echo exit=$exit_code timed_out=$timed_out submission_id=${submission_id:-none}
+              if grep -qi 'status: Accepted' "$log_file"; then
+                echo $label-notarization-accepted
+                return 0
+              fi
+              if [ -n "$submission_id" ]; then
+                echo ::error::$label-submission-$submission_id-did-not-complete
+                return 1
+              fi
+              if [ "$attempt" -lt "$max_attempts" ]; then
+                echo ::warning::$label-failed-before-returning-an-ID-retrying
+                sleep 20
+              fi
+              attempt=$((attempt + 1))
+            done
+            echo ::error::$label-failed-after-$max_attempts-attempts-without-an-ID
+            return 1
+          }
 
           # --- Import certificate into temporary keychain ---
           echo "::group::Import certificate"
@@ -400,32 +456,12 @@ jobs:
           # --- Notarize ---
           echo "::group::Notarize"
           ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/app-notarize.zip"
-          echo "Submitting for notarization ($(du -h "$RUNNER_TEMP/app-notarize.zip" | cut -f1) zip)..."
-
-          NOTARIZE_OUTPUT=$(xcrun notarytool submit "$RUNNER_TEMP/app-notarize.zip" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 1800 2>&1) || true
-
-          echo "$NOTARIZE_OUTPUT"
+          submit_for_notarization \
+            "$RUNNER_TEMP/app-notarize.zip" \
+            macOS-app \
+            "$RUNNER_TEMP/notary-app-${{ matrix.target }}.log" \
+            1
           rm "$RUNNER_TEMP/app-notarize.zip"
-
-          SUBMISSION_ID=$(echo "$NOTARIZE_OUTPUT" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
-
-          if echo "$NOTARIZE_OUTPUT" | grep -qi "status: Accepted"; then
-            echo "Notarization accepted"
-          else
-            echo "::error::Notarization failed"
-            if [ -n "$SUBMISSION_ID" ]; then
-              echo "Fetching notarization log for $SUBMISSION_ID..."
-              xcrun notarytool log "$SUBMISSION_ID" \
-                --apple-id "$APPLE_ID" \
-                --password "$APPLE_PASSWORD" \
-                --team-id "$APPLE_TEAM_ID" 2>&1 || true
-            fi
-            exit 1
-          fi
           echo "::endgroup::"
 
           # --- Staple ---
@@ -449,30 +485,11 @@ jobs:
           hdiutil create -volname "Euro-Office Lite" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$DMG_PATH"
 
-          echo "Submitting DMG for notarization..."
-          DMG_NOTARIZE_OUTPUT=$(xcrun notarytool submit "$DMG_PATH" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait --timeout 1800 2>&1) || true
-
-          echo "$DMG_NOTARIZE_OUTPUT"
-
-          DMG_SUBMISSION_ID=$(echo "$DMG_NOTARIZE_OUTPUT" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
-
-          if echo "$DMG_NOTARIZE_OUTPUT" | grep -qi "status: Accepted"; then
-            echo "DMG notarization accepted"
-          else
-            echo "::error::DMG notarization failed"
-            if [ -n "$DMG_SUBMISSION_ID" ]; then
-              echo "Fetching notarization log for $DMG_SUBMISSION_ID..."
-              xcrun notarytool log "$DMG_SUBMISSION_ID" \
-                --apple-id "$APPLE_ID" \
-                --password "$APPLE_PASSWORD" \
-                --team-id "$APPLE_TEAM_ID" 2>&1 || true
-            fi
-            exit 1
-          fi
+          submit_for_notarization \
+            "$DMG_PATH" \
+            macOS-DMG \
+            "$RUNNER_TEMP/notary-dmg-${{ matrix.target }}.log" \
+            2
 
           xcrun stapler staple "$DMG_PATH"
 
@@ -542,6 +559,7 @@ jobs:
           path: |
             /tmp/doctrenderer-build.log
             /tmp/tauri-build.log
+            ${{ runner.temp }}/notary-*.log
 
   build-linux:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.frontend_only }}

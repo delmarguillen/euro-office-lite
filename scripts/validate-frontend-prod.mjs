@@ -50,13 +50,15 @@ required.forEach(requireFile);
 
 for (const forbidden of [
   'sdkjs/develop',
+  'sdkjs/pdf/src/engine/drawingfile_ie.js',
+  'sdkjs/common/libfont/engine/fonts_ie.js',
   'web-apps/vendor/less',
   'web-apps/apps/documenteditor/main/resources/help',
   'web-apps/apps/spreadsheeteditor/main/resources/help',
   'web-apps/apps/presentationeditor/main/resources/help',
 ]) {
   if (existsSync(path.join(distRoot, forbidden))) {
-    fail(`development-only directory was staged: ${forbidden}`);
+    fail(`excluded asset was staged: ${forbidden}`);
   }
 }
 
@@ -118,13 +120,14 @@ if (existsSync(distRoot)) {
   );
 
   // Guard against accidentally reintroducing source trees or offline help
-  // media. The previous develop staging was about 207.7 MiB / 5,662 files.
-  if (files > 6_000) {
-    fail(`production frontend exceeds file budget: ${files} > 6,000`);
+  // media. The pruned production staging is expected around 164 MiB / 1,170
+  // files; the old develop staging was 207.7 MiB / 5,662 files.
+  if (files > 1_500) {
+    fail(`production frontend exceeds file budget: ${files} > 1,500`);
   }
-  if (mebibytes > 250) {
+  if (mebibytes > 180) {
     fail(
-      `production frontend exceeds size budget: ${mebibytes.toFixed(1)} MiB > 250 MiB`,
+      `production frontend exceeds size budget: ${mebibytes.toFixed(1)} MiB > 180 MiB`,
     );
   }
 }
