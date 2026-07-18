@@ -559,7 +559,6 @@ jobs:
           path: |
             /tmp/doctrenderer-build.log
             /tmp/tauri-build.log
-            ${{ runner.temp }}/notary-*.log
 
   build-linux:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.frontend_only }}
