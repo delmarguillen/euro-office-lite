@@ -344,7 +344,7 @@ fn main() {
 
             let handle = app.handle().clone();
             if let Some(window) = app.get_webview_window("main") {
-                #[cfg(feature = "devtools")]
+                #[cfg(debug_assertions)]
                 window.open_devtools();
 
                 let h = handle.clone();

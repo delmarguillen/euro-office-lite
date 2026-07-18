@@ -1,7 +1,16 @@
 name: Build & Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      frontend_only:
+        description: Build and validate only the shared production frontend
+        required: true
+        default: true
+        type: boolean
   push:
+    branches:
+      - feat/34-production-frontend
     tags:
       - "v*"
 
@@ -12,7 +21,87 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  build-frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            src/sdkjs/build/package-lock.json
+
+      - name: Setup Java for Closure Compiler
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install frontend build dependencies
+        run: |
+          npm ci
+          npm ci --prefix src/sdkjs/build
+
+      - name: Prepare fonts
+        run: |
+          pip3 install Pillow --quiet --break-system-packages || pip3 install Pillow --quiet
+          chmod +x scripts/prepare-fonts.sh
+          bash scripts/prepare-fonts.sh
+
+      - name: Build and validate production frontend
+        run: |
+          set -o pipefail
+          npm run build:frontend:prod 2>&1 | tee /tmp/frontend-build.log
+
+      - name: Collect frontend diagnostics
+        if: always()
+        run: |
+          {
+            echo "event=${{ github.event_name }} ref=${{ github.ref }} sha=${{ github.sha }}"
+            node --version
+            npm --version
+            java -version
+            git submodule status src/sdkjs src/web-apps
+            if [ -d src-dist ]; then
+              echo "File count: $(find src-dist -type f | wc -l)"
+              echo "Total size: $(du -sh src-dist | cut -f1)"
+              echo "Largest production assets:"
+              find src-dist -type f -printf '%s %p\n' | sort -nr | head -30
+            else
+              echo "src-dist was not produced"
+            fi
+          } 2>&1 | tee /tmp/frontend-diagnostics.log
+
+      - name: Upload production frontend
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-frontend
+          path: src-dist/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload frontend diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: frontend-diagnostics-${{ github.run_attempt }}
+          path: |
+            /tmp/frontend-build.log
+            /tmp/frontend-diagnostics.log
+          if-no-files-found: warn
+          retention-days: 7
+
   build-windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.frontend_only }}
+    needs: build-frontend
     runs-on: windows-latest
     strategy:
       matrix:
@@ -46,32 +135,16 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Install npm dependencies
-        run: npm ci
+        run: npm ci --omit=dev
 
-      - name: Generate sdkjs develop scripts
-        shell: pwsh
-        run: |
-          echo "::group::grunt-develop"
-          Push-Location src\sdkjs\build
-          npm ci
-          npx grunt develop --desktop=true
-          Pop-Location
-          $wordScripts = "src\sdkjs\develop\sdkjs\word\scripts.js"
-          $content = Get-Content $wordScripts -Raw -Encoding utf8
-          if ($content -notmatch 'word/document/editor\.js') {
-            Write-Host "Patching word/scripts.js with editor.js..."
-            $content = $content -replace '\];$', ",`n`t`"../../../../sdkjs/word/document/editor.js`"`n];"
-            Set-Content $wordScripts -Value $content -Encoding utf8 -NoNewline
-          }
-          echo "::endgroup::"
+      - name: Download production frontend
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: production-frontend
+          path: src-dist/
 
-      - name: Prepare fonts and AllFonts.js
-        shell: pwsh
-        run: |
-          echo "::group::prepare-fonts"
-          pip install Pillow --quiet
-          .\scripts\prepare-fonts.ps1
-          echo "::endgroup::"
+      - name: Validate production frontend
+        run: npm run validate:frontend:prod
 
       - name: Download x2t binaries
         shell: pwsh
@@ -82,17 +155,19 @@ jobs:
       - name: Prepare DoctRenderer resources
         shell: bash
         run: |
+          set -o pipefail
           echo "::group::Copy fonts to binaries"
           mkdir -p src-tauri/binaries/fonts
           cp src/fonts/*.ttf src-tauri/binaries/fonts/
-          cp src/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
+          cp src-dist/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
           echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
           echo "::endgroup::"
 
           echo "::group::Compile sdkjs for DoctRenderer"
           chmod +x scripts/compile-doctrenderer-sdkjs.sh
           export DOCTRENDERER_STAGING="$RUNNER_TEMP/doctrenderer-sdkjs"
-          bash scripts/compile-doctrenderer-sdkjs.sh
+          export ALLFONTS_SOURCE="$GITHUB_WORKSPACE/src-dist/sdkjs/common/AllFonts.js"
+          bash scripts/compile-doctrenderer-sdkjs.sh 2>&1 | tee "$RUNNER_TEMP/doctrenderer-build.log"
           echo "::endgroup::"
           echo "::group::Create DoctRenderer directory structure"
           DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
@@ -105,15 +180,6 @@ jobs:
           $bin = "src-tauri\binaries"
           Copy-Item "$bin\x2t-x86_64-pc-windows-msvc.exe" "$bin\x2t-aarch64-pc-windows-msvc.exe"
           Remove-Item "$bin\x2t-x86_64-pc-windows-msvc.exe"
-
-      - name: Stage frontend distribution
-        shell: pwsh
-        run: |
-          echo "::group::prepare-dist"
-          .\scripts\prepare-dist.ps1
-          echo "::endgroup::"
-          $logFile = Join-Path $env:TEMP "euro-office-lite\prepare-dist.log"
-          if (Test-Path $logFile) { Get-Content $logFile }
 
       - name: Build Tauri installer
         shell: pwsh
@@ -145,10 +211,12 @@ jobs:
         with:
           name: build-logs-${{ matrix.target }}
           path: |
-            ${{ runner.temp }}/euro-office-lite/prepare-dist.log
+            ${{ runner.temp }}/doctrenderer-build.log
             ${{ runner.temp }}/tauri-build.log
 
   build-macos:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.frontend_only }}
+    needs: build-frontend
     runs-on: macos-latest
     strategy:
       matrix:
@@ -182,30 +250,16 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Install npm dependencies
-        run: npm ci
+        run: npm ci --omit=dev
 
-      - name: Generate sdkjs develop scripts
-        run: |
-          echo "::group::grunt-develop"
-          cd src/sdkjs/build
-          npm ci
-          npx grunt develop --desktop=true
-          cd "$GITHUB_WORKSPACE"
+      - name: Download production frontend
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: production-frontend
+          path: src-dist/
 
-          WORD_SCRIPTS="src/sdkjs/develop/sdkjs/word/scripts.js"
-          if ! grep -q 'word/document/editor\.js' "$WORD_SCRIPTS" 2>/dev/null; then
-            echo "Patching word/scripts.js with editor.js..."
-            sed -i '' 's/\];$/,\n\t"..\/..\/..\/..\/sdkjs\/word\/document\/editor.js"\n];/' "$WORD_SCRIPTS"
-          fi
-          echo "::endgroup::"
-
-      - name: Prepare fonts and AllFonts.js
-        run: |
-          echo "::group::prepare-fonts"
-          pip3 install Pillow --quiet --break-system-packages || pip3 install Pillow --quiet
-          chmod +x scripts/prepare-fonts.sh
-          bash scripts/prepare-fonts.sh
-          echo "::endgroup::"
+      - name: Validate production frontend
+        run: npm run validate:frontend:prod
 
       - name: Generate macOS icons
         run: |
@@ -240,28 +294,23 @@ jobs:
 
       - name: Prepare DoctRenderer resources
         run: |
+          set -o pipefail
           echo "::group::Copy fonts to binaries"
           mkdir -p src-tauri/binaries/fonts
           cp src/fonts/*.ttf src-tauri/binaries/fonts/
-          cp src/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
+          cp src-dist/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
           echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
           echo "::endgroup::"
 
           echo "::group::Compile sdkjs for DoctRenderer"
           chmod +x scripts/compile-doctrenderer-sdkjs.sh
           export DOCTRENDERER_STAGING="$RUNNER_TEMP/doctrenderer-sdkjs"
-          bash scripts/compile-doctrenderer-sdkjs.sh
+          export ALLFONTS_SOURCE="$GITHUB_WORKSPACE/src-dist/sdkjs/common/AllFonts.js"
+          bash scripts/compile-doctrenderer-sdkjs.sh 2>&1 | tee /tmp/doctrenderer-build.log
           echo "::endgroup::"
           echo "::group::Create DoctRenderer directory structure"
           chmod +x scripts/prepare-doctrenderer.sh
           DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
-          echo "::endgroup::"
-
-      - name: Stage frontend distribution
-        run: |
-          echo "::group::prepare-dist"
-          chmod +x scripts/prepare-dist.sh
-          bash scripts/prepare-dist.sh
           echo "::endgroup::"
 
       - name: Build Tauri app
@@ -466,6 +515,12 @@ jobs:
           done
           echo "::endgroup::"
 
+      - name: Show macOS bundle info
+        run: |
+          BUNDLE="src-tauri/target/${{ matrix.target }}/release/bundle"
+          du -sh "$BUNDLE/macos/"*.app 2>/dev/null || true
+          ls -lh "$BUNDLE/dmg/"*.dmg 2>/dev/null || true
+
       - name: Upload DMG artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -477,9 +532,13 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: build-logs-macos-${{ matrix.target }}
-          path: /tmp/tauri-build.log
+          path: |
+            /tmp/doctrenderer-build.log
+            /tmp/tauri-build.log
 
   build-linux:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.frontend_only }}
+    needs: build-frontend
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -536,30 +595,16 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Install npm dependencies
-        run: npm ci
+        run: npm ci --omit=dev
 
-      - name: Generate sdkjs develop scripts
-        run: |
-          echo "::group::grunt-develop"
-          cd src/sdkjs/build
-          npm ci
-          npx grunt develop --desktop=true
-          cd "$GITHUB_WORKSPACE"
+      - name: Download production frontend
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: production-frontend
+          path: src-dist/
 
-          WORD_SCRIPTS="src/sdkjs/develop/sdkjs/word/scripts.js"
-          if ! grep -q 'word/document/editor\.js' "$WORD_SCRIPTS" 2>/dev/null; then
-            echo "Patching word/scripts.js with editor.js..."
-            sed -i 's/\];$/,\n\t"..\/..\/..\/..\/sdkjs\/word\/document\/editor.js"\n];/' "$WORD_SCRIPTS"
-          fi
-          echo "::endgroup::"
-
-      - name: Prepare fonts and AllFonts.js
-        run: |
-          echo "::group::prepare-fonts"
-          pip3 install Pillow --quiet --break-system-packages || pip3 install Pillow --quiet
-          chmod +x scripts/prepare-fonts.sh
-          bash scripts/prepare-fonts.sh
-          echo "::endgroup::"
+      - name: Validate production frontend
+        run: npm run validate:frontend:prod
 
       - name: Generate Linux icons
         run: |
@@ -582,28 +627,23 @@ jobs:
 
       - name: Prepare DoctRenderer resources
         run: |
+          set -o pipefail
           echo "::group::Copy fonts to binaries"
           mkdir -p src-tauri/binaries/fonts
           cp src/fonts/*.ttf src-tauri/binaries/fonts/
-          cp src/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
+          cp src-dist/sdkjs/common/AllFonts.js src-tauri/binaries/AllFonts.js
           echo "Fonts copied: $(ls src-tauri/binaries/fonts/*.ttf | wc -l)"
           echo "::endgroup::"
 
           echo "::group::Compile sdkjs for DoctRenderer"
           chmod +x scripts/compile-doctrenderer-sdkjs.sh
           export DOCTRENDERER_STAGING="$RUNNER_TEMP/doctrenderer-sdkjs"
-          bash scripts/compile-doctrenderer-sdkjs.sh
+          export ALLFONTS_SOURCE="$GITHUB_WORKSPACE/src-dist/sdkjs/common/AllFonts.js"
+          bash scripts/compile-doctrenderer-sdkjs.sh 2>&1 | tee /tmp/doctrenderer-build.log
           echo "::endgroup::"
           echo "::group::Create DoctRenderer directory structure"
           chmod +x scripts/prepare-doctrenderer.sh
           DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
-          echo "::endgroup::"
-
-      - name: Stage frontend distribution
-        run: |
-          echo "::group::prepare-dist"
-          chmod +x scripts/prepare-dist.sh
-          bash scripts/prepare-dist.sh
           echo "::endgroup::"
 
       - name: Build Tauri app
@@ -637,6 +677,12 @@ jobs:
           chmod +x scripts/smoke-test-linux-pdf-bundle.sh
           bash scripts/smoke-test-linux-pdf-bundle.sh "$APP_ROOT"
 
+      - name: Show Linux package info
+        run: |
+          DEB_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/deb"
+          ls -lh "$DEB_DIR/"*.deb
+          dpkg-deb --info "$DEB_DIR/"*.deb | head -40
+
       - name: Upload .deb artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -648,7 +694,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: build-logs-linux-${{ matrix.target }}
-          path: /tmp/tauri-build.log
+          path: |
+            /tmp/doctrenderer-build.log
+            /tmp/tauri-build.log
 
   build-flatpak:
     needs: [build-linux]
@@ -688,6 +736,7 @@ jobs:
           flatpak install -y --noninteractive --user flathub org.gnome.Platform//49 org.gnome.Sdk//49
 
       - name: Import GPG key
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           echo "${{ secrets.FLATPAK_GPG_KEY }}" | gpg --batch --import
           GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format long | grep sec | head -1 | awk '{print $2}' | cut -d'/' -f2)
@@ -695,29 +744,41 @@ jobs:
 
       - name: Build Flatpak
         run: |
+          set -o pipefail
           cd flatpak
+          SIGN_ARGS=()
+          if [ -n "${GPG_KEY_ID:-}" ]; then
+            SIGN_ARGS+=(--gpg-sign="$GPG_KEY_ID")
+          fi
           flatpak-builder --force-clean --user --repo=repo \
-            --gpg-sign=$GPG_KEY_ID \
+            "${SIGN_ARGS[@]}" \
             --disable-updates \
-            build-dir org.eurooffice.Lite.yml
+            build-dir org.eurooffice.Lite.yml 2>&1 | tee /tmp/flatpak-build.log
 
       - name: Update repo metadata
         run: |
+          set -o pipefail
           cd flatpak
+          SIGN_ARGS=()
+          if [ -n "${GPG_KEY_ID:-}" ]; then
+            SIGN_ARGS+=(--gpg-sign="$GPG_KEY_ID")
+          fi
           flatpak build-update-repo repo \
-            --gpg-sign=$GPG_KEY_ID \
+            "${SIGN_ARGS[@]}" \
             --generate-static-deltas \
-            --title="Euro-Office Lite"
+            --title="Euro-Office Lite" 2>&1 | tee -a /tmp/flatpak-build.log
 
       - name: Export GPG public key
+        if: startsWith(github.ref, 'refs/tags/v')
         run: gpg --export --armor $GPG_KEY_ID > flatpak/repo/euro-office-flatpak.gpg
 
       - name: Build single-file bundle
         run: |
+          set -o pipefail
           cd flatpak
           flatpak build-bundle repo \
             euro-office-lite.flatpak \
-            org.eurooffice.Lite
+            org.eurooffice.Lite 2>&1 | tee -a /tmp/flatpak-build.log
           ls -lh euro-office-lite.flatpak
 
       - name: Upload Flatpak bundle artifact
@@ -727,12 +788,21 @@ jobs:
           path: flatpak/euro-office-lite.flatpak
 
       - name: Deploy repo to GitHub Pages
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847 # v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: flatpak/repo
           destination_dir: repo
           keep_files: false
+
+      - name: Upload Flatpak logs on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-logs-flatpak
+          path: /tmp/flatpak-build.log
+          if-no-files-found: warn
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
