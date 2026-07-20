@@ -22,6 +22,7 @@ function requireFile(relativePath) {
 const required = [
   'index.html',
   'bridge.js',
+  'web-apps/vendor/xregexp/xregexp-all-min.js',
   'sdkjs/vendor/polyfill.js',
   'sdkjs/common/AllFonts.js',
   'sdkjs/word/sdk-all-min.js',
@@ -97,6 +98,7 @@ for (const [editor, moduleName] of editorModules) {
   }
 
   for (const expected of [
+    '../../../vendor/xregexp/xregexp-all-min.js',
     '../../../../sdkjs/vendor/polyfill.js',
     '../../../../sdkjs/common/AllFonts.js',
     `../../../../sdkjs/${moduleName}/sdk-all-min.js`,
@@ -105,6 +107,12 @@ for (const [editor, moduleName] of editorModules) {
     if (!html.includes(expected)) {
       fail(`${relativePath} does not load ${expected}`);
     }
+  }
+
+  const xregexpPath = '../../../vendor/xregexp/xregexp-all-min.js';
+  const sdkMinPath = `../../../../sdkjs/${moduleName}/sdk-all-min.js`;
+  if (html.indexOf(xregexpPath) > html.indexOf(sdkMinPath)) {
+    failures.push(`${relativePath} loads ${xregexpPath} after ${sdkMinPath}`);
   }
 }
 

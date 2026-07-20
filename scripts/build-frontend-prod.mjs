@@ -84,6 +84,9 @@ async function injectSdkScripts(editor, moduleName) {
 
   const scripts = [
     '<!-- Euro-Office Lite static production SDK loader -->',
+    // The SDK references XRegExp during its initial synchronous evaluation.
+    // RequireJS starts later, so load this dependency explicitly first.
+    `<script src='../../../vendor/xregexp/xregexp-all-min.js'></script>`,
     '<script src="../../../../sdkjs/vendor/polyfill.js"></script>',
     '<script src="../../../../sdkjs/common/AllFonts.js"></script>',
     `<script src="../../../../sdkjs/${moduleName}/sdk-all-min.js"></script>`,
