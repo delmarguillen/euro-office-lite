@@ -241,6 +241,11 @@ async function injectSdkScripts(editor, moduleName) {
     diagScript2,
     `<script src="../../../../sdkjs/${moduleName}/sdk-all-min.js"></script>`,
     `<script src="../../../../sdkjs/${moduleName}/sdk-all.js"></script>`,
+    // The SDK bundles are loaded statically above. Without this flag, loadSdk()
+    // in editorscommon.js inserts a dynamic <script> that re-executes sdk-all.js,
+    // replacing g_fontApplication, CFontFileLoader, and LoadFontAsync. Upstream
+    // sets this flag in preload.html when pre-loading bundles the same way.
+    `<script>window['AscNotLoadAllScript'] = true;</script>`,
     diagScript3,
   ];
 

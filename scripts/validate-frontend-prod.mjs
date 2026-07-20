@@ -111,8 +111,31 @@ for (const [editor, moduleName] of editorModules) {
 
   const xregexpPath = '../../../vendor/xregexp/xregexp-all-min.js';
   const sdkMinPath = `../../../../sdkjs/${moduleName}/sdk-all-min.js`;
+  const sdkAllPath = `../../../../sdkjs/${moduleName}/sdk-all.js`;
   if (html.indexOf(xregexpPath) > html.indexOf(sdkMinPath)) {
     fail(`${relativePath} loads ${xregexpPath} after ${sdkMinPath}`);
+  }
+
+  const notLoadStatement = "window['AscNotLoadAllScript'] = true;";
+  const notLoadPos = html.indexOf(notLoadStatement);
+  const sdkAllPos = html.indexOf(sdkAllPath);
+  const requirePos = html.indexOf('vendor/requirejs/require.js');
+  if (notLoadPos === -1) {
+    fail(`${relativePath} is missing AscNotLoadAllScript=true`);
+  }
+  if (requirePos === -1) {
+    fail(`${relativePath} is missing require.js`);
+  }
+  if (
+    notLoadPos !== -1 &&
+    sdkAllPos !== -1 &&
+    requirePos !== -1 &&
+    !(sdkAllPos < notLoadPos && notLoadPos < requirePos)
+  ) {
+    fail(
+      `${relativePath} must set AscNotLoadAllScript=true ` +
+      'after sdk-all.js and before require.js',
+    );
   }
 }
 
