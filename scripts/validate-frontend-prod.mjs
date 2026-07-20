@@ -112,7 +112,7 @@ for (const [editor, moduleName] of editorModules) {
   const xregexpPath = '../../../vendor/xregexp/xregexp-all-min.js';
   const sdkMinPath = `../../../../sdkjs/${moduleName}/sdk-all-min.js`;
   if (html.indexOf(xregexpPath) > html.indexOf(sdkMinPath)) {
-    failures.push(`${relativePath} loads ${xregexpPath} after ${sdkMinPath}`);
+    fail(`${relativePath} loads ${xregexpPath} after ${sdkMinPath}`);
   }
 }
 

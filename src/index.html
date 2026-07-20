@@ -455,6 +455,11 @@
       if (!_systemFontsJs || !fw || fw._eoSystemFontsInjected ||
           !fw.AscFonts || !fw.AscFonts.checkAllFonts) return false;
       try {
+        _log('[FONT-DIAG] _applySystemFontsToFrame START' +
+          ' g_font_files=' + (fw.AscFonts.g_font_files ? fw.AscFonts.g_font_files.length : 'null') +
+          ' g_font_infos=' + (fw.AscFonts.g_font_infos ? fw.AscFonts.g_font_infos.length : 'null') +
+          ' editorExists=' + !!(fw.Asc && fw.Asc.editor) +
+          ' isLoadFullApi=' + (fw.Asc && fw.Asc.editor && fw.Asc.editor.isLoadFullApi));
         fw._eoSystemFontsInjected = true;
         new fw.Function(_systemFontsJs)();
 
@@ -482,10 +487,15 @@
         _installFontThumbnailFallback(fw);
         _refreshEditorFonts(fw, loader);
 
+        _log('[FONT-DIAG] _applySystemFontsToFrame END' +
+          ' g_font_files=' + fw.AscFonts.g_font_files.length +
+          ' g_font_infos=' + fw.AscFonts.g_font_infos.length +
+          ' selections=' + (fw.AscFonts.g_fontApplication.g_fontSelections.List || []).length);
         return true;
       } catch(e) {
         fw._eoSystemFontsInjected = false;
-        _log('[EO] System fonts inject error: ' + e.message);
+        _log('[FONT-DIAG] _applySystemFontsToFrame ERROR: ' + e.message +
+          ' stack=' + (e.stack || '').split('\n').slice(0, 5).join(' | '));
         return false;
       }
     }
