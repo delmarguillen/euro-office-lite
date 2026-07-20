@@ -504,10 +504,43 @@
       } catch(e) {}
     }
 
+    function _installFrameDiagnostics(win) {
+      try {
+        if (!win || win._eoDiagnosticsInstalled) return;
+        win._eoDiagnosticsInstalled = true;
+
+        win.addEventListener('error', function(event) {
+          var error = event.error || {};
+          var source = window._eoSafeSource ?
+            window._eoSafeSource(event.filename || '') : (event.filename || '');
+          _log('[IFRAME-ERROR]', {
+            name: error.name,
+            message: event.message || error.message,
+            stack: error.stack
+          }, 'source=' + source + ':' + (event.lineno || 0) + ':' + (event.colno || 0));
+        }, true);
+
+        win.addEventListener('unhandledrejection', function(event) {
+          _log('[IFRAME-REJECT]', event.reason || 'unknown');
+        });
+
+        var frameSource = '';
+        try {
+          frameSource = window._eoSafeSource ?
+            window._eoSafeSource(win.location.href) : win.location.pathname;
+        } catch(e) {}
+        _log('[EO] iframe diagnostics installed: source=' + frameSource);
+      } catch(e) {
+        _log('[EO] iframe diagnostics install failed: ' + (e.message || e));
+      }
+    }
+
     function injectBridgeDeep(win) {
       try {
         var hasADE = false;
         try { hasADE = !!win.AscDesktopEditor; } catch(e) {}
+
+        _installFrameDiagnostics(win);
 
         if (win && !hasADE) {
           try {
@@ -928,6 +961,7 @@
         events: {
           onAppReady: function() {
             var allFrames = document.querySelectorAll('iframe');
+            _log('[EO] App ready: docType=' + docType + ' frames=' + allFrames.length);
             for (var fi = 0; fi < allFrames.length; fi++) {
               try {
                 var fw = allFrames[fi].contentWindow;
@@ -940,10 +974,15 @@
             _loadSystemFonts();
           },
           onDocumentReady: function() {
-            console.log('[EO] Document ready');
+            _log('[EO] Document ready: docType=' + docType);
           },
           onError: function(event) {
-            console.error('[EO] Editor error:', event.data);
+            _log('[EO] Editor error event: docType=' + docType,
+              event && event.data ? event.data : { message: 'missing event data' });
+          },
+          onWarning: function(event) {
+            _log('[EO] Editor warning event: docType=' + docType,
+              event && event.data ? event.data : { message: 'missing event data' });
           }
         }
       });
