@@ -66,23 +66,22 @@ if (existsSync(shellHtmlPath)) {
 const slideBundlePath = path.join(distRoot, 'sdkjs', 'slide', 'sdk-all-min.js');
 if (existsSync(slideBundlePath)) {
   const slideBundle = await readFile(slideBundlePath, 'utf8');
-  const normalizedThemeLoader = ".replace(/\\/+$/,'')+'/themes.js'";
-  const normalizedThemeLoaderCount =
-    slideBundle.split(normalizedThemeLoader).length - 1;
-  const unnormalizedThemeLoaders = [
+  // The runtime guard injected into the presentation HTML intercepts this
+  // exact call through the AscCommon.loadScript property. If the compiled
+  // shape changes, the guard must be revisited.
+  const themeLoaderCalls = [
     ...slideBundle.matchAll(
       /AscCommon\.loadScript\(([A-Za-z_$][\w$]*)\+"\/themes\.js",/g,
     ),
   ];
-
-  if (normalizedThemeLoaderCount !== 1) {
+  if (themeLoaderCalls.length !== 1) {
     fail(
-      'slide/sdk-all-min.js must contain exactly one normalized themes.js ' +
-      `loader; found ${normalizedThemeLoaderCount}`,
+      'slide/sdk-all-min.js must contain exactly one themes.js loader ' +
+      `calling AscCommon.loadScript; found ${themeLoaderCalls.length}`,
     );
   }
-  if (unnormalizedThemeLoaders.length !== 0) {
-    fail('slide/sdk-all-min.js still contains an unnormalized themes.js loader');
+  if (slideBundle.includes(".replace(/\\/+$/,'')+'/themes.js'")) {
+    fail('slide/sdk-all-min.js still contains the obsolete themes.js rewrite');
   }
 }
 
@@ -163,6 +162,27 @@ for (const [editor, moduleName] of editorModules) {
       `${relativePath} must load XRegExp, polyfill.js, AllFonts.js, ` +
       'sdk-all-min.js, and require.js in that order',
     );
+  }
+
+  // The slide guard suppresses the one themes.js request the web
+  // SetThemesPath from sdk-all-min.js fires before the desktop override in
+  // sdk-all.js takes over; without it the missing-asset fallback serves HTML
+  // as JS and the resulting SyntaxError surfaces as error -82.
+  const themesGuardMarker = String.raw`/\/themes\.js(?:[?#]|$)/.test(url)`;
+  const themesGuardPos = html.indexOf(themesGuardMarker);
+  if (moduleName === 'slide') {
+    if (themesGuardPos === -1) {
+      fail(`${relativePath} is missing the slide themes.js loader guard`);
+    } else if (
+      !(html.indexOf(sdkMinPath) < themesGuardPos && themesGuardPos < requirePos)
+    ) {
+      fail(
+        `${relativePath} must install the slide themes.js loader guard ` +
+        'between sdk-all-min.js and require.js',
+      );
+    }
+  } else if (themesGuardPos !== -1) {
+    fail(`${relativePath} unexpectedly contains the slide themes.js guard`);
   }
 }
 

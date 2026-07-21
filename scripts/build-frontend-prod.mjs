@@ -66,27 +66,6 @@ async function copyRequired(source, destination) {
   await copyFile(source, destination);
 }
 
-async function normalizeSlideThemesScriptPath(bundlePath) {
-  const themeScriptPattern =
-    /AscCommon\.loadScript\(([A-Za-z_$][\w$]*)\+"\/themes\.js",/g;
-  let bundle = await readFile(bundlePath, 'utf8');
-  const matches = [...bundle.matchAll(themeScriptPattern)];
-
-  if (matches.length !== 1) {
-    fail(
-      `expected exactly one slide themes.js loader in ${bundlePath}; ` +
-      `found ${matches.length}`,
-    );
-  }
-
-  bundle = bundle.replace(
-    themeScriptPattern,
-    (_match, themePath) =>
-      `AscCommon.loadScript(${themePath}.replace(/\\/+$/,'')+'/themes.js',`,
-  );
-  await writeFile(bundlePath, bundle, 'utf8');
-}
-
 async function injectSdkScripts(editor, moduleName) {
   const htmlPath = path.join(
     outputRoot,
@@ -268,6 +247,28 @@ async function injectSdkScripts(editor, moduleName) {
 })();
 </script>`;
 
+  // Desktop builds never ship sdkjs/slide/themes/themes.js: the desktop
+  // SetThemesPath override (slide/Local/api.js) never requests it, but that
+  // override only arrives with the asynchronous sdk-all.js. Until then the
+  // web SetThemesPath from sdk-all-min.js issues one loadScript for
+  // themes.js, and the missing-asset fallback answers with index.html, which
+  // fails as a SyntaxError and is reported as error -82 while the document is
+  // still opening. Reproduce the benign desktop miss instead: report the load
+  // as failed without issuing a request. AscCommon.loadScript is defined by
+  // sdk-all-min.js and is not redefined by sdk-all.js.
+  const slideThemesGuardScript = `<script>
+(function() {
+  var originalLoadScript = AscCommon.loadScript;
+  AscCommon.loadScript = function(url, onSuccess, onError) {
+    if (typeof url === 'string' && /\\/themes\\.js(?:[?#]|$)/.test(url)) {
+      if (onError) setTimeout(onError, 0);
+      return;
+    }
+    return originalLoadScript.apply(this, arguments);
+  };
+})();
+</script>`;
+
   const scripts = [
     '<!-- Euro-Office Lite static production SDK loader -->',
     diagScript1,
@@ -278,6 +279,7 @@ async function injectSdkScripts(editor, moduleName) {
     '<script src="../../../../sdkjs/common/AllFonts.js"></script>',
     diagScript2,
     `<script src="../../../../sdkjs/${moduleName}/sdk-all-min.js"></script>`,
+    ...(moduleName === 'slide' ? [slideThemesGuardScript] : []),
     // Match ONLYOFFICE's compiled loader: apiBase loads sdk-all.js once and
     // asynchronously from loadSdk() after the editor API has been created.
     diagScript3,
@@ -335,13 +337,6 @@ run(
   ],
   sdkBuildDir,
   commonEnv,
-);
-
-// The presentation app passes a directory with a trailing slash while the
-// partial SDK appends "/themes.js". Normalize only that script request in the
-// compiled bundle; themeN/theme.bin paths must retain their trailing slash.
-await normalizeSlideThemesScriptPath(
-  path.join(buildRoot, 'sdkjs', 'slide', 'sdk-all-min.js'),
 );
 
 // copy-other intentionally does not include these generated/local desktop files.
