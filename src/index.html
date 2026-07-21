@@ -406,12 +406,22 @@
         };
 
         // The generated thumbnail index is not unique (and -1 is shared by many
-        // families), so list rows must use the model's actual name, not an index map.
+        // families), so list rows must use the model's actual name. Resolve the
+        // record through the row's own li id, never by list position: recent
+        // fonts, dividers or menu re-renders shift positional indexes, painting
+        // one font's name on a row whose click applies a different font.
         Combo.prototype.updateVisibleFontsTiles = function(e, scrollY) {
-          var combo = this, j = 0, storeCount = combo.store.length;
+          var combo = this, j = 0;
+          var listItems = fw.$(combo.el).find('a');
+          var anchorCount = listItems.length;
+          if (anchorCount !== combo.store.length && !combo.__eoCountLogged) {
+            combo.__eoCountLogged = true;
+            _log('[FONT-DIAG] font-dropdown anchors=' + anchorCount +
+              ' storeRecords=' + combo.store.length);
+          }
           if (!combo.tiles) combo.tiles = [];
-          if (storeCount !== combo.tiles.length) {
-            for (j = combo.tiles.length; j < storeCount; ++j) combo.tiles.unshift(null);
+          if (anchorCount !== combo.tiles.length) {
+            for (j = combo.tiles.length; j < anchorCount; ++j) combo.tiles.unshift(null);
           }
           if (typeof scrollY === 'undefined') {
             scrollY = parseInt(fw.$(combo.el).find('.ps-scrollbar-x-rail').css('bottom'));
@@ -421,16 +431,27 @@
           var count = Math.max(Math.floor(scrollH / itemHeight) + 3, 0);
           var from = Math.max(Math.floor(-(scrollY / itemHeight)) - 1, 0);
           var to = from + count;
-          var listItems = fw.$(combo.el).find('a');
 
-          for (j = 0; j < storeCount; ++j) {
+          for (j = 0; j < anchorCount; ++j) {
+            var anchor = listItems[j];
+            // A canvas left attached to a replaced or reordered anchor no
+            // longer matches this row; drop it so the row is redrawn.
+            if (combo.tiles[j] && combo.tiles[j].parentNode !== anchor) {
+              if (combo.tiles[j].parentNode) combo.tiles[j].parentNode.removeChild(combo.tiles[j]);
+              combo.tiles[j] = null;
+            }
             if (from <= j && j < to) {
-              if (null === combo.tiles[j]) {
-                var record = combo.store.at(j);
+              if (null === combo.tiles[j] && anchor) {
+                var rowId = fw.$(anchor).closest('li').attr('id');
+                var record = rowId ? combo.store.findWhere({ id: rowId }) : null;
                 var fontName = record && record.get('name');
+                if (rowId && !record && !combo.__eoOrphanLogged) {
+                  combo.__eoOrphanLogged = true;
+                  _log('[FONT-DIAG] font-row without store record: li id=' + rowId);
+                }
                 var fontImage = fontName ? drawFontName(combo, fontName) : null;
                 combo.tiles[j] = fontImage;
-                if (fontImage && listItems[j]) listItems[j].appendChild(fontImage);
+                if (fontImage) anchor.appendChild(fontImage);
               }
             } else if (combo.tiles[j]) {
               if (combo.tiles[j].parentNode) combo.tiles[j].parentNode.removeChild(combo.tiles[j]);
@@ -449,6 +470,24 @@
       } catch(e) {
         _log('[EO] Font thumbnail fallback error: ' + e.message);
       }
+    }
+
+    function _installFontSelectionDiag(fw) {
+      try {
+        var api = fw.Asc && fw.Asc.editor;
+        if (!api || api.__eoFontSelDiag) return;
+        api.__eoFontSelDiag = true;
+        // word/slide apply fonts via put_TextPrFontName, cell via asc_setCellFontName.
+        ['put_TextPrFontName', 'asc_setCellFontName'].forEach(function(fn) {
+          if (typeof api[fn] === 'function') {
+            var original = api[fn];
+            api[fn] = function(name) {
+              _log('[FONT-DIAG] apply-font ' + fn + ' name="' + name + '"');
+              return original.apply(this, arguments);
+            };
+          }
+        });
+      } catch(e) {}
     }
 
     function _applySystemFontsToFrame(fw) {
@@ -485,6 +524,7 @@
           fw._eoFontThumbnailNames[fontInfo.Thumbnail] = fontInfo.Name;
         }
         _installFontThumbnailFallback(fw);
+        _installFontSelectionDiag(fw);
         _refreshEditorFonts(fw, loader);
 
         _log('[FONT-DIAG] _applySystemFontsToFrame END' +
