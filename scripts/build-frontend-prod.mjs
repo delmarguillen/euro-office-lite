@@ -66,6 +66,27 @@ async function copyRequired(source, destination) {
   await copyFile(source, destination);
 }
 
+async function normalizeSlideThemesScriptPath(bundlePath) {
+  const themeScriptPattern =
+    /AscCommon\.loadScript\(([A-Za-z_$][\w$]*)\+"\/themes\.js",/g;
+  let bundle = await readFile(bundlePath, 'utf8');
+  const matches = [...bundle.matchAll(themeScriptPattern)];
+
+  if (matches.length !== 1) {
+    fail(
+      `expected exactly one slide themes.js loader in ${bundlePath}; ` +
+      `found ${matches.length}`,
+    );
+  }
+
+  bundle = bundle.replace(
+    themeScriptPattern,
+    (_match, themePath) =>
+      `AscCommon.loadScript(${themePath}.replace(/\\/+$/,'')+'/themes.js',`,
+  );
+  await writeFile(bundlePath, bundle, 'utf8');
+}
+
 async function injectSdkScripts(editor, moduleName) {
   const htmlPath = path.join(
     outputRoot,
@@ -139,38 +160,6 @@ async function injectSdkScripts(editor, moduleName) {
     '__fonts_files=' + (window['__fonts_files'] ? window['__fonts_files'].length : 'undef') +
     ' __fonts_infos=' + (window['__fonts_infos'] ? window['__fonts_infos'].length : 'undef') +
     ' g_fonts_selection_bin.len=' + ((window['g_fonts_selection_bin'] || '').length));
-})();
-</script>`;
-
-  const themePathScript = `<script>
-(function() {
-  var diag = window.__eoDiag || function(){};
-  var api = window.Asc && window.Asc.asc_docs_api;
-  var proto = api && api.prototype;
-  if (!proto || typeof proto.SetThemesPath !== 'function') {
-    diag('theme-path-patch', 'installed=false');
-    return;
-  }
-  var originalSetThemesPath = proto.SetThemesPath;
-  proto.SetThemesPath = function(path) {
-    var normalized = typeof path === 'string' ? path.replace(/\\/+$/, '') : path;
-    var result = originalSetThemesPath.call(this, normalized);
-    if (!this.isLoadFullApi && normalized) {
-      // The desktop override from sdk-all.js consumes this value later and
-      // expects it to keep a trailing slash for themeN/theme.bin.
-      this.tmpThemesPath = normalized + '/';
-    } else if (this.ThemeLoader && normalized) {
-      var pathWithSlash = normalized + '/';
-      this.ThemeLoader.ThemesUrl = pathWithSlash;
-      var absolute = this.ThemeLoader.ThemesUrlAbs;
-      if (absolute && absolute.charAt(absolute.length - 1) !== '/') {
-        this.ThemeLoader.ThemesUrlAbs = absolute + '/';
-      }
-    }
-    return result;
-  };
-  window.__eoThemePathPatched = true;
-  diag('theme-path-patch', 'installed=true');
 })();
 </script>`;
 
@@ -289,7 +278,6 @@ async function injectSdkScripts(editor, moduleName) {
     '<script src="../../../../sdkjs/common/AllFonts.js"></script>',
     diagScript2,
     `<script src="../../../../sdkjs/${moduleName}/sdk-all-min.js"></script>`,
-    ...(moduleName === 'slide' ? [themePathScript] : []),
     // Match ONLYOFFICE's compiled loader: apiBase loads sdk-all.js once and
     // asynchronously from loadSdk() after the editor API has been created.
     diagScript3,
@@ -347,6 +335,13 @@ run(
   ],
   sdkBuildDir,
   commonEnv,
+);
+
+// The presentation app passes a directory with a trailing slash while the
+// partial SDK appends "/themes.js". Normalize only that script request in the
+// compiled bundle; themeN/theme.bin paths must retain their trailing slash.
+await normalizeSlideThemesScriptPath(
+  path.join(buildRoot, 'sdkjs', 'slide', 'sdk-all-min.js'),
 );
 
 // copy-other intentionally does not include these generated/local desktop files.

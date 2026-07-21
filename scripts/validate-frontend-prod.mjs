@@ -63,6 +63,29 @@ if (existsSync(shellHtmlPath)) {
   }
 }
 
+const slideBundlePath = path.join(distRoot, 'sdkjs', 'slide', 'sdk-all-min.js');
+if (existsSync(slideBundlePath)) {
+  const slideBundle = await readFile(slideBundlePath, 'utf8');
+  const normalizedThemeLoader = ".replace(/\\/+$/,'')+'/themes.js'";
+  const normalizedThemeLoaderCount =
+    slideBundle.split(normalizedThemeLoader).length - 1;
+  const unnormalizedThemeLoaders = [
+    ...slideBundle.matchAll(
+      /AscCommon\.loadScript\(([A-Za-z_$][\w$]*)\+"\/themes\.js",/g,
+    ),
+  ];
+
+  if (normalizedThemeLoaderCount !== 1) {
+    fail(
+      'slide/sdk-all-min.js must contain exactly one normalized themes.js ' +
+      `loader; found ${normalizedThemeLoaderCount}`,
+    );
+  }
+  if (unnormalizedThemeLoaders.length !== 0) {
+    fail('slide/sdk-all-min.js still contains an unnormalized themes.js loader');
+  }
+}
+
 for (const forbidden of [
   'sdkjs/develop',
   'sdkjs/pdf/src/engine/drawingfile_ie.js',
@@ -115,21 +138,14 @@ for (const [editor, moduleName] of editorModules) {
   const sdkAllPath = `../../../../sdkjs/${moduleName}/sdk-all.js`;
   const notLoadStatement = "window['AscNotLoadAllScript'] = true;";
   const requirePos = html.indexOf('vendor/requirejs/require.js');
-  const themePatchPos = html.indexOf('window.__eoThemePathPatched = true');
   if (html.includes(sdkAllPath)) {
     fail(`${relativePath} loads ${sdkAllPath} statically`);
   }
   if (html.includes(notLoadStatement)) {
     fail(`${relativePath} disables the asynchronous sdk-all.js loader`);
   }
-  if (moduleName === 'slide') {
-    if (themePatchPos === -1) {
-      fail(`${relativePath} is missing the Tauri theme-path normalization`);
-    } else if (
-      !(html.indexOf(sdkMinPath) < themePatchPos && themePatchPos < requirePos)
-    ) {
-      fail(`${relativePath} must normalize theme paths after sdk-all-min.js and before require.js`);
-    }
+  if (html.includes('window.__eoThemePathPatched')) {
+    fail(`${relativePath} contains the obsolete runtime theme-path patch`);
   }
   if (requirePos === -1) {
     fail(`${relativePath} is missing require.js`);
