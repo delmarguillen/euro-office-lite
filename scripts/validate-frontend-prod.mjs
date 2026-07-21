@@ -164,6 +164,26 @@ for (const [editor, moduleName] of editorModules) {
     );
   }
 
+  // app.js requires 'sdk', 'allfonts' and 'xregexp' through RequireJS even
+  // though the static loader already evaluated those bundles. The named
+  // define stubs must sit after require.js so RequireJS reuses the loaded
+  // bundles instead of fetching and re-evaluating them, which would wipe the
+  // patches installed between the static tags and app start.
+  for (const stub of [
+    "define('xregexp', [], function() { return window.XRegExp; });",
+    "define('allfonts', [], function() {});",
+    "define('sdk', ['jquery', 'allfonts', 'xregexp', 'socketio'], function() {",
+  ]) {
+    const stubPos = html.indexOf(stub);
+    if (stubPos === -1) {
+      fail(`${relativePath} is missing the RequireJS module stub: ${stub}`);
+    } else if (stubPos < requirePos) {
+      fail(
+        `${relativePath} must register RequireJS module stubs after require.js`,
+      );
+    }
+  }
+
   // The slide guard suppresses the one themes.js request the web
   // SetThemesPath from sdk-all-min.js fires before the desktop override in
   // sdk-all.js takes over; without it the missing-asset fallback serves HTML

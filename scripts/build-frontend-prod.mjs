@@ -240,8 +240,11 @@ async function injectSdkScripts(editor, moduleName) {
   setTimeout(function() {
     try {
       var entries = performance.getEntriesByType('resource')
-        .filter(function(e) { return /\\/sdk-all\\.js(?:[?#]|$)/.test(e.name); });
-      diag('resource-count', 'sdk-all.js=' + entries.length);
+        .filter(function(e) { return /\\/sdk-all(?:-min)?\\.js(?:[?#]|$)/.test(e.name); });
+      diag('resource-count', 'sdk-all(-min).js=' + entries.length);
+      diag('wrapper-check',
+        'loadScriptGuard=' + !!(window.AscCommon && window.AscCommon.loadScript &&
+          window.AscCommon.loadScript.__eoGuard));
     } catch(e) {}
   }, 10000);
 })();
@@ -261,11 +264,13 @@ async function injectSdkScripts(editor, moduleName) {
   var originalLoadScript = AscCommon.loadScript;
   AscCommon.loadScript = function(url, onSuccess, onError) {
     if (typeof url === 'string' && /\\/themes\\.js(?:[?#]|$)/.test(url)) {
+      if (window.__eoDiag) window.__eoDiag('themes-guard', 'suppressed ' + url);
       if (onError) setTimeout(onError, 0);
       return;
     }
     return originalLoadScript.apply(this, arguments);
   };
+  AscCommon.loadScript.__eoGuard = true;
 })();
 </script>`;
 
@@ -291,7 +296,27 @@ async function injectSdkScripts(editor, moduleName) {
     scripts.push('<script src="../../../../sdkjs/word/document/editor.js"></script>');
   }
 
-  html = html.replace(marker, `${scripts.join('\n')}\n${marker}`);
+  // The static tags above already evaluated XRegExp, AllFonts.js and
+  // sdk-all-min.js, but app.js requires them again as the RequireJS modules
+  // 'xregexp', 'allfonts' and 'sdk' (require.config paths + shim). Without
+  // these named stubs RequireJS fetches and evaluates each bundle a second
+  // time, which re-runs the AscCommon/AscFonts exports and silently wipes
+  // every patch installed between the static tags and app start (the slide
+  // themes.js guard, the font patches, the diagnostics wrappers). The 'sdk'
+  // stub keeps the original shim dependencies so jquery and socket.io still
+  // load before the app starts, exactly like the upstream loader.
+  const requirePredefineScript = `<script>
+define('xregexp', [], function() { return window.XRegExp; });
+define('allfonts', [], function() {});
+define('sdk', ['jquery', 'allfonts', 'xregexp', 'socketio'], function() {
+  if (window.__eoDiag) window.__eoDiag('require-stub', 'sdk resolved without refetch');
+});
+</script>`;
+
+  html = html.replace(
+    marker,
+    `${scripts.join('\n')}\n${marker}\n${requirePredefineScript}`,
+  );
   await writeFile(htmlPath, html, 'utf8');
 }
 
