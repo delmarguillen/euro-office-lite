@@ -102,7 +102,6 @@ for (const [editor, moduleName] of editorModules) {
     '../../../../sdkjs/vendor/polyfill.js',
     '../../../../sdkjs/common/AllFonts.js',
     `../../../../sdkjs/${moduleName}/sdk-all-min.js`,
-    `../../../../sdkjs/${moduleName}/sdk-all.js`,
   ]) {
     if (!html.includes(expected)) {
       fail(`${relativePath} does not load ${expected}`);
@@ -110,31 +109,43 @@ for (const [editor, moduleName] of editorModules) {
   }
 
   const xregexpPath = '../../../vendor/xregexp/xregexp-all-min.js';
+  const polyfillPath = '../../../../sdkjs/vendor/polyfill.js';
+  const allFontsPath = '../../../../sdkjs/common/AllFonts.js';
   const sdkMinPath = `../../../../sdkjs/${moduleName}/sdk-all-min.js`;
   const sdkAllPath = `../../../../sdkjs/${moduleName}/sdk-all.js`;
-  if (html.indexOf(xregexpPath) > html.indexOf(sdkMinPath)) {
-    fail(`${relativePath} loads ${xregexpPath} after ${sdkMinPath}`);
-  }
-
   const notLoadStatement = "window['AscNotLoadAllScript'] = true;";
-  const notLoadPos = html.indexOf(notLoadStatement);
-  const sdkAllPos = html.indexOf(sdkAllPath);
   const requirePos = html.indexOf('vendor/requirejs/require.js');
-  if (notLoadPos === -1) {
-    fail(`${relativePath} is missing AscNotLoadAllScript=true`);
+  const themePatchPos = html.indexOf('window.__eoThemePathPatched = true');
+  if (html.includes(sdkAllPath)) {
+    fail(`${relativePath} loads ${sdkAllPath} statically`);
+  }
+  if (html.includes(notLoadStatement)) {
+    fail(`${relativePath} disables the asynchronous sdk-all.js loader`);
+  }
+  if (moduleName === 'slide') {
+    if (themePatchPos === -1) {
+      fail(`${relativePath} is missing the Tauri theme-path normalization`);
+    } else if (
+      !(html.indexOf(sdkMinPath) < themePatchPos && themePatchPos < requirePos)
+    ) {
+      fail(`${relativePath} must normalize theme paths after sdk-all-min.js and before require.js`);
+    }
   }
   if (requirePos === -1) {
     fail(`${relativePath} is missing require.js`);
   }
   if (
-    notLoadPos !== -1 &&
-    sdkAllPos !== -1 &&
     requirePos !== -1 &&
-    !(sdkAllPos < notLoadPos && notLoadPos < requirePos)
+    !(
+      html.indexOf(xregexpPath) < html.indexOf(polyfillPath) &&
+      html.indexOf(polyfillPath) < html.indexOf(allFontsPath) &&
+      html.indexOf(allFontsPath) < html.indexOf(sdkMinPath) &&
+      html.indexOf(sdkMinPath) < requirePos
+    )
   ) {
     fail(
-      `${relativePath} must set AscNotLoadAllScript=true ` +
-      'after sdk-all.js and before require.js',
+      `${relativePath} must load XRegExp, polyfill.js, AllFonts.js, ` +
+      'sdk-all-min.js, and require.js in that order',
     );
   }
 }

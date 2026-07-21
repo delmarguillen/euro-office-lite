@@ -142,11 +142,43 @@ async function injectSdkScripts(editor, moduleName) {
 })();
 </script>`;
 
+  const themePathScript = `<script>
+(function() {
+  var diag = window.__eoDiag || function(){};
+  var api = window.Asc && window.Asc.asc_docs_api;
+  var proto = api && api.prototype;
+  if (!proto || typeof proto.SetThemesPath !== 'function') {
+    diag('theme-path-patch', 'installed=false');
+    return;
+  }
+  var originalSetThemesPath = proto.SetThemesPath;
+  proto.SetThemesPath = function(path) {
+    var normalized = typeof path === 'string' ? path.replace(/\\/+$/, '') : path;
+    var result = originalSetThemesPath.call(this, normalized);
+    if (!this.isLoadFullApi && normalized) {
+      // The desktop override from sdk-all.js consumes this value later and
+      // expects it to keep a trailing slash for themeN/theme.bin.
+      this.tmpThemesPath = normalized + '/';
+    } else if (this.ThemeLoader && normalized) {
+      var pathWithSlash = normalized + '/';
+      this.ThemeLoader.ThemesUrl = pathWithSlash;
+      var absolute = this.ThemeLoader.ThemesUrlAbs;
+      if (absolute && absolute.charAt(absolute.length - 1) !== '/') {
+        this.ThemeLoader.ThemesUrlAbs = absolute + '/';
+      }
+    }
+    return result;
+  };
+  window.__eoThemePathPatched = true;
+  diag('theme-path-patch', 'installed=true');
+})();
+</script>`;
+
   const diagScript3 = `<script>
 (function() {
   var diag = window.__eoDiag || function(){};
   var af = window.AscFonts;
-  if (!af) { diag('post-sdk', 'AscFonts=undefined'); return; }
+  if (!af) { diag('post-sdk-min', 'AscFonts=undefined'); return; }
   var initialGfa = af.g_fontApplication;
   window.__eoInitialGfa = initialGfa;
   var initialLFA = af.CFontFileLoader && af.CFontFileLoader.prototype.LoadFontAsync;
@@ -160,14 +192,25 @@ async function injectSdkScripts(editor, moduleName) {
   }
   window.__eoDescribeLFA = describeLFA;
   var sel = initialGfa && initialGfa.g_fontSelections;
-  diag('post-sdk',
+  diag('post-sdk-min',
     'IsInit=' + (sel && sel.IsInit) +
     ' List.length=' + (sel && sel.List ? sel.List.length : 'null') +
     ' g_font_files=' + (af.g_font_files ? af.g_font_files.length : 'null') +
     ' g_font_infos=' + (af.g_font_infos ? af.g_font_infos.length : 'null') +
-    ' selection_bin.len=' + ((window['g_fonts_selection_bin'] || '').length) +
-    ' AscNotLoadAllScript=' + !!window['AscNotLoadAllScript']);
-  diag('post-sdk', 'LoadFontAsync: ' + describeLFA(initialLFA));
+    ' selection_bin.len=' + ((window['g_fonts_selection_bin'] || '').length));
+  diag('post-sdk-min', 'LoadFontAsync: ' + describeLFA(initialLFA));
+  function reportFullSdkLoaded(source) {
+    var currentAf = window.AscFonts;
+    var currentGfa = currentAf && currentAf.g_fontApplication;
+    var currentLFA = currentAf && currentAf.CFontFileLoader &&
+      currentAf.CFontFileLoader.prototype.LoadFontAsync;
+    diag('sdk-all-loaded',
+      'source=' + source +
+      ' gfaReplaced=' + (currentGfa !== window.__eoInitialGfa) +
+      ' g_font_files=' + (currentAf && currentAf.g_font_files ? currentAf.g_font_files.length : 'null') +
+      ' g_font_infos=' + (currentAf && currentAf.g_font_infos ? currentAf.g_font_infos.length : 'null'));
+    diag('sdk-all-loaded', 'LoadFontAsync: ' + describeLFA(currentLFA));
+  }
   var sdkInsertCount = 0;
   var obs = new MutationObserver(function(mutations) {
     for (var i = 0; i < mutations.length; i++) {
@@ -177,6 +220,12 @@ async function injectSdkScripts(editor, moduleName) {
         if (node.tagName === 'SCRIPT' && node.src && /\\/sdk-all\\.js(?:[?#]|$)/.test(node.src)) {
           sdkInsertCount++;
           diag('sdk-all-dynamic-insert', 'count=' + sdkInsertCount + ' src=' + node.src.split('/').pop());
+          node.addEventListener('load', function() {
+            reportFullSdkLoaded('dynamic-script');
+          }, { once: true });
+          node.addEventListener('error', function() {
+            diag('sdk-all-dynamic-error', 'src=' + node.src);
+          }, { once: true });
         }
       }
     }
@@ -186,7 +235,7 @@ async function injectSdkScripts(editor, moduleName) {
   if (window.AscCommon && window.AscCommon.loadSdk) {
     var origLoadSdk = window.AscCommon.loadSdk;
     window.AscCommon.loadSdk = function(name, onSuccess, onError) {
-      diag('loadSdk-called', 'name=' + name + ' AscNotLoadAllScript=' + !!window['AscNotLoadAllScript']);
+      diag('loadSdk-called', 'name=' + name);
       return origLoadSdk.call(this, name, function() {
         var currentGfa = window.AscFonts.g_fontApplication;
         var gfaReplaced = currentGfa !== window.__eoInitialGfa;
@@ -240,12 +289,9 @@ async function injectSdkScripts(editor, moduleName) {
     '<script src="../../../../sdkjs/common/AllFonts.js"></script>',
     diagScript2,
     `<script src="../../../../sdkjs/${moduleName}/sdk-all-min.js"></script>`,
-    `<script src="../../../../sdkjs/${moduleName}/sdk-all.js"></script>`,
-    // The SDK bundles are loaded statically above. Without this flag, loadSdk()
-    // in editorscommon.js inserts a dynamic <script> that re-executes sdk-all.js,
-    // replacing g_fontApplication, CFontFileLoader, and LoadFontAsync. Upstream
-    // sets this flag in preload.html when pre-loading bundles the same way.
-    `<script>window['AscNotLoadAllScript'] = true;</script>`,
+    ...(moduleName === 'slide' ? [themePathScript] : []),
+    // Match ONLYOFFICE's compiled loader: apiBase loads sdk-all.js once and
+    // asynchronously from loadSdk() after the editor API has been created.
     diagScript3,
   ];
 
