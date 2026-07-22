@@ -10,6 +10,7 @@ SDKJS="$PROJECT_ROOT/src/sdkjs"
 BINARIES="$PROJECT_ROOT/src-tauri/binaries"
 TAG="${DOCTRENDERER_SDKJS_TAG:-v8.2.0.147}"
 STAGING="${DOCTRENDERER_STAGING:-${RUNNER_TEMP:-/tmp}/doctrenderer-sdkjs}"
+ALLFONTS_SOURCE="${ALLFONTS_SOURCE:-$SDKJS/common/AllFonts.js}"
 UI_REF="$(git -C "$SDKJS" rev-parse HEAD)"
 
 restore_sdkjs() {
@@ -50,7 +51,7 @@ mkdir -p "$STAGING/common/Native"
 mkdir -p "$STAGING/common/libfont/engine"
 cp "$SDKJS/common/Native/native.js" "$STAGING/common/Native/"
 cp "$SDKJS/common/Native/jquery_native.js" "$STAGING/common/Native/"
-cp "$SDKJS/common/AllFonts.js" "$STAGING/common/"
+cp "$ALLFONTS_SOURCE" "$STAGING/common/AllFonts.js"
 cp "$SDKJS/common/libfont/engine/fonts_native.js" "$STAGING/common/libfont/engine/"
 
 # Preserve the legacy Word copies in binaries/ while all runtime resources

@@ -383,6 +383,29 @@
           return canvas;
         }
 
+        // fillFonts registers store 'add'/'remove' listeners without detaching
+        // the previous ones. Upstream runs it once, but the system-fonts
+        // re-emit from _refreshEditorFonts runs it a second time; the stacked
+        // listeners then prepend every new recent-font row twice (one store
+        // record, two identical li elements). Detach before the original
+        // re-registers so exactly one listener pair remains.
+        var originalFillFonts = Combo.prototype.fillFonts;
+        Combo.prototype.fillFonts = function(store, select) {
+          if (this.store && this.onInsertItem) {
+            this.store.off('add', this.onInsertItem, this);
+            this.store.off('remove', this.onRemoveItem, this);
+          }
+          return originalFillFonts.apply(this, arguments);
+        };
+
+        // Idempotence guard: a row per record id must be unique even if the
+        // listeners above ever stack again through an async re-registration.
+        var originalOnInsertItem = Combo.prototype.onInsertItem;
+        Combo.prototype.onInsertItem = function(item) {
+          if (item && item.id && fw.$(this.el).find('li[id="' + item.id + '"]').length) return;
+          return originalOnInsertItem.apply(this, arguments);
+        };
+
         var originalLoadSprite = Combo.prototype.loadSprite;
         Combo.prototype.loadSprite = function(callback) {
           var combo = this;
@@ -406,12 +429,17 @@
         };
 
         // The generated thumbnail index is not unique (and -1 is shared by many
-        // families), so list rows must use the model's actual name, not an index map.
+        // families), so list rows must use the model's actual name. Resolve the
+        // record through the row's own li id, never by list position: recent
+        // fonts, dividers or menu re-renders shift positional indexes, painting
+        // one font's name on a row whose click applies a different font.
         Combo.prototype.updateVisibleFontsTiles = function(e, scrollY) {
-          var combo = this, j = 0, storeCount = combo.store.length;
+          var combo = this, j = 0;
+          var listItems = fw.$(combo.el).find('a');
+          var anchorCount = listItems.length;
           if (!combo.tiles) combo.tiles = [];
-          if (storeCount !== combo.tiles.length) {
-            for (j = combo.tiles.length; j < storeCount; ++j) combo.tiles.unshift(null);
+          if (anchorCount !== combo.tiles.length) {
+            for (j = combo.tiles.length; j < anchorCount; ++j) combo.tiles.unshift(null);
           }
           if (typeof scrollY === 'undefined') {
             scrollY = parseInt(fw.$(combo.el).find('.ps-scrollbar-x-rail').css('bottom'));
@@ -421,16 +449,23 @@
           var count = Math.max(Math.floor(scrollH / itemHeight) + 3, 0);
           var from = Math.max(Math.floor(-(scrollY / itemHeight)) - 1, 0);
           var to = from + count;
-          var listItems = fw.$(combo.el).find('a');
 
-          for (j = 0; j < storeCount; ++j) {
+          for (j = 0; j < anchorCount; ++j) {
+            var anchor = listItems[j];
+            // A canvas left attached to a replaced or reordered anchor no
+            // longer matches this row; drop it so the row is redrawn.
+            if (combo.tiles[j] && combo.tiles[j].parentNode !== anchor) {
+              if (combo.tiles[j].parentNode) combo.tiles[j].parentNode.removeChild(combo.tiles[j]);
+              combo.tiles[j] = null;
+            }
             if (from <= j && j < to) {
-              if (null === combo.tiles[j]) {
-                var record = combo.store.at(j);
+              if (null === combo.tiles[j] && anchor) {
+                var rowId = fw.$(anchor).closest('li').attr('id');
+                var record = rowId ? combo.store.findWhere({ id: rowId }) : null;
                 var fontName = record && record.get('name');
                 var fontImage = fontName ? drawFontName(combo, fontName) : null;
                 combo.tiles[j] = fontImage;
-                if (fontImage && listItems[j]) listItems[j].appendChild(fontImage);
+                if (fontImage) anchor.appendChild(fontImage);
               }
             } else if (combo.tiles[j]) {
               if (combo.tiles[j].parentNode) combo.tiles[j].parentNode.removeChild(combo.tiles[j]);
@@ -504,10 +539,43 @@
       } catch(e) {}
     }
 
+    function _installFrameDiagnostics(win) {
+      try {
+        if (!win || win._eoDiagnosticsInstalled) return;
+        win._eoDiagnosticsInstalled = true;
+
+        win.addEventListener('error', function(event) {
+          var error = event.error || {};
+          var source = window._eoSafeSource ?
+            window._eoSafeSource(event.filename || '') : (event.filename || '');
+          _log('[IFRAME-ERROR]', {
+            name: error.name,
+            message: event.message || error.message,
+            stack: error.stack
+          }, 'source=' + source + ':' + (event.lineno || 0) + ':' + (event.colno || 0));
+        }, true);
+
+        win.addEventListener('unhandledrejection', function(event) {
+          _log('[IFRAME-REJECT]', event.reason || 'unknown');
+        });
+
+        var frameSource = '';
+        try {
+          frameSource = window._eoSafeSource ?
+            window._eoSafeSource(win.location.href) : win.location.pathname;
+        } catch(e) {}
+        _log('[EO] iframe diagnostics installed: source=' + frameSource);
+      } catch(e) {
+        _log('[EO] iframe diagnostics install failed: ' + (e.message || e));
+      }
+    }
+
     function injectBridgeDeep(win) {
       try {
         var hasADE = false;
         try { hasADE = !!win.AscDesktopEditor; } catch(e) {}
+
+        _installFrameDiagnostics(win);
 
         if (win && !hasADE) {
           try {
@@ -560,6 +628,16 @@
             try {
               if (!saveAsPatched && win.Asc && win.Asc.editor) {
                 var api = win.Asc.editor;
+
+                // Euro Office is a local desktop application even though Tauri
+                // serves its assets through a custom http(s) protocol. Production
+                // Web Apps can otherwise snapshot the base SDK's protocol check
+                // before the desktop override and expose the online "Download as"
+                // flow. Keep the API authoritative for all later mode checks.
+                var reportedOffline = 'unavailable';
+                try { reportedOffline = String(api.asc_isOffline()); } catch(e) {}
+                api.asc_isOffline = api['asc_isOffline'] = function() { return true; };
+                win._eoLog('[EO] desktop-offline API override: reported=' + reportedOffline);
 
                 var origDownloadAs = api.asc_DownloadAs;
                 api.asc_DownloadAs = api['asc_DownloadAs'] = function(options) {
@@ -618,6 +696,64 @@
             }
           }, 50);
           setTimeout(function() { clearInterval(savePatchInterval); }, 30000);
+
+          // The production Web Apps bundle computes File-menu visibility once
+          // while it initializes. Reassert desktop/offline mode on the controller
+          // state as well as the SDK API, then ask the menu to reapply that state.
+          // This hides the online "Download as" entry while preserving the local
+          // "Save as" and PDF export actions gated by canDownload.
+          var desktopModePatched = false;
+          var desktopModeLastError = '';
+          var desktopModeInterval = setInterval(function() {
+            if (desktopModePatched) return;
+            try {
+              var editorApps = [
+                { name: 'word', app: win.DE },
+                { name: 'cell', app: win.SSE },
+                { name: 'slide', app: win.PE }
+              ];
+              for (var ei = 0; ei < editorApps.length; ei++) {
+                var editorApp = editorApps[ei];
+                if (!editorApp.app || !editorApp.app.getController) continue;
+
+                var mainController = editorApp.app.getController('Main');
+                var leftMenuController = editorApp.app.getController('LeftMenu');
+                if (!mainController || !mainController.appOptions ||
+                    !leftMenuController || !leftMenuController.mode) continue;
+
+                var previousDesktop = mainController.appOptions.isDesktopApp;
+                var previousOffline = mainController.appOptions.isOffline;
+                mainController.appOptions.isDesktopApp = true;
+                mainController.appOptions.isOffline = true;
+                leftMenuController.mode.isDesktopApp = true;
+                leftMenuController.mode.isOffline = true;
+
+                if (typeof leftMenuController.setMode === 'function') {
+                  leftMenuController.setMode(leftMenuController.mode);
+                }
+
+                win._eoLog('[EO] desktop-offline UI mode: editor=' + editorApp.name +
+                  ' previousDesktop=' + previousDesktop +
+                  ' previousOffline=' + previousOffline +
+                  ' canDownload=' + leftMenuController.mode.canDownload);
+                desktopModePatched = true;
+                clearInterval(desktopModeInterval);
+                break;
+              }
+            } catch(e) {
+              var modeError = String(e.message || e);
+              if (modeError !== desktopModeLastError) {
+                desktopModeLastError = modeError;
+                win._eoLog('[EO] desktop-offline UI mode retry: ' + modeError);
+              }
+            }
+          }, 50);
+          setTimeout(function() {
+            clearInterval(desktopModeInterval);
+            if (!desktopModePatched) {
+              win._eoLog('[EO] desktop-offline UI mode was not applied before timeout');
+            }
+          }, 30000);
 
           // Supply printer list to print preview panel
           var printSetupDone = false;
@@ -860,6 +996,7 @@
         events: {
           onAppReady: function() {
             var allFrames = document.querySelectorAll('iframe');
+            _log('[EO] App ready: docType=' + docType + ' frames=' + allFrames.length);
             for (var fi = 0; fi < allFrames.length; fi++) {
               try {
                 var fw = allFrames[fi].contentWindow;
@@ -872,10 +1009,15 @@
             _loadSystemFonts();
           },
           onDocumentReady: function() {
-            console.log('[EO] Document ready');
+            _log('[EO] Document ready: docType=' + docType);
           },
           onError: function(event) {
-            console.error('[EO] Editor error:', event.data);
+            _log('[EO] Editor error event: docType=' + docType,
+              event && event.data ? event.data : { message: 'missing event data' });
+          },
+          onWarning: function(event) {
+            _log('[EO] Editor warning event: docType=' + docType,
+              event && event.data ? event.data : { message: 'missing event data' });
           }
         }
       });

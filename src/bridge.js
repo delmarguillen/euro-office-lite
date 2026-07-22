@@ -77,15 +77,61 @@ var ClipboardHelper = (function() {
   };
 })();
 
+function _eoLimitLogText(value, limit) {
+  var text = String(value === undefined || value === null ? '' : value);
+  return text.length > limit ? text.substring(0, limit) + '...[truncated]' : text;
+}
+
+function _eoSafeSource(source) {
+  var value = String(source || '').split('#')[0].split('?')[0].replace(/\\/g, '/');
+  for (var i = 0; i < 2; i++) {
+    var marker = i === 0 ? '/web-apps/' : '/sdkjs/';
+    var markerIndex = value.indexOf(marker);
+    if (markerIndex !== -1) return value.substring(markerIndex + 1);
+  }
+  var parts = value.split('/');
+  return parts.slice(Math.max(0, parts.length - 2)).join('/');
+}
+
+// Keep diagnostics useful without serializing arbitrary SDK objects, which may
+// contain document data. Only known error fields and object key names are logged.
+function _eoFormatLogValue(value) {
+  try {
+    if (value === undefined) return 'undefined';
+    if (value === null) return 'null';
+    if (typeof value !== 'object') return _eoLimitLogText(value, 6000);
+
+    if (Array.isArray(value)) return '[Array length=' + value.length + ']';
+
+    var fields = [];
+    var allowed = ['name', 'message', 'errorCode', 'errorDescription', 'level', 'stack'];
+    for (var i = 0; i < allowed.length; i++) {
+      var key = allowed[i];
+      if (value[key] === undefined || value[key] === null || value[key] === '') continue;
+      fields.push(key + '=' + _eoLimitLogText(value[key], key === 'stack' ? 6000 : 1000));
+    }
+    if (fields.length) return fields.join(' ');
+
+    var keys = Object.keys(value).slice(0, 20);
+    return '[Object keys=' + keys.join(',') + (Object.keys(value).length > keys.length ? ',...' : '') + ']';
+  } catch(e) {
+    return '[unprintable diagnostic value]';
+  }
+}
+
+window._eoSafeSource = _eoSafeSource;
+window._eoFormatLogValue = _eoFormatLogValue;
 window._eoLogBuffer = [];
 window._eoLog = function() {
   var parts = [];
   for (var i = 0; i < arguments.length; i++) {
-    try { parts.push(String(arguments[i])); } catch(e) { parts.push('[?]'); }
+    parts.push(_eoFormatLogValue(arguments[i]));
   }
-  var msg = parts.join(' ');
+  var msg = '[' + new Date().toISOString() + '] ' + parts.join(' ');
+  msg = _eoLimitLogText(msg, 12000);
   console.log(msg);
   window._eoLogBuffer.push(msg);
+  if (window._eoLogBuffer.length > 500) window._eoLogBuffer.shift();
   try {
     invoke('js_log', { msg: msg });
   } catch(e) {
@@ -276,16 +322,20 @@ window._eoSetLang = function(code) {
 // ── end i18n ──
 
 window.addEventListener('error', function(e) {
-  window._eoLog('[JS-ERROR] ' + e.message + ' at ' + (e.filename || '') + ':' + (e.lineno || ''));
+  window._eoLog('[JS-ERROR]', {
+    name: e.error && e.error.name,
+    message: e.message || (e.error && e.error.message),
+    stack: e.error && e.error.stack
+  }, 'source=' + _eoSafeSource(e.filename) + ':' + (e.lineno || 0) + ':' + (e.colno || 0));
 });
 window.addEventListener('unhandledrejection', function(e) {
-  window._eoLog('[JS-REJECT] ' + (e.reason && (e.reason.message || e.reason) || 'unknown'));
+  window._eoLog('[JS-REJECT]', e.reason || 'unknown');
 });
 var _origConsoleError = console.error;
 console.error = function() {
   var parts = [];
   for (var i = 0; i < arguments.length; i++) {
-    try { parts.push(String(arguments[i])); } catch(e) { parts.push('[?]'); }
+    parts.push(_eoFormatLogValue(arguments[i]));
   }
   window._eoLog('[CONSOLE-ERROR] ' + parts.join(' '));
   _origConsoleError.apply(console, arguments);
@@ -480,6 +530,7 @@ window.AscDesktopEditor = {
     if (!window.AscDesktopEditor._editorWindow) {
       window.AscDesktopEditor._editorWindow = _findEditorWindow(window);
     }
+
   },
 
   LocalStartOpen: function() {
