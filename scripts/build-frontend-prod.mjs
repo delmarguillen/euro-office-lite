@@ -82,174 +82,6 @@ async function injectSdkScripts(editor, moduleName) {
     fail(`production loader marker not found in ${htmlPath}`);
   }
 
-  const diagScript1 = `<script>
-(function() {
-  window.__eoFontDiag = { t0: performance.now(), events: [] };
-  function diag(label, data) {
-    var t = Math.round(performance.now() - window.__eoFontDiag.t0);
-    var msg = '[FONT-DIAG ' + t + 'ms] ' + label + (data ? ' ' + data : '');
-    window.__eoFontDiag.events.push(msg);
-    try { console.log(msg); } catch(e) {}
-    try { window.parent._eoLog(msg); } catch(e) {}
-  }
-  window.__eoDiag = diag;
-  diag('init', 'diagnostics installed');
-  window.addEventListener('error', function(ev) {
-    diag('error-listener', 'msg=' + (ev.message || '') +
-      ' src=' + (ev.filename || '').split('/').pop() + ':' + (ev.lineno || 0));
-  }, true);
-  window.addEventListener('unhandledrejection', function(ev) {
-    var reason = ev && ev.reason;
-    diag('rejection-listener', 'reason=' + (reason && reason.message || reason));
-  });
-  var origXhrOpen = XMLHttpRequest.prototype.open;
-  var fontXhrCount = 0;
-  XMLHttpRequest.prototype.open = function(method, url) {
-    var self = this;
-    if (typeof url === 'string' && (/\\.ttf|\\.otf/i.test(url) || /\\/fonts\\//i.test(url) || /ascdesktop:\\/\\/fonts\\//i.test(url))) {
-      fontXhrCount++;
-      self.__eoFontUrl = url.split('/').pop().split('?')[0];
-      self.__eoFontNum = fontXhrCount;
-      self.addEventListener('loadend', function() {
-        var bytes = 0;
-        try {
-          var response = self.response;
-          if (response && typeof response.byteLength === 'number') bytes = response.byteLength;
-          else if (response && typeof response.size === 'number') bytes = response.size;
-          else if (typeof self.responseText === 'string') bytes = self.responseText.length;
-        } catch(e) {}
-        if (self.__eoFontNum <= 10 || self.status !== 200) {
-          diag('font-xhr', '#' + self.__eoFontNum + ' file=' + self.__eoFontUrl +
-            ' status=' + self.status + ' bytes=' + bytes +
-            ' ascdesktop=' + (url.indexOf('ascdesktop://fonts/') !== -1));
-        } else if (self.__eoFontNum === 50) {
-          diag('font-xhr', 'aggregate: 50 requests so far');
-        }
-      }, { once: true });
-    }
-    return origXhrOpen.apply(this, arguments);
-  };
-})();
-</script>`;
-
-  const diagScript2 = `<script>
-(function() {
-  var diag = window.__eoDiag || function(){};
-  diag('post-AllFonts',
-    '__fonts_files=' + (window['__fonts_files'] ? window['__fonts_files'].length : 'undef') +
-    ' __fonts_infos=' + (window['__fonts_infos'] ? window['__fonts_infos'].length : 'undef') +
-    ' g_fonts_selection_bin.len=' + ((window['g_fonts_selection_bin'] || '').length));
-})();
-</script>`;
-
-  const diagScript3 = `<script>
-(function() {
-  var diag = window.__eoDiag || function(){};
-  var af = window.AscFonts;
-  if (!af) { diag('post-sdk-min', 'AscFonts=undefined'); return; }
-  var initialGfa = af.g_fontApplication;
-  window.__eoInitialGfa = initialGfa;
-  var initialLFA = af.CFontFileLoader && af.CFontFileLoader.prototype.LoadFontAsync;
-  window.__eoInitialLFA = initialLFA;
-  function describeLFA(fn) {
-    var src = String(fn || '');
-    return 'changed=' + (fn !== window.__eoInitialLFA) +
-      ' ascdesktopFonts=' + (src.indexOf('ascdesktop://fonts/') !== -1) +
-      ' tauriAbs=' + (src.indexOf('abs/') !== -1) +
-      ' sourceLen=' + src.length;
-  }
-  window.__eoDescribeLFA = describeLFA;
-  var sel = initialGfa && initialGfa.g_fontSelections;
-  diag('post-sdk-min',
-    'IsInit=' + (sel && sel.IsInit) +
-    ' List.length=' + (sel && sel.List ? sel.List.length : 'null') +
-    ' g_font_files=' + (af.g_font_files ? af.g_font_files.length : 'null') +
-    ' g_font_infos=' + (af.g_font_infos ? af.g_font_infos.length : 'null') +
-    ' selection_bin.len=' + ((window['g_fonts_selection_bin'] || '').length));
-  diag('post-sdk-min', 'LoadFontAsync: ' + describeLFA(initialLFA));
-  function reportFullSdkLoaded(source) {
-    var currentAf = window.AscFonts;
-    var currentGfa = currentAf && currentAf.g_fontApplication;
-    var currentLFA = currentAf && currentAf.CFontFileLoader &&
-      currentAf.CFontFileLoader.prototype.LoadFontAsync;
-    diag('sdk-all-loaded',
-      'source=' + source +
-      ' gfaReplaced=' + (currentGfa !== window.__eoInitialGfa) +
-      ' g_font_files=' + (currentAf && currentAf.g_font_files ? currentAf.g_font_files.length : 'null') +
-      ' g_font_infos=' + (currentAf && currentAf.g_font_infos ? currentAf.g_font_infos.length : 'null'));
-    diag('sdk-all-loaded', 'LoadFontAsync: ' + describeLFA(currentLFA));
-  }
-  var sdkInsertCount = 0;
-  var obs = new MutationObserver(function(mutations) {
-    for (var i = 0; i < mutations.length; i++) {
-      var nodes = mutations[i].addedNodes;
-      for (var j = 0; j < nodes.length; j++) {
-        var node = nodes[j];
-        if (node.tagName === 'SCRIPT' && node.src && /\\/sdk-all\\.js(?:[?#]|$)/.test(node.src)) {
-          sdkInsertCount++;
-          diag('sdk-all-dynamic-insert', 'count=' + sdkInsertCount + ' src=' + node.src.split('/').pop());
-          node.addEventListener('load', function() {
-            reportFullSdkLoaded('dynamic-script');
-          }, { once: true });
-          node.addEventListener('error', function() {
-            diag('sdk-all-dynamic-error', 'src=' + node.src);
-          }, { once: true });
-        }
-      }
-    }
-  });
-  obs.observe(document.head, { childList: true });
-  window.__eoSdkObserver = obs;
-  if (window.AscCommon && window.AscCommon.loadSdk) {
-    var origLoadSdk = window.AscCommon.loadSdk;
-    window.AscCommon.loadSdk = function(name, onSuccess, onError) {
-      diag('loadSdk-called', 'name=' + name);
-      return origLoadSdk.call(this, name, function() {
-        var currentGfa = window.AscFonts.g_fontApplication;
-        var gfaReplaced = currentGfa !== window.__eoInitialGfa;
-        diag('loadSdk-callback',
-          'gfaReplaced=' + gfaReplaced +
-          ' g_font_files=' + (window.AscFonts.g_font_files ? window.AscFonts.g_font_files.length : 'null') +
-          ' g_font_infos=' + (window.AscFonts.g_font_infos ? window.AscFonts.g_font_infos.length : 'null'));
-        var lfn2 = window.AscFonts.CFontFileLoader.prototype.LoadFontAsync;
-        var describe = window.__eoDescribeLFA || function() { return 'unavailable'; };
-        diag('loadSdk-callback', 'LoadFontAsync: ' + describe(lfn2));
-        var gfa = window.AscFonts.g_fontApplication;
-        if (gfa && gfa.g_fontSelections && !gfa.g_fontSelections.__eoDiagWrapped) {
-          gfa.g_fontSelections.__eoDiagWrapped = true;
-          var origInit = gfa.g_fontSelections.Init;
-          gfa.g_fontSelections.Init = function() {
-            var binLen = (window['g_fonts_selection_bin'] || '').length;
-            diag('fontSelections.Init-BEFORE',
-              'IsInit=' + gfa.g_fontSelections.IsInit +
-              ' selection_bin.len=' + binLen +
-              ' g_font_files=' + (window.AscFonts.g_font_files ? window.AscFonts.g_font_files.length : 'null'));
-            var result = origInit.apply(this, arguments);
-            diag('fontSelections.Init-AFTER',
-              'List.length=' + (gfa.g_fontSelections.List ? gfa.g_fontSelections.List.length : 'null') +
-              ' hasFamiliesNotASCW3=' + !!(gfa.g_fontSelections.List && gfa.g_fontSelections.List.some(function(e) {
-                return e.m_wsFontName && e.m_wsFontName !== 'ASCW3';
-              })));
-            return result;
-          };
-        }
-        return onSuccess.apply(this, arguments);
-      }, onError);
-    };
-  }
-  setTimeout(function() {
-    try {
-      var entries = performance.getEntriesByType('resource')
-        .filter(function(e) { return /\\/sdk-all(?:-min)?\\.js(?:[?#]|$)/.test(e.name); });
-      diag('resource-count', 'sdk-all(-min).js=' + entries.length);
-      diag('wrapper-check',
-        'loadScriptGuard=' + !!(window.AscCommon && window.AscCommon.loadScript &&
-          window.AscCommon.loadScript.__eoGuard));
-    } catch(e) {}
-  }, 10000);
-})();
-</script>`;
-
   // Desktop builds never ship sdkjs/slide/themes/themes.js: the desktop
   // SetThemesPath override (slide/Local/api.js) never requests it, but that
   // override only arrives with the asynchronous sdk-all.js. Until then the
@@ -264,7 +96,6 @@ async function injectSdkScripts(editor, moduleName) {
   var originalLoadScript = AscCommon.loadScript;
   AscCommon.loadScript = function(url, onSuccess, onError) {
     if (typeof url === 'string' && /\\/themes\\.js(?:[?#]|$)/.test(url)) {
-      if (window.__eoDiag) window.__eoDiag('themes-guard', 'suppressed ' + url);
       if (onError) setTimeout(onError, 0);
       return;
     }
@@ -276,18 +107,16 @@ async function injectSdkScripts(editor, moduleName) {
 
   const scripts = [
     '<!-- Euro-Office Lite static production SDK loader -->',
-    diagScript1,
     // The SDK references XRegExp during its initial synchronous evaluation.
     // RequireJS starts later, so load this dependency explicitly first.
     `<script src='../../../vendor/xregexp/xregexp-all-min.js'></script>`,
     '<script src="../../../../sdkjs/vendor/polyfill.js"></script>',
     '<script src="../../../../sdkjs/common/AllFonts.js"></script>',
-    diagScript2,
     `<script src="../../../../sdkjs/${moduleName}/sdk-all-min.js"></script>`,
+    // Match the upstream compiled loader: apiBase loads sdk-all.js once and
+    // asynchronously from loadSdk() after the editor API has been created,
+    // so it must not appear as a static tag here.
     ...(moduleName === 'slide' ? [slideThemesGuardScript] : []),
-    // Match ONLYOFFICE's compiled loader: apiBase loads sdk-all.js once and
-    // asynchronously from loadSdk() after the editor API has been created.
-    diagScript3,
   ];
 
   // The local Word bootstrap is deliberately outside the Closure bundle.
@@ -302,15 +131,13 @@ async function injectSdkScripts(editor, moduleName) {
   // these named stubs RequireJS fetches and evaluates each bundle a second
   // time, which re-runs the AscCommon/AscFonts exports and silently wipes
   // every patch installed between the static tags and app start (the slide
-  // themes.js guard, the font patches, the diagnostics wrappers). The 'sdk'
+  // themes.js guard and the font patches). The 'sdk'
   // stub keeps the original shim dependencies so jquery and socket.io still
   // load before the app starts, exactly like the upstream loader.
   const requirePredefineScript = `<script>
 define('xregexp', [], function() { return window.XRegExp; });
 define('allfonts', [], function() {});
-define('sdk', ['jquery', 'allfonts', 'xregexp', 'socketio'], function() {
-  if (window.__eoDiag) window.__eoDiag('require-stub', 'sdk resolved without refetch');
-});
+define('sdk', ['jquery', 'allfonts', 'xregexp', 'socketio'], function() {});
 </script>`;
 
   html = html.replace(

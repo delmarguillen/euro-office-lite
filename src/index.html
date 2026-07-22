@@ -392,13 +392,6 @@
         var originalFillFonts = Combo.prototype.fillFonts;
         Combo.prototype.fillFonts = function(store, select) {
           if (this.store && this.onInsertItem) {
-            var events = this.store._events || {};
-            var stackedAdd = events.add ? events.add.length : 0;
-            var stackedRemove = events.remove ? events.remove.length : 0;
-            if (stackedAdd || stackedRemove) {
-              _log('[FONT-DIAG] fillFonts re-run: detaching stacked listeners' +
-                ' add=' + stackedAdd + ' remove=' + stackedRemove);
-            }
             this.store.off('add', this.onInsertItem, this);
             this.store.off('remove', this.onRemoveItem, this);
           }
@@ -409,13 +402,7 @@
         // listeners above ever stack again through an async re-registration.
         var originalOnInsertItem = Combo.prototype.onInsertItem;
         Combo.prototype.onInsertItem = function(item) {
-          if (item && item.id && fw.$(this.el).find('li[id="' + item.id + '"]').length) {
-            // Should never fire once fillFonts detaches stacked listeners; if
-            // it does, the async loadSprite callbacks raced and re-stacked.
-            _log('[FONT-DIAG] duplicate recent row suppressed id=' + item.id +
-              ' name=' + (item.get ? item.get('name') : '?'));
-            return;
-          }
+          if (item && item.id && fw.$(this.el).find('li[id="' + item.id + '"]').length) return;
           return originalOnInsertItem.apply(this, arguments);
         };
 
@@ -450,11 +437,6 @@
           var combo = this, j = 0;
           var listItems = fw.$(combo.el).find('a');
           var anchorCount = listItems.length;
-          if (anchorCount !== combo.store.length && !combo.__eoCountLogged) {
-            combo.__eoCountLogged = true;
-            _log('[FONT-DIAG] font-dropdown anchors=' + anchorCount +
-              ' storeRecords=' + combo.store.length);
-          }
           if (!combo.tiles) combo.tiles = [];
           if (anchorCount !== combo.tiles.length) {
             for (j = combo.tiles.length; j < anchorCount; ++j) combo.tiles.unshift(null);
@@ -481,10 +463,6 @@
                 var rowId = fw.$(anchor).closest('li').attr('id');
                 var record = rowId ? combo.store.findWhere({ id: rowId }) : null;
                 var fontName = record && record.get('name');
-                if (rowId && !record && !combo.__eoOrphanLogged) {
-                  combo.__eoOrphanLogged = true;
-                  _log('[FONT-DIAG] font-row without store record: li id=' + rowId);
-                }
                 var fontImage = fontName ? drawFontName(combo, fontName) : null;
                 combo.tiles[j] = fontImage;
                 if (fontImage) anchor.appendChild(fontImage);
@@ -508,33 +486,10 @@
       }
     }
 
-    function _installFontSelectionDiag(fw) {
-      try {
-        var api = fw.Asc && fw.Asc.editor;
-        if (!api || api.__eoFontSelDiag) return;
-        api.__eoFontSelDiag = true;
-        // word/slide apply fonts via put_TextPrFontName, cell via asc_setCellFontName.
-        ['put_TextPrFontName', 'asc_setCellFontName'].forEach(function(fn) {
-          if (typeof api[fn] === 'function') {
-            var original = api[fn];
-            api[fn] = function(name) {
-              _log('[FONT-DIAG] apply-font ' + fn + ' name="' + name + '"');
-              return original.apply(this, arguments);
-            };
-          }
-        });
-      } catch(e) {}
-    }
-
     function _applySystemFontsToFrame(fw) {
       if (!_systemFontsJs || !fw || fw._eoSystemFontsInjected ||
           !fw.AscFonts || !fw.AscFonts.checkAllFonts) return false;
       try {
-        _log('[FONT-DIAG] _applySystemFontsToFrame START' +
-          ' g_font_files=' + (fw.AscFonts.g_font_files ? fw.AscFonts.g_font_files.length : 'null') +
-          ' g_font_infos=' + (fw.AscFonts.g_font_infos ? fw.AscFonts.g_font_infos.length : 'null') +
-          ' editorExists=' + !!(fw.Asc && fw.Asc.editor) +
-          ' isLoadFullApi=' + (fw.Asc && fw.Asc.editor && fw.Asc.editor.isLoadFullApi));
         fw._eoSystemFontsInjected = true;
         new fw.Function(_systemFontsJs)();
 
@@ -560,18 +515,12 @@
           fw._eoFontThumbnailNames[fontInfo.Thumbnail] = fontInfo.Name;
         }
         _installFontThumbnailFallback(fw);
-        _installFontSelectionDiag(fw);
         _refreshEditorFonts(fw, loader);
 
-        _log('[FONT-DIAG] _applySystemFontsToFrame END' +
-          ' g_font_files=' + fw.AscFonts.g_font_files.length +
-          ' g_font_infos=' + fw.AscFonts.g_font_infos.length +
-          ' selections=' + (fw.AscFonts.g_fontApplication.g_fontSelections.List || []).length);
         return true;
       } catch(e) {
         fw._eoSystemFontsInjected = false;
-        _log('[FONT-DIAG] _applySystemFontsToFrame ERROR: ' + e.message +
-          ' stack=' + (e.stack || '').split('\n').slice(0, 5).join(' | '));
+        _log('[EO] System fonts inject error: ' + e.message);
         return false;
       }
     }

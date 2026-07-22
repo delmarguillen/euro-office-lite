@@ -468,11 +468,6 @@ function _loadEditorBin(b64data, fileName) {
       }, true);
     }
 
-    var signatureValid = ref.ew.AscCommon.checkStreamSignature(
-      bytes, ref.ew.AscCommon.c_oSerFormat.Signature);
-    window._eoLog('[FONT-DIAG] _loadEditorBin b64len=' + b64data.length +
-      ' bytesLen=' + bytes.length + ' signatureValid=' + signatureValid);
-
     var file = new ref.ew.AscCommon.OpenFileResult();
     file.data = bytes;
     file.bSerFormat = true;
@@ -536,27 +531,9 @@ window.AscDesktopEditor = {
       window.AscDesktopEditor._editorWindow = _findEditorWindow(window);
     }
 
-    if (api && !api.__eoSendEventWrapped) {
-      api.__eoSendEventWrapped = true;
-      var originalSendEvent = api.sendEvent;
-      api.sendEvent = function() {
-        var eventName = arguments[0];
-        if (eventName === 'asc_onError') {
-          var errorId = arguments[1];
-          window._eoLog('[FONT-DIAG] sendEvent asc_onError id=' + errorId +
-            ' isLoadFullApi=' + api.isLoadFullApi +
-            ' isDocumentLoadComplete=' + api.isDocumentLoadComplete +
-            ' stack=' + new Error().stack.split('\n').slice(0, 12).join(' | '));
-        }
-        return originalSendEvent.apply(api, arguments);
-      };
-    }
   },
 
   LocalStartOpen: function() {
-    window.__eoLocalStartOpenCount = (window.__eoLocalStartOpenCount || 0) + 1;
-    window._eoLog('[FONT-DIAG] LocalStartOpen call#=' + window.__eoLocalStartOpenCount +
-      ' pendingFileData=' + !!window._pendingFileData);
     var ref = _getEditor();
     if (!ref.editor) return;
 
