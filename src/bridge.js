@@ -115,6 +115,7 @@ var KeyboardLayoutShim = (function() {
       Object.defineProperty(e, 'key', { configurable: true, get: function() { return key; } });
       Object.defineProperty(e, 'keyCode', { configurable: true, get: function() { return keyCode; } });
       Object.defineProperty(e, 'which', { configurable: true, get: function() { return keyCode; } });
+      e.__eoLayoutNormalized = true;
     } catch (err) {
       window._eoLog('[EO] KeyShim: defineProperty failed: ' + (err.message || err));
     }
@@ -473,6 +474,26 @@ function _loadEditorBin(b64data, fileName) {
         KeyboardLayoutShim.install(editorDoc);
 
         editorDoc.addEventListener('keydown', function(e) {
+          // WebKitGTK matches its native copy/cut/paste editing commands by
+          // keyval, so with a non-Latin layout they never run (the clipboard
+          // side of Issue #23). For normalized events, drive them from here:
+          // execCommand for copy/cut (fires the same copy/cut DOM event the
+          // native path uses), the bridge's Paste() for paste (execCommand
+          // 'paste' is refused; verified in journal 030).
+          if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.__eoLayoutNormalized) {
+            if (e.key === 'c' || e.key === 'x') {
+              try {
+                editorDoc.execCommand(e.key === 'c' ? 'copy' : 'cut');
+              } catch(err) {
+                window._eoLog('[EO] KeyShim ' + e.key + ': execCommand=error ' + (err.message || err));
+              }
+              return;
+            }
+            if (e.key === 'v') {
+              window.AscDesktopEditor.Paste();
+              return;
+            }
+          }
           if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
               if (imageFile) {
