@@ -101,6 +101,17 @@ var ClipboardHelper = (function() {
   };
 })();
 
+// True when an HTML clipboard flavor is nothing but an image reference (the
+// shape a browser's "Copy Image" produces: optional meta/html scaffolding
+// around a single <img>). Used to tell image pastes apart from rich text.
+function _eoHtmlIsJustImage(html) {
+  if (!html || !/<img[\s>]/i.test(html)) return false;
+  var stripped = html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<\/?(?:html|head|body|meta|img)[^>]*>/gi, '');
+  return stripped.trim() === '';
+}
+
 // Replays the SDK's own internal copy buffer, mirroring what sdkjs's
 // Button_Paste does when the system clipboard is unreachable. Used when a
 // clipboard probe times out because our webview owns the X11 selection and
@@ -544,6 +555,12 @@ function _loadEditorBin(b64data, fileName) {
               return;
             }
             if (e.key === 'v') {
+              // Issue #24: mark the native read as in flight so the paste
+              // listener below can block the SDK's duplicate insertion. With
+              // non-Latin layouts WebKitGTK normally fires no paste event at
+              // all; the timeout covers that case.
+              window._eoLinuxPasteInFlight = true;
+              setTimeout(function() { window._eoLinuxPasteInFlight = false; }, 400);
               // read_clipboard_text hangs ~30s when our own webview owns the
               // clipboard (it cannot answer the selection request while
               // waiting; journal 030). In that case the last in-app copy IS
@@ -583,6 +600,11 @@ function _loadEditorBin(b64data, fileName) {
             }
           }
           if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
+            // Issue #24: mark the native read as in flight so the paste
+            // listener below can block the SDK's duplicate insertion of the
+            // same keystroke (it fires ~50ms later on the same document).
+            window._eoLinuxPasteInFlight = true;
+            setTimeout(function() { window._eoLinuxPasteInFlight = false; }, 400);
             // [DIAG24] temporary logging for Issue #24 (remove before final commit)
             window._eoLog('[DIAG24] keydown-V latin branch fired');
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
@@ -628,6 +650,30 @@ function _loadEditorBin(b64data, fileName) {
             ' htmlHead=' + JSON.stringify(_eoLimitLogText(dHtml, 300)));
         } catch (diagErr) {
           window._eoLog('[DIAG24] paste event: dump failed ' + (diagErr.message || diagErr));
+        }
+        // Issue #24: on Linux, one Ctrl+V fires both the keydown interceptor
+        // above (native clipboard read -> AddImageUrl) and the SDK's own
+        // paste handler. A browser image copy carries no plain text, only a
+        // text/html "<img src=...>" that the SDK would download and insert
+        // as a second copy (through its hidden asc_pasteFrame iframe). While
+        // the interceptor's read is in flight and the payload is image-shaped,
+        // block the SDK handler: this capture listener runs before sdkjs's
+        // bubble-phase ones, so stopPropagation is enough. Anything carrying
+        // plain text (web text, in-app copies) must pass through untouched.
+        if (isLinux && window._eoLinuxPasteInFlight) {
+          window._eoLinuxPasteInFlight = false;
+          var suppressPlain = '';
+          var suppressHtml = '';
+          try {
+            suppressPlain = cd ? cd.getData('text/plain') : '';
+            suppressHtml = cd ? cd.getData('text/html') : '';
+          } catch(suppressErr) {}
+          if (!suppressPlain && (!suppressHtml || _eoHtmlIsJustImage(suppressHtml))) {
+            window._eoLog('[EO] paste: SDK paste suppressed (image payload, native read in flight)');
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
         }
         if (!cd) return;
         var imagePath = ClipboardHelper.extractImageUriFromPaste(cd);
