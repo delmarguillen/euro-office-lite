@@ -482,15 +482,70 @@ function _loadEditorBin(b64data, fileName) {
           // 'paste' is refused; verified in journal 030).
           if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.__eoLayoutNormalized) {
             if (e.key === 'c' || e.key === 'x') {
+              var execOk = false;
               try {
-                editorDoc.execCommand(e.key === 'c' ? 'copy' : 'cut');
+                execOk = editorDoc.execCommand(e.key === 'c' ? 'copy' : 'cut');
               } catch(err) {
                 window._eoLog('[EO] KeyShim ' + e.key + ': execCommand=error ' + (err.message || err));
+              }
+              // WebKitGTK refuses the cut command on sdkjs's collapsed DOM
+              // selection; mirror sdkjs's own Button_Cut fallback: copy
+              // natively, then delete the selection.
+              if (e.key === 'x' && !execOk) {
+                try { editorDoc.execCommand('copy'); } catch(err) {}
+                var refCut = _getEditor();
+                if (refCut.editor && refCut.editor.asc_SelectionCut) refCut.editor.asc_SelectionCut();
               }
               return;
             }
             if (e.key === 'v') {
-              window.AscDesktopEditor.Paste();
+              // read_clipboard_text hangs ~30s when our own webview owns the
+              // clipboard (it cannot answer the selection request while
+              // waiting; journal 030). In that case the last in-app copy IS
+              // the clipboard content, so fall back to sdkjs's internal copy
+              // buffer like Button_Paste does. A fast empty read means an
+              // external owner without text: probe for an image as usual.
+              var TIMED_OUT = { timedOut: true };
+              var timeoutP = new Promise(function(resolve) {
+                setTimeout(function() { resolve(TIMED_OUT); }, 1200);
+              });
+              Promise.race([invoke('read_clipboard_text'), timeoutP]).then(function(text) {
+                var refV = _getEditor();
+                if (!refV.editor || !refV.ew || !refV.ew.AscCommon) return;
+                var fmt = refV.ew.AscCommon.c_oAscClipboardDataFormat;
+                if (text && text !== TIMED_OUT) {
+                  refV.editor.asc_PasteData(fmt.Text, text);
+                  window._eoLog('[EO] KeyShim v: result=text');
+                  return;
+                }
+                if (text === TIMED_OUT) {
+                  var cb = refV.ew.AscCommon.g_clipboardBase;
+                  var last = cb && cb.LastCopyBinary;
+                  if (last && last.length) {
+                    var internalData = null, textData = null;
+                    for (var i = 0; i < last.length; i++) {
+                      if (fmt.Internal === last[i].type) internalData = last[i].data;
+                      else if (fmt.Text === last[i].type) textData = last[i].data;
+                    }
+                    if (internalData !== null) refV.editor.asc_PasteData(fmt.Internal, internalData, null, textData);
+                    else refV.editor.asc_PasteData(last[0].type, last[0].data, null, textData);
+                    window._eoLog('[EO] KeyShim v: result=internal');
+                  } else {
+                    window._eoLog('[EO] KeyShim v: result=timeout-no-internal');
+                  }
+                  return;
+                }
+                ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
+                  if (imageFile) {
+                    refV.editor.AddImageUrl([imageFile]);
+                    window._eoLog('[EO] KeyShim v: result=image');
+                  } else {
+                    window._eoLog('[EO] KeyShim v: result=empty');
+                  }
+                });
+              }).catch(function(err) {
+                window._eoLog('[EO] KeyShim v: error ' + (err && err.message || err));
+              });
               return;
             }
           }
