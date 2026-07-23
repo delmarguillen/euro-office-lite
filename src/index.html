@@ -564,7 +564,16 @@
           frameSource = window._eoSafeSource ?
             window._eoSafeSource(win.location.href) : win.location.pathname;
         } catch(e) {}
-        _log('[EO] iframe diagnostics installed: source=' + frameSource);
+        // The frame element's id tells SDK-created helper iframes (e.g. sdkjs's
+        // asc_pasteFrame, whose document.write inherits the editor URL) apart
+        // from the real editor iframe, which shares the same source path.
+        var frameId = '';
+        try {
+          if (win.frameElement) {
+            frameId = ' id=' + (win.frameElement.id || win.frameElement.name || '(anonymous)');
+          }
+        } catch(e) {}
+        _log('[EO] iframe diagnostics installed: source=' + frameSource + frameId);
       } catch(e) {
         _log('[EO] iframe diagnostics install failed: ' + (e.message || e));
       }

@@ -550,11 +550,15 @@ function _loadEditorBin(b64data, fileName) {
             }
           }
           if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
+            // [DIAG24] temporary logging for Issue #24 (remove before final commit)
+            window._eoLog('[DIAG24] keydown-V latin branch fired');
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
+              window._eoLog('[DIAG24] keydown-V arboard result=' + (imageFile || 'null'));
               if (imageFile) {
                 var ref = _getEditor();
                 if (ref.editor) {
                   ref.editor.AddImageUrl([imageFile]);
+                  window._eoLog('[DIAG24] keydown-V inserted ' + imageFile);
                 }
               }
             });
@@ -564,9 +568,38 @@ function _loadEditorBin(b64data, fileName) {
 
       editorDoc.addEventListener('paste', function(e) {
         var cd = e.clipboardData;
+        // [DIAG24] temporary logging for Issue #24 (remove before final commit)
+        try {
+          var dTypes = cd && cd.types ? Array.prototype.slice.call(cd.types) : [];
+          var dItems = [];
+          if (cd && cd.items) {
+            for (var di = 0; di < cd.items.length; di++) {
+              dItems.push(cd.items[di].kind + ':' + cd.items[di].type);
+            }
+          }
+          var dFiles = [];
+          if (cd && cd.files) {
+            for (var dfi = 0; dfi < cd.files.length; dfi++) {
+              dFiles.push(cd.files[dfi].type + ':' + cd.files[dfi].name);
+            }
+          }
+          var dUri = cd ? cd.getData('text/uri-list') : '';
+          var dText = cd ? cd.getData('text/plain') : '';
+          var dHtml = cd ? cd.getData('text/html') : '';
+          window._eoLog('[DIAG24] paste event: types=' + JSON.stringify(dTypes) +
+            ' items=' + JSON.stringify(dItems) +
+            ' files=' + JSON.stringify(dFiles) +
+            ' uriList=' + JSON.stringify(_eoLimitLogText(dUri, 200)) +
+            ' textPlain=' + JSON.stringify(_eoLimitLogText(dText, 200)) +
+            ' htmlLen=' + dHtml.length +
+            ' htmlHead=' + JSON.stringify(_eoLimitLogText(dHtml, 300)));
+        } catch (diagErr) {
+          window._eoLog('[DIAG24] paste event: dump failed ' + (diagErr.message || diagErr));
+        }
         if (!cd) return;
         var imagePath = ClipboardHelper.extractImageUriFromPaste(cd);
         if (imagePath) {
+          window._eoLog('[DIAG24] paste event: uri-list branch -> AddImageUrl ' + imagePath);
           e.preventDefault();
           e.stopPropagation();
           var ref = _getEditor();
@@ -885,6 +918,8 @@ window.AscDesktopEditor = {
       if (callback) callback({});
       return;
     }
+    // [DIAG24] temporary logging for Issue #24 (remove before final commit)
+    window._eoLog('[DIAG24] DownloadFiles urls=' + urls.length + ' first=' + _eoLimitLogText(urls[0], 160));
     var fileMap = {};
     var pending = urls.length;
     urls.forEach(function(url) {
@@ -979,9 +1014,13 @@ window.AscDesktopEditor = {
     var protocol = (url.indexOf('http://') === 0 || url.indexOf('https://') === 0)
       ? 'download-to-media' : 'copy-to-media';
     try {
+      // [DIAG24] temporary timing log for Issue #24 (remove before final commit)
+      var diagT0 = Date.now();
       var xhr = new XMLHttpRequest();
       xhr.open('GET', ASC_PROTO_BASE + protocol + '/' + encodeURIComponent(url), false);
       xhr.send(null);
+      window._eoLog('[DIAG24] LocalFileGetImageUrl proto=' + protocol + ' status=' + xhr.status +
+        ' ms=' + (Date.now() - diagT0) + ' url=' + _eoLimitLogText(url, 160));
       if (xhr.status === 200 && xhr.responseText) {
           var result = xhr.responseText;
           if (protocol === 'download-to-media') {
