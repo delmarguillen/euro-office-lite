@@ -77,6 +77,59 @@ var ClipboardHelper = (function() {
   };
 })();
 
+// Issue #23: with a non-Latin keyboard layout active (e.g. Cyrillic), WebKitGTK
+// reports the layout character in KeyboardEvent.key/keyCode ("м" instead of "v",
+// keyCode from the keysym), so sdkjs/web-apps shortcut handlers stop matching.
+// CEF (upstream desktop) normalizes to the US layout automatically; WebKitGTK
+// does not. With Ctrl/Alt/Meta held, map the physical key (event.code) back to
+// its US-layout equivalent before the event reaches any other handler.
+var KeyboardLayoutShim = (function() {
+  var CODE_TO_US = {
+    'Semicolon': [186, ';'], 'Equal': [187, '='], 'Comma': [188, ','],
+    'Minus': [189, '-'], 'Period': [190, '.'], 'Slash': [191, '/'],
+    'Backquote': [192, '`'], 'BracketLeft': [219, '['], 'Backslash': [220, '\\'],
+    'BracketRight': [221, ']'], 'Quote': [222, "'"]
+  };
+  for (var i = 0; i < 26; i++) {
+    CODE_TO_US['Key' + String.fromCharCode(65 + i)] = [65 + i, String.fromCharCode(97 + i)];
+  }
+  for (var d = 0; d <= 9; d++) {
+    CODE_TO_US['Digit' + d] = [48 + d, String(d)];
+  }
+
+  function _normalize(e) {
+    if (!(e.ctrlKey || e.metaKey || e.altKey)) return;
+    // AltGr combos produce characters, not shortcuts. sdkjs (getAltGr) treats
+    // Ctrl+Alt as AltGr, so both forms must pass through untouched.
+    if ((e.ctrlKey || e.metaKey) && e.altKey) return;
+    if (e.getModifierState && e.getModifierState('AltGraph')) return;
+    var mapped = CODE_TO_US[e.code];
+    if (!mapped) return;
+    // Only rewrite when the layout produced a non-ASCII character; on a Latin
+    // layout the event already matches and must not be remapped.
+    if (typeof e.key !== 'string' || e.key.length !== 1 || e.key.charCodeAt(0) < 128) return;
+    var keyCode = mapped[0];
+    var key = mapped[1];
+    if (e.shiftKey && keyCode >= 65 && keyCode <= 90) key = key.toUpperCase();
+    try {
+      Object.defineProperty(e, 'key', { configurable: true, get: function() { return key; } });
+      Object.defineProperty(e, 'keyCode', { configurable: true, get: function() { return keyCode; } });
+      Object.defineProperty(e, 'which', { configurable: true, get: function() { return keyCode; } });
+      e.__eoLayoutNormalized = true;
+    } catch (err) {
+      window._eoLog('[EO] KeyShim: defineProperty failed: ' + (err.message || err));
+    }
+  }
+
+  function install(doc) {
+    if (!doc || doc.__eoKeyLayoutShimInstalled) return;
+    doc.addEventListener('keydown', _normalize, true);
+    doc.__eoKeyLayoutShimInstalled = true;
+  }
+
+  return { install: install };
+})();
+
 function _eoLimitLogText(value, limit) {
   var text = String(value === undefined || value === null ? '' : value);
   return text.length > limit ? text.substring(0, limit) + '...[truncated]' : text;
@@ -415,7 +468,87 @@ function _loadEditorBin(b64data, fileName) {
 
     if (editorDoc) {
       if (isLinux) {
+        // Must register before the Ctrl+V interceptor below: same document and
+        // phase, so listener order is registration order, and the interceptor's
+        // e.key === 'v' check needs the already-normalized key.
+        KeyboardLayoutShim.install(editorDoc);
+
         editorDoc.addEventListener('keydown', function(e) {
+          // WebKitGTK matches its native copy/cut/paste editing commands by
+          // keyval, so with a non-Latin layout they never run (the clipboard
+          // side of Issue #23). For normalized events, drive them from here:
+          // execCommand for copy/cut (fires the same copy/cut DOM event the
+          // native path uses), the bridge's Paste() for paste (execCommand
+          // 'paste' is refused; verified in journal 030).
+          if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.__eoLayoutNormalized) {
+            if (e.key === 'c' || e.key === 'x') {
+              var execOk = false;
+              try {
+                execOk = editorDoc.execCommand(e.key === 'c' ? 'copy' : 'cut');
+              } catch(err) {
+                window._eoLog('[EO] KeyShim ' + e.key + ': execCommand=error ' + (err.message || err));
+              }
+              // WebKitGTK refuses the cut command on sdkjs's collapsed DOM
+              // selection; mirror sdkjs's own Button_Cut fallback: copy
+              // natively, then delete the selection.
+              if (e.key === 'x' && !execOk) {
+                try { editorDoc.execCommand('copy'); } catch(err) {}
+                var refCut = _getEditor();
+                if (refCut.editor && refCut.editor.asc_SelectionCut) refCut.editor.asc_SelectionCut();
+              }
+              return;
+            }
+            if (e.key === 'v') {
+              // read_clipboard_text hangs ~30s when our own webview owns the
+              // clipboard (it cannot answer the selection request while
+              // waiting; journal 030). In that case the last in-app copy IS
+              // the clipboard content, so fall back to sdkjs's internal copy
+              // buffer like Button_Paste does. A fast empty read means an
+              // external owner without text: probe for an image as usual.
+              var TIMED_OUT = { timedOut: true };
+              var timeoutP = new Promise(function(resolve) {
+                setTimeout(function() { resolve(TIMED_OUT); }, 1200);
+              });
+              Promise.race([invoke('read_clipboard_text'), timeoutP]).then(function(text) {
+                var refV = _getEditor();
+                if (!refV.editor || !refV.ew || !refV.ew.AscCommon) return;
+                var fmt = refV.ew.AscCommon.c_oAscClipboardDataFormat;
+                if (text && text !== TIMED_OUT) {
+                  refV.editor.asc_PasteData(fmt.Text, text);
+                  window._eoLog('[EO] KeyShim v: result=text');
+                  return;
+                }
+                if (text === TIMED_OUT) {
+                  var cb = refV.ew.AscCommon.g_clipboardBase;
+                  var last = cb && cb.LastCopyBinary;
+                  if (last && last.length) {
+                    var internalData = null, textData = null;
+                    for (var i = 0; i < last.length; i++) {
+                      if (fmt.Internal === last[i].type) internalData = last[i].data;
+                      else if (fmt.Text === last[i].type) textData = last[i].data;
+                    }
+                    if (internalData !== null) refV.editor.asc_PasteData(fmt.Internal, internalData, null, textData);
+                    else refV.editor.asc_PasteData(last[0].type, last[0].data, null, textData);
+                    window._eoLog('[EO] KeyShim v: result=internal');
+                  } else {
+                    window._eoLog('[EO] KeyShim v: result=timeout-no-internal');
+                  }
+                  return;
+                }
+                ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
+                  if (imageFile) {
+                    refV.editor.AddImageUrl([imageFile]);
+                    window._eoLog('[EO] KeyShim v: result=image');
+                  } else {
+                    window._eoLog('[EO] KeyShim v: result=empty');
+                  }
+                });
+              }).catch(function(err) {
+                window._eoLog('[EO] KeyShim v: error ' + (err && err.message || err));
+              });
+              return;
+            }
+          }
           if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
               if (imageFile) {
