@@ -70,9 +70,33 @@ var ClipboardHelper = (function() {
       };
     }
   }
+  // Detects clipboard text that is really a file-manager copy of one image
+  // file (Nautilus and friends publish the path as the plain-text flavor, so
+  // a text-first probe order would paste the path as text). Multi-line text
+  // is rejected: multi-file copies deliberately keep pasting as text.
+  // Extension list matches clipboard.rs, without tif/tiff: the WebView has no
+  // TIFF decoder and main.rs's content-type map does not cover them either.
+  function looksLikeImageFilePath(str) {
+    if (!str || typeof str !== 'string') return false;
+    if (str.indexOf('\n') !== -1 || str.indexOf('\r') !== -1) return false;
+    var s = str.trim();
+    if (!s) return false;
+    if (s.indexOf('file://') === 0) {
+      try { s = decodeURIComponent(s.substring(7)); } catch(e) { return false; }
+    }
+    var isAbsolute = s.charAt(0) === '/' || /^[A-Za-z]:[\\/]/.test(s);
+    if (!isAbsolute) return false;
+    var lower = s.toLowerCase();
+    var imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.ico'];
+    for (var i = 0; i < imageExts.length; i++) {
+      if (lower.endsWith(imageExts[i])) return true;
+    }
+    return false;
+  }
   return {
     readNativeClipboardImage: readNativeClipboardImage,
     extractImageUriFromPaste: extractImageUriFromPaste,
+    looksLikeImageFilePath: looksLikeImageFilePath,
     installUrlPipelineOverrides: installUrlPipelineOverrides
   };
 })();
@@ -1101,7 +1125,10 @@ window.AscDesktopEditor = {
       if (!imageFile) await probeText();
     } else {
       await probeText();
-      if (!textTimedOut && !text) await probeImage();
+      // A single-image-file copy from a file manager arrives with the file
+      // PATH as the text flavor; prefer the image probe there (Issue #24
+      // arc, L2: context menu pasted the path as text).
+      if (!textTimedOut && (!text || ClipboardHelper.looksLikeImageFilePath(text))) await probeImage();
     }
     if (textTimedOut) {
       try {
@@ -1115,7 +1142,7 @@ window.AscDesktopEditor = {
       }
       return;
     }
-    if (imageFile && (!text || _isMac)) {
+    if (imageFile && (!text || _isMac || ClipboardHelper.looksLikeImageFilePath(text))) {
       try {
         var ref = _getEditor();
         if (ref.editor) {
