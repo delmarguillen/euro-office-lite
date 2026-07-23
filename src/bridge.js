@@ -77,6 +77,27 @@ var ClipboardHelper = (function() {
   };
 })();
 
+// Replays the SDK's own internal copy buffer, mirroring what sdkjs's
+// Button_Paste does when the system clipboard is unreachable. Used when a
+// clipboard probe times out because our webview owns the X11 selection and
+// arboard cannot read it (journal 030): in that state the last in-app copy
+// IS the clipboard content. Returns true if something was pasted.
+function _eoPasteFromLastCopyBinary(ref) {
+  if (!ref.editor || !ref.ew || !ref.ew.AscCommon) return false;
+  var fmt = ref.ew.AscCommon.c_oAscClipboardDataFormat;
+  var cb = ref.ew.AscCommon.g_clipboardBase;
+  var last = cb && cb.LastCopyBinary;
+  if (!last || !last.length) return false;
+  var internalData = null, textData = null;
+  for (var i = 0; i < last.length; i++) {
+    if (fmt.Internal === last[i].type) internalData = last[i].data;
+    else if (fmt.Text === last[i].type) textData = last[i].data;
+  }
+  if (internalData !== null) ref.editor.asc_PasteData(fmt.Internal, internalData, null, textData);
+  else ref.editor.asc_PasteData(last[0].type, last[0].data, null, textData);
+  return true;
+}
+
 // Issue #23: with a non-Latin keyboard layout active (e.g. Cyrillic), WebKitGTK
 // reports the layout character in KeyboardEvent.key/keyCode ("м" instead of "v",
 // keyCode from the keysym), so sdkjs/web-apps shortcut handlers stop matching.
@@ -519,20 +540,8 @@ function _loadEditorBin(b64data, fileName) {
                   return;
                 }
                 if (text === TIMED_OUT) {
-                  var cb = refV.ew.AscCommon.g_clipboardBase;
-                  var last = cb && cb.LastCopyBinary;
-                  if (last && last.length) {
-                    var internalData = null, textData = null;
-                    for (var i = 0; i < last.length; i++) {
-                      if (fmt.Internal === last[i].type) internalData = last[i].data;
-                      else if (fmt.Text === last[i].type) textData = last[i].data;
-                    }
-                    if (internalData !== null) refV.editor.asc_PasteData(fmt.Internal, internalData, null, textData);
-                    else refV.editor.asc_PasteData(last[0].type, last[0].data, null, textData);
-                    window._eoLog('[EO] KeyShim v: result=internal');
-                  } else {
-                    window._eoLog('[EO] KeyShim v: result=timeout-no-internal');
-                  }
+                  window._eoLog('[EO] KeyShim v: result=' +
+                    (_eoPasteFromLastCopyBinary(refV) ? 'internal' : 'timeout-no-internal'));
                   return;
                 }
                 ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
@@ -1069,9 +1078,20 @@ window.AscDesktopEditor = {
         window._eoLog('[EO] Paste: image probe -> error ' + (e.message || e));
       }
     };
+    var textTimedOut = false;
     var probeText = async function() {
       try {
-        text = await invoke('read_clipboard_text');
+        // read_clipboard_text hangs ~30s when our own webview owns the X11
+        // selection (journal 030) - exactly the copy-then-paste-in-app flow.
+        // Race it and fall back to the SDK's internal copy buffer on timeout;
+        // the image probe is skipped too, it hangs the same way.
+        var TIMED_OUT = { timedOut: true };
+        var result = await Promise.race([
+          invoke('read_clipboard_text'),
+          new Promise(function(resolve) { setTimeout(function() { resolve(TIMED_OUT); }, 1200); })
+        ]);
+        if (result === TIMED_OUT) textTimedOut = true;
+        else text = result;
       } catch(e) {
         window._eoLog('[EO] Paste: text probe -> error ' + (e.message || e));
       }
@@ -1081,7 +1101,19 @@ window.AscDesktopEditor = {
       if (!imageFile) await probeText();
     } else {
       await probeText();
-      if (!text) await probeImage();
+      if (!textTimedOut && !text) await probeImage();
+    }
+    if (textTimedOut) {
+      try {
+        if (_eoPasteFromLastCopyBinary(_getEditor())) {
+          window._eoLog('[CLIPBOARD] paste result=internal');
+        } else {
+          window._eoLog('[CLIPBOARD] paste result=timeout-no-internal');
+        }
+      } catch(e) {
+        window._eoLog('[EO] Paste: branch=internal -> error ' + (e.message || e));
+      }
+      return;
     }
     if (imageFile && (!text || _isMac)) {
       try {
