@@ -10,7 +10,7 @@ on:
         type: boolean
   push:
     branches:
-      - feat/34-production-frontend
+      - feat/35-non-latin-shortcuts
     tags:
       - "v*"
 

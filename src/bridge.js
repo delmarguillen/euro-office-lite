@@ -77,6 +77,58 @@ var ClipboardHelper = (function() {
   };
 })();
 
+// Issue #23: with a non-Latin keyboard layout active (e.g. Cyrillic), WebKitGTK
+// reports the layout character in KeyboardEvent.key/keyCode ("м" instead of "v",
+// keyCode from the keysym), so sdkjs/web-apps shortcut handlers stop matching.
+// CEF (upstream desktop) normalizes to the US layout automatically; WebKitGTK
+// does not. With Ctrl/Alt/Meta held, map the physical key (event.code) back to
+// its US-layout equivalent before the event reaches any other handler.
+var KeyboardLayoutShim = (function() {
+  var CODE_TO_US = {
+    'Semicolon': [186, ';'], 'Equal': [187, '='], 'Comma': [188, ','],
+    'Minus': [189, '-'], 'Period': [190, '.'], 'Slash': [191, '/'],
+    'Backquote': [192, '`'], 'BracketLeft': [219, '['], 'Backslash': [220, '\\'],
+    'BracketRight': [221, ']'], 'Quote': [222, "'"]
+  };
+  for (var i = 0; i < 26; i++) {
+    CODE_TO_US['Key' + String.fromCharCode(65 + i)] = [65 + i, String.fromCharCode(97 + i)];
+  }
+  for (var d = 0; d <= 9; d++) {
+    CODE_TO_US['Digit' + d] = [48 + d, String(d)];
+  }
+
+  function _normalize(e) {
+    if (!(e.ctrlKey || e.metaKey || e.altKey)) return;
+    // AltGr combos produce characters, not shortcuts. sdkjs (getAltGr) treats
+    // Ctrl+Alt as AltGr, so both forms must pass through untouched.
+    if ((e.ctrlKey || e.metaKey) && e.altKey) return;
+    if (e.getModifierState && e.getModifierState('AltGraph')) return;
+    var mapped = CODE_TO_US[e.code];
+    if (!mapped) return;
+    // Only rewrite when the layout produced a non-ASCII character; on a Latin
+    // layout the event already matches and must not be remapped.
+    if (typeof e.key !== 'string' || e.key.length !== 1 || e.key.charCodeAt(0) < 128) return;
+    var keyCode = mapped[0];
+    var key = mapped[1];
+    if (e.shiftKey && keyCode >= 65 && keyCode <= 90) key = key.toUpperCase();
+    try {
+      Object.defineProperty(e, 'key', { configurable: true, get: function() { return key; } });
+      Object.defineProperty(e, 'keyCode', { configurable: true, get: function() { return keyCode; } });
+      Object.defineProperty(e, 'which', { configurable: true, get: function() { return keyCode; } });
+    } catch (err) {
+      window._eoLog('[EO] KeyShim: defineProperty failed: ' + (err.message || err));
+    }
+  }
+
+  function install(doc) {
+    if (!doc || doc.__eoKeyLayoutShimInstalled) return;
+    doc.addEventListener('keydown', _normalize, true);
+    doc.__eoKeyLayoutShimInstalled = true;
+  }
+
+  return { install: install };
+})();
+
 function _eoLimitLogText(value, limit) {
   var text = String(value === undefined || value === null ? '' : value);
   return text.length > limit ? text.substring(0, limit) + '...[truncated]' : text;
@@ -415,6 +467,11 @@ function _loadEditorBin(b64data, fileName) {
 
     if (editorDoc) {
       if (isLinux) {
+        // Must register before the Ctrl+V interceptor below: same document and
+        // phase, so listener order is registration order, and the interceptor's
+        // e.key === 'v' check needs the already-normalized key.
+        KeyboardLayoutShim.install(editorDoc);
+
         editorDoc.addEventListener('keydown', function(e) {
           if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
