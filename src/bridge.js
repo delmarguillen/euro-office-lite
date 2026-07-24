@@ -70,12 +70,68 @@ var ClipboardHelper = (function() {
       };
     }
   }
+  // Detects clipboard text that is really a file-manager copy of one image
+  // file (Nautilus and friends publish the path as the plain-text flavor, so
+  // a text-first probe order would paste the path as text). Multi-line text
+  // is rejected: multi-file copies deliberately keep pasting as text.
+  // Extension list matches clipboard.rs, without tif/tiff: the WebView has no
+  // TIFF decoder and main.rs's content-type map does not cover them either.
+  function looksLikeImageFilePath(str) {
+    if (!str || typeof str !== 'string') return false;
+    if (str.indexOf('\n') !== -1 || str.indexOf('\r') !== -1) return false;
+    var s = str.trim();
+    if (!s) return false;
+    if (s.indexOf('file://') === 0) {
+      try { s = decodeURIComponent(s.substring(7)); } catch(e) { return false; }
+    }
+    var isAbsolute = s.charAt(0) === '/' || /^[A-Za-z]:[\\/]/.test(s);
+    if (!isAbsolute) return false;
+    var lower = s.toLowerCase();
+    var imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.svg', '.webp', '.ico'];
+    for (var i = 0; i < imageExts.length; i++) {
+      if (lower.endsWith(imageExts[i])) return true;
+    }
+    return false;
+  }
   return {
     readNativeClipboardImage: readNativeClipboardImage,
     extractImageUriFromPaste: extractImageUriFromPaste,
+    looksLikeImageFilePath: looksLikeImageFilePath,
     installUrlPipelineOverrides: installUrlPipelineOverrides
   };
 })();
+
+// True when an HTML clipboard flavor is nothing but an image reference (the
+// shape a browser's "Copy Image" produces: optional meta/html scaffolding
+// around a single <img>). Used to tell image pastes apart from rich text.
+function _eoHtmlIsJustImage(html) {
+  if (!html || !/<img[\s>]/i.test(html)) return false;
+  var stripped = html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<\/?(?:html|head|body|meta|img)[^>]*>/gi, '');
+  return stripped.trim() === '';
+}
+
+// Replays the SDK's own internal copy buffer, mirroring what sdkjs's
+// Button_Paste does when the system clipboard is unreachable. Used when a
+// clipboard probe times out because our webview owns the X11 selection and
+// arboard cannot read it (journal 030): in that state the last in-app copy
+// IS the clipboard content. Returns true if something was pasted.
+function _eoPasteFromLastCopyBinary(ref) {
+  if (!ref.editor || !ref.ew || !ref.ew.AscCommon) return false;
+  var fmt = ref.ew.AscCommon.c_oAscClipboardDataFormat;
+  var cb = ref.ew.AscCommon.g_clipboardBase;
+  var last = cb && cb.LastCopyBinary;
+  if (!last || !last.length) return false;
+  var internalData = null, textData = null;
+  for (var i = 0; i < last.length; i++) {
+    if (fmt.Internal === last[i].type) internalData = last[i].data;
+    else if (fmt.Text === last[i].type) textData = last[i].data;
+  }
+  if (internalData !== null) ref.editor.asc_PasteData(fmt.Internal, internalData, null, textData);
+  else ref.editor.asc_PasteData(last[0].type, last[0].data, null, textData);
+  return true;
+}
 
 // Issue #23: with a non-Latin keyboard layout active (e.g. Cyrillic), WebKitGTK
 // reports the layout character in KeyboardEvent.key/keyCode ("м" instead of "v",
@@ -499,6 +555,12 @@ function _loadEditorBin(b64data, fileName) {
               return;
             }
             if (e.key === 'v') {
+              // Issue #24: mark the native read as in flight so the paste
+              // listener below can block the SDK's duplicate insertion. With
+              // non-Latin layouts WebKitGTK normally fires no paste event at
+              // all; the timeout covers that case.
+              window._eoLinuxPasteInFlight = true;
+              setTimeout(function() { window._eoLinuxPasteInFlight = false; }, 400);
               // read_clipboard_text hangs ~30s when our own webview owns the
               // clipboard (it cannot answer the selection request while
               // waiting; journal 030). In that case the last in-app copy IS
@@ -519,20 +581,8 @@ function _loadEditorBin(b64data, fileName) {
                   return;
                 }
                 if (text === TIMED_OUT) {
-                  var cb = refV.ew.AscCommon.g_clipboardBase;
-                  var last = cb && cb.LastCopyBinary;
-                  if (last && last.length) {
-                    var internalData = null, textData = null;
-                    for (var i = 0; i < last.length; i++) {
-                      if (fmt.Internal === last[i].type) internalData = last[i].data;
-                      else if (fmt.Text === last[i].type) textData = last[i].data;
-                    }
-                    if (internalData !== null) refV.editor.asc_PasteData(fmt.Internal, internalData, null, textData);
-                    else refV.editor.asc_PasteData(last[0].type, last[0].data, null, textData);
-                    window._eoLog('[EO] KeyShim v: result=internal');
-                  } else {
-                    window._eoLog('[EO] KeyShim v: result=timeout-no-internal');
-                  }
+                  window._eoLog('[EO] KeyShim v: result=' +
+                    (_eoPasteFromLastCopyBinary(refV) ? 'internal' : 'timeout-no-internal'));
                   return;
                 }
                 ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
@@ -550,11 +600,17 @@ function _loadEditorBin(b64data, fileName) {
             }
           }
           if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
+            // Issue #24: mark the native read as in flight so the paste
+            // listener below can block the SDK's duplicate insertion of the
+            // same keystroke (it fires ~50ms later on the same document).
+            window._eoLinuxPasteInFlight = true;
+            setTimeout(function() { window._eoLinuxPasteInFlight = false; }, 400);
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
               if (imageFile) {
                 var ref = _getEditor();
                 if (ref.editor) {
                   ref.editor.AddImageUrl([imageFile]);
+                  window._eoLog('[EO] Ctrl+V: clipboard image inserted ' + imageFile);
                 }
               }
             });
@@ -564,6 +620,30 @@ function _loadEditorBin(b64data, fileName) {
 
       editorDoc.addEventListener('paste', function(e) {
         var cd = e.clipboardData;
+        // Issue #24: on Linux, one Ctrl+V fires both the keydown interceptor
+        // above (native clipboard read -> AddImageUrl) and the SDK's own
+        // paste handler. A browser image copy carries no plain text, only a
+        // text/html "<img src=...>" that the SDK would download and insert
+        // as a second copy (through its hidden asc_pasteFrame iframe). While
+        // the interceptor's read is in flight and the payload is image-shaped,
+        // block the SDK handler: this capture listener runs before sdkjs's
+        // bubble-phase ones, so stopPropagation is enough. Anything carrying
+        // plain text (web text, in-app copies) must pass through untouched.
+        if (isLinux && window._eoLinuxPasteInFlight) {
+          window._eoLinuxPasteInFlight = false;
+          var suppressPlain = '';
+          var suppressHtml = '';
+          try {
+            suppressPlain = cd ? cd.getData('text/plain') : '';
+            suppressHtml = cd ? cd.getData('text/html') : '';
+          } catch(suppressErr) {}
+          if (!suppressPlain && (!suppressHtml || _eoHtmlIsJustImage(suppressHtml))) {
+            window._eoLog('[EO] paste: SDK paste suppressed (image payload, native read in flight)');
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
+        }
         if (!cd) return;
         var imagePath = ClipboardHelper.extractImageUriFromPaste(cd);
         if (imagePath) {
@@ -982,6 +1062,10 @@ window.AscDesktopEditor = {
       var xhr = new XMLHttpRequest();
       xhr.open('GET', ASC_PROTO_BASE + protocol + '/' + encodeURIComponent(url), false);
       xhr.send(null);
+      if (xhr.status !== 200) {
+        window._eoLog('[EO] LocalFileGetImageUrl ' + protocol + ' failed: status ' + xhr.status +
+          ' url=' + _eoLimitLogText(url, 160));
+      }
       if (xhr.status === 200 && xhr.responseText) {
           var result = xhr.responseText;
           if (protocol === 'download-to-media') {
@@ -1030,9 +1114,20 @@ window.AscDesktopEditor = {
         window._eoLog('[EO] Paste: image probe -> error ' + (e.message || e));
       }
     };
+    var textTimedOut = false;
     var probeText = async function() {
       try {
-        text = await invoke('read_clipboard_text');
+        // read_clipboard_text hangs ~30s when our own webview owns the X11
+        // selection (journal 030) - exactly the copy-then-paste-in-app flow.
+        // Race it and fall back to the SDK's internal copy buffer on timeout;
+        // the image probe is skipped too, it hangs the same way.
+        var TIMED_OUT = { timedOut: true };
+        var result = await Promise.race([
+          invoke('read_clipboard_text'),
+          new Promise(function(resolve) { setTimeout(function() { resolve(TIMED_OUT); }, 1200); })
+        ]);
+        if (result === TIMED_OUT) textTimedOut = true;
+        else text = result;
       } catch(e) {
         window._eoLog('[EO] Paste: text probe -> error ' + (e.message || e));
       }
@@ -1042,9 +1137,24 @@ window.AscDesktopEditor = {
       if (!imageFile) await probeText();
     } else {
       await probeText();
-      if (!text) await probeImage();
+      // A single-image-file copy from a file manager arrives with the file
+      // PATH as the text flavor; prefer the image probe there (Issue #24
+      // arc, L2: context menu pasted the path as text).
+      if (!textTimedOut && (!text || ClipboardHelper.looksLikeImageFilePath(text))) await probeImage();
     }
-    if (imageFile && (!text || _isMac)) {
+    if (textTimedOut) {
+      try {
+        if (_eoPasteFromLastCopyBinary(_getEditor())) {
+          window._eoLog('[CLIPBOARD] paste result=internal');
+        } else {
+          window._eoLog('[CLIPBOARD] paste result=timeout-no-internal');
+        }
+      } catch(e) {
+        window._eoLog('[EO] Paste: branch=internal -> error ' + (e.message || e));
+      }
+      return;
+    }
+    if (imageFile && (!text || _isMac || ClipboardHelper.looksLikeImageFilePath(text))) {
       try {
         var ref = _getEditor();
         if (ref.editor) {

@@ -102,6 +102,19 @@ fn read_clipboard_file_image(
         }
     };
 
+    // text/uri-list uses CRLF line endings; arboard's X11 backend keeps the
+    // trailing \r in each parsed path, which breaks the extension match and
+    // every later fs call. Upstream bug 1Password/arboard#216; the fix (PR
+    // #217) is merged but unreleased as of arboard 3.6.1, so trim here.
+    // Harmless once upstream ships: trimming an already-clean path is a no-op.
+    let files: Vec<std::path::PathBuf> = files
+        .into_iter()
+        .map(|p| match p.to_str() {
+            Some(s) => std::path::PathBuf::from(s.trim_end_matches(&['\r', '\n'][..])),
+            None => p,
+        })
+        .collect();
+
     const IMAGE_EXTS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "bmp", "svg", "webp", "ico"];
     let src = files.into_iter().find(|p| {
         let ext_match = p.extension()

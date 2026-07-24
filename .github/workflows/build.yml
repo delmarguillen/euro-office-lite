@@ -10,7 +10,7 @@ on:
         type: boolean
   push:
     branches:
-      - feat/35-non-latin-shortcuts
+      - feat/36-linux-clipboard-fixes
     tags:
       - "v*"
 
