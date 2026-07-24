@@ -10,7 +10,7 @@ on:
         type: boolean
   push:
     branches:
-      - feat/36-linux-clipboard-fixes
+      - feat/37-linux-dmabuf-render
     tags:
       - "v*"
 

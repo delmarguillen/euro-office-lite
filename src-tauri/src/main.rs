@@ -42,6 +42,16 @@ fn log_startup(temp_dir: &std::path::Path, msg: &str) {
 }
 
 fn main() {
+    // WebKitGTK's DMABUF renderer produces jagged/rough canvas rendering on some
+    // drivers (Nvidia proprietary especially, issue #27). The Flatpak already sets
+    // this for everyone; mirror it here so the .deb matches. Set before any WebKit
+    // initialization, and only if the user has not set their own value (so
+    // WEBKIT_DISABLE_DMABUF_RENDERER=0 re-enables the DMABUF path).
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     let context = tauri::generate_context!();
     // The user-facing version comes from tauri.conf.json; Cargo's crate version stays independent.
     let app_version = context.package_info().version.clone();
@@ -77,9 +87,14 @@ fn main() {
         let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
         let desktop = std::env::var("XDG_CURRENT_DESKTOP")
             .unwrap_or_else(|_| "unknown".to_string());
+        let dmabuf = std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER")
+            .unwrap_or_else(|_| "unset".to_string());
         log_startup(
             &temp_dir,
-            &format!("Linux distro={} session={} desktop={}", distro, session, desktop),
+            &format!(
+                "Linux distro={} session={} desktop={} WEBKIT_DISABLE_DMABUF_RENDERER={}",
+                distro, session, desktop, dmabuf
+            ),
         );
     }
 
