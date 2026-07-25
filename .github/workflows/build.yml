@@ -10,7 +10,7 @@ on:
         type: boolean
   push:
     branches:
-      - feat/37-linux-dmabuf-render
+      - feat/39-linux-user-font-dirs
     tags:
       - "v*"
 
