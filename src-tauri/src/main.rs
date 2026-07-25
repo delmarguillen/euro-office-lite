@@ -390,6 +390,33 @@ fn main() {
         .expect("error running Euro-Office Lite");
 }
 
+// x2t does not use fontconfig: it scans a fixed list of directories
+// (/usr/share/fonts, /usr/share/X11/fonts, /usr/local/share/fonts and a couple more),
+// so fonts installed per user or exposed by the Flatpak host mounts are invisible to
+// the editor even though fc-list finds them (issue #29). Passing them explicitly is
+// safe: x2t deduplicates directories it already scans.
+#[cfg(target_os = "linux")]
+fn extra_font_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs: Vec<std::path::PathBuf> = vec![
+        // Flatpak host font mounts
+        std::path::PathBuf::from("/run/host/fonts"),
+        std::path::PathBuf::from("/run/host/local-fonts"),
+        std::path::PathBuf::from("/run/host/user-fonts"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        dirs.push(home.join(".local/share/fonts"));
+        dirs.push(home.join(".fonts"));
+    }
+    dirs.retain(|dir| dir.is_dir());
+    dirs
+}
+
+#[cfg(not(target_os = "linux"))]
+fn extra_font_dirs() -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
 fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Path) {
     let marker = temp_dir.join(".fonts_generated");
 
@@ -448,6 +475,10 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
         .arg("-create-allfonts")
         .arg(&fontdata_str)
         .arg(&fonts_str);
+    for dir in extra_font_dirs() {
+        log_startup(temp_dir, &format!("Extra font directory: {}", dir.display()));
+        cmd.arg(dir);
+    }
     #[cfg(target_os = "linux")]
     cmd.env("LD_LIBRARY_PATH", binaries_dir);
     match cmd.output() {
