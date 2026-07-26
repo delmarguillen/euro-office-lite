@@ -311,7 +311,10 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'The current document has unsaved changes. Do you want to discard them and open another file?',
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
     saveError: 'Save error', saveErrorMsg: 'Could not save the file.\n\nTarget format not compatible with this document type.',
-    documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language'
+    documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
+    recentFiles: 'Recent files', rememberRecent: 'Remember recent files', clearRecent: 'Clear',
+    noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
+    openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.'
   },
   es: {
     document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación',
@@ -320,7 +323,10 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y abrir otro archivo?',
     unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
     saveError: 'Error al guardar', saveErrorMsg: 'No se pudo guardar el archivo.\n\nFormato de destino no compatible con este tipo de documento.',
-    documents: 'Documentos', all: 'Todos', plainText: 'Texto plano', user: 'Usuario', language: 'Idioma'
+    documents: 'Documentos', all: 'Todos', plainText: 'Texto plano', user: 'Usuario', language: 'Idioma',
+    recentFiles: 'Archivos recientes', rememberRecent: 'Recordar archivos recientes', clearRecent: 'Limpiar',
+    noRecentFiles: 'Todavía no hay archivos recientes', openFailed: 'No se pudo abrir el archivo',
+    openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.'
   },
   fr: {
     document: 'Document', spreadsheet: 'Feuille de calcul', presentation: 'Présentation',
@@ -329,7 +335,10 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et ouvrir un autre fichier ?',
     unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
     saveError: 'Erreur de sauvegarde', saveErrorMsg: 'Impossible d\'enregistrer le fichier.\n\nFormat de destination incompatible avec ce type de document.',
-    documents: 'Documents', all: 'Tous', plainText: 'Texte brut', user: 'Utilisateur', language: 'Langue'
+    documents: 'Documents', all: 'Tous', plainText: 'Texte brut', user: 'Utilisateur', language: 'Langue',
+    recentFiles: 'Fichiers récents', rememberRecent: 'Mémoriser les fichiers récents', clearRecent: 'Effacer',
+    noRecentFiles: 'Aucun fichier récent pour le moment', openFailed: 'Impossible d\'ouvrir le fichier',
+    openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.'
   },
   de: {
     document: 'Dokument', spreadsheet: 'Tabelle', presentation: 'Präsentation',
@@ -338,7 +347,10 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und eine andere Datei öffnen?',
     unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
     saveError: 'Speicherfehler', saveErrorMsg: 'Die Datei konnte nicht gespeichert werden.\n\nZielformat nicht kompatibel mit diesem Dokumenttyp.',
-    documents: 'Dokumente', all: 'Alle', plainText: 'Nur Text', user: 'Benutzer', language: 'Sprache'
+    documents: 'Dokumente', all: 'Alle', plainText: 'Nur Text', user: 'Benutzer', language: 'Sprache',
+    recentFiles: 'Zuletzt verwendete Dateien', rememberRecent: 'Zuletzt verwendete Dateien merken', clearRecent: 'Leeren',
+    noRecentFiles: 'Noch keine zuletzt verwendeten Dateien', openFailed: 'Datei konnte nicht geöffnet werden',
+    openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.'
   },
   it: {
     document: 'Documento', spreadsheet: 'Foglio di calcolo', presentation: 'Presentazione',
@@ -347,7 +359,10 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e aprire un altro file?',
     unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
     saveError: 'Errore di salvataggio', saveErrorMsg: 'Impossibile salvare il file.\n\nFormato di destinazione non compatibile con questo tipo di documento.',
-    documents: 'Documenti', all: 'Tutti', plainText: 'Testo normale', user: 'Utente', language: 'Lingua'
+    documents: 'Documenti', all: 'Tutti', plainText: 'Testo normale', user: 'Utente', language: 'Lingua',
+    recentFiles: 'File recenti', rememberRecent: 'Ricorda i file recenti', clearRecent: 'Cancella',
+    noRecentFiles: 'Nessun file recente', openFailed: 'Impossibile aprire il file',
+    openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.'
   },
   pt: {
     document: 'Documento', spreadsheet: 'Planilha', presentation: 'Apresentação',
@@ -356,7 +371,10 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'O documento atual tem alterações não salvas. Deseja descartá-las e abrir outro arquivo?',
     unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
     saveError: 'Erro ao salvar', saveErrorMsg: 'Não foi possível salvar o arquivo.\n\nFormato de destino não compatível com este tipo de documento.',
-    documents: 'Documentos', all: 'Todos', plainText: 'Texto simples', user: 'Usuário', language: 'Idioma'
+    documents: 'Documentos', all: 'Todos', plainText: 'Texto simples', user: 'Usuário', language: 'Idioma',
+    recentFiles: 'Arquivos recentes', rememberRecent: 'Lembrar arquivos recentes', clearRecent: 'Limpar',
+    noRecentFiles: 'Ainda não há arquivos recentes', openFailed: 'Não foi possível abrir o arquivo',
+    openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.'
   },
   ru: {
     document: 'Документ', spreadsheet: 'Таблица', presentation: 'Презентация',
@@ -365,7 +383,10 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Текущий документ содержит несохранённые изменения. Отменить их и открыть другой файл?',
     unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
     saveError: 'Ошибка сохранения', saveErrorMsg: 'Не удалось сохранить файл.\n\nФормат назначения несовместим с этим типом документа.',
-    documents: 'Документы', all: 'Все', plainText: 'Обычный текст', user: 'Пользователь', language: 'Язык'
+    documents: 'Документы', all: 'Все', plainText: 'Обычный текст', user: 'Пользователь', language: 'Язык',
+    recentFiles: 'Недавние файлы', rememberRecent: 'Запоминать недавние файлы', clearRecent: 'Очистить',
+    noRecentFiles: 'Недавних файлов пока нет', openFailed: 'Не удалось открыть файл',
+    openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.'
   },
   uk: {
     document: 'Документ', spreadsheet: 'Таблиця', presentation: 'Презентація',
@@ -374,7 +395,10 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і відкрити інший файл?',
     unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
     saveError: 'Помилка збереження', saveErrorMsg: 'Не вдалося зберегти файл.\n\nФормат призначення несумісний із цим типом документа.',
-    documents: 'Документи', all: 'Усі', plainText: 'Звичайний текст', user: 'Користувач', language: 'Мова'
+    documents: 'Документи', all: 'Усі', plainText: 'Звичайний текст', user: 'Користувач', language: 'Мова',
+    recentFiles: 'Нещодавні файли', rememberRecent: 'Запам\'ятовувати нещодавні файли', clearRecent: 'Очистити',
+    noRecentFiles: 'Нещодавніх файлів поки немає', openFailed: 'Не вдалося відкрити файл',
+    openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.'
   },
   zh: {
     document: '文档', spreadsheet: '电子表格', presentation: '演示文稿',
@@ -383,7 +407,10 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: '当前文档有未保存的更改。是否放弃更改并打开另一个文件？',
     unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
     saveError: '保存错误', saveErrorMsg: '无法保存文件。\n\n目标格式与此文档类型不兼容。',
-    documents: '文档', all: '所有文件', plainText: '纯文本', user: '用户', language: '语言'
+    documents: '文档', all: '所有文件', plainText: '纯文本', user: '用户', language: '语言',
+    recentFiles: '最近的文件', rememberRecent: '记住最近的文件', clearRecent: '清除',
+    noRecentFiles: '暂无最近的文件', openFailed: '无法打开文件',
+    openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。'
   },
   ja: {
     document: 'ドキュメント', spreadsheet: 'スプレッドシート', presentation: 'プレゼンテーション',
@@ -392,7 +419,10 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: '現在のドキュメントには未保存の変更があります。変更を破棄して別のファイルを開きますか？',
     unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
     saveError: '保存エラー', saveErrorMsg: 'ファイルを保存できませんでした。\n\n対象の形式はこのドキュメントタイプと互換性がありません。',
-    documents: 'ドキュメント', all: 'すべて', plainText: 'プレーンテキスト', user: 'ユーザー', language: '言語'
+    documents: 'ドキュメント', all: 'すべて', plainText: 'プレーンテキスト', user: 'ユーザー', language: '言語',
+    recentFiles: '最近使用したファイル', rememberRecent: '最近使用したファイルを記憶する', clearRecent: 'クリア',
+    noRecentFiles: '最近使用したファイルはありません', openFailed: 'ファイルを開けませんでした',
+    openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。'
   }
 };
 
@@ -429,6 +459,16 @@ window._eoSetLang = function(code) {
 };
 
 // ── end i18n ──
+
+// Which editor a path belongs to. Shared with index.html so the start screen,
+// the reopen-after-reload path and the recent files list all agree.
+function _eoDocTypeForPath(path) {
+  var ext = String(path || '').split('.').pop().toLowerCase();
+  if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) return 'cell';
+  if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) return 'slide';
+  return 'word';
+}
+window._eoDocTypeForPath = _eoDocTypeForPath;
 
 window.addEventListener('error', function(e) {
   window._eoLog('[JS-ERROR]', {
@@ -1300,6 +1340,21 @@ window.AscDesktopEditor = {
         }
         _forceReload();
       })();
+    } else if (cmd === 'open:recent') {
+      try {
+        var recent = JSON.parse(param);
+        // LocalFileOpen already handles the unsaved-changes confirmation and the
+        // reload needed to switch documents.
+        if (recent && recent.path) window.AscDesktopEditor.LocalFileOpen(recent.path);
+      } catch(e) {
+        window._eoLog('[EO] open:recent parse error: ' + (e.message || e));
+      }
+    } else if (cmd === 'recent:forget') {
+      invoke('clear_recent_files').then(function() {
+        window.AscDesktopEditor.LocalFileRecents();
+      }).catch(function(e) {
+        window._eoLog('[EO] recent:forget error: ' + (e.message || e));
+      });
     } else if (cmd === 'editor:event') {
       try {
         var evt = JSON.parse(param);
@@ -1385,7 +1440,29 @@ window.AscDesktopEditor = {
   LocalFileRemoveRecoverFolder: function() {},
   InitRecoverFolder: function() {},
   GetRecoverFolder: () => '',
-  LocalFileRecents: function() {},
+  // Desktop.js asks for the list once the editor is ready and expects the shell
+  // to answer through window.onupdaterecents in the editor frame. Each editor
+  // then keeps only the formats it can open (utils.matchFileFormat), so the
+  // same payload serves all three; its format ids are x2t's, the ones
+  // detect_format already returns on the Rust side.
+  LocalFileRecents: function() {
+    invoke('recent_files_state').then(function(state) {
+      var files = (state && state.enabled && state.files) ? state.files : [];
+      var payload = files.map(function(file, index) {
+        return { id: index, path: file.path, type: file.fileType };
+      });
+      var ref = _getEditor();
+      var target = ref.ew && typeof ref.ew.onupdaterecents === 'function' ? ref.ew : null;
+      if (!target) {
+        window._eoLog('[RECENT] editor list skipped: onupdaterecents unavailable');
+        return;
+      }
+      target.onupdaterecents(payload);
+      window._eoLog('[RECENT] editor list sent: entries=' + payload.length);
+    }).catch(function(e) {
+      window._eoLog('[EO] LocalFileRecents error: ' + (e.message || e));
+    });
+  },
   LocalFileRecover: function() {},
   LocalFileGetOpenChangesCount: function() { return 0; },
   LocalFileGetOpenChanges: function() { return ''; },
@@ -1430,10 +1507,7 @@ listen('confirm-close', async () => {
 listen('open-file', async (event) => {
   if (!event.payload) return;
   var filePath = event.payload;
-  var ext = filePath.split('.').pop().toLowerCase();
-  var docType = 'word';
-  if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) docType = 'cell';
-  else if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) docType = 'slide';
+  var docType = _eoDocTypeForPath(filePath);
 
   try {
     var b64data = await invoke('open_file', { path: filePath });

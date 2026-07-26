@@ -39,6 +39,18 @@ pub async fn open_file(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<String, String> {
+    open_file_inner(app, state, path, true).await
+}
+
+// Every frontend open path funnels through open_file, so the recent list is fed
+// here rather than in JS. create_new converts a bundled blank template through
+// the same code and must stay out of the list, hence the flag.
+async fn open_file_inner(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    record_recent: bool,
+) -> Result<String, String> {
     let input = PathBuf::from(&path);
     let output = state.temp_dir.join("Editor.bin");
 
@@ -92,6 +104,10 @@ pub async fn open_file(
 
     *state.current_file.lock().unwrap() = Some(input);
     *state.modified.lock().unwrap() = false;
+
+    if record_recent {
+        super::recent::record(&app, &path);
+    }
 
     Ok(b64)
 }
@@ -148,9 +164,12 @@ pub async fn save_file_as(
     )
     .await?;
 
+    // A PDF export leaves the document itself untouched (current_file keeps
+    // pointing at the editable file), so it does not belong in the list either.
     if format_to != 513 {
         *state.current_file.lock().unwrap() = Some(dest);
         *state.modified.lock().unwrap() = false;
+        super::recent::record(&app, &path);
     }
     Ok("ok".to_string())
 }
@@ -292,7 +311,13 @@ pub async fn create_new(
     *state.current_file.lock().unwrap() = None;
     *state.modified.lock().unwrap() = false;
 
-    let result = open_file(app, state.clone(), template_path.to_string_lossy().to_string()).await;
+    let result = open_file_inner(
+        app,
+        state.clone(),
+        template_path.to_string_lossy().to_string(),
+        false,
+    )
+    .await;
     *state.current_file.lock().unwrap() = None;
     result
 }
@@ -389,7 +414,9 @@ pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
 }
 
-fn detect_format(path: &PathBuf) -> i32 {
+// x2t format ids, shared with the editors: web-apps uses the same numbers in
+// utils.defines.FileFormat to pick the icon and to filter the Open Recent list.
+pub fn detect_format(path: &PathBuf) -> i32 {
     match path.extension().and_then(|e| e.to_str()) {
         Some("docx") => 65,
         Some("doc") => 66,

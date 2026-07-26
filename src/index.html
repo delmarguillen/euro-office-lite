@@ -21,6 +21,7 @@
       justify-content: center;
       height: 100%;
       text-align: center;
+      overflow-y: auto;
     }
     .start.hidden { display: none; }
 
@@ -69,6 +70,41 @@
     .lang-selector select:hover { border-color: #6c7086; }
     .lang-selector select:focus { outline: none; border-color: #89b4fa; }
     .lang-selector label { font-size: 0.8rem; color: #a6adc8; }
+
+    .recent { width: min(560px, 88vw); margin: 2rem auto 0; text-align: left; }
+    .recent-head {
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 0.85rem; color: #a6adc8; margin-bottom: 0.5rem;
+    }
+    .recent-clear {
+      background: none; border: none; color: #89b4fa; cursor: pointer;
+      font-size: 0.8rem; padding: 0.2rem 0.4rem; border-radius: 4px;
+    }
+    .recent-clear:hover { background: #313244; }
+    .recent-list { list-style: none; max-height: 232px; overflow-y: auto; }
+    .recent-item {
+      display: flex; align-items: baseline; gap: 0.75rem; width: 100%;
+      background: #313244; border: 1px solid #45475a; color: #cdd6f4;
+      border-radius: 6px; padding: 0.5rem 0.7rem; margin-bottom: 0.4rem;
+      cursor: pointer; text-align: left; font-family: inherit; font-size: 0.85rem;
+    }
+    .recent-item:hover { background: #45475a; }
+    .recent-name {
+      flex: 0 1 auto; max-width: 45%;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .recent-path {
+      flex: 1 1 auto; min-width: 0; color: #6c7086; font-size: 0.78rem;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .recent-date { flex: 0 0 auto; color: #6c7086; font-size: 0.75rem; }
+    .recent-empty { color: #6c7086; font-size: 0.82rem; padding: 0.3rem 0; }
+    .recent-toggle {
+      display: flex; align-items: center; gap: 0.45rem; margin-top: 0.7rem;
+      font-size: 0.8rem; color: #a6adc8; cursor: pointer;
+    }
+    .recent-toggle input { accent-color: #89b4fa; cursor: pointer; }
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body>
@@ -79,7 +115,7 @@
     </div>
     <div>
       <h1>Euro-Office Lite</h1>
-      <p class="version">v0.17.4-alpha — Desktop</p>
+      <p class="version">v0.17.5-alpha — Desktop</p>
       <div class="actions">
         <button class="btn" data-type="word">
           <span class="icon">W</span> <span data-i18n="document">Document</span>
@@ -93,6 +129,19 @@
         <button class="btn" data-open="true">
           <span class="icon">...</span> <span data-i18n="openFile">Open file</span>
         </button>
+      </div>
+
+      <div class="recent">
+        <div class="recent-head" id="recent-head">
+          <span data-i18n="recentFiles">Recent files</span>
+          <button type="button" class="recent-clear" id="recent-clear" data-i18n="clearRecent">Clear</button>
+        </div>
+        <ul class="recent-list" id="recent-list"></ul>
+        <p class="recent-empty" id="recent-empty" data-i18n="noRecentFiles">No recent files yet</p>
+        <label class="recent-toggle">
+          <input type="checkbox" id="recent-remember">
+          <span data-i18n="rememberRecent">Remember recent files</span>
+        </label>
       </div>
     </div>
   </div>
@@ -1072,21 +1121,23 @@
         ]
       });
       if (!path) return;
+      _openPath(path);
+    });
 
-      var ext = path.split('.').pop().toLowerCase();
-      var docType = 'word';
-      if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) docType = 'cell';
-      if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) docType = 'slide';
-
+    // Every opening goes through open_file, which is where the Rust side records
+    // the recent files entry.
+    async function _openPath(path) {
       try {
         var b64data = await window.__TAURI__.core.invoke('open_file', { path: path });
         var fileName = path.replace(/\\/g, '/').split('/').pop();
         window._pendingFileData = { data: b64data, path: path, name: fileName };
-        openEditor(docType);
+        openEditor(window._eoDocTypeForPath(path));
+        return true;
       } catch(e) {
         window._eoLog('[EO] Error opening file:', e);
+        return false;
       }
-    });
+    }
 
     (function checkPendingOpenPath() {
       var pendingPath = localStorage.getItem('eo-pending-open-path');
@@ -1095,10 +1146,7 @@
 
       startScreen.classList.add('hidden');
 
-      var ext = pendingPath.split('.').pop().toLowerCase();
-      var docType = 'word';
-      if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) docType = 'cell';
-      if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) docType = 'slide';
+      var docType = window._eoDocTypeForPath(pendingPath);
 
       window.__TAURI__.core.invoke('open_file', { path: pendingPath }).then(function(b64data) {
         var fileName = pendingPath.replace(/\\/g, '/').split('/').pop();
@@ -1109,6 +1157,84 @@
         startScreen.classList.remove('hidden');
       });
     })();
+
+    // ── Recent files (Issue #13) ──
+    function _formatRecentDate(seconds) {
+      try {
+        return new Date(seconds * 1000).toLocaleDateString(window._eoCurrentLang || 'en',
+          { year: 'numeric', month: 'short', day: 'numeric' });
+      } catch(e) {
+        return '';
+      }
+    }
+
+    async function _openRecentFile(path) {
+      if (await _openPath(path)) return;
+      // The file can disappear between rendering the list and the click.
+      await window.__TAURI__.dialog.message(_t('openFailedMsg'),
+        { title: _t('openFailed'), kind: 'error' });
+      _refreshRecentFiles();
+    }
+
+    function _renderRecentFiles(state) {
+      var list = document.getElementById('recent-list');
+      var files = state.enabled ? state.files : [];
+
+      document.getElementById('recent-remember').checked = state.enabled;
+      // With the switch off the whole block collapses to the switch itself: a
+      // heading with nothing under it reads as leftover UI.
+      document.getElementById('recent-head').hidden = !state.enabled;
+      document.getElementById('recent-empty').hidden = !state.enabled || files.length > 0;
+      document.getElementById('recent-clear').hidden = state.files.length === 0;
+
+      list.textContent = '';
+      files.forEach(function(file) {
+        var row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'recent-item';
+        row.title = file.path;
+        // File names are user data: build the row with textContent so a name
+        // containing markup can never be parsed as HTML.
+        var fields = [
+          { className: 'recent-name', text: file.name },
+          { className: 'recent-path', text: file.path },
+          { className: 'recent-date', text: _formatRecentDate(file.openedAt) }
+        ];
+        fields.forEach(function(field) {
+          var span = document.createElement('span');
+          span.className = field.className;
+          span.textContent = field.text;
+          row.appendChild(span);
+        });
+        row.addEventListener('click', function() { _openRecentFile(file.path); });
+
+        var item = document.createElement('li');
+        item.appendChild(row);
+        list.appendChild(item);
+      });
+    }
+
+    async function _refreshRecentFiles() {
+      try {
+        _renderRecentFiles(await window.__TAURI__.core.invoke('recent_files_state'));
+      } catch(e) {
+        _log('[EO] Recent files unavailable: ' + (e.message || e));
+      }
+    }
+
+    document.getElementById('recent-clear').addEventListener('click', function() {
+      window.__TAURI__.core.invoke('clear_recent_files')
+        .then(_refreshRecentFiles)
+        .catch(function(e) { _log('[EO] Recent files clear failed: ' + (e.message || e)); });
+    });
+
+    document.getElementById('recent-remember').addEventListener('change', function() {
+      window.__TAURI__.core.invoke('set_recent_files_enabled', { enabled: this.checked })
+        .then(_refreshRecentFiles)
+        .catch(function(e) { _log('[EO] Recent files toggle failed: ' + (e.message || e)); });
+    });
+
+    _refreshRecentFiles();
 
     // ── Language selector initialization ──
     function _updateStartScreenStrings() {
@@ -1135,6 +1261,8 @@
       select.addEventListener('change', function() {
         window._eoSetLang(select.value);
         _updateStartScreenStrings();
+        // Dates in the list are formatted for the UI language.
+        _refreshRecentFiles();
       });
 
       _updateStartScreenStrings();

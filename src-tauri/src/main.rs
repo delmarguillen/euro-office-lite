@@ -4,6 +4,7 @@ mod bridge;
 mod clipboard;
 mod converter;
 mod file_ops;
+mod recent;
 
 use file_ops::AppState;
 use std::sync::Mutex;
@@ -153,6 +154,9 @@ fn main() {
             bridge::force_close,
             clipboard::read_clipboard_image,
             clipboard::read_clipboard_text,
+            recent::recent_files_state,
+            recent::set_recent_files_enabled,
+            recent::clear_recent_files,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let uri = request.uri().to_string();
