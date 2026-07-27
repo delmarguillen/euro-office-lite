@@ -57,6 +57,18 @@ fn clear_document_temp(temp_dir: &std::path::Path) {
 pub fn stage_into_media(media_dir: &std::path::Path, src: &std::path::Path) -> Option<String> {
     let file_name = src.file_name()?.to_string_lossy().to_string();
     let bytes = std::fs::read(src).ok()?;
+    stage_bytes_into_media(media_dir, &file_name, &bytes)
+}
+
+// Same staging, for callers that already hold the bytes and have no file to
+// read: a downloaded image only becomes a file once it has a name, and the name
+// is what this decides.
+pub fn stage_bytes_into_media(
+    media_dir: &std::path::Path,
+    file_name: &str,
+    bytes: &[u8],
+) -> Option<String> {
+    let file_name = file_name.to_string();
 
     let (stem, ext) = match file_name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{}", e)),
@@ -70,7 +82,7 @@ pub fn stage_into_media(media_dir: &std::path::Path, src: &std::path::Path) -> O
         match std::fs::read(&dest) {
             // Free name: stage it here.
             Err(_) => {
-                std::fs::write(&dest, &bytes).ok()?;
+                std::fs::write(&dest, bytes).ok()?;
                 return Some(candidate);
             }
             // Already staged, byte for byte. Reusing the name is what makes a
@@ -665,6 +677,48 @@ mod tests {
 
     // An unreadable source must report failure, not a name pointing at nothing:
     // the caller answers 500 and the bridge falls back to the original url.
+    // download-to-media used to write the downloaded bytes straight over
+    // media/<name>, so a download named like an image already in there replaced
+    // it, and the reply still carried the original name.
+    #[test]
+    fn staging_bytes_never_overwrites_a_staged_image() {
+        let dir = staging_dir();
+        let media = dir.join("media");
+        std::fs::write(media.join("image1.png"), b"host document image").unwrap();
+
+        let name = stage_bytes_into_media(&media, "image1.png", b"downloaded image").unwrap();
+
+        assert_eq!(name, "image1_1.png");
+        assert_eq!(
+            std::fs::read(media.join("image1.png")).unwrap(),
+            b"host document image"
+        );
+        assert_eq!(
+            std::fs::read(media.join(&name)).unwrap(),
+            b"downloaded image"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Both entry points have to agree, or a file staged from disk and the same
+    // file downloaded would end up duplicated under two names.
+    #[test]
+    fn staging_bytes_and_staging_a_file_agree() {
+        let dir = staging_dir();
+        let media = dir.join("media");
+        let src = dir.join("src/photo.png");
+        std::fs::write(&src, b"same image").unwrap();
+
+        let from_file = stage_into_media(&media, &src).unwrap();
+        let from_bytes = stage_bytes_into_media(&media, "photo.png", b"same image").unwrap();
+
+        assert_eq!(from_file, from_bytes);
+        assert_eq!(std::fs::read_dir(&media).unwrap().count(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn staging_a_missing_source_fails() {
         let dir = staging_dir();

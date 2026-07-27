@@ -251,20 +251,27 @@ fn main() {
                     .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
                     .collect();
                 let dest_name = if safe_name.is_empty() { "download.jpg".to_string() } else { safe_name };
-                let dest_download = downloads_dir.join(&dest_name);
-                let dest = media_dir.join(&dest_name);
                 if let Ok(resp) = ureq::get(url).call() {
                     if let Ok(bytes) = resp.into_body().read_to_vec() {
-                        let _ = std::fs::write(&dest, &bytes);
-                        if std::fs::write(&dest_download, &bytes).is_ok() {
-                            let full_path = dest_download.to_string_lossy().to_string();
-                            return tauri::http::Response::builder()
-                                .status(200)
-                                .header("Content-Type", "text/plain")
-                                .header("Cache-Control", "no-store")
-                                .header("Access-Control-Allow-Origin", "*")
-                                .body(full_path.into_bytes())
-                                .unwrap();
+                        // Staging picks the final name, which may not be dest_name if
+                        // media/ already holds a different image under it. downloads/
+                        // has to follow that name: the bridge answers this request by
+                        // taking the basename of the path below and writing it into the
+                        // document, so the two have to agree on one name (bridge.js:1111).
+                        if let Some(name) =
+                            file_ops::stage_bytes_into_media(&media_dir, &dest_name, &bytes)
+                        {
+                            let dest_download = downloads_dir.join(&name);
+                            if std::fs::write(&dest_download, &bytes).is_ok() {
+                                let full_path = dest_download.to_string_lossy().to_string();
+                                return tauri::http::Response::builder()
+                                    .status(200)
+                                    .header("Content-Type", "text/plain")
+                                    .header("Cache-Control", "no-store")
+                                    .header("Access-Control-Allow-Origin", "*")
+                                    .body(full_path.into_bytes())
+                                    .unwrap();
+                            }
                         }
                     }
                 }
