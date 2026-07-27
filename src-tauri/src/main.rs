@@ -213,10 +213,28 @@ fn main() {
 
             if decoded_path.starts_with("copy-to-media/") {
                 let src_path = &decoded_path[14..];
-                let src = std::path::Path::new(src_path);
                 let state = ctx.app_handle().state::<AppState>();
                 let media_dir = state.temp_dir.join("media");
                 let _ = std::fs::create_dir_all(&media_dir);
+                // After a compare or a merge, sdkjs does not register the url map
+                // convert_for_insert hands it and asks for the bare name the inserted
+                // binary carries ("image1.png"), which is not a path this can read.
+                // Resolving it against insert_tmp/media/ is what turns that request
+                // into the image the user actually inserted; staging is keyed on
+                // content, so the file already staged there answers with the very same
+                // name it got at convert time instead of piling up a second copy.
+                // Only the file name, so a relative request cannot walk out of that
+                // directory with a ..
+                let insert_src = state
+                    .temp_dir
+                    .join("insert_tmp")
+                    .join("media")
+                    .join(std::path::Path::new(src_path).file_name().unwrap_or_default());
+                let src = if std::path::Path::new(src_path).is_absolute() {
+                    std::path::Path::new(src_path)
+                } else {
+                    insert_src.as_path()
+                };
                 // The reply is the name sdkjs will write into the document, which is not
                 // necessarily the source's: see stage_into_media for the collision rules.
                 if let Some(name) = file_ops::stage_into_media(&media_dir, src) {

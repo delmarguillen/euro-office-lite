@@ -34,11 +34,18 @@ fn clear_changes(temp_dir: &std::path::Path) {
 // only goes away when the open document changes. Clearing it before an export
 // left x2t unable to load them, and the editor drew each one as a solid black
 // rectangle (#31).
+// insert_tmp/ and downloads/ hold what the previous document pulled in from a
+// compare, a merge or a url. They belong to that document just like media/ does,
+// and nothing else ever emptied them: the temp dir is fixed, so they grew across
+// documents and across sessions, and a stale image stayed reachable through
+// ascdesktop://abs/ while a different document was open.
 fn clear_document_temp(temp_dir: &std::path::Path) {
     clear_changes(temp_dir);
-    let media_dir = temp_dir.join("media");
-    if media_dir.exists() {
-        let _ = std::fs::remove_dir_all(&media_dir);
+    for dir in ["media", "insert_tmp", "downloads"] {
+        let path = temp_dir.join(dir);
+        if path.exists() {
+            let _ = std::fs::remove_dir_all(&path);
+        }
     }
 }
 
@@ -94,6 +101,44 @@ pub fn stage_bytes_into_media(
             }
         }
     }
+}
+
+// Copies the images x2t extracted from an inserted document into the media/ the
+// exporter reads, and reports each one as (name the inserted binary references,
+// name it ended up under). The two differ whenever the host document already
+// staged something else under that name, which is the normal case: x2t numbers
+// media image1, image2... per document, so an inserted document arrives with the
+// same names the host document already used.
+//
+// Copies rather than moves, on purpose. sdkjs does not always register the map
+// this feeds it and then asks copy-to-media for the bare name instead, which is
+// resolved against insert_tmp/media/ (main.rs): the original has to still be
+// sitting there for that second request to find anything. Content keying is what
+// makes it answer with the name assigned here instead of staging a duplicate.
+pub fn stage_insert_media(
+    insert_media_dir: &std::path::Path,
+    doc_media_dir: &std::path::Path,
+) -> Vec<(String, String)> {
+    let mut staged = Vec::new();
+    let Ok(entries) = std::fs::read_dir(insert_media_dir) else {
+        return staged;
+    };
+    let _ = std::fs::create_dir_all(doc_media_dir);
+    // Sorted, so image1, image2... keep their order and a rerun of the same
+    // insert reproduces the same names.
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    for img_path in paths {
+        let name = img_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if let Some(final_name) = stage_into_media(doc_media_dir, &img_path) {
+            staged.push((name, final_name));
+        }
+    }
+    staged
 }
 
 #[tauri::command]
@@ -445,24 +490,19 @@ pub async fn convert_for_insert(
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
     let b64 = STANDARD.encode(&bin_data);
 
-    let media_dir = insert_dir.join("media");
+    // x2t drops the inserted document's images in insert_tmp/media/, but the
+    // exporter only ever looks in temp_dir/media/, so anything left here came out
+    // of the PDF as a black rectangle: the same #31 mechanism through another
+    // door. Staging them into media/ is what makes them exportable, and it has to
+    // go through the collision-safe primitive rather than copy under the original
+    // name, because collision is the normal case here and not an edge one: x2t
+    // names these image1.png, image2.png... per document, which is exactly what it
+    // already named the host document's own images.
     let mut images = serde_json::Map::new();
-    if media_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&media_dir) {
-            for entry in entries.flatten() {
-                let img_path = entry.path();
-                let name = img_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                let img_url = format!(
-                    "ascdesktop://abs/{}",
-                    img_path.to_string_lossy().replace('\\', "/")
-                );
-                images.insert(name, serde_json::Value::String(img_url));
-            }
-        }
+    for (name, staged) in stage_insert_media(&insert_dir.join("media"), &state.temp_dir.join("media"))
+    {
+        let img_url = format!("ascdesktop://docmedia/media/{}", staged);
+        images.insert(name, serde_json::Value::String(img_url));
     }
 
     Ok(serde_json::json!({
@@ -723,6 +763,116 @@ mod tests {
     fn staging_a_missing_source_fails() {
         let dir = staging_dir();
         assert!(stage_into_media(&dir.join("media"), &dir.join("src/gone.png")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The residual of #31: images of a compared or merged document stayed in
+    // insert_tmp/media/, which the exporter never reads, so they came out of the
+    // PDF as black rectangles.
+    #[test]
+    fn insert_media_lands_where_the_exporter_reads_it() {
+        let dir = staging_dir();
+        let media = dir.join("media");
+        let insert = dir.join("insert_tmp/media");
+        std::fs::create_dir_all(&insert).unwrap();
+        std::fs::write(insert.join("image1.png"), b"compared image").unwrap();
+
+        let staged = stage_insert_media(&insert, &media);
+
+        assert_eq!(staged, vec![("image1.png".into(), "image1.png".into())]);
+        assert_eq!(
+            std::fs::read(media.join("image1.png")).unwrap(),
+            b"compared image",
+            "x2t only resolves media/ when exporting, not insert_tmp/media/"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Copying under the original name would look fine against a blank host
+    // document and quietly serve the wrong image against a real one: x2t numbers
+    // both documents' images image1, image2...
+    #[test]
+    fn insert_media_does_not_take_over_the_host_document_names() {
+        let dir = staging_dir();
+        let media = dir.join("media");
+        let insert = dir.join("insert_tmp/media");
+        std::fs::create_dir_all(&insert).unwrap();
+        std::fs::write(media.join("image1.png"), b"host image").unwrap();
+        std::fs::write(insert.join("image1.png"), b"compared image").unwrap();
+        std::fs::write(insert.join("image2.png"), b"second compared image").unwrap();
+
+        let staged = stage_insert_media(&insert, &media);
+
+        assert_eq!(
+            staged,
+            vec![
+                ("image1.png".to_string(), "image1_1.png".to_string()),
+                ("image2.png".to_string(), "image2.png".to_string()),
+            ],
+            "the map has to report the name each image ended up under"
+        );
+        assert_eq!(
+            std::fs::read(media.join("image1.png")).unwrap(),
+            b"host image",
+            "the host document must keep its own image"
+        );
+        assert_eq!(
+            std::fs::read(media.join("image1_1.png")).unwrap(),
+            b"compared image"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // sdkjs does not register the url map after a compare and asks for the bare
+    // name instead, which lands back on staging through copy-to-media. Content
+    // keying is what makes that second request answer with the name already
+    // assigned rather than a fresh copy.
+    #[test]
+    fn asking_again_for_an_inserted_image_returns_the_staged_name() {
+        let dir = staging_dir();
+        let media = dir.join("media");
+        let insert = dir.join("insert_tmp/media");
+        std::fs::create_dir_all(&insert).unwrap();
+        std::fs::write(media.join("image1.png"), b"host image").unwrap();
+        std::fs::write(insert.join("image1.png"), b"compared image").unwrap();
+
+        let staged = stage_insert_media(&insert, &media);
+        let asked_again = stage_into_media(&media, &insert.join("image1.png")).unwrap();
+
+        assert_eq!(asked_again, staged[0].1);
+        assert_eq!(
+            std::fs::read_dir(&media).unwrap().count(),
+            2,
+            "the second request must not add a third file"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn insert_media_is_a_noop_without_images() {
+        let dir = staging_dir();
+        assert!(stage_insert_media(&dir.join("insert_tmp/media"), &dir.join("media")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // insert_tmp/ and downloads/ belong to the open document just like media/,
+    // and until now nothing ever emptied them.
+    #[test]
+    fn clear_document_temp_drops_inserted_and_downloaded_files() {
+        let dir = temp_dir_with_changes_and_media();
+        std::fs::create_dir_all(dir.join("insert_tmp/media")).unwrap();
+        std::fs::create_dir_all(dir.join("downloads")).unwrap();
+        std::fs::write(dir.join("insert_tmp/media/image1.png"), b"compared").unwrap();
+        std::fs::write(dir.join("downloads/photo.png"), b"downloaded").unwrap();
+
+        clear_document_temp(&dir);
+
+        assert!(!dir.join("insert_tmp").exists());
+        assert!(!dir.join("downloads").exists());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
