@@ -217,20 +217,18 @@ fn main() {
                 let state = ctx.app_handle().state::<AppState>();
                 let media_dir = state.temp_dir.join("media");
                 let _ = std::fs::create_dir_all(&media_dir);
-                if let Some(file_name) = src.file_name() {
-                    let dest = media_dir.join(file_name);
-                    if dest.exists() || std::fs::copy(src, &dest).is_ok() {
-                        let name = file_name.to_string_lossy().to_string();
-                        // no-store: a cached response would skip the actual copy after media/ is
-                        // cleared on document switch, leaving a dangling reference
-                        return tauri::http::Response::builder()
-                            .status(200)
-                            .header("Content-Type", "text/plain")
-                            .header("Cache-Control", "no-store")
-                            .header("Access-Control-Allow-Origin", "*")
-                            .body(name.into_bytes())
-                            .unwrap();
-                    }
+                // The reply is the name sdkjs will write into the document, which is not
+                // necessarily the source's: see stage_into_media for the collision rules.
+                if let Some(name) = file_ops::stage_into_media(&media_dir, src) {
+                    // no-store: a cached response would skip the actual copy after media/ is
+                    // cleared on document switch, leaving a dangling reference
+                    return tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", "text/plain")
+                        .header("Cache-Control", "no-store")
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(name.into_bytes())
+                        .unwrap();
                 }
                 return tauri::http::Response::builder()
                     .status(500)

@@ -42,6 +42,48 @@ fn clear_document_temp(temp_dir: &std::path::Path) {
     }
 }
 
+// Stages an image into media/, where x2t resolves it from on every export, and
+// returns the name the document must reference.
+//
+// The name is not always the source's: media/ is shared by everything the
+// document pulls in, and x2t already fills it with image1.png, image2.png...
+// when opening a document, so two unrelated images landing on the same name is
+// the common case, not the rare one. Copying over the existing file would break
+// the document that referenced it first, and skipping the copy (what
+// copy-to-media did until now) served the first image in place of the second.
+// So: same content under that name means it is already staged and the name is
+// reused, which keeps repeated calls for the same source idempotent; different
+// content gets a _1, _2... suffix.
+pub fn stage_into_media(media_dir: &std::path::Path, src: &std::path::Path) -> Option<String> {
+    let file_name = src.file_name()?.to_string_lossy().to_string();
+    let bytes = std::fs::read(src).ok()?;
+
+    let (stem, ext) = match file_name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{}", e)),
+        _ => (file_name.clone(), String::new()),
+    };
+
+    let mut candidate = file_name;
+    let mut n = 0u32;
+    loop {
+        let dest = media_dir.join(&candidate);
+        match std::fs::read(&dest) {
+            // Free name: stage it here.
+            Err(_) => {
+                std::fs::write(&dest, &bytes).ok()?;
+                return Some(candidate);
+            }
+            // Already staged, byte for byte. Reusing the name is what makes a
+            // second call for the same file return the same answer.
+            Ok(existing) if existing == bytes => return Some(candidate),
+            Ok(_) => {
+                n += 1;
+                candidate = format!("{}_{}{}", stem, n, ext);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn open_file(
     app: tauri::AppHandle,
@@ -524,6 +566,109 @@ mod tests {
 
         assert!(dir.exists(), "clearing must not remove the temp dir itself");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn staging_dir() -> PathBuf {
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "eo-stage-test-{}-{}",
+            std::process::id(),
+            unique
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("media")).unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        dir
+    }
+
+    // Two different images that happen to share a file name. Skipping the copy
+    // (what copy-to-media did) answered with the same name twice and the second
+    // image was shown, and exported, as the first one.
+    #[test]
+    fn staging_a_colliding_name_keeps_both_images() {
+        let dir = staging_dir();
+        let media = dir.join("media");
+        std::fs::create_dir_all(dir.join("src/a")).unwrap();
+        std::fs::create_dir_all(dir.join("src/b")).unwrap();
+        std::fs::write(dir.join("src/a/photo.png"), b"red image").unwrap();
+        std::fs::write(dir.join("src/b/photo.png"), b"blue image").unwrap();
+
+        let first = stage_into_media(&media, &dir.join("src/a/photo.png")).unwrap();
+        let second = stage_into_media(&media, &dir.join("src/b/photo.png")).unwrap();
+
+        assert_eq!(first, "photo.png");
+        assert_ne!(
+            second, first,
+            "a different image must not be handed the name of one already staged"
+        );
+        assert_eq!(second, "photo_1.png");
+        assert_eq!(std::fs::read(media.join(&first)).unwrap(), b"red image");
+        assert_eq!(std::fs::read(media.join(&second)).unwrap(), b"blue image");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The skip that caused the bug above was there for a reason: sdkjs asks for
+    // the same file more than once and must keep getting the same name back.
+    #[test]
+    fn staging_the_same_file_twice_returns_the_same_name() {
+        let dir = staging_dir();
+        let media = dir.join("media");
+        let src = dir.join("src/photo.png");
+        std::fs::write(&src, b"red image").unwrap();
+
+        assert_eq!(stage_into_media(&media, &src).unwrap(), "photo.png");
+        assert_eq!(stage_into_media(&media, &src).unwrap(), "photo.png");
+        assert_eq!(
+            std::fs::read_dir(&media).unwrap().count(),
+            1,
+            "an unchanged source must not pile up copies"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The realistic collision: x2t names a document's own media image1.png,
+    // image2.png..., so anything inserted under those names lands on top.
+    #[test]
+    fn staging_walks_past_every_taken_name() {
+        let dir = staging_dir();
+        let media = dir.join("media");
+        std::fs::write(media.join("image1.png"), b"host document image").unwrap();
+        std::fs::write(media.join("image1_1.png"), b"another one").unwrap();
+        let src = dir.join("src/image1.png");
+        std::fs::write(&src, b"inserted image").unwrap();
+
+        assert_eq!(stage_into_media(&media, &src).unwrap(), "image1_2.png");
+        assert_eq!(
+            std::fs::read(media.join("image1.png")).unwrap(),
+            b"host document image",
+            "the host document's own image must survive untouched"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staging_handles_names_without_an_extension() {
+        let dir = staging_dir();
+        let media = dir.join("media");
+        std::fs::write(media.join("clip"), b"first").unwrap();
+        let src = dir.join("src/clip");
+        std::fs::write(&src, b"second").unwrap();
+
+        assert_eq!(stage_into_media(&media, &src).unwrap(), "clip_1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // An unreadable source must report failure, not a name pointing at nothing:
+    // the caller answers 500 and the bridge falls back to the original url.
+    #[test]
+    fn staging_a_missing_source_fails() {
+        let dir = staging_dir();
+        assert!(stage_into_media(&dir.join("media"), &dir.join("src/gone.png")).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
