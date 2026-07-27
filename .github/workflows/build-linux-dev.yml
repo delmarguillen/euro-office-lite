@@ -17,6 +17,7 @@ on:
       - 'feat/33-fix-linux-pdf-release'
       - 'hotfix/**'
       - 'feat/24-fix-metadata'
+      - 'feat/40-pdf-image-media'
     paths:
       - 'src-tauri/**'
       - 'src/**'

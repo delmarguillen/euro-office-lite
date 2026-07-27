@@ -27,6 +27,15 @@ fn clear_changes(temp_dir: &std::path::Path) {
     if changes_dir.exists() {
         let _ = std::fs::remove_dir_all(&changes_dir);
     }
+}
+
+// media/ holds the images inserted from disk (copy-to-media in main.rs) and x2t
+// resolves them from there on every export, so it must outlive a PDF export and
+// only goes away when the open document changes. Clearing it before an export
+// left x2t unable to load them, and the editor drew each one as a solid black
+// rectangle (#31).
+fn clear_document_temp(temp_dir: &std::path::Path) {
+    clear_changes(temp_dir);
     let media_dir = temp_dir.join("media");
     if media_dir.exists() {
         let _ = std::fs::remove_dir_all(&media_dir);
@@ -54,7 +63,7 @@ async fn open_file_inner(
     let input = PathBuf::from(&path);
     let output = state.temp_dir.join("Editor.bin");
 
-    clear_changes(&state.temp_dir);
+    clear_document_temp(&state.temp_dir);
 
     let format_from = detect_format(&input);
     let format_to = 8192;
@@ -432,5 +441,97 @@ pub fn detect_format(path: &PathBuf) -> i32 {
         Some("odp") => 131,
         Some("pdf") => 513,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    // A throwaway temp dir laid out like the app's: changes/ with one pending
+    // change and media/ with one inserted image.
+    fn temp_dir_with_changes_and_media() -> PathBuf {
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "eo-file-ops-test-{}-{}",
+            std::process::id(),
+            unique
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("changes")).unwrap();
+        std::fs::create_dir_all(dir.join("media")).unwrap();
+        std::fs::write(dir.join("changes/change_0.json"), b"[]").unwrap();
+        std::fs::write(dir.join("media/image1.png"), b"not really a png").unwrap();
+        dir
+    }
+
+    // The #31 regression: the PDF paths (save_file_as with format_to == 513, and
+    // print_document) call clear_changes right before handing the document to
+    // x2t. If that call also wiped media/, x2t could no longer load the images
+    // and drew each one as a solid black rectangle.
+    #[test]
+    fn clear_changes_keeps_media() {
+        let dir = temp_dir_with_changes_and_media();
+
+        clear_changes(&dir);
+
+        assert!(
+            !dir.join("changes").exists(),
+            "clear_changes must drop pending changes"
+        );
+        assert!(
+            dir.join("media/image1.png").exists(),
+            "clear_changes must keep inserted images: x2t resolves them from \
+             media/ on every export (#31)"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Switching documents does invalidate the images, so the full reset still
+    // has to take media/ with it.
+    #[test]
+    fn clear_document_temp_drops_media() {
+        let dir = temp_dir_with_changes_and_media();
+
+        clear_document_temp(&dir);
+
+        assert!(!dir.join("changes").exists());
+        assert!(
+            !dir.join("media").exists(),
+            "opening another document must not leave the previous document's images behind"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Both run on temp dirs that a fresh profile has not created yet.
+    #[test]
+    fn clearing_is_a_noop_when_nothing_exists() {
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "eo-file-ops-test-empty-{}-{}",
+            std::process::id(),
+            unique
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        clear_changes(&dir);
+        clear_document_temp(&dir);
+
+        assert!(dir.exists(), "clearing must not remove the temp dir itself");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detect_format_maps_pdf_to_the_x2t_export_id() {
+        // 513 is the value both PDF paths branch on before calling the converter.
+        assert_eq!(detect_format(&PathBuf::from("/tmp/out.pdf")), 513);
+        assert_eq!(detect_format(&PathBuf::from("/tmp/out.docx")), 65);
+        assert_eq!(detect_format(&PathBuf::from("/tmp/out.unknown")), 0);
     }
 }

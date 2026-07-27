@@ -10,7 +10,7 @@ on:
         type: boolean
   push:
     branches:
-      - feat/38-recent-files
+      - feat/40-pdf-image-media
     tags:
       - "v*"
 

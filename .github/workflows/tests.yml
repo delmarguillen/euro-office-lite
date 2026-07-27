@@ -1,0 +1,80 @@
+name: Rust unit tests
+
+# Job aparte del pipeline de release a propósito: no alargar el camino al tag.
+# Cubre la lógica pura del backend (ver src-tauri/src/file_ops.rs, mod tests).
+# NO cubre el empaquetado ni la conversión real con x2t: eso lo siguen validando
+# los builds y las máquinas de prueba.
+
+on:
+  push:
+    paths:
+      - 'src-tauri/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    paths:
+      - 'src-tauri/**'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_BACKTRACE: "1"
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-22.04
+
+    steps:
+      # Sin submodules: los tests no tocan sdkjs ni web-apps, y traerlos aquí
+      # costaría más que compilar el crate.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-tests-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-tests-
+
+      # frontendDist (../src-dist) lo genera prepare-dist.sh en el pipeline de
+      # build; acá alcanza con que el directorio exista.
+      - name: Create frontend placeholder
+        run: |
+          mkdir -p src-dist
+          echo '<!doctype html><title>test placeholder</title>' > src-dist/index.html
+
+      # tauri_build::build() valida la config entera antes de compilar: exige el
+      # externalBin binaries/x2t-<target-triple> y que CADA glob de
+      # bundle.resources matchee algún archivo. Todo eso lo produce el pipeline
+      # de build (get-x2t-ci.sh, prepare-dist.sh, submódulos), y traerlo aquí
+      # costaría descargar ~100 MB de x2t para tests que no lo ejecutan.
+      # TAURI_CONFIG (mismo merge que usa --config) desactiva el bundle en este
+      # job: se compila y se corren las aserciones, no se empaqueta nada. No
+      # puede enmascarar un problema de empaquetado porque de eso responden los
+      # workflows de build, que sí arman el .deb completo.
+      - name: Run tests
+        env:
+          TAURI_CONFIG: '{"bundle":{"active":false,"resources":[],"externalBin":[]}}'
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
