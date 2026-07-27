@@ -213,24 +213,40 @@ fn main() {
 
             if decoded_path.starts_with("copy-to-media/") {
                 let src_path = &decoded_path[14..];
-                let src = std::path::Path::new(src_path);
                 let state = ctx.app_handle().state::<AppState>();
                 let media_dir = state.temp_dir.join("media");
                 let _ = std::fs::create_dir_all(&media_dir);
-                if let Some(file_name) = src.file_name() {
-                    let dest = media_dir.join(file_name);
-                    if dest.exists() || std::fs::copy(src, &dest).is_ok() {
-                        let name = file_name.to_string_lossy().to_string();
-                        // no-store: a cached response would skip the actual copy after media/ is
-                        // cleared on document switch, leaving a dangling reference
-                        return tauri::http::Response::builder()
-                            .status(200)
-                            .header("Content-Type", "text/plain")
-                            .header("Cache-Control", "no-store")
-                            .header("Access-Control-Allow-Origin", "*")
-                            .body(name.into_bytes())
-                            .unwrap();
-                    }
+                // After a compare or a merge, sdkjs does not register the url map
+                // convert_for_insert hands it and asks for the bare name the inserted
+                // binary carries ("image1.png"), which is not a path this can read.
+                // Resolving it against insert_tmp/media/ is what turns that request
+                // into the image the user actually inserted; staging is keyed on
+                // content, so the file already staged there answers with the very same
+                // name it got at convert time instead of piling up a second copy.
+                // Only the file name, so a relative request cannot walk out of that
+                // directory with a ..
+                let insert_src = state
+                    .temp_dir
+                    .join("insert_tmp")
+                    .join("media")
+                    .join(std::path::Path::new(src_path).file_name().unwrap_or_default());
+                let src = if std::path::Path::new(src_path).is_absolute() {
+                    std::path::Path::new(src_path)
+                } else {
+                    insert_src.as_path()
+                };
+                // The reply is the name sdkjs will write into the document, which is not
+                // necessarily the source's: see stage_into_media for the collision rules.
+                if let Some(name) = file_ops::stage_into_media(&media_dir, src) {
+                    // no-store: a cached response would skip the actual copy after media/ is
+                    // cleared on document switch, leaving a dangling reference
+                    return tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", "text/plain")
+                        .header("Cache-Control", "no-store")
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(name.into_bytes())
+                        .unwrap();
                 }
                 return tauri::http::Response::builder()
                     .status(500)
@@ -253,20 +269,27 @@ fn main() {
                     .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
                     .collect();
                 let dest_name = if safe_name.is_empty() { "download.jpg".to_string() } else { safe_name };
-                let dest_download = downloads_dir.join(&dest_name);
-                let dest = media_dir.join(&dest_name);
                 if let Ok(resp) = ureq::get(url).call() {
                     if let Ok(bytes) = resp.into_body().read_to_vec() {
-                        let _ = std::fs::write(&dest, &bytes);
-                        if std::fs::write(&dest_download, &bytes).is_ok() {
-                            let full_path = dest_download.to_string_lossy().to_string();
-                            return tauri::http::Response::builder()
-                                .status(200)
-                                .header("Content-Type", "text/plain")
-                                .header("Cache-Control", "no-store")
-                                .header("Access-Control-Allow-Origin", "*")
-                                .body(full_path.into_bytes())
-                                .unwrap();
+                        // Staging picks the final name, which may not be dest_name if
+                        // media/ already holds a different image under it. downloads/
+                        // has to follow that name: the bridge answers this request by
+                        // taking the basename of the path below and writing it into the
+                        // document, so the two have to agree on one name (bridge.js:1111).
+                        if let Some(name) =
+                            file_ops::stage_bytes_into_media(&media_dir, &dest_name, &bytes)
+                        {
+                            let dest_download = downloads_dir.join(&name);
+                            if std::fs::write(&dest_download, &bytes).is_ok() {
+                                let full_path = dest_download.to_string_lossy().to_string();
+                                return tauri::http::Response::builder()
+                                    .status(200)
+                                    .header("Content-Type", "text/plain")
+                                    .header("Cache-Control", "no-store")
+                                    .header("Access-Control-Allow-Origin", "*")
+                                    .body(full_path.into_bytes())
+                                    .unwrap();
+                            }
                         }
                     }
                 }
