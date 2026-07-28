@@ -17,10 +17,7 @@ pub async fn convert_file(
         return convert_to_pdf(&binaries_dir, input, output, std::path::Path::new(temp_dir));
     }
 
-    let params_dir = std::path::Path::new(output)
-        .parent()
-        .unwrap_or(std::path::Path::new("."));
-    let params_path = params_dir.join("x2t_params_convert.xml");
+    let params_path = params_path(std::path::Path::new(temp_dir), "convert");
 
     let xml = format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
@@ -36,7 +33,7 @@ pub async fn convert_file(
         format_to,
         temp_dir.replace('\\', "/"),
     );
-    std::fs::write(&params_path, &xml).map_err(|e| e.to_string())?;
+    write_file(&params_path, &xml)?;
 
     let mut sidecar = app
         .shell()
@@ -240,6 +237,26 @@ fn strip_extended_prefix(p: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
+/// Where to write the params file x2t is invoked with. Every path inside the
+/// XML is absolute, so the file does not need to sit next to the output; the
+/// print path has always written it into temp_dir and works on all three
+/// platforms. Keeping it there is what stops a PDF export from leaving
+/// `x2t_params.xml` behind in the user's folder (#35), which the cleanup after
+/// the run cannot guarantee on its own (a crash or a kill skips it). The name
+/// is unique per call so two conversions in the same session cannot clobber
+/// each other's params.
+fn params_path(temp_dir: &std::path::Path, tag: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    temp_dir.join(format!(
+        "x2t_params_{}_{}_{}.xml",
+        tag,
+        std::process::id(),
+        unique
+    ))
+}
+
 fn convert_to_pdf(
     binaries_dir: &std::path::Path,
     input: &str,
@@ -339,10 +356,7 @@ fn convert_to_pdf(
         error
     })?;
 
-    let params_xml = std::path::PathBuf::from(output)
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("x2t_params.xml");
+    let params_xml = params_path(temp_dir, "pdf");
 
     let fonts_dir_for_xml = std::fs::canonicalize(&run_fonts).unwrap_or_else(|_| run_fonts.clone());
     let allfonts_abs =
@@ -382,6 +396,7 @@ fn convert_to_pdf(
         log_pdf(temp_dir, &message);
         message
     })?;
+    let _ = std::fs::remove_file(&params_xml);
     let code = result.status.code().unwrap_or(-999);
     let pdf_exists = std::path::Path::new(output).exists();
     let pdf_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
@@ -666,6 +681,47 @@ fn find_x2t_exe(binaries_dir: &std::path::Path) -> Result<std::path::PathBuf, St
         }
     }
     Err("x2t executable not found".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The #35 regression: convert_to_pdf used to drop the params file next to
+    // the PDF it was writing, so every export left an x2t_params.xml in the
+    // user's folder. The params file belongs in the app temp directory.
+    #[test]
+    fn params_stay_out_of_the_output_folder() {
+        let temp_dir = std::path::Path::new("/tmp/eo-app");
+        let output_dir = std::path::Path::new("/home/user/Documents");
+
+        for tag in ["pdf", "convert"] {
+            let path = params_path(temp_dir, tag);
+
+            assert_eq!(
+                path.parent(),
+                Some(temp_dir),
+                "params must be written to temp_dir, never beside the output (#35)"
+            );
+            assert_ne!(
+                path.parent(),
+                Some(output_dir),
+                "params must never land in the folder the user picked (#35)"
+            );
+        }
+    }
+
+    // Two exports in the same session must not share a params file: the second
+    // would overwrite the first while x2t is still reading it.
+    #[test]
+    fn params_path_is_unique_per_call() {
+        let temp_dir = std::path::Path::new("/tmp/eo-app");
+
+        let first = params_path(temp_dir, "pdf");
+        let second = params_path(temp_dir, "pdf");
+
+        assert_ne!(first, second, "each conversion needs its own params file");
+    }
 }
 
 pub fn is_x2t_binary(name: &str) -> bool {
