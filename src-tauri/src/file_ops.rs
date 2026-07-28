@@ -47,6 +47,44 @@ fn clear_document_temp(temp_dir: &std::path::Path) {
             let _ = std::fs::remove_dir_all(&path);
         }
     }
+    clear_x2t_scratch(temp_dir);
+}
+
+// x2t unpacks the document it is converting into <ext>_unpacked/ inside the temp
+// dir it is given, under a name that depends only on the extension, and leaves it
+// there. The temp dir is fixed and outlives the process, so that directory is
+// still sitting there the next time a document of the same type is opened.
+//
+// That is what made opening a 0-byte file show the previous document (#33):
+// x2t cannot unpack an empty file, but it finds the leftover docx_unpacked/,
+// converts THAT, and exits 0 — so the conversion reports success and hands back
+// an Editor.bin holding the previous document. Verified on the test machine with
+// the same binary and the same params: a clean temp dir exits 80 and writes
+// nothing, one holding the previous docx_unpacked/ exits 0 and writes the
+// previous document byte for byte.
+fn clear_x2t_scratch(temp_dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(temp_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        if is_x2t_scratch_dir(&entry.file_name().to_string_lossy()) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+// The app's own directories in the temp dir (media, changes, fontdata,
+// x2t-workdir, insert_tmp, downloads) must survive this: they are cleared, kept
+// or rebuilt on their own terms. Only what x2t scatters goes.
+fn is_x2t_scratch_dir(name: &str) -> bool {
+    // docx_unpacked, xlsx_unpacked, pptx_unpacked...
+    name.ends_with("_unpacked")
+        // Randomly named scratch dirs x2t creates per run (asc9gz1zK and the
+        // like). Nothing of ours starts with "asc".
+        || name.starts_with("asc")
 }
 
 // Stages an image into media/, where x2t resolves it from on every export, and
@@ -164,6 +202,12 @@ async fn open_file_inner(
 
     clear_document_temp(&state.temp_dir);
 
+    // Editor.bin also outlives the process, and it is read back after the
+    // conversion. Dropping it first means a conversion that reports success
+    // without writing anything can no longer serve the previous document (#33):
+    // there is nothing left to serve.
+    let _ = std::fs::remove_file(&output);
+
     let format_from = detect_format(&input);
     let format_to = 8192;
     let file_name = input
@@ -196,6 +240,15 @@ async fn open_file_inner(
     let bin_size = std::fs::metadata(&output)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
+    // A successful exit code is not proof that there is a document to show.
+    if bin_size == 0 {
+        let error = format!("{} could not be opened: it has no content", file_name);
+        log_event(
+            &state,
+            &format!("[OPEN] failed file={} error=empty Editor.bin", file_name),
+        );
+        return Err(error);
+    }
     let media_count = std::fs::read_dir(state.temp_dir.join("media"))
         .map(|entries| entries.filter_map(Result::ok).count())
         .unwrap_or(0);
@@ -598,6 +651,57 @@ mod tests {
             !dir.join("media").exists(),
             "opening another document must not leave the previous document's images behind"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The #33 regression: x2t leaves docx_unpacked/ in the temp dir, and given a
+    // 0-byte file it converts that leftover instead of failing, exits 0 and hands
+    // back the previous document. Opening another document has to take it.
+    #[test]
+    fn clear_document_temp_drops_x2t_unpacked_dirs() {
+        let dir = temp_dir_with_changes_and_media();
+        for scratch in ["docx_unpacked", "xlsx_unpacked", "pptx_unpacked", "asc9gz1zK"] {
+            std::fs::create_dir_all(dir.join(scratch)).unwrap();
+            std::fs::write(dir.join(scratch).join("document.xml"), b"<w:document/>").unwrap();
+        }
+
+        clear_document_temp(&dir);
+
+        for scratch in ["docx_unpacked", "xlsx_unpacked", "pptx_unpacked", "asc9gz1zK"] {
+            assert!(
+                !dir.join(scratch).exists(),
+                "{} must not survive into the next document: x2t converts it and \
+                 reports success when the file it was given is empty (#33)",
+                scratch
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The scratch sweep runs over the whole temp dir, so it has to leave what the
+    // app itself keeps there. fontdata/ and x2t-workdir/ in particular are
+    // rebuilt per export, not per document.
+    #[test]
+    fn clear_document_temp_keeps_the_apps_own_directories() {
+        let dir = temp_dir_with_changes_and_media();
+        for kept in ["fontdata", "x2t-workdir"] {
+            std::fs::create_dir_all(dir.join(kept)).unwrap();
+            std::fs::write(dir.join(kept).join("AllFonts.js"), b"//").unwrap();
+        }
+        std::fs::write(dir.join("js-debug.log"), b"log").unwrap();
+
+        clear_document_temp(&dir);
+
+        for kept in ["fontdata", "x2t-workdir"] {
+            assert!(
+                dir.join(kept).join("AllFonts.js").exists(),
+                "{} belongs to the app, not to the open document",
+                kept
+            );
+        }
+        assert!(dir.join("js-debug.log").exists(), "the log is not scratch");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
