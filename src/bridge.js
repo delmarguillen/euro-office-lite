@@ -250,6 +250,7 @@ window._eoLog = function() {
 
 var _isWindows = navigator.platform && navigator.platform.indexOf('Win') !== -1;
 var _isMac = navigator.platform && navigator.platform.indexOf('Mac') === 0;
+var _isLinux = navigator.platform && navigator.platform.indexOf('Linux') !== -1;
 var ASC_PROTO_BASE = _isWindows ? 'http://ascdesktop.localhost/' : 'ascdesktop://';
 window._eoAscProtoBase = ASC_PROTO_BASE;
 
@@ -506,6 +507,67 @@ function _forceReload() {
   invoke('set_document_modified', { modified: false })
     .catch(function(){})
     .finally(function() { window.location.reload(); });
+}
+
+// Which filters the Save As dialog offers. Pulled out of LocalFileSave so the
+// Linux branch below can be reasoned about (and exercised) on its own.
+//
+// On Linux the GTK dialog never reports back which filter the user picked:
+// rfd reads only gtk_file_chooser_get_filename and drops the filter, and
+// tauri-plugin-dialog's save returns the bare path (verified against rfd 0.16
+// and tauri-plugin-dialog 2.7.1). A dropdown listing every format therefore
+// offers a choice we cannot honour, and picking PDF while typing a name with
+// no extension wrote a .docx instead (#34). So on Linux the generic Save As
+// offers exactly one filter, the format the document already is, and the
+// dialog stops promising anything it cannot deliver. Choosing a different
+// format there goes through the editor's own Save As submenu, which passes
+// fileType and takes the requestedExt branch.
+//
+// Windows and macOS keep the full list: their dialogs append the extension of
+// the selected type themselves, so the choice does survive.
+function _eoSaveAsFilters(docType, requestedExt, currentPath, isLinux) {
+  var byDocType = {
+    cell: [
+      { name: 'Excel', extensions: ['xlsx'] },
+      { name: 'OpenDocument Spreadsheet', extensions: ['ods'] },
+      { name: 'CSV', extensions: ['csv'] },
+      { name: 'PDF', extensions: ['pdf'] },
+    ],
+    slide: [
+      { name: 'PowerPoint', extensions: ['pptx'] },
+      { name: 'OpenDocument Presentation', extensions: ['odp'] },
+      { name: 'PDF', extensions: ['pdf'] },
+    ],
+    word: [
+      { name: 'Word', extensions: ['docx'] },
+      { name: 'OpenDocument Text', extensions: ['odt'] },
+      { name: 'Rich Text', extensions: ['rtf'] },
+      { name: _t('plainText'), extensions: ['txt'] },
+      { name: 'PDF', extensions: ['pdf'] },
+    ]
+  };
+  var all = byDocType[docType] || byDocType.word;
+
+  // The editor already said which format it wants: one filter, and the
+  // auto-append below has nothing to guess.
+  if (requestedExt) {
+    return [{
+      name: requestedExt === 'pdf' ? 'PDF' : requestedExt.toUpperCase(),
+      extensions: [requestedExt]
+    }];
+  }
+
+  if (!isLinux) return all;
+
+  // The format the document already is, falling back to the doc type's default
+  // when the file was never saved or is of a legacy type Save As does not
+  // offer to write back (a .doc or an .xls, say).
+  var currentExt = (currentPath || '').replace(/\\/g, '/').split('/').pop().split('.').pop().toLowerCase();
+  var match = null;
+  for (var i = 0; i < all.length; i++) {
+    if (all[i].extensions[0] === currentExt) { match = all[i]; break; }
+  }
+  return [match || all[0]];
 }
 
 function _getEditor() {
@@ -916,33 +978,7 @@ window.AscDesktopEditor = {
         };
         var requestedExt = formatExtensions[fileType] || null;
 
-        var filters;
-        if (requestedExt) {
-          filters = [
-            { name: requestedExt === 'pdf' ? 'PDF' : requestedExt.toUpperCase(), extensions: [requestedExt] }
-          ];
-        } else if (docType === 'cell') {
-          filters = [
-            { name: 'Excel', extensions: ['xlsx'] },
-            { name: 'OpenDocument Spreadsheet', extensions: ['ods'] },
-            { name: 'CSV', extensions: ['csv'] },
-            { name: 'PDF', extensions: ['pdf'] },
-          ];
-        } else if (docType === 'slide') {
-          filters = [
-            { name: 'PowerPoint', extensions: ['pptx'] },
-            { name: 'OpenDocument Presentation', extensions: ['odp'] },
-            { name: 'PDF', extensions: ['pdf'] },
-          ];
-        } else {
-          filters = [
-            { name: 'Word', extensions: ['docx'] },
-            { name: 'OpenDocument Text', extensions: ['odt'] },
-            { name: 'Rich Text', extensions: ['rtf'] },
-            { name: _t('plainText'), extensions: ['txt'] },
-            { name: 'PDF', extensions: ['pdf'] },
-          ];
-        }
+        var filters = _eoSaveAsFilters(docType, requestedExt, currentPath, _isLinux);
         var dialog = window.__TAURI__.dialog;
         var savePath = await dialog.save({ filters: filters });
         if (savePath) {
