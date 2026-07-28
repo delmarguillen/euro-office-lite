@@ -18,6 +18,7 @@ on:
       - 'hotfix/**'
       - 'feat/24-fix-metadata'
       - 'feat/40-pdf-image-media'
+      - 'feat/39-issue17-copy-cut'
     paths:
       - 'src-tauri/**'
       - 'src/**'

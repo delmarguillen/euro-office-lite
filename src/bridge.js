@@ -1163,7 +1163,6 @@ window.AscDesktopEditor = {
   GetOpenedFile: function(data) { return null; },
 
   Copy: function() {
-    if (!_isWindows) return;
     var ref = _getEditor();
     if (!ref.ew) { window._eoLog('[EO] WARN: Copy - editor context not available'); return; }
     var cb = ref.ew.AscCommon && ref.ew.AscCommon.g_clipboardBase;
@@ -1257,7 +1256,6 @@ window.AscDesktopEditor = {
     window._eoLog('[CLIPBOARD] paste result=empty');
   },
   Cut: function() {
-    if (!_isWindows) return;
     var ref = _getEditor();
     if (!ref.ew) { window._eoLog('[EO] WARN: Cut - editor context not available'); return; }
     var cb = ref.ew.AscCommon && ref.ew.AscCommon.g_clipboardBase;
@@ -1265,10 +1263,18 @@ window.AscDesktopEditor = {
       if (cb.inputContext && cb.inputContext.HtmlArea) cb.inputContext.HtmlArea.focus();
       if (cb.CommonDiv_Execute_CopyCut) cb.CommonDiv_Execute_CopyCut();
     }
+    var execOk = false;
     try {
-      ref.ew.document.execCommand('cut');
+      execOk = ref.ew.document.execCommand('cut');
     } catch(e) {
       window._eoLog('[EO] Cut: execCommand=error ' + (e.message || e));
+    }
+    // WebKit can refuse the cut command on sdkjs's collapsed DOM selection
+    // (journal 030); mirror sdkjs's own Button_Cut fallback: copy natively,
+    // then delete the selection.
+    if (!execOk) {
+      try { ref.ew.document.execCommand('copy'); } catch(e) {}
+      if (ref.editor && ref.editor.asc_SelectionCut) ref.editor.asc_SelectionCut();
     }
   },
 
