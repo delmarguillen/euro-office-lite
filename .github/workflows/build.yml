@@ -10,7 +10,7 @@ on:
         type: boolean
   push:
     branches:
-      - feat/40-pdf-image-media
+      - feat/43-issue32-default-font
     tags:
       - "v*"
 
