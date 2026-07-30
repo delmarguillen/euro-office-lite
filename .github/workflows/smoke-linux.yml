@@ -1,0 +1,115 @@
+name: Smoke tests (Linux)
+
+# Installs the .deb produced by "Build & Release" on a clean runner, launches the
+# app under Xvfb and asserts by DOM that the start screen renders and the three
+# editors load (levels 1 and 2 of the smoke plan). No recompilation, no secrets,
+# no model in the loop: every check is a hard assertion in ci/smoke-linux.sh.
+#
+# Diagnostics (app log, launch log, per-editor log copies) are uploaded only when
+# the job fails.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Build & Release run id to take installer-x86_64-unknown-linux-gnu from"
+        required: true
+        type: string
+      expected_version:
+        description: "Version the start screen must show (default: version in src-tauri/tauri.conf.json)"
+        required: false
+        type: string
+
+  # Automatic trigger, to be enabled when this file is merged to main:
+  # workflow_run only fires when the workflow file exists on the DEFAULT branch,
+  # so on any feature branch it can never fire and the POC runs by dispatch.
+  # On activation, also add to the job:
+  #   if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+  # (the download step already falls back to github.event.workflow_run.id).
+  # workflow_run:
+  #   workflows: ["Build & Release"]
+  #   types: [completed]
+
+permissions:
+  contents: read
+  # Downloading an artifact from a DIFFERENT run goes through the Actions API,
+  # which the implicit GITHUB_TOKEN can only reach with actions: read.
+  actions: read
+
+concurrency:
+  group: smoke-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-linux:
+    # Pinned on purpose (not ubuntu-latest, which can jump versions): same base
+    # as the .deb build job and as the physical Ubuntu test machine, so the
+    # WebKitGTK under test is the known one.
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Resolve expected version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.expected_version }}
+        run: |
+          VERSION="$INPUT_VERSION"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          fi
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "ERROR: could not resolve the expected version"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Expected start screen version: $VERSION"
+
+      - name: Download Linux installer from the build run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: installer-x86_64-unknown-linux-gnu
+          path: installer/
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Run smoke tests
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -o pipefail
+          DEB=$(find installer -maxdepth 2 -name 'Euro-Office-Lite_*.deb' -print -quit)
+          if [ -z "$DEB" ]; then
+            echo "ERROR: the downloaded artifact has no Euro-Office-Lite_*.deb"
+            ls -laR installer
+            exit 1
+          fi
+          # Printed for diagnosis: with workflow_dispatch the run_id can point at
+          # a build older than the checkout, and then the version assertion is
+          # expected to be red (pass expected_version to test such a build).
+          echo "::group::Package under test"
+          dpkg-deb -f "$DEB" Package Version Architecture
+          echo "::endgroup::"
+          mkdir -p /tmp/eo-smoke
+          chmod +x ci/smoke-linux.sh ci/eo-inspect.py
+          bash ci/smoke-linux.sh --version "$EXPECTED_VERSION" --deb "$DEB" 2>&1 \
+            | tee /tmp/eo-smoke/smoke-output.log
+
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-linux-diagnostics-${{ github.run_attempt }}
+          path: |
+            /tmp/eo-smoke/
+            /tmp/eo-launch.log
+            /tmp/euro-office-lite/js-debug.log
+          if-no-files-found: warn
+          retention-days: 7
