@@ -20,15 +20,14 @@ on:
         required: false
         type: string
 
-  # Automatic trigger, to be enabled when this file is merged to main:
-  # workflow_run only fires when the workflow file exists on the DEFAULT branch,
-  # so on any feature branch it can never fire and the POC runs by dispatch.
-  # On activation, also add to the job:
-  #   if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
-  # (the download step already falls back to github.event.workflow_run.id).
-  # workflow_run:
-  #   workflows: ["Build & Release"]
-  #   types: [completed]
+  # Runs automatically after every Build & Release (the job skips builds that
+  # did not succeed). Note for new workflows: workflow_run (and also
+  # workflow_dispatch) only work once the workflow file exists on the DEFAULT
+  # branch, so on a feature branch this can never fire and validation happens
+  # against a physical test machine first.
+  workflow_run:
+    workflows: ["Build & Release"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -42,6 +41,9 @@ concurrency:
 
 jobs:
   smoke-linux:
+    # On workflow_run, only test builds that succeeded (a failed build has no
+    # installer artifact to smoke anyway).
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     # Pinned on purpose (not ubuntu-latest, which can jump versions): same base
     # as the .deb build job and as the physical Ubuntu test machine, so the
     # WebKitGTK under test is the known one.
