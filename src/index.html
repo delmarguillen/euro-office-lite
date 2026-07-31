@@ -679,6 +679,51 @@
             };
           }
 
+          // Re-expose the "Download As" File-menu entry, the only visible way to
+          // pick an output format when saving: the native dialog shows no format
+          // selector on Linux and macOS, and typing the extension by hand was the
+          // documented workaround (issue #34). The entry is hidden by the
+          // desktop-offline mode patch below, so CSS with !important is used to
+          // beat the inline style jQuery sets, whenever the File menu renders.
+          // Its format panel is trimmed to the formats the bridge maps to an
+          // extension (_eoSaveAsFilters in bridge.js): anything else silently
+          // saves in the document's current format instead of the chosen one.
+          if (!win._eoSaveAsPanelStyled) {
+            win._eoSaveAsPanelStyled = true;
+            var supportedFormats = [
+              65, 67, 68, 69,      // word: docx, odt, rtf, txt
+              257, 259, 260,       // cell: xlsx, ods, csv
+              129, 131,            // slide: pptx, odp
+              513                  // pdf (all editors)
+            ];
+            var formatFilter = '';
+            var itemFilter = '';
+            for (var fi = 0; fi < supportedFormats.length; fi++) {
+              formatFilter += ':not([format="' + supportedFormats[fi] + '"])';
+              itemFilter += ':not(:has(.btn-doc-format[format="' + supportedFormats[fi] + '"]))';
+            }
+            var saveAsStyleInterval = setInterval(function() {
+              try {
+                var head = win.document && win.document.head;
+                if (!head) return;
+                var style = win.document.createElement('style');
+                style.textContent =
+                  '#fm-btn-download { display: list-item !important; }\n' +
+                  // The tile container carries no format attribute, so hiding
+                  // only the inner button would leave empty cells in the grid.
+                  // The child rule stays as the fallback if :has() ever fails.
+                  '#panel-saveas .format-item' + itemFilter + ' { display: none !important; }\n' +
+                  '#panel-saveas .btn-doc-format' + formatFilter + ' { display: none !important; }';
+                head.appendChild(style);
+                clearInterval(saveAsStyleInterval);
+                win._eoLog('[EO] Download As panel style installed');
+              } catch(e) {
+                clearInterval(saveAsStyleInterval);
+              }
+            }, 50);
+            setTimeout(function() { clearInterval(saveAsStyleInterval); }, 30000);
+          }
+
           window._patchButtonHint(win);
 
           var saveAsPatched = false;
@@ -771,8 +816,9 @@
           // The production Web Apps bundle computes File-menu visibility once
           // while it initializes. Reassert desktop/offline mode on the controller
           // state as well as the SDK API, then ask the menu to reapply that state.
-          // This hides the online "Download as" entry while preserving the local
-          // "Save as" and PDF export actions gated by canDownload.
+          // This keeps the local "Save as" and PDF export actions gated by
+          // canDownload. It also hides the "Download as" entry, which the style
+          // installed above brings back on purpose as the format picker.
           var desktopModePatched = false;
           var desktopModeLastError = '';
           var desktopModeInterval = setInterval(function() {
