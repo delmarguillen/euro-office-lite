@@ -10,7 +10,7 @@ on:
         type: boolean
   push:
     branches:
-      - feat/43-issue32-default-font
+      - feat/45-issue34-saveas-format
     tags:
       - "v*"
 
