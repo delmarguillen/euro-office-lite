@@ -703,6 +703,19 @@
                     return origDownloadAs.call(api, options);
                   }
 
+                  // The TXT/CSV export flows put their encoding settings in
+                  // options.advancedOptions, but the desktop save path in sdkjs
+                  // assumes that field is always the print options object and
+                  // calls asc_getNativeOptions() on it. The resulting TypeError
+                  // fires after sync_StartAction, so isLongAction() stays true
+                  // and every later save (Ctrl+S included) becomes a silent
+                  // no-op until restart. Drop anything that is not the print
+                  // object; the bridge ignores those settings anyway.
+                  if (options && options.advancedOptions &&
+                      typeof options.advancedOptions.asc_getNativeOptions !== 'function') {
+                    options.advancedOptions = undefined;
+                  }
+
                   var docType = win.AscDesktopEditor._currentDocType || '';
 
                   // Cell and Slide gate asc_Save behind canSave. A Save As/export must
