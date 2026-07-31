@@ -725,44 +725,52 @@
           }
 
           // "Download As" is web-apps wording for an online flow. The entry saves
-          // to disk here, so it is renamed to "Export". The File menu renders
-          // lazily when the user first opens it, so this watches the document
-          // instead of polling on a timer, and stops once both captions are set.
-          if (!win._eoExportCaptionPatched) {
+          // to disk here, so it is renamed to "Export". The entry markup ships in
+          // the page, but web-apps rewrites its caption when the File menu first
+          // renders, so a single pass gets overwritten: the entry keeps its own
+          // observer for the life of the document and reapplies the label. The
+          // panel header is written once, when the panel renders.
+          if (!win._eoExportCaptionPatched && win.MutationObserver) {
             win._eoExportCaptionPatched = true;
             var exportLabel = window._t ? window._t('export') : 'Export';
-            var entryRenamed = false;
+            var entryWatched = false;
             var headerRenamed = false;
-            var renameExportCaptions = function() {
-              if (!entryRenamed) {
-                var entry = win.document.getElementById('fm-btn-download');
-                var link = entry && entry.querySelector('a');
-                if (link) {
-                  // The anchor is an icon span followed by a bare text node;
-                  // replacing the text node keeps the icon in place.
-                  for (var ni = link.childNodes.length - 1; ni >= 0; ni--) {
-                    var node = link.childNodes[ni];
-                    if (node.nodeType === 3 && node.nodeValue.trim()) {
-                      node.nodeValue = exportLabel;
-                      entryRenamed = true;
-                      break;
-                    }
-                  }
+            var renameEntry = function() {
+              var entry = win.document.getElementById('fm-btn-download');
+              var link = entry && entry.querySelector('a');
+              if (!link) return false;
+              // The anchor is an icon span followed by a bare text node;
+              // replacing the text node keeps the icon in place.
+              for (var ni = link.childNodes.length - 1; ni >= 0; ni--) {
+                var node = link.childNodes[ni];
+                if (node.nodeType === 3 && node.nodeValue.trim()) {
+                  // The guard also stops this observer from waking itself up.
+                  if (node.nodeValue !== exportLabel) node.nodeValue = exportLabel;
+                  return true;
                 }
               }
-              if (!headerRenamed) {
-                var panel = win.document.getElementById('panel-saveas');
-                var header = panel && panel.querySelector('.header');
-                if (header) {
-                  header.textContent = exportLabel;
-                  headerRenamed = true;
-                }
-              }
-              return entryRenamed && headerRenamed;
+              return false;
             };
-            if (!renameExportCaptions() && win.MutationObserver) {
+            var renameHeader = function() {
+              var panel = win.document.getElementById('panel-saveas');
+              var header = panel && panel.querySelector('.header');
+              if (!header) return false;
+              header.textContent = exportLabel;
+              return true;
+            };
+            var applyExportCaptions = function() {
+              if (!entryWatched && renameEntry()) {
+                entryWatched = true;
+                var entryObserver = new win.MutationObserver(renameEntry);
+                entryObserver.observe(win.document.getElementById('fm-btn-download'),
+                  { childList: true, subtree: true, characterData: true });
+              }
+              if (!headerRenamed) headerRenamed = renameHeader();
+              return entryWatched && headerRenamed;
+            };
+            if (!applyExportCaptions()) {
               var exportObserver = new win.MutationObserver(function() {
-                if (renameExportCaptions()) {
+                if (applyExportCaptions()) {
                   exportObserver.disconnect();
                   win._eoLog('[EO] Export captions applied');
                 }
