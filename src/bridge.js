@@ -307,6 +307,7 @@ var _SUPPORTED_LANGS = [
 var _UI_STRINGS = {
   en: {
     document: 'Document', spreadsheet: 'Spreadsheet', presentation: 'Presentation',
+    export: 'Export',
     openFile: 'Open file', newDocument: 'New document', newSpreadsheet: 'New spreadsheet',
     newPresentation: 'New presentation', unsavedChanges: 'Unsaved changes',
     unsavedDiscardOpen: 'The current document has unsaved changes. Do you want to discard them and open another file?',
@@ -319,6 +320,7 @@ var _UI_STRINGS = {
   },
   es: {
     document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación',
+    export: 'Exportar',
     openFile: 'Abrir archivo', newDocument: 'Nuevo documento', newSpreadsheet: 'Nueva hoja de cálculo',
     newPresentation: 'Nueva presentación', unsavedChanges: 'Cambios sin guardar',
     unsavedDiscardOpen: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y abrir otro archivo?',
@@ -331,6 +333,7 @@ var _UI_STRINGS = {
   },
   fr: {
     document: 'Document', spreadsheet: 'Feuille de calcul', presentation: 'Présentation',
+    export: 'Exporter',
     openFile: 'Ouvrir un fichier', newDocument: 'Nouveau document', newSpreadsheet: 'Nouvelle feuille de calcul',
     newPresentation: 'Nouvelle présentation', unsavedChanges: 'Modifications non enregistrées',
     unsavedDiscardOpen: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et ouvrir un autre fichier ?',
@@ -343,6 +346,7 @@ var _UI_STRINGS = {
   },
   de: {
     document: 'Dokument', spreadsheet: 'Tabelle', presentation: 'Präsentation',
+    export: 'Exportieren',
     openFile: 'Datei öffnen', newDocument: 'Neues Dokument', newSpreadsheet: 'Neue Tabelle',
     newPresentation: 'Neue Präsentation', unsavedChanges: 'Ungespeicherte Änderungen',
     unsavedDiscardOpen: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und eine andere Datei öffnen?',
@@ -355,6 +359,7 @@ var _UI_STRINGS = {
   },
   it: {
     document: 'Documento', spreadsheet: 'Foglio di calcolo', presentation: 'Presentazione',
+    export: 'Esporta',
     openFile: 'Apri file', newDocument: 'Nuovo documento', newSpreadsheet: 'Nuovo foglio di calcolo',
     newPresentation: 'Nuova presentazione', unsavedChanges: 'Modifiche non salvate',
     unsavedDiscardOpen: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e aprire un altro file?',
@@ -367,6 +372,7 @@ var _UI_STRINGS = {
   },
   pt: {
     document: 'Documento', spreadsheet: 'Planilha', presentation: 'Apresentação',
+    export: 'Exportar',
     openFile: 'Abrir arquivo', newDocument: 'Novo documento', newSpreadsheet: 'Nova planilha',
     newPresentation: 'Nova apresentação', unsavedChanges: 'Alterações não salvas',
     unsavedDiscardOpen: 'O documento atual tem alterações não salvas. Deseja descartá-las e abrir outro arquivo?',
@@ -379,6 +385,7 @@ var _UI_STRINGS = {
   },
   ru: {
     document: 'Документ', spreadsheet: 'Таблица', presentation: 'Презентация',
+    export: 'Экспорт',
     openFile: 'Открыть файл', newDocument: 'Новый документ', newSpreadsheet: 'Новая таблица',
     newPresentation: 'Новая презентация', unsavedChanges: 'Несохранённые изменения',
     unsavedDiscardOpen: 'Текущий документ содержит несохранённые изменения. Отменить их и открыть другой файл?',
@@ -391,6 +398,7 @@ var _UI_STRINGS = {
   },
   uk: {
     document: 'Документ', spreadsheet: 'Таблиця', presentation: 'Презентація',
+    export: 'Експорт',
     openFile: 'Відкрити файл', newDocument: 'Новий документ', newSpreadsheet: 'Нова таблиця',
     newPresentation: 'Нова презентація', unsavedChanges: 'Незбережені зміни',
     unsavedDiscardOpen: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і відкрити інший файл?',
@@ -403,6 +411,7 @@ var _UI_STRINGS = {
   },
   zh: {
     document: '文档', spreadsheet: '电子表格', presentation: '演示文稿',
+    export: '导出',
     openFile: '打开文件', newDocument: '新建文档', newSpreadsheet: '新建电子表格',
     newPresentation: '新建演示文稿', unsavedChanges: '未保存的更改',
     unsavedDiscardOpen: '当前文档有未保存的更改。是否放弃更改并打开另一个文件？',
@@ -415,6 +424,7 @@ var _UI_STRINGS = {
   },
   ja: {
     document: 'ドキュメント', spreadsheet: 'スプレッドシート', presentation: 'プレゼンテーション',
+    export: 'エクスポート',
     openFile: 'ファイルを開く', newDocument: '新規ドキュメント', newSpreadsheet: '新規スプレッドシート',
     newPresentation: '新規プレゼンテーション', unsavedChanges: '未保存の変更',
     unsavedDiscardOpen: '現在のドキュメントには未保存の変更があります。変更を破棄して別のファイルを開きますか？',
