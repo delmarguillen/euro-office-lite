@@ -9,8 +9,6 @@ on:
         default: true
         type: boolean
   push:
-    branches:
-      - feat/45-issue34-saveas-format
     tags:
       - "v*"
 
