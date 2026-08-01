@@ -115,7 +115,7 @@
     </div>
     <div>
       <h1>Euro-Office Lite</h1>
-      <p class="version">v0.17.10-alpha — Desktop</p>
+      <p class="version">v0.17.11-alpha — Desktop</p>
       <div class="actions">
         <button class="btn" data-type="word">
           <span class="icon">W</span> <span data-i18n="document">Document</span>
@@ -679,6 +679,105 @@
             };
           }
 
+          // Re-expose the "Download As" File-menu entry, the only visible way to
+          // pick an output format when saving: the native dialog shows no format
+          // selector on Linux and macOS, and typing the extension by hand was the
+          // documented workaround (issue #34). The entry is hidden by the
+          // desktop-offline mode patch below, so CSS with !important is used to
+          // beat the inline style jQuery sets, whenever the File menu renders.
+          // Its format panel is trimmed to the formats the bridge maps to an
+          // extension (_eoSaveAsFilters in bridge.js): anything else silently
+          // saves in the document's current format instead of the chosen one.
+          if (!win._eoSaveAsPanelStyled) {
+            win._eoSaveAsPanelStyled = true;
+            var supportedFormats = [
+              65, 67, 68, 69,      // word: docx, odt, rtf, txt
+              257, 259, 260,       // cell: xlsx, ods, csv
+              129, 131,            // slide: pptx, odp
+              513                  // pdf (all editors)
+            ];
+            var formatFilter = '';
+            var itemFilter = '';
+            for (var fi = 0; fi < supportedFormats.length; fi++) {
+              formatFilter += ':not([format="' + supportedFormats[fi] + '"])';
+              itemFilter += ':not(:has(.btn-doc-format[format="' + supportedFormats[fi] + '"]))';
+            }
+            var saveAsStyleInterval = setInterval(function() {
+              try {
+                var head = win.document && win.document.head;
+                if (!head) return;
+                var style = win.document.createElement('style');
+                style.textContent =
+                  '#fm-btn-download { display: list-item !important; }\n' +
+                  // The tile container carries no format attribute, so hiding
+                  // only the inner button would leave empty cells in the grid.
+                  // The child rule stays as the fallback if :has() ever fails.
+                  '#panel-saveas .format-item' + itemFilter + ' { display: none !important; }\n' +
+                  '#panel-saveas .btn-doc-format' + formatFilter + ' { display: none !important; }';
+                head.appendChild(style);
+                clearInterval(saveAsStyleInterval);
+                win._eoLog('[EO] Download As panel style installed');
+              } catch(e) {
+                clearInterval(saveAsStyleInterval);
+              }
+            }, 50);
+            setTimeout(function() { clearInterval(saveAsStyleInterval); }, 30000);
+          }
+
+          // "Download As" is web-apps wording for an online flow. The entry saves
+          // to disk here, so it is renamed to "Export". Two things make a single
+          // pass insufficient: this runs before the frame has navigated to the
+          // editor document (so the timer waits for the live document rather
+          // than patching the one being replaced), and web-apps rewrites the
+          // caption every time it renders the File menu (so the observer stays
+          // connected for the life of the document instead of firing once).
+          if (!win._eoExportCaptionPatched && win.MutationObserver) {
+            win._eoExportCaptionPatched = true;
+            var exportLabel = window._t ? window._t('export') : 'Export';
+            var renameExportEntry = function() {
+              var entry = win.document.getElementById('fm-btn-download');
+              var link = entry && entry.querySelector('a');
+              if (!link) return;
+              // The anchor is an icon span followed by a bare text node;
+              // replacing the text node keeps the icon in place.
+              for (var ni = link.childNodes.length - 1; ni >= 0; ni--) {
+                var node = link.childNodes[ni];
+                if (node.nodeType === 3 && node.nodeValue.trim()) {
+                  // The guard also stops the observer from waking itself up.
+                  if (node.nodeValue !== exportLabel) node.nodeValue = exportLabel;
+                  return;
+                }
+              }
+            };
+            var renameExportHeader = function() {
+              var panel = win.document.getElementById('panel-saveas');
+              var header = panel && panel.querySelector('.header');
+              if (header && header.textContent !== exportLabel) {
+                header.textContent = exportLabel;
+              }
+            };
+            var exportCaptionInterval = setInterval(function() {
+              try {
+                // about:blank has a body too, so the SDK being up is what tells
+                // the live editor document apart from the one it replaces.
+                if (!win.Asc || !win.Asc.editor || !win.document || !win.document.body) return;
+                clearInterval(exportCaptionInterval);
+                var exportObserver = new win.MutationObserver(function() {
+                  renameExportEntry();
+                  renameExportHeader();
+                });
+                exportObserver.observe(win.document.documentElement,
+                  { childList: true, subtree: true, characterData: true });
+                renameExportEntry();
+                renameExportHeader();
+                win._eoLog('[EO] Export caption watcher installed');
+              } catch(e) {
+                clearInterval(exportCaptionInterval);
+              }
+            }, 50);
+            setTimeout(function() { clearInterval(exportCaptionInterval); }, 30000);
+          }
+
           window._patchButtonHint(win);
 
           var saveAsPatched = false;
@@ -701,6 +800,19 @@
                 api.asc_DownloadAs = api['asc_DownloadAs'] = function(options) {
                   if (options && options.isNaturalDownload) {
                     return origDownloadAs.call(api, options);
+                  }
+
+                  // The TXT/CSV export flows put their encoding settings in
+                  // options.advancedOptions, but the desktop save path in sdkjs
+                  // assumes that field is always the print options object and
+                  // calls asc_getNativeOptions() on it. The resulting TypeError
+                  // fires after sync_StartAction, so isLongAction() stays true
+                  // and every later save (Ctrl+S included) becomes a silent
+                  // no-op until restart. Drop anything that is not the print
+                  // object; the bridge ignores those settings anyway.
+                  if (options && options.advancedOptions &&
+                      typeof options.advancedOptions.asc_getNativeOptions !== 'function') {
+                    options.advancedOptions = undefined;
                   }
 
                   var docType = win.AscDesktopEditor._currentDocType || '';
@@ -758,8 +870,9 @@
           // The production Web Apps bundle computes File-menu visibility once
           // while it initializes. Reassert desktop/offline mode on the controller
           // state as well as the SDK API, then ask the menu to reapply that state.
-          // This hides the online "Download as" entry while preserving the local
-          // "Save as" and PDF export actions gated by canDownload.
+          // This keeps the local "Save as" and PDF export actions gated by
+          // canDownload. It also hides the "Download as" entry, which the style
+          // installed above brings back on purpose as the format picker.
           var desktopModePatched = false;
           var desktopModeLastError = '';
           var desktopModeInterval = setInterval(function() {
