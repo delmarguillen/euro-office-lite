@@ -22,6 +22,8 @@ function requireFile(relativePath) {
 const required = [
   'index.html',
   'bridge.js',
+  'button-hint-patch.js',
+  'editor-patches.js',
   'web-apps/vendor/xregexp/xregexp-all-min.js',
   'sdkjs/vendor/polyfill.js',
   'sdkjs/common/AllFonts.js',
@@ -49,16 +51,16 @@ for (const editor of [
 
 required.forEach(requireFile);
 
-const shellHtmlPath = path.join(distRoot, 'index.html');
-if (existsSync(shellHtmlPath)) {
-  const shellHtml = await readFile(shellHtmlPath, 'utf8');
+const editorPatchesPath = path.join(distRoot, 'editor-patches.js');
+if (existsSync(editorPatchesPath)) {
+  const editorPatches = await readFile(editorPatchesPath, 'utf8');
   for (const marker of [
     "api.asc_isOffline = api['asc_isOffline']",
     'mainController.appOptions.isOffline = true',
     'leftMenuController.setMode(leftMenuController.mode)',
   ]) {
-    if (!shellHtml.includes(marker)) {
-      fail('index.html is missing desktop-offline integration marker: ' + marker);
+    if (!editorPatches.includes(marker)) {
+      fail('editor-patches.js is missing desktop-offline integration marker: ' + marker);
     }
   }
 }

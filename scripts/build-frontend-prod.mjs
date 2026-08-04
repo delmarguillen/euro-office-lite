@@ -296,6 +296,14 @@ await copyRequired(
   path.join(projectRoot, 'src', 'bridge.js'),
   path.join(outputRoot, 'bridge.js'),
 );
+await copyRequired(
+  path.join(projectRoot, 'src', 'button-hint-patch.js'),
+  path.join(outputRoot, 'button-hint-patch.js'),
+);
+await copyRequired(
+  path.join(projectRoot, 'src', 'editor-patches.js'),
+  path.join(outputRoot, 'editor-patches.js'),
+);
 await cp(path.join(projectRoot, 'src', 'fonts'), path.join(outputRoot, 'fonts'), {
   recursive: true,
 });

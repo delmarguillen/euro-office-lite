@@ -98,6 +98,7 @@ copy_single_file() {
 # --- Root files ---
 copy_single_file "$SRC/index.html" "$DIST/index.html" "index.html"
 copy_single_file "$SRC/bridge.js"  "$DIST/bridge.js"  "bridge.js"
+copy_single_file "$SRC/button-hint-patch.js" "$DIST/button-hint-patch.js" "button-hint-patch.js"copy_single_file "$SRC/editor-patches.js"    "$DIST/editor-patches.js"    "editor-patches.js"
 
 # --- Fonts ---
 copy_tree "$SRC/fonts" "$DIST/fonts" "src/fonts"
