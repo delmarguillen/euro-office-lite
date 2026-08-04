@@ -23,6 +23,7 @@ const required = [
   'index.html',
   'bridge.js',
   'button-hint-patch.js',
+  'font-patches.js',
   'editor-patches.js',
   'web-apps/vendor/xregexp/xregexp-all-min.js',
   'sdkjs/vendor/polyfill.js',

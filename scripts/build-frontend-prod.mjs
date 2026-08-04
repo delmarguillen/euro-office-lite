@@ -301,6 +301,10 @@ await copyRequired(
   path.join(outputRoot, 'button-hint-patch.js'),
 );
 await copyRequired(
+  path.join(projectRoot, 'src', 'font-patches.js'),
+  path.join(outputRoot, 'font-patches.js'),
+);
+await copyRequired(
   path.join(projectRoot, 'src', 'editor-patches.js'),
   path.join(outputRoot, 'editor-patches.js'),
 );

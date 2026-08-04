@@ -99,7 +99,8 @@ function Copy-SingleFile {
 # --- Root files ---
 Copy-SingleFile "$src\index.html"  "$dist\index.html"  "index.html"
 Copy-SingleFile "$src\bridge.js"   "$dist\bridge.js"   "bridge.js"
-Copy-SingleFile "$src\button-hint-patch.js" "$dist\button-hint-patch.js" "button-hint-patch.js"Copy-SingleFile "$src\editor-patches.js"    "$dist\editor-patches.js"    "editor-patches.js"
+Copy-SingleFile "$src\button-hint-patch.js" "$dist\button-hint-patch.js" "button-hint-patch.js"
+Copy-SingleFile "$src\font-patches.js"      "$dist\font-patches.js"      "font-patches.js"Copy-SingleFile "$src\editor-patches.js"    "$dist\editor-patches.js"    "editor-patches.js"
 
 # --- Fonts ---
 Copy-Tree "$src\fonts" "$dist\fonts" @() "src/fonts"
