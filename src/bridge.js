@@ -1028,7 +1028,23 @@ window.AscDesktopEditor = {
           }
         }
       } else {
-        await invoke('save_file', { data: '' });
+        try {
+          await invoke('save_file', { data: '' });
+        } catch(saveErr) {
+          // Same dialog the Save As path shows. A save can fail for reasons the
+          // user is the only one who can act on, a read-only location or a full
+          // disk, and the editor's own "saved" indicator says nothing about it:
+          // without this the document looks written and is not.
+          window._eoLog('[EO] Save failed: ' + saveErr);
+          await window.__TAURI__.dialog.message(
+            _t('saveErrorMsg'),
+            { title: _t('saveError'), kind: 'error' }
+          );
+          if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
+            ref.ew.DesktopOfflineAppDocumentEndSave(1);
+          }
+          return;
+        }
       }
 
       if (ref.ew.DesktopOfflineAppDocumentEndSave) {
