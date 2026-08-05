@@ -131,6 +131,7 @@ fn main() {
             current_file: Mutex::new(None),
             temp_dir: temp_dir.clone(),
             modified: Mutex::new(false),
+            pending_recent: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,

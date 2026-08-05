@@ -1,5 +1,5 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
@@ -7,6 +7,11 @@ pub struct AppState {
     pub current_file: Mutex<Option<PathBuf>>,
     pub temp_dir: PathBuf,
     pub modified: Mutex<bool>,
+    // The path a 0-byte file was opened from (#33). It is not in the recent
+    // list yet: the file still has no content, and an entry that opens to
+    // nothing is worse than no entry. The first save that actually writes it
+    // records it.
+    pub pending_recent: Mutex<Option<PathBuf>>,
 }
 
 fn log_event(state: &AppState, msg: &str) {
@@ -200,6 +205,27 @@ async fn open_file_inner(
     let input = PathBuf::from(&path);
     let output = state.temp_dir.join("Editor.bin");
 
+    clear_pending_recent(&state.pending_recent);
+
+    // An empty file has nothing to convert, so a blank template of the matching
+    // type is converted instead and current_file still points at the file the
+    // user opened: the first save writes the document there, in the format its
+    // extension asks for (#33). The check is a stat taken here, so a file that
+    // stopped being empty between the double click and this call opens normally.
+    let mut source = path.clone();
+    let mut opened_blank = false;
+    if is_empty_file(&input) {
+        if let Some(template) = blank_template_for(&input) {
+            let template_path = app
+                .path()
+                .resource_dir()
+                .map_err(|e| e.to_string())?
+                .join(template);
+            source = template_path.to_string_lossy().to_string();
+            opened_blank = true;
+        }
+    }
+
     clear_document_temp(&state.temp_dir);
 
     // Editor.bin also outlives the process, and it is read back after the
@@ -208,7 +234,7 @@ async fn open_file_inner(
     // there is nothing left to serve.
     let _ = std::fs::remove_file(&output);
 
-    let format_from = detect_format(&input);
+    let format_from = detect_format(&PathBuf::from(&source));
     let format_to = 8192;
     let file_name = input
         .file_name()
@@ -217,12 +243,17 @@ async fn open_file_inner(
 
     log_event(
         &state,
-        &format!("[OPEN] start file={} format={}", file_name, format_from),
+        &format!(
+            "[OPEN] start file={} format={}{}",
+            file_name,
+            format_from,
+            if opened_blank { " empty=blank" } else { "" }
+        ),
     );
 
     super::converter::convert_file(
         &app,
-        &path,
+        &source,
         &output.to_string_lossy(),
         format_from,
         format_to,
@@ -263,10 +294,13 @@ async fn open_file_inner(
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
     let b64 = STANDARD.encode(&bin_data);
 
-    *state.current_file.lock().unwrap() = Some(input);
+    *state.current_file.lock().unwrap() = Some(input.clone());
     *state.modified.lock().unwrap() = false;
 
-    if record_recent {
+    if opened_blank {
+        // Nothing is on disk yet, so the entry waits for the first real save.
+        arm_pending_recent(&state.pending_recent, &input);
+    } else if record_recent {
         super::recent::record(&app, &path);
     }
 
@@ -295,6 +329,12 @@ pub async fn save_file(
         &state.temp_dir.to_string_lossy(),
     )
     .await?;
+
+    // The 0-byte file this document was opened from now holds a real document,
+    // so it earns its place in the recent list (#33).
+    if let Some(recorded) = take_pending_recent(&state.pending_recent, &dest) {
+        super::recent::record(&app, &recorded.to_string_lossy());
+    }
 
     *state.modified.lock().unwrap() = false;
     Ok("ok".to_string())
@@ -328,6 +368,10 @@ pub async fn save_file_as(
     // A PDF export leaves the document itself untouched (current_file keeps
     // pointing at the editable file), so it does not belong in the list either.
     if format_to != 513 {
+        // Same reason a PDF export does not end the pending 0-byte entry, while
+        // a real Save As does: record below files the path actually written,
+        // which when the entry is consumed is that same path (#33).
+        end_pending_recent(&state.pending_recent, &dest);
         *state.current_file.lock().unwrap() = Some(dest);
         *state.modified.lock().unwrap() = false;
         super::recent::record(&app, &path);
@@ -589,6 +633,85 @@ pub fn detect_format(path: &PathBuf) -> i32 {
         Some("pdf") => 513,
         _ => 0,
     }
+}
+
+// File managers on Linux create 0-byte files from their "New document" menu and
+// opening one is an ordinary desktop flow, so an empty file is treated as a new
+// document that saves back to that path (#33, proposed by the reporter).
+// The blank template only decides which editor opens: the format written on the
+// first save comes from detect_format on the destination, so a 0-byte .odt is
+// edited in Word and saved as ODT.
+//
+// Deliberately absent: txt and csv (x2t asks for encoding options through a
+// dialog that is not wired up), pdf (nothing to edit), and the legacy doc/xls/ppt
+// (writing those back is not validated). Those keep the plain rejection.
+fn blank_template_for(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_lowercase();
+    match ext.as_str() {
+        "docx" | "odt" | "rtf" => Some("templates/blank.docx"),
+        "xlsx" | "ods" => Some("templates/blank.xlsx"),
+        "pptx" | "odp" => Some("templates/blank.pptx"),
+        _ => None,
+    }
+}
+
+fn is_empty_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.len() == 0)
+        .unwrap_or(false)
+}
+
+// Case-insensitive on Windows only, even though the default macOS filesystem is
+// case-insensitive too. Both paths compared here come from the same source (the
+// path the document was opened from, and the destination the save writes), so
+// they differ in case only if the user retyped one by hand in the Save As
+// dialog. On Windows that is one drive-letter case away and worth covering; on
+// macOS it would mean also honouring the per-volume setting, which is a real
+// filesystem query for a case that costs a missing recent-list entry.
+fn same_path(a: &Path, b: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        a == b
+    }
+}
+
+fn arm_pending_recent(pending: &Mutex<Option<PathBuf>>, path: &Path) {
+    *pending.lock().unwrap() = Some(path.to_path_buf());
+}
+
+// Cleared on every open: the pending path belongs to the document that is on
+// screen, and opening another one ends that document. Without this, saving the
+// next document would file the abandoned 0-byte path in the recent list.
+fn clear_pending_recent(pending: &Mutex<Option<PathBuf>>) {
+    *pending.lock().unwrap() = None;
+}
+
+// Consumed only by a save that writes the pending path itself. A Save As to a
+// different path is a different file, and the 0-byte one was never filled.
+fn take_pending_recent(pending: &Mutex<Option<PathBuf>>, dest: &Path) -> Option<PathBuf> {
+    let mut slot = pending.lock().unwrap();
+    match slot.as_ref() {
+        Some(path) if same_path(path, dest) => slot.take(),
+        _ => None,
+    }
+}
+
+// How a Save As ends the pending entry, either way: saving onto the 0-byte file
+// itself materialises it and consumes the entry, saving anywhere else leaves it
+// empty and drops it. Returns what was consumed so the caller can tell the two
+// apart; save_file_as needs no more than that its record call, which files the
+// path actually written, is the only one that runs.
+fn end_pending_recent(pending: &Mutex<Option<PathBuf>>, dest: &Path) -> Option<PathBuf> {
+    let consumed = take_pending_recent(pending, dest);
+    if consumed.is_none() {
+        clear_pending_recent(pending);
+    }
+    consumed
 }
 
 #[cfg(test)]
@@ -978,6 +1101,108 @@ mod tests {
         assert!(!dir.join("downloads").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn blank_template_covers_the_three_editors_and_nothing_else() {
+        let template = |name: &str| blank_template_for(&PathBuf::from(name));
+
+        assert_eq!(template("/tmp/empty.docx"), Some("templates/blank.docx"));
+        // The editor comes from the extension, and ODF and RTF are edited in the
+        // same one: the format is only decided when the document is written.
+        assert_eq!(template("/tmp/empty.odt"), Some("templates/blank.docx"));
+        assert_eq!(template("/tmp/EMPTY.ODS"), Some("templates/blank.xlsx"));
+        assert_eq!(template("/tmp/empty.odp"), Some("templates/blank.pptx"));
+
+        // Out of scope on purpose: these keep failing the open instead.
+        for unsupported in ["/tmp/empty.txt", "/tmp/empty.csv", "/tmp/empty.pdf",
+                            "/tmp/empty.doc", "/tmp/empty.xyz", "/tmp/empty"] {
+            assert_eq!(template(unsupported), None, "{} must not open blank", unsupported);
+        }
+    }
+
+    // Leak 1: the pending path must not outlive its document. Opening another
+    // file ends the 0-byte one, and saving THAT document would otherwise file
+    // the abandoned empty path in the recent list.
+    #[test]
+    fn opening_another_document_drops_the_pending_recent_entry() {
+        let pending = Mutex::new(None);
+        let empty = PathBuf::from("/home/user/nuevo.docx");
+
+        arm_pending_recent(&pending, &empty);
+        clear_pending_recent(&pending); // what every open does first
+
+        let other = PathBuf::from("/home/user/informe.docx");
+        assert_eq!(
+            take_pending_recent(&pending, &other),
+            None,
+            "saving the next document must not record the abandoned empty path"
+        );
+        assert_eq!(
+            take_pending_recent(&pending, &empty),
+            None,
+            "the entry is gone for its own path too: that document was closed"
+        );
+    }
+
+    // Leak 2: Save As writes somewhere else, so the 0-byte file stays empty and
+    // stops being this document's path. Its entry is dropped, not consumed, and
+    // a later plain save must not resurrect it.
+    #[test]
+    fn save_as_elsewhere_drops_the_pending_recent_entry() {
+        let pending = Mutex::new(None);
+        let empty = PathBuf::from("/home/user/nuevo.docx");
+        arm_pending_recent(&pending, &empty);
+
+        let elsewhere = PathBuf::from("/home/user/copia.docx");
+        assert_eq!(
+            end_pending_recent(&pending, &elsewhere),
+            None,
+            "a different destination is a different file"
+        );
+
+        assert_eq!(
+            take_pending_recent(&pending, &empty),
+            None,
+            "the empty file was never written, so it never enters the list"
+        );
+    }
+
+    // The sub-case of leak 2: Save As can also pick the 0-byte file itself, and
+    // then the file IS materialised. Its entry is consumed, not dropped, and the
+    // record call that follows in save_file_as files that same path.
+    #[test]
+    fn save_as_onto_the_empty_file_consumes_the_pending_entry() {
+        let pending = Mutex::new(None);
+        let empty = PathBuf::from("/home/user/nuevo.docx");
+        arm_pending_recent(&pending, &empty);
+
+        assert_eq!(
+            end_pending_recent(&pending, &empty),
+            Some(empty.clone()),
+            "saving onto the empty file writes it, so the entry is earned \
+             rather than dropped with the rest of the Save As branch"
+        );
+        assert_eq!(
+            end_pending_recent(&pending, &empty),
+            None,
+            "and it is spent: later saves must not record it again"
+        );
+    }
+
+    // The path the whole fix exists for, and it fires exactly once.
+    #[test]
+    fn saving_the_empty_file_itself_records_it_once() {
+        let pending = Mutex::new(None);
+        let empty = PathBuf::from("/home/user/nuevo.odt");
+        arm_pending_recent(&pending, &empty);
+
+        assert_eq!(take_pending_recent(&pending, &empty), Some(empty.clone()));
+        assert_eq!(
+            take_pending_recent(&pending, &empty),
+            None,
+            "every later save would otherwise re-record the same file"
+        );
     }
 
     #[test]
