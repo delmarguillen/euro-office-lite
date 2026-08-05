@@ -49,3 +49,38 @@ euro-office-lite                   0   140.2M   172.1M   253.4M
 WebKitWebProcess                   0   455.3M   485.4M   564.2M
                                    0   605.2M   692.4M   892.3M
 ```
+
+---
+
+## Re-measurement with the production frontend (v0.17.0-alpha, 2026-07-23)
+
+Same machine (bare-metal Ubuntu 22.04.5, kernel 6.8.0-124-generic, 16 GB RAM), same protocol: PSS via smem, states stabilized (start screen idle; blank .docx opened, no typing; second sample at +30 s confirmed flat within 0.3 MB). Fresh install from the official v0.17.0-alpha release .deb after a full purge (package, user data, caches).
+
+### Idle (start screen, no document)
+
+| Process | USS | PSS | RSS |
+|---|---|---|---|
+| euro-office-lite (Tauri/Rust) | 49.4 MB | 73.8 MB | 153.6 MB |
+| WebKitWebProcess | 62.5 MB | 82.2 MB | 156.5 MB |
+| WebKitNetworkProcess | 9.9 MB | 17.8 MB | 52.7 MB |
+| **Total** | **121.8 MB** | **173.8 MB** | **362.8 MB** |
+
+### Editing (blank .docx, writer editor loaded)
+
+| Process | USS | PSS | RSS |
+|---|---|---|---|
+| euro-office-lite (Tauri/Rust) | 65.0 MB | 89.9 MB | 170.3 MB |
+| WebKitWebProcess | 355.8 MB | 376.6 MB | 452.5 MB |
+| WebKitNetworkProcess | 9.9 MB | 18.1 MB | 53.5 MB |
+| **Total** | **430.7 MB** | **484.7 MB** | **676.2 MB** |
+
+### Deltas
+
+| State | Dev build (2026-06-28) | v0.17.0 production | Change |
+|---|---|---|---|
+| Idle PSS | 213.9 MB | 173.8 MB | **-40 MB (-19%)** |
+| Editing PSS | 675.4 MB | 484.7 MB | **-191 MB (-28%)** |
+
+Against Euro-Office Desktop measured on this same machine on 2026-07-02 (413 MB idle / 564 MB editing, PSS, all child processes): v0.17.0 is now lighter in BOTH states, -58% idle and -14% editing. Caveat for public claims: their number is from 2026-07-02 with their version of that date; re-install and re-measure theirs the same day before publishing a head-to-head comparison.
+
+Note: the editing document was opened by passing the bundled blank.docx template as a CLI argument, which follows the same open pipeline as the start-screen Document button (verified via [OPEN] log entries).
