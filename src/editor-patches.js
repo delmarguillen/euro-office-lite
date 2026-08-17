@@ -652,7 +652,7 @@
 
     // Every opening goes through open_file, which is where the Rust side records
     // the recent files entry.
-    async function _openPath(path) {
+    async function _openPath(path, silent) {
       try {
         var b64data = await window.__TAURI__.core.invoke('open_file', { path: path });
         var fileName = path.replace(/\\/g, '/').split('/').pop();
@@ -660,7 +660,11 @@
         openEditor(window._eoDocTypeForPath(path));
         return true;
       } catch(e) {
+        // Without a dialog the app just drops back to the start screen and the
+        // reason only reaches the log: the user cannot tell a damaged file from
+        // a broken app (Issue #38).
         window._eoLog('[EO] Error opening file:', e);
+        if (!silent) await window._eoShowOpenError();
         return false;
       }
     }
@@ -681,6 +685,7 @@
       }).catch(function(e) {
         window._eoLog('[EO] Error reopening file:', e);
         startScreen.classList.remove('hidden');
+        window._eoShowOpenError().catch(function(){});
       });
     })();
 
@@ -695,8 +700,9 @@
     }
 
     async function _openRecentFile(path) {
-      if (await _openPath(path)) return;
-      // The file can disappear between rendering the list and the click.
+      // Silent: this path keeps its own message for the dominant case, a file
+      // that disappeared between rendering the list and the click.
+      if (await _openPath(path, true)) return;
       await window.__TAURI__.dialog.message(_t('openFailedMsg'),
         { title: _t('openFailed'), kind: 'error' });
       _refreshRecentFiles();

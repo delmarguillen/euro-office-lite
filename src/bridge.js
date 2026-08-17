@@ -316,7 +316,8 @@ var _UI_STRINGS = {
     documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
     recentFiles: 'Recent files', rememberRecent: 'Remember recent files', clearRecent: 'Clear',
     noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
-    openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.'
+    openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.',
+    openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.'
   },
   es: {
     document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación',
@@ -329,7 +330,8 @@ var _UI_STRINGS = {
     documents: 'Documentos', all: 'Todos', plainText: 'Texto plano', user: 'Usuario', language: 'Idioma',
     recentFiles: 'Archivos recientes', rememberRecent: 'Recordar archivos recientes', clearRecent: 'Limpiar',
     noRecentFiles: 'Todavía no hay archivos recientes', openFailed: 'No se pudo abrir el archivo',
-    openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.'
+    openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.',
+    openErrorMsg: 'No se pudo abrir el archivo. No es un documento válido o está dañado.'
   },
   fr: {
     document: 'Document', spreadsheet: 'Feuille de calcul', presentation: 'Présentation',
@@ -342,7 +344,8 @@ var _UI_STRINGS = {
     documents: 'Documents', all: 'Tous', plainText: 'Texte brut', user: 'Utilisateur', language: 'Langue',
     recentFiles: 'Fichiers récents', rememberRecent: 'Mémoriser les fichiers récents', clearRecent: 'Effacer',
     noRecentFiles: 'Aucun fichier récent pour le moment', openFailed: 'Impossible d\'ouvrir le fichier',
-    openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.'
+    openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.',
+    openErrorMsg: 'Impossible d\'ouvrir le fichier. Ce n\'est pas un document valide ou il est endommagé.'
   },
   de: {
     document: 'Dokument', spreadsheet: 'Tabelle', presentation: 'Präsentation',
@@ -355,7 +358,8 @@ var _UI_STRINGS = {
     documents: 'Dokumente', all: 'Alle', plainText: 'Nur Text', user: 'Benutzer', language: 'Sprache',
     recentFiles: 'Zuletzt verwendete Dateien', rememberRecent: 'Zuletzt verwendete Dateien merken', clearRecent: 'Leeren',
     noRecentFiles: 'Noch keine zuletzt verwendeten Dateien', openFailed: 'Datei konnte nicht geöffnet werden',
-    openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.'
+    openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.',
+    openErrorMsg: 'Die Datei konnte nicht geöffnet werden. Sie ist kein gültiges Dokument oder sie ist beschädigt.'
   },
   it: {
     document: 'Documento', spreadsheet: 'Foglio di calcolo', presentation: 'Presentazione',
@@ -368,7 +372,8 @@ var _UI_STRINGS = {
     documents: 'Documenti', all: 'Tutti', plainText: 'Testo normale', user: 'Utente', language: 'Lingua',
     recentFiles: 'File recenti', rememberRecent: 'Ricorda i file recenti', clearRecent: 'Cancella',
     noRecentFiles: 'Nessun file recente', openFailed: 'Impossibile aprire il file',
-    openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.'
+    openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.',
+    openErrorMsg: 'Impossibile aprire il file. Non è un documento valido oppure è danneggiato.'
   },
   pt: {
     document: 'Documento', spreadsheet: 'Planilha', presentation: 'Apresentação',
@@ -381,7 +386,8 @@ var _UI_STRINGS = {
     documents: 'Documentos', all: 'Todos', plainText: 'Texto simples', user: 'Usuário', language: 'Idioma',
     recentFiles: 'Arquivos recentes', rememberRecent: 'Lembrar arquivos recentes', clearRecent: 'Limpar',
     noRecentFiles: 'Ainda não há arquivos recentes', openFailed: 'Não foi possível abrir o arquivo',
-    openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.'
+    openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.',
+    openErrorMsg: 'Não foi possível abrir o arquivo. Não é um documento válido ou está danificado.'
   },
   ru: {
     document: 'Документ', spreadsheet: 'Таблица', presentation: 'Презентация',
@@ -394,7 +400,8 @@ var _UI_STRINGS = {
     documents: 'Документы', all: 'Все', plainText: 'Обычный текст', user: 'Пользователь', language: 'Язык',
     recentFiles: 'Недавние файлы', rememberRecent: 'Запоминать недавние файлы', clearRecent: 'Очистить',
     noRecentFiles: 'Недавних файлов пока нет', openFailed: 'Не удалось открыть файл',
-    openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.'
+    openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.',
+    openErrorMsg: 'Не удалось открыть файл. Это не действительный документ или он повреждён.'
   },
   uk: {
     document: 'Документ', spreadsheet: 'Таблиця', presentation: 'Презентація',
@@ -407,7 +414,8 @@ var _UI_STRINGS = {
     documents: 'Документи', all: 'Усі', plainText: 'Звичайний текст', user: 'Користувач', language: 'Мова',
     recentFiles: 'Нещодавні файли', rememberRecent: 'Запам\'ятовувати нещодавні файли', clearRecent: 'Очистити',
     noRecentFiles: 'Нещодавніх файлів поки немає', openFailed: 'Не вдалося відкрити файл',
-    openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.'
+    openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.',
+    openErrorMsg: 'Не вдалося відкрити файл. Це не дійсний документ або його пошкоджено.'
   },
   zh: {
     document: '文档', spreadsheet: '电子表格', presentation: '演示文稿',
@@ -420,7 +428,8 @@ var _UI_STRINGS = {
     documents: '文档', all: '所有文件', plainText: '纯文本', user: '用户', language: '语言',
     recentFiles: '最近的文件', rememberRecent: '记住最近的文件', clearRecent: '清除',
     noRecentFiles: '暂无最近的文件', openFailed: '无法打开文件',
-    openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。'
+    openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。',
+    openErrorMsg: '无法打开文件。它不是有效的文档，或者已损坏。'
   },
   ja: {
     document: 'ドキュメント', spreadsheet: 'スプレッドシート', presentation: 'プレゼンテーション',
@@ -433,7 +442,8 @@ var _UI_STRINGS = {
     documents: 'ドキュメント', all: 'すべて', plainText: 'プレーンテキスト', user: 'ユーザー', language: '言語',
     recentFiles: '最近使用したファイル', rememberRecent: '最近使用したファイルを記憶する', clearRecent: 'クリア',
     noRecentFiles: '最近使用したファイルはありません', openFailed: 'ファイルを開けませんでした',
-    openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。'
+    openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。',
+    openErrorMsg: 'ファイルを開けませんでした。有効なドキュメントではないか、破損しています。'
   }
 };
 
@@ -470,6 +480,18 @@ window._eoSetLang = function(code) {
 };
 
 // ── end i18n ──
+
+// One dialog for every failed open. The Rust side already refuses a file the
+// converter cannot read, but the reason only reached js-debug.log: the user saw
+// the start screen come back and nothing else (Issue #38). The raw error stays
+// in the log, the user gets a translated, generic message.
+function _eoShowOpenError() {
+  return window.__TAURI__.dialog.message(
+    _t('openErrorMsg'),
+    { title: _t('openFailed'), kind: 'error' }
+  );
+}
+window._eoShowOpenError = _eoShowOpenError;
 
 // Which editor a path belongs to. Shared with index.html so the start screen,
 // the reopen-after-reload path and the recent files list all agree.
@@ -941,6 +963,7 @@ window.AscDesktopEditor = {
       _loadEditorBin(b64data, path);
     } catch(e) {
       window._eoLog('[EO] Error opening file: ' + e);
+      await _eoShowOpenError();
     }
   },
 
@@ -1589,5 +1612,6 @@ listen('open-file', async (event) => {
     }
   } catch(e) {
     window._eoLog('[EO] open-file: conversion failed: ' + (e.message || e));
+    await _eoShowOpenError();
   }
 });
