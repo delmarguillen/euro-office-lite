@@ -13,6 +13,10 @@ base64 = "0.22"
 ureq = "3"
 arboard = { version = "3", features = ["image-data"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Only to rewrite the docx package when the footnote separator is removed (#42):
+# deflate is the single method a docx uses besides stored, so the rest of the
+# codecs stay out of the binary.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-printer-v2 = "0.2.4"
 

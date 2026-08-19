@@ -317,7 +317,15 @@ var _UI_STRINGS = {
     recentFiles: 'Recent files', rememberRecent: 'Remember recent files', clearRecent: 'Clear',
     noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
     openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.',
-    openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.'
+    openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.',
+    removeNoteSeparator: 'Remove note separator',
+    noteSeparator: 'Note separator',
+    noteSeparatorSaveFirst: 'Save the document before removing the note separator. The separator is removed from the file on disk.',
+    noteSeparatorNoFile: 'Save the document as a .docx file before removing the note separator.',
+    noteSeparatorNotDocx: 'The note separator can only be removed from documents in .docx format.',
+    noteSeparatorNoNotes: 'The document does not have footnotes yet. Insert a footnote first: until then the separator is not kept in the file.',
+    noteSeparatorAlready: 'The note separator has already been removed from this document.',
+    noteSeparatorFailed: 'The note separator could not be removed.'
   },
   es: {
     document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación',
@@ -331,7 +339,15 @@ var _UI_STRINGS = {
     recentFiles: 'Archivos recientes', rememberRecent: 'Recordar archivos recientes', clearRecent: 'Limpiar',
     noRecentFiles: 'Todavía no hay archivos recientes', openFailed: 'No se pudo abrir el archivo',
     openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.',
-    openErrorMsg: 'No se pudo abrir el archivo. No es un documento válido o está dañado.'
+    openErrorMsg: 'No se pudo abrir el archivo. No es un documento válido o está dañado.',
+    removeNoteSeparator: 'Quitar el separador de notas',
+    noteSeparator: 'Separador de notas',
+    noteSeparatorSaveFirst: 'Guarde el documento antes de quitar el separador de notas. El separador se quita del archivo en disco.',
+    noteSeparatorNoFile: 'Guarde el documento en formato .docx antes de quitar el separador de notas.',
+    noteSeparatorNotDocx: 'El separador de notas solo se puede quitar en documentos con formato .docx.',
+    noteSeparatorNoNotes: 'El documento todavía no tiene notas al pie. Inserte una nota primero: hasta entonces el separador no se conserva en el archivo.',
+    noteSeparatorAlready: 'El separador de notas ya se había quitado de este documento.',
+    noteSeparatorFailed: 'No se pudo quitar el separador de notas.'
   },
   fr: {
     document: 'Document', spreadsheet: 'Feuille de calcul', presentation: 'Présentation',
@@ -345,7 +361,15 @@ var _UI_STRINGS = {
     recentFiles: 'Fichiers récents', rememberRecent: 'Mémoriser les fichiers récents', clearRecent: 'Effacer',
     noRecentFiles: 'Aucun fichier récent pour le moment', openFailed: 'Impossible d\'ouvrir le fichier',
     openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.',
-    openErrorMsg: 'Impossible d\'ouvrir le fichier. Ce n\'est pas un document valide ou il est endommagé.'
+    openErrorMsg: 'Impossible d\'ouvrir le fichier. Ce n\'est pas un document valide ou il est endommagé.',
+    removeNoteSeparator: 'Supprimer le séparateur de notes',
+    noteSeparator: 'Séparateur de notes',
+    noteSeparatorSaveFirst: 'Enregistrez le document avant de supprimer le séparateur de notes. Le séparateur est supprimé du fichier sur le disque.',
+    noteSeparatorNoFile: 'Enregistrez le document au format .docx avant de supprimer le séparateur de notes.',
+    noteSeparatorNotDocx: 'Le séparateur de notes ne peut être supprimé que dans les documents au format .docx.',
+    noteSeparatorNoNotes: 'Le document ne contient pas encore de notes de bas de page. Insérez d\'abord une note : jusque-là, le séparateur n\'est pas conservé dans le fichier.',
+    noteSeparatorAlready: 'Le séparateur de notes a déjà été supprimé de ce document.',
+    noteSeparatorFailed: 'Impossible de supprimer le séparateur de notes.'
   },
   de: {
     document: 'Dokument', spreadsheet: 'Tabelle', presentation: 'Präsentation',
@@ -359,7 +383,15 @@ var _UI_STRINGS = {
     recentFiles: 'Zuletzt verwendete Dateien', rememberRecent: 'Zuletzt verwendete Dateien merken', clearRecent: 'Leeren',
     noRecentFiles: 'Noch keine zuletzt verwendeten Dateien', openFailed: 'Datei konnte nicht geöffnet werden',
     openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.',
-    openErrorMsg: 'Die Datei konnte nicht geöffnet werden. Sie ist kein gültiges Dokument oder sie ist beschädigt.'
+    openErrorMsg: 'Die Datei konnte nicht geöffnet werden. Sie ist kein gültiges Dokument oder sie ist beschädigt.',
+    removeNoteSeparator: 'Fußnotentrennlinie entfernen',
+    noteSeparator: 'Fußnotentrennlinie',
+    noteSeparatorSaveFirst: 'Speichern Sie das Dokument, bevor Sie die Fußnotentrennlinie entfernen. Die Trennlinie wird aus der Datei auf dem Datenträger entfernt.',
+    noteSeparatorNoFile: 'Speichern Sie das Dokument im Format .docx, bevor Sie die Fußnotentrennlinie entfernen.',
+    noteSeparatorNotDocx: 'Die Fußnotentrennlinie kann nur in Dokumenten im Format .docx entfernt werden.',
+    noteSeparatorNoNotes: 'Das Dokument enthält noch keine Fußnoten. Fügen Sie zuerst eine Fußnote ein: bis dahin wird die Fußnotentrennlinie nicht in der Datei gespeichert.',
+    noteSeparatorAlready: 'Die Fußnotentrennlinie wurde aus diesem Dokument bereits entfernt.',
+    noteSeparatorFailed: 'Die Fußnotentrennlinie konnte nicht entfernt werden.'
   },
   it: {
     document: 'Documento', spreadsheet: 'Foglio di calcolo', presentation: 'Presentazione',
@@ -373,7 +405,15 @@ var _UI_STRINGS = {
     recentFiles: 'File recenti', rememberRecent: 'Ricorda i file recenti', clearRecent: 'Cancella',
     noRecentFiles: 'Nessun file recente', openFailed: 'Impossibile aprire il file',
     openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.',
-    openErrorMsg: 'Impossibile aprire il file. Non è un documento valido oppure è danneggiato.'
+    openErrorMsg: 'Impossibile aprire il file. Non è un documento valido oppure è danneggiato.',
+    removeNoteSeparator: 'Rimuovi il separatore delle note',
+    noteSeparator: 'Separatore delle note',
+    noteSeparatorSaveFirst: 'Salvare il documento prima di rimuovere il separatore delle note. Il separatore viene rimosso dal file su disco.',
+    noteSeparatorNoFile: 'Salvare il documento in formato .docx prima di rimuovere il separatore delle note.',
+    noteSeparatorNotDocx: 'Il separatore delle note può essere rimosso solo nei documenti in formato .docx.',
+    noteSeparatorNoNotes: 'Il documento non ha ancora note a piè di pagina. Inserire prima una nota: fino ad allora il separatore non viene conservato nel file.',
+    noteSeparatorAlready: 'Il separatore delle note è già stato rimosso da questo documento.',
+    noteSeparatorFailed: 'Impossibile rimuovere il separatore delle note.'
   },
   pt: {
     document: 'Documento', spreadsheet: 'Planilha', presentation: 'Apresentação',
@@ -387,7 +427,15 @@ var _UI_STRINGS = {
     recentFiles: 'Arquivos recentes', rememberRecent: 'Lembrar arquivos recentes', clearRecent: 'Limpar',
     noRecentFiles: 'Ainda não há arquivos recentes', openFailed: 'Não foi possível abrir o arquivo',
     openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.',
-    openErrorMsg: 'Não foi possível abrir o arquivo. Não é um documento válido ou está danificado.'
+    openErrorMsg: 'Não foi possível abrir o arquivo. Não é um documento válido ou está danificado.',
+    removeNoteSeparator: 'Remover o separador de notas',
+    noteSeparator: 'Separador de notas',
+    noteSeparatorSaveFirst: 'Salve o documento antes de remover o separador de notas. O separador é removido do arquivo em disco.',
+    noteSeparatorNoFile: 'Salve o documento no formato .docx antes de remover o separador de notas.',
+    noteSeparatorNotDocx: 'O separador de notas só pode ser removido em documentos no formato .docx.',
+    noteSeparatorNoNotes: 'O documento ainda não tem notas de rodapé. Insira uma nota primeiro: até lá o separador não é mantido no arquivo.',
+    noteSeparatorAlready: 'O separador de notas já foi removido deste documento.',
+    noteSeparatorFailed: 'Não foi possível remover o separador de notas.'
   },
   ru: {
     document: 'Документ', spreadsheet: 'Таблица', presentation: 'Презентация',
@@ -401,7 +449,15 @@ var _UI_STRINGS = {
     recentFiles: 'Недавние файлы', rememberRecent: 'Запоминать недавние файлы', clearRecent: 'Очистить',
     noRecentFiles: 'Недавних файлов пока нет', openFailed: 'Не удалось открыть файл',
     openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.',
-    openErrorMsg: 'Не удалось открыть файл. Это не действительный документ или он повреждён.'
+    openErrorMsg: 'Не удалось открыть файл. Это не действительный документ или он повреждён.',
+    removeNoteSeparator: 'Убрать разделитель сносок',
+    noteSeparator: 'Разделитель сносок',
+    noteSeparatorSaveFirst: 'Сохраните документ, прежде чем убирать разделитель сносок. Разделитель удаляется из файла на диске.',
+    noteSeparatorNoFile: 'Сохраните документ в формате .docx, прежде чем убирать разделитель сносок.',
+    noteSeparatorNotDocx: 'Разделитель сносок можно убрать только в документах формата .docx.',
+    noteSeparatorNoNotes: 'В документе пока нет сносок. Сначала вставьте сноску: до этого разделитель не сохраняется в файле.',
+    noteSeparatorAlready: 'Разделитель сносок уже убран из этого документа.',
+    noteSeparatorFailed: 'Не удалось убрать разделитель сносок.'
   },
   uk: {
     document: 'Документ', spreadsheet: 'Таблиця', presentation: 'Презентація',
@@ -415,7 +471,15 @@ var _UI_STRINGS = {
     recentFiles: 'Нещодавні файли', rememberRecent: 'Запам\'ятовувати нещодавні файли', clearRecent: 'Очистити',
     noRecentFiles: 'Нещодавніх файлів поки немає', openFailed: 'Не вдалося відкрити файл',
     openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.',
-    openErrorMsg: 'Не вдалося відкрити файл. Це не дійсний документ або його пошкоджено.'
+    openErrorMsg: 'Не вдалося відкрити файл. Це не дійсний документ або його пошкоджено.',
+    removeNoteSeparator: 'Прибрати роздільник виносок',
+    noteSeparator: 'Роздільник виносок',
+    noteSeparatorSaveFirst: 'Збережіть документ, перш ніж прибирати роздільник виносок. Роздільник вилучається з файлу на диску.',
+    noteSeparatorNoFile: 'Збережіть документ у форматі .docx, перш ніж прибирати роздільник виносок.',
+    noteSeparatorNotDocx: 'Роздільник виносок можна прибрати лише в документах формату .docx.',
+    noteSeparatorNoNotes: 'У документі поки немає виносок. Спочатку вставте виноску: до цього роздільник не зберігається у файлі.',
+    noteSeparatorAlready: 'Роздільник виносок уже прибрано з цього документа.',
+    noteSeparatorFailed: 'Не вдалося прибрати роздільник виносок.'
   },
   zh: {
     document: '文档', spreadsheet: '电子表格', presentation: '演示文稿',
@@ -429,7 +493,15 @@ var _UI_STRINGS = {
     recentFiles: '最近的文件', rememberRecent: '记住最近的文件', clearRecent: '清除',
     noRecentFiles: '暂无最近的文件', openFailed: '无法打开文件',
     openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。',
-    openErrorMsg: '无法打开文件。它不是有效的文档，或者已损坏。'
+    openErrorMsg: '无法打开文件。它不是有效的文档，或者已损坏。',
+    removeNoteSeparator: '移除脚注分隔线',
+    noteSeparator: '脚注分隔线',
+    noteSeparatorSaveFirst: '请先保存文档，然后再移除脚注分隔线。分隔线是从磁盘上的文件中移除的。',
+    noteSeparatorNoFile: '请先将文档保存为 .docx 格式，然后再移除脚注分隔线。',
+    noteSeparatorNotDocx: '只能在 .docx 格式的文档中移除脚注分隔线。',
+    noteSeparatorNoNotes: '该文档尚无脚注。请先插入一条脚注：在此之前，分隔线不会保存到文件中。',
+    noteSeparatorAlready: '该文档的脚注分隔线已经移除。',
+    noteSeparatorFailed: '无法移除脚注分隔线。'
   },
   ja: {
     document: 'ドキュメント', spreadsheet: 'スプレッドシート', presentation: 'プレゼンテーション',
@@ -443,7 +515,15 @@ var _UI_STRINGS = {
     recentFiles: '最近使用したファイル', rememberRecent: '最近使用したファイルを記憶する', clearRecent: 'クリア',
     noRecentFiles: '最近使用したファイルはありません', openFailed: 'ファイルを開けませんでした',
     openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。',
-    openErrorMsg: 'ファイルを開けませんでした。有効なドキュメントではないか、破損しています。'
+    openErrorMsg: 'ファイルを開けませんでした。有効なドキュメントではないか、破損しています。',
+    removeNoteSeparator: '脚注の区切り線を削除',
+    noteSeparator: '脚注の区切り線',
+    noteSeparatorSaveFirst: '脚注の区切り線を削除する前にドキュメントを保存してください。区切り線はディスク上のファイルから削除されます。',
+    noteSeparatorNoFile: '脚注の区切り線を削除する前に、ドキュメントを .docx 形式で保存してください。',
+    noteSeparatorNotDocx: '脚注の区切り線を削除できるのは .docx 形式のドキュメントだけです。',
+    noteSeparatorNoNotes: 'このドキュメントにはまだ脚注がありません。先に脚注を挿入してください。それまで区切り線はファイルに保存されません。',
+    noteSeparatorAlready: 'このドキュメントの脚注の区切り線はすでに削除されています。',
+    noteSeparatorFailed: '脚注の区切り線を削除できませんでした。'
   }
 };
 
@@ -540,6 +620,62 @@ function _forceReload() {
     .catch(function(){})
     .finally(function() { window.location.reload(); });
 }
+
+// Remove note separator (#42). The horizontal rule above the footnotes comes
+// from a special footnote in the file itself and no editor setting reaches it,
+// so the Rust side edits word/footnotes.xml in the .docx on disk and the
+// document is reopened from there.
+//
+// Because the surgery happens on disk, anything still only in the editor would
+// be written over it by the next save. The order is therefore: refuse while the
+// document is modified, operate, reopen.
+//
+// Refusing rather than saving first is deliberate. LocalFileSave is awaitable
+// here, but it also reports the end of a save to sdkjs with
+// DesktopOfflineAppDocumentEndSave, which sdkjs expects to answer a save IT
+// started; calling it from a save the editor never began puts the editor's own
+// state at odds with ours, and it returns the same undefined whether the write
+// succeeded or failed, so the surgery could not tell one from the other. A
+// message the user answers with Ctrl+S costs one click and no such guessing.
+async function _eoRemoveNoteSeparator() {
+  var dialog = window.__TAURI__.dialog;
+  function _tell(key) {
+    return dialog.message(_t(key), { title: _t('noteSeparator'), kind: 'info' });
+  }
+
+  if (window.AscDesktopEditor._isModified) {
+    await _tell('noteSeparatorSaveFirst');
+    return;
+  }
+
+  var code;
+  try {
+    code = await invoke('remove_note_separator');
+  } catch(e) {
+    window._eoLog('[EO] remove_note_separator failed: ' + (e.message || e));
+    await _tell('noteSeparatorFailed');
+    return;
+  }
+  window._eoLog('[EO] remove_note_separator: ' + code);
+
+  if (code === 'removed') {
+    // Same reopen the document switch uses: the editor holds the document it
+    // parsed at open time, and only a fresh open shows the edited file.
+    var path = await invoke('get_current_path').catch(function() { return null; });
+    if (path) localStorage.setItem('eo-pending-open-path', path);
+    _forceReload();
+    return;
+  }
+
+  var messages = {
+    no_notes: 'noteSeparatorNoNotes',
+    already_removed: 'noteSeparatorAlready',
+    not_docx: 'noteSeparatorNotDocx',
+    no_file: 'noteSeparatorNoFile'
+  };
+  await _tell(messages[code] || 'noteSeparatorFailed');
+}
+window._eoRemoveNoteSeparator = _eoRemoveNoteSeparator;
 
 // Which filters the Save As dialog offers. Pulled out of LocalFileSave so the
 // Linux branch below can be reasoned about (and exercised) on its own.

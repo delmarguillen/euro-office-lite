@@ -4,6 +4,7 @@ mod bridge;
 mod clipboard;
 mod converter;
 mod file_ops;
+mod note_separator;
 mod recent;
 
 use file_ops::AppState;
@@ -153,6 +154,7 @@ fn main() {
             bridge::list_media_dir,
             bridge::js_log,
             bridge::force_close,
+            note_separator::remove_note_separator,
             clipboard::read_clipboard_image,
             clipboard::read_clipboard_text,
             recent::recent_files_state,

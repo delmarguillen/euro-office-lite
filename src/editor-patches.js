@@ -191,6 +191,78 @@
             setTimeout(function() { clearInterval(exportCaptionInterval); }, 30000);
           }
 
+          // "Remove note separator" (#42): a File menu entry of the Word editor
+          // only, since the surgery is on word/footnotes.xml of a .docx. Same
+          // shape as the Export caption watcher above and for the same two
+          // reasons: this runs before the frame has navigated to the editor
+          // document, and web-apps re-renders the File menu, which drops
+          // anything it did not put there itself.
+          if (!win._eoNoteSeparatorEntryInstalled && win.MutationObserver &&
+              window.AscDesktopEditor._currentDocType === 'word') {
+            win._eoNoteSeparatorEntryInstalled = true;
+            var noteSepId = 'fm-btn-eo-note-separator';
+            var noteSepLabel = window._t ? window._t('removeNoteSeparator') : 'Remove note separator';
+            var addNoteSeparatorEntry = function() {
+              var doc = win.document;
+              // Also what stops the observer from waking itself up on the entry
+              // it just inserted.
+              if (doc.getElementById(noteSepId)) return;
+              // Cloned from an entry web-apps rendered itself, so the item picks
+              // up whatever classes and inner markup this build gives them
+              // rather than a copy that ages badly.
+              var template = doc.getElementById('fm-btn-print') ||
+                doc.getElementById('fm-btn-save');
+              if (!template || !template.querySelector('a')) return;
+
+              var entry = template.cloneNode(true);
+              entry.id = noteSepId;
+              // Layout names and hints belong to the entry this was cloned from.
+              entry.removeAttribute('data-layout-name');
+              entry.style.display = 'list-item';
+              var link = entry.querySelector('a');
+              link.removeAttribute('data-hint-title');
+              link.removeAttribute('id');
+              // The icon box stays for the alignment, without the glyph of the
+              // action it was cloned from.
+              var icon = link.querySelector('span');
+              if (icon) icon.className = 'menu__icon';
+              for (var ni = link.childNodes.length - 1; ni >= 0; ni--) {
+                if (link.childNodes[ni].nodeType === 3) link.removeChild(link.childNodes[ni]);
+              }
+              link.appendChild(doc.createTextNode(noteSepLabel));
+
+              // The clone carries no handler of its own (cloneNode copies markup,
+              // not listeners) and web-apps has no MenuItem registered for it, so
+              // the click is stopped here rather than left to a delegated handler
+              // that would look this entry up and find nothing.
+              entry.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (window._eoRemoveNoteSeparator) window._eoRemoveNoteSeparator();
+              }, true);
+
+              template.parentNode.insertBefore(entry, template.nextSibling);
+            };
+            var noteSepInterval = setInterval(function() {
+              try {
+                // about:blank has a body too, so the SDK being up is what tells
+                // the live editor document apart from the one it replaces.
+                if (!win.Asc || !win.Asc.editor || !win.document || !win.document.body) return;
+                clearInterval(noteSepInterval);
+                var noteSepObserver = new win.MutationObserver(function() {
+                  addNoteSeparatorEntry();
+                });
+                noteSepObserver.observe(win.document.documentElement,
+                  { childList: true, subtree: true });
+                addNoteSeparatorEntry();
+                win._eoLog('[EO] Note separator entry watcher installed');
+              } catch(e) {
+                clearInterval(noteSepInterval);
+              }
+            }, 50);
+            setTimeout(function() { clearInterval(noteSepInterval); }, 30000);
+          }
+
           window._patchButtonHint(win);
 
           var saveAsPatched = false;
