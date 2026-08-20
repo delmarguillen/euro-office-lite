@@ -201,7 +201,7 @@
               window.AscDesktopEditor._currentDocType === 'word') {
             win._eoNoteSeparatorEntryInstalled = true;
             var noteSepId = 'fm-btn-eo-note-separator';
-            var noteSepLabel = window._t ? window._t('removeNoteSeparator') : 'Remove note separator';
+            var noteSepLabel = window._t ? window._t('removeNoteSeparator') : 'Note lines';
             var addNoteSeparatorEntry = function() {
               var doc = win.document;
               // Also what stops the observer from waking itself up on the entry
@@ -210,22 +210,38 @@
               // Cloned from an entry web-apps rendered itself, so the item picks
               // up whatever classes and inner markup this build gives them
               // rather than a copy that ages badly.
-              var template = doc.getElementById('fm-btn-print') ||
+              // Save As ("fm-btn-save-desktop") first: it is the one File menu
+              // entry web-apps renders with no icon, so its markup is already
+              // the shape this entry needs. Print/Save are the fallback if the
+              // build did not render it.
+              var template = doc.getElementById('fm-btn-save-desktop') ||
+                doc.getElementById('fm-btn-print') ||
                 doc.getElementById('fm-btn-save');
               if (!template || !template.querySelector('a')) return;
 
               var entry = template.cloneNode(true);
               entry.id = noteSepId;
-              // Layout names and hints belong to the entry this was cloned from.
+              // Layout names, hints and the scaling hook belong to the entry
+              // this was cloned from.
               entry.removeAttribute('data-layout-name');
+              entry.removeAttribute('ratio');
               entry.style.display = 'list-item';
               var link = entry.querySelector('a');
               link.removeAttribute('data-hint-title');
               link.removeAttribute('id');
-              // The icon box stays for the alignment, without the glyph of the
-              // action it was cloned from.
-              var icon = link.querySelector('span');
-              if (icon) icon.className = 'menu__icon';
+              // The label is indented the way the iconless entries are: the
+              // stylesheet gives ".fm-btn > a[data-no-icon]" the same left
+              // padding that an icon box plus its margin occupies, and that is
+              // exactly how web-apps aligns Save As. Keeping a stripped icon
+              // node instead loses the "menu-item-icon" class that carries the
+              // width and the 8px margin, so the label started flush against
+              // the padding while every neighbour started 28px in - which is
+              // what made this entry read as centred next to the others.
+              var icons = link.querySelectorAll('.menu-item-icon');
+              for (var ii = 0; ii < icons.length; ii++) {
+                icons[ii].parentNode.removeChild(icons[ii]);
+              }
+              link.setAttribute('data-no-icon', '');
               for (var ni = link.childNodes.length - 1; ni >= 0; ni--) {
                 if (link.childNodes[ni].nodeType === 3) link.removeChild(link.childNodes[ni]);
               }

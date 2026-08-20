@@ -318,8 +318,9 @@ var _UI_STRINGS = {
     noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
     openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.',
     openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.',
-    removeNoteSeparator: 'Remove note separator',
-    noteSeparator: 'Note separator',
+    removeNoteSeparator: 'Note lines',
+    noteSeparator: 'Note lines',
+    noteSeparatorConfirm: 'Remove the note separator lines from this document? The lines above footnotes and endnotes are removed from the saved file.',
     noteSeparatorSaveFirst: 'Save the document before removing the note separator. The separator is removed from the file on disk.',
     noteSeparatorNoFile: 'Save the document as a .docx file before removing the note separator.',
     noteSeparatorNotDocx: 'The note separator can only be removed from documents in .docx format.',
@@ -340,8 +341,9 @@ var _UI_STRINGS = {
     noRecentFiles: 'Todavía no hay archivos recientes', openFailed: 'No se pudo abrir el archivo',
     openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.',
     openErrorMsg: 'No se pudo abrir el archivo. No es un documento válido o está dañado.',
-    removeNoteSeparator: 'Quitar el separador de notas',
-    noteSeparator: 'Separador de notas',
+    removeNoteSeparator: 'Líneas de notas',
+    noteSeparator: 'Líneas de notas',
+    noteSeparatorConfirm: '¿Quitar las líneas separadoras de notas de este documento? Las líneas que aparecen encima de las notas al pie y de las notas al final se quitan del archivo guardado.',
     noteSeparatorSaveFirst: 'Guarde el documento antes de quitar el separador de notas. El separador se quita del archivo en disco.',
     noteSeparatorNoFile: 'Guarde el documento en formato .docx antes de quitar el separador de notas.',
     noteSeparatorNotDocx: 'El separador de notas solo se puede quitar en documentos con formato .docx.',
@@ -362,8 +364,9 @@ var _UI_STRINGS = {
     noRecentFiles: 'Aucun fichier récent pour le moment', openFailed: 'Impossible d\'ouvrir le fichier',
     openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.',
     openErrorMsg: 'Impossible d\'ouvrir le fichier. Ce n\'est pas un document valide ou il est endommagé.',
-    removeNoteSeparator: 'Supprimer le séparateur de notes',
-    noteSeparator: 'Séparateur de notes',
+    removeNoteSeparator: 'Lignes de notes',
+    noteSeparator: 'Lignes de notes',
+    noteSeparatorConfirm: 'Supprimer les lignes de séparation des notes de ce document ? Les lignes situées au-dessus des notes de bas de page et des notes de fin sont supprimées du fichier enregistré.',
     noteSeparatorSaveFirst: 'Enregistrez le document avant de supprimer le séparateur de notes. Le séparateur est supprimé du fichier sur le disque.',
     noteSeparatorNoFile: 'Enregistrez le document au format .docx avant de supprimer le séparateur de notes.',
     noteSeparatorNotDocx: 'Le séparateur de notes ne peut être supprimé que dans les documents au format .docx.',
@@ -384,8 +387,9 @@ var _UI_STRINGS = {
     noRecentFiles: 'Noch keine zuletzt verwendeten Dateien', openFailed: 'Datei konnte nicht geöffnet werden',
     openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.',
     openErrorMsg: 'Die Datei konnte nicht geöffnet werden. Sie ist kein gültiges Dokument oder sie ist beschädigt.',
-    removeNoteSeparator: 'Fuß-/Endnotentrennlinie entfernen',
-    noteSeparator: 'Fuß-/Endnotentrennlinie',
+    removeNoteSeparator: 'Trennlinien',
+    noteSeparator: 'Trennlinien',
+    noteSeparatorConfirm: 'Die Trennlinien der Fuß- und Endnoten aus diesem Dokument entfernen? Die Linien über den Fuß- und Endnoten werden aus der gespeicherten Datei entfernt.',
     noteSeparatorSaveFirst: 'Speichern Sie das Dokument, bevor Sie die Fuß-/Endnotentrennlinie entfernen. Die Trennlinie wird aus der Datei auf dem Datenträger entfernt.',
     noteSeparatorNoFile: 'Speichern Sie das Dokument im Format .docx, bevor Sie die Fuß-/Endnotentrennlinie entfernen.',
     noteSeparatorNotDocx: 'Die Fuß-/Endnotentrennlinie kann nur in Dokumenten im Format .docx entfernt werden.',
@@ -406,8 +410,9 @@ var _UI_STRINGS = {
     noRecentFiles: 'Nessun file recente', openFailed: 'Impossibile aprire il file',
     openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.',
     openErrorMsg: 'Impossibile aprire il file. Non è un documento valido oppure è danneggiato.',
-    removeNoteSeparator: 'Rimuovi il separatore delle note',
-    noteSeparator: 'Separatore delle note',
+    removeNoteSeparator: 'Linee delle note',
+    noteSeparator: 'Linee delle note',
+    noteSeparatorConfirm: 'Rimuovere le linee di separazione delle note da questo documento? Le linee sopra le note a piè di pagina e le note di chiusura vengono rimosse dal file salvato.',
     noteSeparatorSaveFirst: 'Salvare il documento prima di rimuovere il separatore delle note. Il separatore viene rimosso dal file su disco.',
     noteSeparatorNoFile: 'Salvare il documento in formato .docx prima di rimuovere il separatore delle note.',
     noteSeparatorNotDocx: 'Il separatore delle note può essere rimosso solo nei documenti in formato .docx.',
@@ -428,8 +433,9 @@ var _UI_STRINGS = {
     noRecentFiles: 'Ainda não há arquivos recentes', openFailed: 'Não foi possível abrir o arquivo',
     openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.',
     openErrorMsg: 'Não foi possível abrir o arquivo. Não é um documento válido ou está danificado.',
-    removeNoteSeparator: 'Remover o separador de notas',
-    noteSeparator: 'Separador de notas',
+    removeNoteSeparator: 'Linhas de notas',
+    noteSeparator: 'Linhas de notas',
+    noteSeparatorConfirm: 'Remover as linhas separadoras de notas deste documento? As linhas acima das notas de rodapé e das notas de fim são removidas do arquivo salvo.',
     noteSeparatorSaveFirst: 'Salve o documento antes de remover o separador de notas. O separador é removido do arquivo em disco.',
     noteSeparatorNoFile: 'Salve o documento no formato .docx antes de remover o separador de notas.',
     noteSeparatorNotDocx: 'O separador de notas só pode ser removido em documentos no formato .docx.',
@@ -450,8 +456,9 @@ var _UI_STRINGS = {
     noRecentFiles: 'Недавних файлов пока нет', openFailed: 'Не удалось открыть файл',
     openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.',
     openErrorMsg: 'Не удалось открыть файл. Это не действительный документ или он повреждён.',
-    removeNoteSeparator: 'Убрать разделитель сносок',
-    noteSeparator: 'Разделитель сносок',
+    removeNoteSeparator: 'Линии сносок',
+    noteSeparator: 'Линии сносок',
+    noteSeparatorConfirm: 'Убрать из этого документа линии, отделяющие сноски? Линии над обычными и концевыми сносками будут удалены из сохранённого файла.',
     noteSeparatorSaveFirst: 'Сохраните документ, прежде чем убирать разделитель сносок. Разделитель удаляется из файла на диске.',
     noteSeparatorNoFile: 'Сохраните документ в формате .docx, прежде чем убирать разделитель сносок.',
     noteSeparatorNotDocx: 'Разделитель сносок можно убрать только в документах формата .docx.',
@@ -472,8 +479,9 @@ var _UI_STRINGS = {
     noRecentFiles: 'Нещодавніх файлів поки немає', openFailed: 'Не вдалося відкрити файл',
     openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.',
     openErrorMsg: 'Не вдалося відкрити файл. Це не дійсний документ або його пошкоджено.',
-    removeNoteSeparator: 'Прибрати роздільник виносок',
-    noteSeparator: 'Роздільник виносок',
+    removeNoteSeparator: 'Лінії виносок',
+    noteSeparator: 'Лінії виносок',
+    noteSeparatorConfirm: 'Прибрати з цього документа лінії, що відокремлюють виноски? Лінії над звичайними та кінцевими виносками буде вилучено зі збереженого файлу.',
     noteSeparatorSaveFirst: 'Збережіть документ, перш ніж прибирати роздільник виносок. Роздільник вилучається з файлу на диску.',
     noteSeparatorNoFile: 'Збережіть документ у форматі .docx, перш ніж прибирати роздільник виносок.',
     noteSeparatorNotDocx: 'Роздільник виносок можна прибрати лише в документах формату .docx.',
@@ -494,8 +502,9 @@ var _UI_STRINGS = {
     noRecentFiles: '暂无最近的文件', openFailed: '无法打开文件',
     openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。',
     openErrorMsg: '无法打开文件。它不是有效的文档，或者已损坏。',
-    removeNoteSeparator: '移除脚注/尾注分隔线',
-    noteSeparator: '脚注/尾注分隔线',
+    removeNoteSeparator: '脚注/尾注线',
+    noteSeparator: '脚注/尾注线',
+    noteSeparatorConfirm: '要移除此文档中的脚注/尾注分隔线吗？脚注和尾注上方的横线将从保存的文件中移除。',
     noteSeparatorSaveFirst: '请先保存文档，然后再移除脚注/尾注分隔线。分隔线是从磁盘上的文件中移除的。',
     noteSeparatorNoFile: '请先将文档保存为 .docx 格式，然后再移除脚注/尾注分隔线。',
     noteSeparatorNotDocx: '只能在 .docx 格式的文档中移除脚注/尾注分隔线。',
@@ -516,8 +525,9 @@ var _UI_STRINGS = {
     noRecentFiles: '最近使用したファイルはありません', openFailed: 'ファイルを開けませんでした',
     openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。',
     openErrorMsg: 'ファイルを開けませんでした。有効なドキュメントではないか、破損しています。',
-    removeNoteSeparator: '注の区切り線を削除',
+    removeNoteSeparator: '注の区切り線',
     noteSeparator: '注の区切り線',
+    noteSeparatorConfirm: 'この文書から注の区切り線を削除しますか？脚注と文末脚注の上にある線が、保存されるファイルから削除されます。',
     noteSeparatorSaveFirst: '注の区切り線を削除する前にドキュメントを保存してください。区切り線はディスク上のファイルから削除されます。',
     noteSeparatorNoFile: '注の区切り線を削除する前に、ドキュメントを .docx 形式で保存してください。',
     noteSeparatorNotDocx: '注の区切り線を削除できるのは .docx 形式のドキュメントだけです。',
@@ -638,6 +648,10 @@ function _forceReload() {
 // state at odds with ours, and it returns the same undefined whether the write
 // succeeded or failed, so the surgery could not tell one from the other. A
 // message the user answers with Ctrl+S costs one click and no such guessing.
+//
+// The full order is: refuse while modified, confirm, operate, reopen. The
+// confirmation carries the documentation of the action, for the reason given
+// where it is raised.
 async function _eoRemoveNoteSeparator() {
   var dialog = window.__TAURI__.dialog;
   function _tell(key) {
@@ -648,6 +662,15 @@ async function _eoRemoveNoteSeparator() {
     await _tell('noteSeparatorSaveFirst');
     return;
   }
+
+  // The File menu entry is a short noun ("Note lines") so that it lines up
+  // with its neighbours instead of running over them, and a noun does not say
+  // what clicking it does. This dialog does: it spells out that the lines above
+  // footnotes and endnotes go away, and that the change lands in the file on
+  // disk rather than in the editor, which is worth a confirmation on its own.
+  var confirmed = await dialog.confirm(_t('noteSeparatorConfirm'),
+    { title: _t('noteSeparator'), kind: 'warning' });
+  if (!confirmed) return;
 
   var code;
   try {
