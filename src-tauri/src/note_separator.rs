@@ -1,4 +1,4 @@
-// Removing the note separator lines (#42).
+// Removing and restoring the note separator lines (#42).
 //
 // The editor has no setting for them: the horizontal rules above the notes are
 // drawn from the special notes the engine keeps in word/footnotes.xml and
@@ -25,6 +25,14 @@
 // previous page. A part with no real notes of its own is left alone, since the
 // engine regenerates it wholesale and the edit would be a lie.
 //
+// The action is a toggle, because taking the lines away and never giving them
+// back is a trap: the same File menu entry first asks the file which state it is
+// in ("inspect", which writes nothing) and then either removes the runs or puts
+// them back. Restoring re-inserts the run inside the special note's paragraph,
+// and, for a file some other program stripped down to nothing, writes the whole
+// special note as the engine writes it, before the first real note so the part
+// reads the way the engine emits it.
+//
 // A zip cannot be edited in place, so the whole package is rewritten: every
 // entry copied across and the edited parts replaced in a single pass. The new
 // package is built beside the document and moved onto it with a rename, so a
@@ -39,10 +47,22 @@ use tauri::State;
 // Result codes, shared verbatim with the bridge: the frontend branches on these
 // strings to pick between reopening the document and showing a message.
 pub const REMOVED: &str = "removed";
+pub const RESTORED: &str = "restored";
 pub const NO_NOTES: &str = "no_notes";
 pub const ALREADY_REMOVED: &str = "already_removed";
+pub const ALREADY_PRESENT: &str = "already_present";
 pub const NOT_DOCX: &str = "not_docx";
 pub const NO_FILE: &str = "no_file";
+// Only inspect answers with this one: the lines are there to be removed. The
+// opposite answer is REMOVED, which reads the same whether it was just done or
+// found already done.
+pub const PRESENT: &str = "present";
+
+// What the bridge may ask for. Anything else is a bug on the JS side and is
+// refused rather than guessed at.
+pub const ACTION_INSPECT: &str = "inspect";
+pub const ACTION_REMOVE: &str = "remove";
+pub const ACTION_RESTORE: &str = "restore";
 
 const FOOTNOTES_PART: &str = "word/footnotes.xml";
 const ENDNOTES_PART: &str = "word/endnotes.xml";
@@ -61,8 +81,32 @@ const SPECIAL_NOTES: [(&str, &str); 2] = [
     ("continuationSeparator", "w:continuationSeparator"),
 ];
 
+// The three things the entry can be asked to do. Parsed once, at the edge, so
+// nothing below has to deal with a string that might be anything.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Action {
+    Inspect,
+    Remove,
+    Restore,
+}
+
+impl Action {
+    pub fn parse(action: &str) -> Result<Action, String> {
+        match action {
+            ACTION_INSPECT => Ok(Action::Inspect),
+            ACTION_REMOVE => Ok(Action::Remove),
+            ACTION_RESTORE => Ok(Action::Restore),
+            other => Err(format!("unknown note separator action: {}", other)),
+        }
+    }
+}
+
 #[tauri::command]
-pub async fn remove_note_separator(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn remove_note_separator(
+    state: State<'_, AppState>,
+    action: String,
+) -> Result<String, String> {
+    let action = Action::parse(&action)?;
     // Cloned out of the mutex here: the blocking closure below outlives the lock,
     // and the path is all it needs.
     let current = state.current_file.lock().unwrap().clone();
@@ -78,7 +122,7 @@ pub async fn remove_note_separator(state: State<'_, AppState>) -> Result<String,
     // command runs inline on the IPC handler, which on Linux is the GTK main loop:
     // the UI would stop repainting for as long as the surgery takes (journal 046,
     // the same discipline the clipboard reads follow).
-    tauri::async_runtime::spawn_blocking(move || remove_note_separator_at(&path))
+    tauri::async_runtime::spawn_blocking(move || apply_at(&path, action))
         .await
         .map_err(|e| format!("note separator task failed: {}", e))?
 }
@@ -90,9 +134,9 @@ fn is_docx(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn remove_note_separator_at(path: &Path) -> Result<String, String> {
+fn apply_at(path: &Path, action: Action) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("Cannot read {}: {}", path.display(), e))?;
-    let (code, rewritten) = remove_separator_from_docx(&bytes)?;
+    let (code, rewritten) = apply_to_docx(&bytes, action)?;
     let Some(rewritten) = rewritten else {
         return Ok(code.to_string());
     };
@@ -128,16 +172,20 @@ fn temp_sibling(path: &Path) -> PathBuf {
 }
 
 // The whole surgery, on bytes, so it can be exercised without a Tauri app or a
-// file on disk. Returns the result code and, only for REMOVED, the bytes of the
-// rewritten package.
-pub fn remove_separator_from_docx(bytes: &[u8]) -> Result<(&'static str, Option<Vec<u8>>), String> {
+// file on disk. Returns the result code and, only when something changed, the
+// bytes of the rewritten package. Inspect never rewrites anything.
+pub fn apply_to_docx(
+    bytes: &[u8],
+    action: Action,
+) -> Result<(&'static str, Option<Vec<u8>>), String> {
     let reader = std::io::Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("Not a readable docx: {}", e))?;
 
-    // Every part present and carrying notes of its own is operated on. Both may
-    // be there, either alone, or neither.
+    // Every part present and carrying notes of its own is looked at. Both may be
+    // there, either alone, or neither.
     let mut edits: Vec<(String, String)> = Vec::new();
     let mut any_real_notes = false;
+    let mut any_run_present = false;
 
     for (part, note_element) in NOTE_PARTS {
         let Some(data) = read_entry(&mut archive, part)? else {
@@ -154,7 +202,17 @@ pub fn remove_separator_from_docx(bytes: &[u8]) -> Result<(&'static str, Option<
         }
         any_real_notes = true;
 
-        if let Some(edited) = strip_separator_runs(&xml, note_element) {
+        let edited = match action {
+            Action::Inspect => {
+                if has_separator_runs(&xml, note_element) {
+                    any_run_present = true;
+                }
+                None
+            }
+            Action::Remove => strip_separator_runs(&xml, note_element),
+            Action::Restore => restore_separator_runs(&xml, note_element),
+        };
+        if let Some(edited) = edited {
             edits.push((part.to_string(), edited));
         }
     }
@@ -162,13 +220,22 @@ pub fn remove_separator_from_docx(bytes: &[u8]) -> Result<(&'static str, Option<
     if !any_real_notes {
         return Ok((NO_NOTES, None));
     }
+    if action == Action::Inspect {
+        return Ok((if any_run_present { PRESENT } else { REMOVED }, None));
+    }
     if edits.is_empty() {
-        return Ok((ALREADY_REMOVED, None));
+        return Ok((
+            if action == Action::Remove { ALREADY_REMOVED } else { ALREADY_PRESENT },
+            None,
+        ));
     }
 
     // One rewrite for however many parts changed: the package is copied once.
     let rewritten = rewrite_package(&mut archive, &edits)?;
-    Ok((REMOVED, Some(rewritten)))
+    Ok((
+        if action == Action::Remove { REMOVED } else { RESTORED },
+        Some(rewritten),
+    ))
 }
 
 fn read_entry<R: Read + std::io::Seek>(
@@ -243,6 +310,139 @@ fn has_real_notes(xml: &str, note_element: &str) -> bool {
         .filter_map(|pos| open_tag_at(xml, pos))
         .filter_map(|tag| attr_value(tag, "w:id"))
         .any(|id| id.trim().parse::<i64>().map(|n| n > 0).unwrap_or(false))
+}
+
+// Does this part still draw a rule? Bounded to the special notes for the same
+// reason the surgery is: a <w:separator/> a user put inside a note of their own
+// is content, not the rule the entry is about.
+fn has_separator_runs(xml: &str, note_element: &str) -> bool {
+    SPECIAL_NOTES.iter().any(|(note_type, run_element)| {
+        special_note_span(xml, note_element, note_type)
+            .map(|(start, end)| !element_starts(&xml[start..end], run_element).is_empty())
+            .unwrap_or(false)
+    })
+}
+
+// Both special notes of one part, filled back in in turn. Returns the edited
+// XML, or None when both already hold their run.
+fn restore_separator_runs(xml: &str, note_element: &str) -> Option<String> {
+    let mut edited: Option<String> = None;
+    for (note_type, run_element) in SPECIAL_NOTES {
+        let source = edited.as_deref().unwrap_or(xml);
+        if let Some(next) = restore_run_in_special_note(source, note_element, note_type, run_element)
+        {
+            edited = Some(next);
+        }
+    }
+    edited
+}
+
+// One special note filled back in. When the note is there the run goes inside
+// its first paragraph, after the paragraph properties, where the engine puts it;
+// when the note is gone altogether (a file some other program rewrote) the whole
+// block is written as the engine writes it.
+fn restore_run_in_special_note(
+    xml: &str,
+    note_element: &str,
+    note_type: &str,
+    run_element: &str,
+) -> Option<String> {
+    let run = format!("<w:r><{}/></w:r>", run_element);
+
+    let Some((block_start, block_end)) = special_note_span(xml, note_element, note_type) else {
+        let block = special_note_block(note_element, note_type, run_element);
+        let at = missing_note_insert_at(xml, note_element, note_type);
+        let mut edited = String::with_capacity(xml.len() + block.len());
+        edited.push_str(&xml[..at]);
+        edited.push_str(&block);
+        edited.push_str(&xml[at..]);
+        return Some(edited);
+    };
+
+    let block = &xml[block_start..block_end];
+    if !element_starts(block, run_element).is_empty() {
+        return None;
+    }
+    let at = block_start + paragraph_content_start(block)?;
+
+    let mut edited = String::with_capacity(xml.len() + run.len());
+    edited.push_str(&xml[..at]);
+    edited.push_str(&run);
+    edited.push_str(&xml[at..]);
+    Some(edited)
+}
+
+// Where a run may be inserted inside the block's first paragraph: after
+// <w:pPr>...</w:pPr> or a self-closed <w:pPr/>, since the properties have to
+// come first, and otherwise straight after the <w:p> opening tag.
+fn paragraph_content_start(block: &str) -> Option<usize> {
+    // "w:p" does not match <w:pPr>: element_starts wants the name to end there.
+    let p_pos = *element_starts(block, "w:p").first()?;
+    let after_open = p_pos + block[p_pos..].find('>')? + 1;
+
+    let Some(&pr_pos) = element_starts(&block[after_open..], "w:pPr").first() else {
+        return Some(after_open);
+    };
+    let pr_pos = after_open + pr_pos;
+    let pr_tag = open_tag_at(block, pr_pos)?;
+    if pr_tag.ends_with('/') {
+        return Some(pr_pos + block[pr_pos..].find('>')? + 1);
+    }
+    let close = block[pr_pos..].find("</w:pPr>")? + pr_pos + "</w:pPr>".len();
+    Some(close)
+}
+
+// The special note exactly as the engine writes it, so a part it had to be
+// invented for reads like one the engine produced.
+fn special_note_block(note_element: &str, note_type: &str, run_element: &str) -> String {
+    let id = if note_type == "separator" { "-1" } else { "0" };
+    format!(
+        "<{n} w:type=\"{t}\" w:id=\"{i}\">\
+<w:p><w:pPr><w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/></w:pPr>\
+<w:r></w:r><w:r><{r}/></w:r><w:r></w:r></w:p></{n}>",
+        n = note_element,
+        t = note_type,
+        i = id,
+        r = run_element
+    )
+}
+
+// Where a special note that is missing altogether goes. The special notes come
+// first in a part the engine wrote, and the separator comes before the
+// continuationSeparator, so a new block lands next to the surviving special note
+// if there is one, otherwise before the first real note, otherwise at the top of
+// the part.
+fn missing_note_insert_at(xml: &str, note_element: &str, note_type: &str) -> usize {
+    let mut spans: Vec<(usize, usize)> = SPECIAL_NOTES
+        .iter()
+        .filter_map(|(other, _)| special_note_span(xml, note_element, other))
+        .collect();
+    spans.sort();
+    // At most one can be there: the caller found this one missing.
+    if let (Some(&(first_start, _)), Some(&(_, last_end))) = (spans.first(), spans.last()) {
+        return if note_type == "separator" { first_start } else { last_end };
+    }
+    first_real_note_start(xml, note_element).unwrap_or_else(|| root_content_start(xml, note_element))
+}
+
+fn first_real_note_start(xml: &str, note_element: &str) -> Option<usize> {
+    element_starts(xml, note_element).into_iter().find(|&pos| {
+        open_tag_at(xml, pos)
+            .and_then(|tag| attr_value(tag, "w:id"))
+            .and_then(|id| id.trim().parse::<i64>().ok())
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    })
+}
+
+// Just after the <w:footnotes ...> / <w:endnotes ...> opening tag, and at the
+// very end of the part if there is no root to speak of.
+fn root_content_start(xml: &str, note_element: &str) -> usize {
+    let root = format!("{}s", note_element);
+    element_starts(xml, &root)
+        .first()
+        .and_then(|&pos| xml[pos..].find('>').map(|rel| pos + rel + 1))
+        .unwrap_or(xml.len())
 }
 
 // Both special notes of one part, emptied in turn. Returns the edited XML, or
@@ -370,6 +570,20 @@ mod tests {
 
     const FOOTNOTE: &str = "w:footnote";
     const ENDNOTE: &str = "w:endnote";
+
+    // One name per direction: the tests read better for it, and the app only
+    // ever comes in through apply_to_docx with the action the bridge asked for.
+    fn remove_separator_from_docx(bytes: &[u8]) -> Result<(&'static str, Option<Vec<u8>>), String> {
+        apply_to_docx(bytes, Action::Remove)
+    }
+
+    fn restore_separator_in_docx(bytes: &[u8]) -> Result<(&'static str, Option<Vec<u8>>), String> {
+        apply_to_docx(bytes, Action::Restore)
+    }
+
+    fn inspect_docx(bytes: &[u8]) -> Result<&'static str, String> {
+        Ok(apply_to_docx(bytes, Action::Inspect)?.0)
+    }
 
     // The special notes exactly as the engine writes them (from the autopsy of a
     // document saved by the editor), built for either note element since the two
@@ -781,6 +995,301 @@ mod tests {
         // A footnotes part never answers for endnotes, and the other way round.
         assert!(!has_real_notes(&populated_part(FOOTNOTE), ENDNOTE));
         assert!(!has_real_notes(&populated_part(ENDNOTE), FOOTNOTE));
+    }
+
+    // ---- the restore direction (#42, the toggle) -------------------------
+
+    // Both rules have to be back where the engine draws them, and the special
+    // notes may not be duplicated in the process.
+    fn assert_both_rules_back(xml: &str, note_element: &str) {
+        assert!(xml.contains("<w:separator/>"), "the short line is drawn again: {}", xml);
+        assert!(
+            xml.contains("<w:continuationSeparator/>"),
+            "the full-width line is drawn again: {}",
+            xml
+        );
+        for note_type in ["separator", "continuationSeparator"] {
+            assert_eq!(
+                xml.matches(&format!("w:type=\"{}\"", note_type)).count(),
+                1,
+                "exactly one {} block in the {} part: {}",
+                note_type,
+                note_element,
+                xml
+            );
+        }
+    }
+
+    // The promise on the issue: what the action took away, the action gives back.
+    #[test]
+    fn a_document_that_was_operated_on_gets_both_runs_back() {
+        let docx = docx_with_parts(Some(&populated_part(FOOTNOTE)), Some(&populated_part(ENDNOTE)));
+        let removed = remove_separator_from_docx(&docx).unwrap().1.unwrap();
+
+        let (code, rewritten) = restore_separator_in_docx(&removed).unwrap();
+        assert_eq!(code, RESTORED);
+        let rewritten = rewritten.expect("the package must be rewritten");
+
+        assert_both_rules_back(&footnotes_of(&rewritten), FOOTNOTE);
+        assert_both_rules_back(&endnotes_of(&rewritten), ENDNOTE);
+        // Round trip: everything except the run comes out as it went in. The
+        // run lands first inside the paragraph rather than between the two empty
+        // runs the engine brackets it with, which is where it was; the empty
+        // runs draw nothing and their order carries no meaning, so the file
+        // renders identically. Removing again lands exactly where the first
+        // removal did, which is what the toggle has to guarantee and what
+        // remove_restore_remove_lands_where_the_first_remove_did checks.
+        for (note_element, part) in [(FOOTNOTE, footnotes_of(&rewritten)), (ENDNOTE, endnotes_of(&rewritten))] {
+            assert_eq!(
+                part.replace("<w:r><w:separator/></w:r>", "")
+                    .replace("<w:r><w:continuationSeparator/></w:r>", ""),
+                strip_separator_runs(&populated_part(note_element), note_element).unwrap(),
+                "nothing but the two runs may differ: {}",
+                part
+            );
+        }
+        for (name, data) in other_entries() {
+            assert_eq!(entry_of(&rewritten, name).unwrap_or_default(), data, "{}", name);
+        }
+    }
+
+    // The reporter's own document, in the other direction.
+    #[test]
+    fn a_document_with_only_endnotes_gets_its_endnote_rules_back() {
+        let docx = docx_with_parts(None, Some(&populated_part(ENDNOTE)));
+        let removed = remove_separator_from_docx(&docx).unwrap().1.unwrap();
+
+        let (code, rewritten) = restore_separator_in_docx(&removed).unwrap();
+        let rewritten = rewritten.expect("the package must be rewritten");
+
+        assert_eq!(code, RESTORED);
+        assert_both_rules_back(&endnotes_of(&rewritten), ENDNOTE);
+        assert!(
+            entry_of(&rewritten, FOOTNOTES_PART).is_none(),
+            "no part may be invented for a document that has none"
+        );
+    }
+
+    // One part done, the other not: still a restore, and the untouched part
+    // comes out byte for byte.
+    #[test]
+    fn one_part_still_missing_a_rule_is_enough_for_a_restore() {
+        let intact = populated_part(FOOTNOTE);
+        let stripped = strip_separator_runs(&populated_part(ENDNOTE), ENDNOTE).unwrap();
+        let docx = docx_with_parts(Some(&intact), Some(&stripped));
+
+        let (code, rewritten) = restore_separator_in_docx(&docx).unwrap();
+        let rewritten = rewritten.expect("the package must be rewritten");
+
+        assert_eq!(code, RESTORED);
+        assert_eq!(footnotes_of(&rewritten), intact, "the intact part is not touched");
+        assert_both_rules_back(&endnotes_of(&rewritten), ENDNOTE);
+    }
+
+    // Nothing to give back, so nothing is written: a rewrite would rewrite the
+    // user's package for no reason.
+    #[test]
+    fn a_document_that_still_has_its_rules_reports_already_present() {
+        let docx = docx_with_parts(Some(&populated_part(FOOTNOTE)), Some(&populated_part(ENDNOTE)));
+
+        let (code, rewritten) = restore_separator_in_docx(&docx).unwrap();
+
+        assert_eq!(code, ALREADY_PRESENT);
+        assert!(rewritten.is_none(), "nothing may be written for a no-op");
+    }
+
+    #[test]
+    fn a_document_without_real_notes_cannot_be_restored_either() {
+        let docx = docx_with_parts(Some(&notes_part(FOOTNOTE, &specials(FOOTNOTE))), None);
+
+        let (code, rewritten) = restore_separator_in_docx(&docx).unwrap();
+
+        assert_eq!(code, NO_NOTES);
+        assert!(rewritten.is_none());
+    }
+
+    // A file some other program rewrote can be missing the special note
+    // altogether. Then the block is written whole, as the engine writes it, and
+    // before the first real note so the part reads the way one the engine
+    // produced does.
+    #[test]
+    fn a_missing_special_note_is_written_whole_before_the_first_real_note() {
+        for note_element in [FOOTNOTE, ENDNOTE] {
+            let part = notes_part(note_element, &real_note(note_element));
+            let docx = if note_element == FOOTNOTE {
+                docx_with_parts(Some(&part), None)
+            } else {
+                docx_with_parts(None, Some(&part))
+            };
+
+            let (code, rewritten) = restore_separator_in_docx(&docx).unwrap();
+            assert_eq!(code, RESTORED, "{}", note_element);
+            let rewritten = rewritten.expect("the package must be rewritten");
+            let xml = part_of(
+                &rewritten,
+                if note_element == FOOTNOTE { FOOTNOTES_PART } else { ENDNOTES_PART },
+            );
+
+            assert_both_rules_back(&xml, note_element);
+            // Written with the engine's own shape, both of them.
+            assert!(xml.contains(&separator_note(note_element)), "{}", xml);
+            assert!(xml.contains(&continuation_note(note_element)), "{}", xml);
+            // And in the engine's order, ahead of the real note.
+            assert_eq!(
+                xml,
+                notes_part(note_element, &format!("{}{}", specials(note_element), real_note(note_element))),
+                "the part must read like one the engine wrote"
+            );
+        }
+    }
+
+    // Only one of the two missing: the survivor stays put and the new block
+    // lands on the right side of it.
+    #[test]
+    fn a_single_missing_special_note_lands_beside_the_one_that_survived() {
+        for (missing, kept) in [("separator", "continuationSeparator"), ("continuationSeparator", "separator")] {
+            let survivor = if kept == "separator" {
+                separator_note(FOOTNOTE)
+            } else {
+                continuation_note(FOOTNOTE)
+            };
+            let part = footnotes_part(&format!("{}{}", survivor, real_note(FOOTNOTE)));
+            let docx = docx_with(Some(&part));
+
+            let (code, rewritten) = restore_separator_in_docx(&docx).unwrap();
+            assert_eq!(code, RESTORED, "{}", missing);
+            let xml = footnotes_of(&rewritten.unwrap());
+
+            assert_both_rules_back(&xml, FOOTNOTE);
+            assert_eq!(
+                xml,
+                footnotes_part(&format!("{}{}", specials(FOOTNOTE), real_note(FOOTNOTE))),
+                "the separator comes before the continuation separator: {}",
+                xml
+            );
+        }
+    }
+
+    // A special note whose paragraph has no properties at all, and one whose
+    // properties are self-closed: the run still has to land after them, since
+    // <w:pPr> has to be the first child of the paragraph.
+    #[test]
+    fn the_restored_run_lands_after_the_paragraph_properties() {
+        let empty_with_pr = "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:pPr/></w:p></w:footnote>";
+        let empty_bare = "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p></w:p></w:footnote>";
+        let part = footnotes_part(&format!("{}{}{}", empty_with_pr, empty_bare, real_note(FOOTNOTE)));
+
+        let edited = restore_separator_runs(&part, FOOTNOTE).unwrap();
+
+        assert!(
+            edited.contains("<w:p><w:pPr/><w:r><w:separator/></w:r></w:p>"),
+            "the run goes after the properties, not before them: {}",
+            edited
+        );
+        assert!(
+            edited.contains("<w:p><w:r><w:continuationSeparator/></w:r></w:p>"),
+            "a paragraph with no properties takes the run straight away: {}",
+            edited
+        );
+    }
+
+    // The whole point of a toggle: it can be worked back and forth without the
+    // document drifting.
+    #[test]
+    fn remove_restore_remove_lands_where_the_first_remove_did() {
+        let docx = docx_with_parts(Some(&populated_part(FOOTNOTE)), Some(&populated_part(ENDNOTE)));
+
+        let once = remove_separator_from_docx(&docx).unwrap().1.unwrap();
+        let back = restore_separator_in_docx(&once).unwrap().1.unwrap();
+        let (code, twice) = remove_separator_from_docx(&back).unwrap();
+        let twice = twice.expect("the restored document has rules to lose again");
+
+        assert_eq!(code, REMOVED);
+        assert_eq!(footnotes_of(&twice), footnotes_of(&once));
+        assert_eq!(endnotes_of(&twice), endnotes_of(&once));
+    }
+
+    // A note of the user's own that holds a rule is not the note rule: restore
+    // must not read it as one and decide there is nothing to do.
+    #[test]
+    fn a_separator_inside_a_real_note_is_never_counted_or_touched() {
+        for run_element in ["w:separator", "w:continuationSeparator"] {
+            let note_with_rule = format!(
+                "<w:footnote w:id=\"1\"><w:p><w:r><{r}/></w:r><w:r><w:t>note body</w:t></w:r></w:p></w:footnote>",
+                r = run_element
+            );
+            let emptied = specials(FOOTNOTE)
+                .replace("<w:r><w:separator/></w:r>", "")
+                .replace("<w:r><w:continuationSeparator/></w:r>", "");
+            let part = footnotes_part(&format!("{}{}", emptied, note_with_rule));
+            let docx = docx_with(Some(&part));
+
+            // Inspect sees the rules as gone, whatever the note's own content is.
+            assert_eq!(inspect_docx(&docx).unwrap(), REMOVED, "{}", run_element);
+
+            let (code, rewritten) = restore_separator_in_docx(&docx).unwrap();
+            assert_eq!(code, RESTORED, "{}", run_element);
+            let xml = footnotes_of(&rewritten.unwrap());
+
+            assert!(
+                xml.contains(&note_with_rule),
+                "the note's own content is left exactly as it was: {}",
+                xml
+            );
+            assert_both_rules_back(&xml, FOOTNOTE);
+        }
+    }
+
+    // ---- inspection ------------------------------------------------------
+
+    #[test]
+    fn inspection_reports_the_three_states_and_writes_nothing() {
+        let intact = docx_with_parts(Some(&populated_part(FOOTNOTE)), Some(&populated_part(ENDNOTE)));
+        assert_eq!(inspect_docx(&intact).unwrap(), PRESENT);
+
+        let removed = remove_separator_from_docx(&intact).unwrap().1.unwrap();
+        assert_eq!(inspect_docx(&removed).unwrap(), REMOVED);
+
+        let no_notes = docx_with_parts(Some(&notes_part(FOOTNOTE, &specials(FOOTNOTE))), None);
+        assert_eq!(inspect_docx(&no_notes).unwrap(), NO_NOTES);
+
+        assert!(
+            apply_to_docx(&intact, Action::Inspect).unwrap().1.is_none(),
+            "inspection may never rewrite the document"
+        );
+        assert!(apply_to_docx(&removed, Action::Inspect).unwrap().1.is_none());
+    }
+
+    // One part still drawing a rule is enough: the entry has something to remove.
+    #[test]
+    fn inspection_answers_present_when_any_part_still_draws_a_rule() {
+        let stripped = strip_separator_runs(&populated_part(FOOTNOTE), FOOTNOTE).unwrap();
+        let docx = docx_with_parts(Some(&stripped), Some(&populated_part(ENDNOTE)));
+
+        assert_eq!(inspect_docx(&docx).unwrap(), PRESENT);
+    }
+
+    // A part with no real notes says nothing about the state: the engine
+    // regenerates it, so it is neither present nor removed.
+    #[test]
+    fn inspection_ignores_a_part_the_engine_regenerates() {
+        let docx = docx_with_parts(
+            // Special notes intact, but no real footnote: not an answer.
+            Some(&notes_part(FOOTNOTE, &specials(FOOTNOTE))),
+            Some(&strip_separator_runs(&populated_part(ENDNOTE), ENDNOTE).unwrap()),
+        );
+
+        assert_eq!(inspect_docx(&docx).unwrap(), REMOVED);
+    }
+
+    #[test]
+    fn only_the_three_known_actions_are_accepted() {
+        assert_eq!(Action::parse("inspect").unwrap(), Action::Inspect);
+        assert_eq!(Action::parse("remove").unwrap(), Action::Remove);
+        assert_eq!(Action::parse("restore").unwrap(), Action::Restore);
+        assert!(Action::parse("").is_err());
+        assert!(Action::parse("Remove").is_err());
+        assert!(Action::parse("delete").is_err());
     }
 
     #[test]
