@@ -321,12 +321,14 @@ var _UI_STRINGS = {
     removeNoteSeparator: 'Note lines',
     noteSeparator: 'Note lines',
     noteSeparatorConfirm: 'Remove the note separator lines from this document? The lines above footnotes and endnotes are removed from the saved file.',
-    noteSeparatorSaveFirst: 'Save the document before removing the note separator. The separator is removed from the file on disk.',
-    noteSeparatorNoFile: 'Save the document as a .docx file before removing the note separator.',
-    noteSeparatorNotDocx: 'The note separator can only be removed from documents in .docx format.',
+    noteSeparatorConfirmRestore: 'The separator lines have been removed from this document. Restore them?',
+    noteSeparatorSaveFirst: 'Save the document before changing the note separator lines. The change is made in the file on disk.',
+    noteSeparatorNoFile: 'Save the document as a .docx file before changing the note separator lines.',
+    noteSeparatorNotDocx: 'The note separator lines can only be changed in documents in .docx format.',
     noteSeparatorNoNotes: 'The document does not have footnotes or endnotes yet. Insert a note first: until then the separator is not kept in the file.',
     noteSeparatorAlready: 'The note separator has already been removed from this document.',
-    noteSeparatorFailed: 'The note separator could not be removed.'
+    noteSeparatorAlreadyPresent: 'This document already has its note separator lines.',
+    noteSeparatorFailed: 'The note separator lines could not be changed.'
   },
   es: {
     document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación',
@@ -344,12 +346,14 @@ var _UI_STRINGS = {
     removeNoteSeparator: 'Líneas de notas',
     noteSeparator: 'Líneas de notas',
     noteSeparatorConfirm: '¿Quitar las líneas separadoras de notas de este documento? Las líneas que aparecen encima de las notas al pie y de las notas al final se quitan del archivo guardado.',
-    noteSeparatorSaveFirst: 'Guarde el documento antes de quitar el separador de notas. El separador se quita del archivo en disco.',
-    noteSeparatorNoFile: 'Guarde el documento en formato .docx antes de quitar el separador de notas.',
-    noteSeparatorNotDocx: 'El separador de notas solo se puede quitar en documentos con formato .docx.',
+    noteSeparatorConfirmRestore: 'Las líneas separadoras de notas se quitaron de este documento. ¿Restaurarlas?',
+    noteSeparatorSaveFirst: 'Guarde el documento antes de cambiar las líneas separadoras de notas. El cambio se hace en el archivo en disco.',
+    noteSeparatorNoFile: 'Guarde el documento en formato .docx antes de cambiar las líneas separadoras de notas.',
+    noteSeparatorNotDocx: 'Las líneas separadoras de notas solo se pueden cambiar en documentos con formato .docx.',
     noteSeparatorNoNotes: 'El documento todavía no tiene notas al pie ni notas al final. Inserte una nota primero: hasta entonces el separador no se conserva en el archivo.',
     noteSeparatorAlready: 'El separador de notas ya se había quitado de este documento.',
-    noteSeparatorFailed: 'No se pudo quitar el separador de notas.'
+    noteSeparatorAlreadyPresent: 'Este documento ya tiene sus líneas separadoras de notas.',
+    noteSeparatorFailed: 'No se pudieron cambiar las líneas separadoras de notas.'
   },
   fr: {
     document: 'Document', spreadsheet: 'Feuille de calcul', presentation: 'Présentation',
@@ -367,12 +371,14 @@ var _UI_STRINGS = {
     removeNoteSeparator: 'Lignes de notes',
     noteSeparator: 'Lignes de notes',
     noteSeparatorConfirm: 'Supprimer les lignes de séparation des notes de ce document ? Les lignes situées au-dessus des notes de bas de page et des notes de fin sont supprimées du fichier enregistré.',
-    noteSeparatorSaveFirst: 'Enregistrez le document avant de supprimer le séparateur de notes. Le séparateur est supprimé du fichier sur le disque.',
-    noteSeparatorNoFile: 'Enregistrez le document au format .docx avant de supprimer le séparateur de notes.',
-    noteSeparatorNotDocx: 'Le séparateur de notes ne peut être supprimé que dans les documents au format .docx.',
+    noteSeparatorConfirmRestore: 'Les lignes de séparation des notes ont été supprimées de ce document. Les rétablir ?',
+    noteSeparatorSaveFirst: 'Enregistrez le document avant de modifier les lignes de séparation des notes. La modification est effectuée dans le fichier sur le disque.',
+    noteSeparatorNoFile: 'Enregistrez le document au format .docx avant de modifier les lignes de séparation des notes.',
+    noteSeparatorNotDocx: 'Les lignes de séparation des notes ne peuvent être modifiées que dans les documents au format .docx.',
     noteSeparatorNoNotes: 'Le document ne contient pas encore de notes de bas de page ni de notes de fin. Insérez d\'abord une note : jusque-là, le séparateur n\'est pas conservé dans le fichier.',
     noteSeparatorAlready: 'Le séparateur de notes a déjà été supprimé de ce document.',
-    noteSeparatorFailed: 'Impossible de supprimer le séparateur de notes.'
+    noteSeparatorAlreadyPresent: 'Ce document possède déjà ses lignes de séparation des notes.',
+    noteSeparatorFailed: 'Impossible de modifier les lignes de séparation des notes.'
   },
   de: {
     document: 'Dokument', spreadsheet: 'Tabelle', presentation: 'Präsentation',
@@ -390,12 +396,14 @@ var _UI_STRINGS = {
     removeNoteSeparator: 'Trennlinien',
     noteSeparator: 'Trennlinien',
     noteSeparatorConfirm: 'Die Trennlinien der Fuß- und Endnoten aus diesem Dokument entfernen? Die Linien über den Fuß- und Endnoten werden aus der gespeicherten Datei entfernt.',
-    noteSeparatorSaveFirst: 'Speichern Sie das Dokument, bevor Sie die Fuß-/Endnotentrennlinie entfernen. Die Trennlinie wird aus der Datei auf dem Datenträger entfernt.',
-    noteSeparatorNoFile: 'Speichern Sie das Dokument im Format .docx, bevor Sie die Fuß-/Endnotentrennlinie entfernen.',
-    noteSeparatorNotDocx: 'Die Fuß-/Endnotentrennlinie kann nur in Dokumenten im Format .docx entfernt werden.',
+    noteSeparatorConfirmRestore: 'Die Trennlinien der Fuß- und Endnoten wurden aus diesem Dokument entfernt. Sollen sie wiederhergestellt werden?',
+    noteSeparatorSaveFirst: 'Speichern Sie das Dokument, bevor Sie die Trennlinien der Fuß- und Endnoten ändern. Die Änderung erfolgt in der Datei auf dem Datenträger.',
+    noteSeparatorNoFile: 'Speichern Sie das Dokument im Format .docx, bevor Sie die Trennlinien der Fuß- und Endnoten ändern.',
+    noteSeparatorNotDocx: 'Die Trennlinien der Fuß- und Endnoten können nur in Dokumenten im Format .docx geändert werden.',
     noteSeparatorNoNotes: 'Das Dokument enthält noch keine Fuß- oder Endnoten. Fügen Sie zuerst eine Fußnote oder Endnote ein: bis dahin wird die Trennlinie nicht in der Datei gespeichert.',
     noteSeparatorAlready: 'Die Fuß-/Endnotentrennlinie wurde aus diesem Dokument bereits entfernt.',
-    noteSeparatorFailed: 'Die Fuß-/Endnotentrennlinie konnte nicht entfernt werden.'
+    noteSeparatorAlreadyPresent: 'Dieses Dokument enthält die Trennlinien der Fuß- und Endnoten bereits.',
+    noteSeparatorFailed: 'Die Trennlinien der Fuß- und Endnoten konnten nicht geändert werden.'
   },
   it: {
     document: 'Documento', spreadsheet: 'Foglio di calcolo', presentation: 'Presentazione',
@@ -413,12 +421,14 @@ var _UI_STRINGS = {
     removeNoteSeparator: 'Linee delle note',
     noteSeparator: 'Linee delle note',
     noteSeparatorConfirm: 'Rimuovere le linee di separazione delle note da questo documento? Le linee sopra le note a piè di pagina e le note di chiusura vengono rimosse dal file salvato.',
-    noteSeparatorSaveFirst: 'Salvare il documento prima di rimuovere il separatore delle note. Il separatore viene rimosso dal file su disco.',
-    noteSeparatorNoFile: 'Salvare il documento in formato .docx prima di rimuovere il separatore delle note.',
-    noteSeparatorNotDocx: 'Il separatore delle note può essere rimosso solo nei documenti in formato .docx.',
+    noteSeparatorConfirmRestore: 'Le linee di separazione delle note sono state rimosse da questo documento. Ripristinarle?',
+    noteSeparatorSaveFirst: 'Salvare il documento prima di modificare le linee di separazione delle note. La modifica viene effettuata nel file su disco.',
+    noteSeparatorNoFile: 'Salvare il documento in formato .docx prima di modificare le linee di separazione delle note.',
+    noteSeparatorNotDocx: 'Le linee di separazione delle note possono essere modificate solo nei documenti in formato .docx.',
     noteSeparatorNoNotes: 'Il documento non ha ancora note a piè di pagina né note di chiusura. Inserire prima una nota: fino ad allora il separatore non viene conservato nel file.',
     noteSeparatorAlready: 'Il separatore delle note è già stato rimosso da questo documento.',
-    noteSeparatorFailed: 'Impossibile rimuovere il separatore delle note.'
+    noteSeparatorAlreadyPresent: 'Questo documento ha già le linee di separazione delle note.',
+    noteSeparatorFailed: 'Impossibile modificare le linee di separazione delle note.'
   },
   pt: {
     document: 'Documento', spreadsheet: 'Planilha', presentation: 'Apresentação',
@@ -436,12 +446,14 @@ var _UI_STRINGS = {
     removeNoteSeparator: 'Linhas de notas',
     noteSeparator: 'Linhas de notas',
     noteSeparatorConfirm: 'Remover as linhas separadoras de notas deste documento? As linhas acima das notas de rodapé e das notas de fim são removidas do arquivo salvo.',
-    noteSeparatorSaveFirst: 'Salve o documento antes de remover o separador de notas. O separador é removido do arquivo em disco.',
-    noteSeparatorNoFile: 'Salve o documento no formato .docx antes de remover o separador de notas.',
-    noteSeparatorNotDocx: 'O separador de notas só pode ser removido em documentos no formato .docx.',
+    noteSeparatorConfirmRestore: 'As linhas separadoras de notas foram removidas deste documento. Restaurá-las?',
+    noteSeparatorSaveFirst: 'Salve o documento antes de alterar as linhas separadoras de notas. A alteração é feita no arquivo em disco.',
+    noteSeparatorNoFile: 'Salve o documento no formato .docx antes de alterar as linhas separadoras de notas.',
+    noteSeparatorNotDocx: 'As linhas separadoras de notas só podem ser alteradas em documentos no formato .docx.',
     noteSeparatorNoNotes: 'O documento ainda não tem notas de rodapé nem notas de fim. Insira uma nota primeiro: até lá o separador não é mantido no arquivo.',
     noteSeparatorAlready: 'O separador de notas já foi removido deste documento.',
-    noteSeparatorFailed: 'Não foi possível remover o separador de notas.'
+    noteSeparatorAlreadyPresent: 'Este documento já tem as linhas separadoras de notas.',
+    noteSeparatorFailed: 'Não foi possível alterar as linhas separadoras de notas.'
   },
   ru: {
     document: 'Документ', spreadsheet: 'Таблица', presentation: 'Презентация',
@@ -459,12 +471,14 @@ var _UI_STRINGS = {
     removeNoteSeparator: 'Линии сносок',
     noteSeparator: 'Линии сносок',
     noteSeparatorConfirm: 'Убрать из этого документа линии, отделяющие сноски? Линии над обычными и концевыми сносками будут удалены из сохранённого файла.',
-    noteSeparatorSaveFirst: 'Сохраните документ, прежде чем убирать разделитель сносок. Разделитель удаляется из файла на диске.',
-    noteSeparatorNoFile: 'Сохраните документ в формате .docx, прежде чем убирать разделитель сносок.',
-    noteSeparatorNotDocx: 'Разделитель сносок можно убрать только в документах формата .docx.',
+    noteSeparatorConfirmRestore: 'Линии, отделяющие сноски, были убраны из этого документа. Восстановить их?',
+    noteSeparatorSaveFirst: 'Сохраните документ, прежде чем изменять линии сносок. Изменение вносится в файл на диске.',
+    noteSeparatorNoFile: 'Сохраните документ в формате .docx, прежде чем изменять линии сносок.',
+    noteSeparatorNotDocx: 'Линии сносок можно изменить только в документах формата .docx.',
     noteSeparatorNoNotes: 'В документе пока нет ни обычных, ни концевых сносок. Сначала вставьте сноску: до этого разделитель не сохраняется в файле.',
     noteSeparatorAlready: 'Разделитель сносок уже убран из этого документа.',
-    noteSeparatorFailed: 'Не удалось убрать разделитель сносок.'
+    noteSeparatorAlreadyPresent: 'В этом документе линии, отделяющие сноски, уже есть.',
+    noteSeparatorFailed: 'Не удалось изменить линии сносок.'
   },
   uk: {
     document: 'Документ', spreadsheet: 'Таблиця', presentation: 'Презентація',
@@ -482,12 +496,14 @@ var _UI_STRINGS = {
     removeNoteSeparator: 'Лінії виносок',
     noteSeparator: 'Лінії виносок',
     noteSeparatorConfirm: 'Прибрати з цього документа лінії, що відокремлюють виноски? Лінії над звичайними та кінцевими виносками буде вилучено зі збереженого файлу.',
-    noteSeparatorSaveFirst: 'Збережіть документ, перш ніж прибирати роздільник виносок. Роздільник вилучається з файлу на диску.',
-    noteSeparatorNoFile: 'Збережіть документ у форматі .docx, перш ніж прибирати роздільник виносок.',
-    noteSeparatorNotDocx: 'Роздільник виносок можна прибрати лише в документах формату .docx.',
+    noteSeparatorConfirmRestore: 'Лінії, що відокремлюють виноски, було прибрано з цього документа. Відновити їх?',
+    noteSeparatorSaveFirst: 'Збережіть документ, перш ніж змінювати лінії виносок. Зміну буде внесено до файлу на диску.',
+    noteSeparatorNoFile: 'Збережіть документ у форматі .docx, перш ніж змінювати лінії виносок.',
+    noteSeparatorNotDocx: 'Лінії виносок можна змінити лише в документах формату .docx.',
     noteSeparatorNoNotes: 'У документі поки немає ні звичайних, ні кінцевих виносок. Спочатку вставте виноску: до цього роздільник не зберігається у файлі.',
     noteSeparatorAlready: 'Роздільник виносок уже прибрано з цього документа.',
-    noteSeparatorFailed: 'Не вдалося прибрати роздільник виносок.'
+    noteSeparatorAlreadyPresent: 'У цьому документі лінії, що відокремлюють виноски, уже є.',
+    noteSeparatorFailed: 'Не вдалося змінити лінії виносок.'
   },
   zh: {
     document: '文档', spreadsheet: '电子表格', presentation: '演示文稿',
@@ -505,12 +521,14 @@ var _UI_STRINGS = {
     removeNoteSeparator: '脚注/尾注线',
     noteSeparator: '脚注/尾注线',
     noteSeparatorConfirm: '要移除此文档中的脚注/尾注分隔线吗？脚注和尾注上方的横线将从保存的文件中移除。',
-    noteSeparatorSaveFirst: '请先保存文档，然后再移除脚注/尾注分隔线。分隔线是从磁盘上的文件中移除的。',
-    noteSeparatorNoFile: '请先将文档保存为 .docx 格式，然后再移除脚注/尾注分隔线。',
-    noteSeparatorNotDocx: '只能在 .docx 格式的文档中移除脚注/尾注分隔线。',
+    noteSeparatorConfirmRestore: '此文档的脚注/尾注分隔线已被移除。要恢复它们吗？',
+    noteSeparatorSaveFirst: '请先保存文档，然后再更改脚注/尾注分隔线。更改是在磁盘上的文件中进行的。',
+    noteSeparatorNoFile: '请先将文档保存为 .docx 格式，然后再更改脚注/尾注分隔线。',
+    noteSeparatorNotDocx: '只能在 .docx 格式的文档中更改脚注/尾注分隔线。',
     noteSeparatorNoNotes: '该文档尚无脚注或尾注。请先插入一条脚注或尾注：在此之前，分隔线不会保存到文件中。',
     noteSeparatorAlready: '该文档的脚注/尾注分隔线已经移除。',
-    noteSeparatorFailed: '无法移除脚注/尾注分隔线。'
+    noteSeparatorAlreadyPresent: '此文档已有脚注/尾注分隔线。',
+    noteSeparatorFailed: '无法更改脚注/尾注分隔线。'
   },
   ja: {
     document: 'ドキュメント', spreadsheet: 'スプレッドシート', presentation: 'プレゼンテーション',
@@ -528,12 +546,14 @@ var _UI_STRINGS = {
     removeNoteSeparator: '注の区切り線',
     noteSeparator: '注の区切り線',
     noteSeparatorConfirm: 'この文書から注の区切り線を削除しますか？脚注と文末脚注の上にある線が、保存されるファイルから削除されます。',
-    noteSeparatorSaveFirst: '注の区切り線を削除する前にドキュメントを保存してください。区切り線はディスク上のファイルから削除されます。',
-    noteSeparatorNoFile: '注の区切り線を削除する前に、ドキュメントを .docx 形式で保存してください。',
-    noteSeparatorNotDocx: '注の区切り線を削除できるのは .docx 形式のドキュメントだけです。',
+    noteSeparatorConfirmRestore: 'この文書からは注の区切り線が削除されています。元に戻しますか？',
+    noteSeparatorSaveFirst: '注の区切り線を変更する前にドキュメントを保存してください。変更はディスク上のファイルに対して行われます。',
+    noteSeparatorNoFile: '注の区切り線を変更する前に、ドキュメントを .docx 形式で保存してください。',
+    noteSeparatorNotDocx: '注の区切り線を変更できるのは .docx 形式のドキュメントだけです。',
     noteSeparatorNoNotes: 'このドキュメントにはまだ脚注も文末脚注もありません。先に注を挿入してください。それまで区切り線はファイルに保存されません。',
     noteSeparatorAlready: 'このドキュメントの注の区切り線はすでに削除されています。',
-    noteSeparatorFailed: '注の区切り線を削除できませんでした。'
+    noteSeparatorAlreadyPresent: 'この文書にはすでに注の区切り線があります。',
+    noteSeparatorFailed: '注の区切り線を変更できませんでした。'
   }
 };
 
@@ -631,7 +651,7 @@ function _forceReload() {
     .finally(function() { window.location.reload(); });
 }
 
-// Remove note separator (#42). The horizontal rules above the notes come from
+// Note lines (#42), a toggle. The horizontal rules above the notes come from
 // special notes in the file itself and no editor setting reaches them, so the
 // Rust side edits word/footnotes.xml and word/endnotes.xml in the .docx on disk
 // (both the separator and the continuationSeparator of each) and the document
@@ -649,8 +669,15 @@ function _forceReload() {
 // succeeded or failed, so the surgery could not tell one from the other. A
 // message the user answers with Ctrl+S costs one click and no such guessing.
 //
-// The full order is: refuse while modified, confirm, operate, reopen. The
-// confirmation carries the documentation of the action, for the reason given
+// One entry, both directions. Taking the lines away and never giving them back
+// would be a trap, so the entry is a toggle: it asks the file which state it is
+// in first (an inspection that writes nothing) and then offers the move that
+// state allows, removing the lines or putting them back. The menu label stays
+// the same noun either way, which is why the confirmation has to say which of
+// the two is about to happen.
+//
+// The full order is: refuse while modified, inspect, confirm, operate, reopen.
+// The confirmation carries the documentation of the action, for the reason given
 // where it is raised.
 async function _eoRemoveNoteSeparator() {
   var dialog = window.__TAURI__.dialog;
@@ -663,26 +690,48 @@ async function _eoRemoveNoteSeparator() {
     return;
   }
 
+  async function _act(action) {
+    try {
+      var code = await invoke('remove_note_separator', { action: action });
+      window._eoLog('[EO] note separator ' + action + ': ' + code);
+      return code;
+    } catch(e) {
+      window._eoLog('[EO] note separator ' + action + ' failed: ' + (e.message || e));
+      return null;
+    }
+  }
+
+  // Messages for everything that is not a state the toggle can act on, shared
+  // by the inspection and by the two actions: a document can stop being
+  // operable between the question and the answer.
+  var messages = {
+    no_notes: 'noteSeparatorNoNotes',
+    not_docx: 'noteSeparatorNotDocx',
+    no_file: 'noteSeparatorNoFile',
+    already_removed: 'noteSeparatorAlready',
+    already_present: 'noteSeparatorAlreadyPresent'
+  };
+
+  var state = await _act('inspect');
+  if (state !== 'present' && state !== 'removed') {
+    await _tell(messages[state] || 'noteSeparatorFailed');
+    return;
+  }
+
   // The File menu entry is a short noun ("Note lines") so that it lines up
   // with its neighbours instead of running over them, and a noun does not say
-  // what clicking it does. This dialog does: it spells out that the lines above
-  // footnotes and endnotes go away, and that the change lands in the file on
+  // what clicking it does. This dialog does: it spells out which way the lines
+  // are about to go, and (for the removal) that the change lands in the file on
   // disk rather than in the editor, which is worth a confirmation on its own.
-  var confirmed = await dialog.confirm(_t('noteSeparatorConfirm'),
+  var removing = state === 'present';
+  var confirmed = await dialog.confirm(
+    _t(removing ? 'noteSeparatorConfirm' : 'noteSeparatorConfirmRestore'),
     { title: _t('noteSeparator'), kind: 'warning' });
   if (!confirmed) return;
 
-  var code;
-  try {
-    code = await invoke('remove_note_separator');
-  } catch(e) {
-    window._eoLog('[EO] remove_note_separator failed: ' + (e.message || e));
-    await _tell('noteSeparatorFailed');
-    return;
-  }
-  window._eoLog('[EO] remove_note_separator: ' + code);
+  var code = await _act(removing ? 'remove' : 'restore');
 
-  if (code === 'removed') {
+  if (code === 'removed' || code === 'restored') {
     // Same reopen the document switch uses: the editor holds the document it
     // parsed at open time, and only a fresh open shows the edited file.
     var path = await invoke('get_current_path').catch(function() { return null; });
@@ -691,12 +740,6 @@ async function _eoRemoveNoteSeparator() {
     return;
   }
 
-  var messages = {
-    no_notes: 'noteSeparatorNoNotes',
-    already_removed: 'noteSeparatorAlready',
-    not_docx: 'noteSeparatorNotDocx',
-    no_file: 'noteSeparatorNoFile'
-  };
   await _tell(messages[code] || 'noteSeparatorFailed');
 }
 window._eoRemoveNoteSeparator = _eoRemoveNoteSeparator;
