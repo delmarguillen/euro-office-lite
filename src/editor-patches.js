@@ -137,6 +137,52 @@
             setTimeout(function() { clearInterval(saveAsStyleInterval); }, 30000);
           }
 
+          // Language pickers (#6): web-apps renders the spellcheck indicator as
+          // an <svg> that it only fills with a <use> when the language has a
+          // dictionary. The size comes from ".icon.spellcheck-lang", a class the
+          // same template only adds in that case, so an indicator for a language
+          // without a dictionary is an svg with no CSS size at all and falls back
+          // to the SVG default of 300x150. Measured in this build: every entry of
+          // the status bar menu (252 of 252, no dictionaries are bundled) blew up
+          // from 42px to 180px tall and the menu from 462px to 762px wide, which
+          // is the wrecked dropdown of the report.
+          //
+          // Hiding only the EMPTY indicators is deliberate: it is equivalent to
+          // dropping the whole icon column while no dictionary ships, and it
+          // keeps the indicator for the languages that would have one if
+          // dictionaries are ever bundled.
+          //
+          // The combo of the "Select document language" dialog needs its own
+          // rule: its input indicator always carries the <use> and web-apps
+          // toggles the "spellcheck-lang" class on it instead (LanguageDialog's
+          // onLangSelect), so it becomes the same unsized 300x150 svg, absolutely
+          // positioned over the dialog. Both rules are keyed on classes that only
+          // the language pickers use, so they are inert in the editors that have
+          // no language dialog.
+          if (!win._eoLangPickerStyled) {
+            win._eoLangPickerStyled = true;
+            var langStyleInterval = setInterval(function() {
+              try {
+                var head = win.document && win.document.head;
+                if (!head) return;
+                var langStyle = win.document.createElement('style');
+                langStyle.textContent =
+                  // ".lang-menu" also covers the table language submenu of the
+                  // context menu, which renders an <i> instead of an <svg>: that
+                  // one measures 0x0 empty, so the rule is a no-op there.
+                  '.lang-menu .icon:not(.spellcheck-lang):not(:has(use)),\n' +
+                  '.combo-langs .dropdown-menu .icon:not(.spellcheck-lang):not(:has(use)),\n' +
+                  '.combo-langs .input-icon:not(.spellcheck-lang) { display: none !important; }';
+                head.appendChild(langStyle);
+                clearInterval(langStyleInterval);
+                win._eoLog('[EO] Language picker style installed');
+              } catch(e) {
+                clearInterval(langStyleInterval);
+              }
+            }, 50);
+            setTimeout(function() { clearInterval(langStyleInterval); }, 30000);
+          }
+
           // "Download As" is web-apps wording for an online flow. The entry saves
           // to disk here, so it is renamed to "Export". Two things make a single
           // pass insufficient: this runs before the frame has navigated to the
