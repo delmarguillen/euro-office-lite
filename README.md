@@ -16,10 +16,9 @@ Supports Word, Excel, and PowerPoint documents with native file operations and d
 
 Euro-Office Lite is alpha. A few things you will run into early:
 
-- **Spell check does not work yet** (#6).
+- **Spell check does not work yet** (#6). No spellcheck engine or dictionaries ship with this build.
 - **No crash recovery.** Closing the window prompts you to save unsaved changes, but if the app crashes or is force-quit mid-edit, that unsaved work is lost. Save often.
-- **Copy and Cut from the right-click menu do nothing on macOS and Linux.** The keyboard shortcuts (Cmd/Ctrl+C and Cmd/Ctrl+X) work on every platform (#17).
-- **Some Linux setups show rendering glitches** such as rough text or a brief gray flash after Ctrl+C in Documents and Slides. The font list and editing itself are not affected, and this is under investigation (#27).
+- **Plain text (.txt) and .csv files cannot be opened yet.** They need an encoding and delimiter dialog the app does not have; DOCX, XLSX, PPTX, ODT, ODS, ODP and RTF all work.
 
 ## Requirements
 
