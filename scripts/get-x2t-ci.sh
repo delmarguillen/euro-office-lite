@@ -40,7 +40,10 @@ if [ "$OS" = "Darwin" ]; then
 elif [ "$OS" = "Linux" ]; then
     ZIP_NAME="x2t-binaries-linux-x64.zip"
     if [ "$ARCH" = "aarch64" ]; then
-        TRIPLE="aarch64-unknown-linux-gnu"
+        # The 'dependencies' release has no linux-arm64 zip; extract the
+        # sidecar from the ONLYOFFICE aarch64 package instead.
+        log "aarch64 host: delegating to extract-x2t-linux-arm64.sh"
+        exec bash "$SCRIPT_DIR/extract-x2t-linux-arm64.sh"
     else
         TRIPLE="x86_64-unknown-linux-gnu"
     fi

@@ -33,10 +33,22 @@ env:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        target: [x86_64-unknown-linux-gnu]
+        include:
+          # The sdkjs tag has to match the x2t the target ships. x64 takes its
+          # sidecar from the dependencies release (8.2); arm64 has no zip there
+          # and takes x2t from the ONLYOFFICE 9.4 package, whose matching sdkjs
+          # tag exists only upstream, not in this fork.
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            sdkjs_tag: v8.2.0.147
+            sdkjs_remote: origin
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+            sdkjs_tag: v9.4.0.129
+            sdkjs_remote: https://github.com/ONLYOFFICE/sdkjs.git
 
     steps:
       - name: Checkout
@@ -171,6 +183,9 @@ jobs:
           echo "x2t resource copy created ($(wc -c < src-tauri/binaries/x2t) bytes)"
 
       - name: Prepare DoctRenderer resources
+        env:
+          DOCTRENDERER_SDKJS_TAG: ${{ matrix.sdkjs_tag }}
+          DOCTRENDERER_SDKJS_REMOTE: ${{ matrix.sdkjs_remote }}
         run: |
           echo "::group::Copy fonts to binaries"
           mkdir -p src-tauri/binaries/fonts
