@@ -14,6 +14,8 @@ pub struct AppState {
     pub pending_recent: Mutex<Option<PathBuf>>,
     // Crash recovery session of the open document, if any (recovery.rs).
     pub recovery: Mutex<Option<crate::recovery::RecoverySession>>,
+    // Path passed as a launch argument that the frontend has not opened yet.
+    pub pending_open: Mutex<Option<String>>,
 }
 
 pub(crate) fn log_event(state: &AppState, msg: &str) {
@@ -473,6 +475,12 @@ pub fn get_current_path(state: State<'_, AppState>) -> Option<String> {
         .unwrap()
         .as_ref()
         .map(|p| p.to_string_lossy().to_string())
+}
+
+// Hands over the launch argument once: a page reload must not open it again.
+#[tauri::command]
+pub fn take_pending_open_file(state: State<'_, AppState>) -> Option<String> {
+    state.pending_open.lock().unwrap().take()
 }
 
 #[tauri::command]

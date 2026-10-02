@@ -2576,9 +2576,7 @@ listen('confirm-close', async () => {
   }
 });
 
-listen('open-file', async (event) => {
-  if (!event.payload) return;
-  var filePath = event.payload;
+async function _eoOpenFromPath(filePath) {
   var docType = _eoDocTypeForPath(filePath);
 
   try {
@@ -2595,4 +2593,20 @@ listen('open-file', async (event) => {
     window._eoLog('[EO] open-file: conversion failed: ' + (e.message || e));
     await _eoShowOpenError();
   }
-});
+}
+
+// An event emitted by the backend at startup is lost if no listener exists yet,
+// so the page asks for the launch argument instead, once DOMContentLoaded
+// guarantees the later scripts (and window._openEditor) have run.
+function _eoTakePendingOpenFile() {
+  invoke('take_pending_open_file').then(function(filePath) {
+    if (filePath) return _eoOpenFromPath(filePath);
+  }).catch(function(e) {
+    window._eoLog('[EO] open-file: pending path unavailable: ' + (e.message || e));
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _eoTakePendingOpenFile);
+} else {
+  _eoTakePendingOpenFile();
+}

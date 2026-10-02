@@ -136,6 +136,7 @@ fn main() {
             modified: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
+            pending_open: Mutex::new(file_to_open),
         })
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
@@ -145,6 +146,7 @@ fn main() {
             file_ops::print_document,
             file_ops::create_new,
             file_ops::get_current_path,
+            file_ops::take_pending_open_file,
             file_ops::open_pdf_viewer,
             file_ops::convert_for_insert,
             file_ops::write_download_temp,
@@ -453,15 +455,6 @@ fn main() {
                             let _ = h.emit("confirm-close", ());
                         }
                     }
-                });
-            }
-
-            if let Some(ref file_path) = file_to_open {
-                let handle = app.handle().clone();
-                let fp = file_path.clone();
-                tauri::async_runtime::spawn(async move {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    let _ = handle.emit("open-file", fp);
                 });
             }
 
