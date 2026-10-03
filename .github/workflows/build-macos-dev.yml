@@ -9,15 +9,6 @@ on:
         default: true
   push:
     branches:
-      - 'feat/14-macos-build'
-      - 'feat/19-save-as-extension-fix'
-      - 'feat/27-macos-codesign'
-      - 'feat/28-intel-mac-build'
-      - 'feat/30-context-toolbar-clipboard'
-      - 'feat/31-clipboard-file-paste'
-      - 'feat/32-linux-system-fonts'
-      - 'feat/33-fix-linux-pdf-release'
-      - 'feat/39-issue17-copy-cut'
       - 'hotfix/**'
     paths:
       - 'src/**'
