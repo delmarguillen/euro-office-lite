@@ -681,6 +681,7 @@
       window.AscDesktopEditor._currentDocType = docType;
       startScreen.classList.add('hidden');
       document.getElementById('placeholder').classList.add('active');
+      window._eoHideOpening();
 
       new DocsAPI.DocEditor('placeholder', {
         type: 'desktop',
@@ -766,6 +767,7 @@
 
     document.querySelectorAll('.btn[data-type]').forEach(function(btn) {
       btn.addEventListener('click', function() {
+        window._eoShowOpening(_t('creatingDocument'));
         openEditor(btn.dataset.type);
       });
     });
@@ -787,6 +789,7 @@
     // Every opening goes through open_file, which is where the Rust side records
     // the recent files entry.
     async function _openPath(path, silent) {
+      window._eoShowOpening(window._eoOpeningFileText(path));
       try {
         var b64data = await window.__TAURI__.core.invoke('open_file', { path: path });
         var fileName = path.replace(/\\/g, '/').split('/').pop();
@@ -798,6 +801,7 @@
         // reason only reaches the log: the user cannot tell a damaged file from
         // a broken app (Issue #38).
         window._eoLog('[EO] Error opening file:', e);
+        window._eoHideOpening();
         if (!silent) await window._eoShowOpenError();
         return false;
       }
@@ -812,8 +816,11 @@
       localStorage.removeItem('eo-pending-recover-id');
 
       startScreen.classList.add('hidden');
+      // Only the id survives the reload: the name joins the text once loaded.
+      window._eoShowOpening('');
 
       window.__TAURI__.core.invoke('recovery_load', { id: id }).then(function(session) {
+        window._eoShowOpening(window._eoOpeningFileText(session.name));
         window._pendingFileData = {
           data: session.data,
           path: session.path,
@@ -826,6 +833,7 @@
         // Nothing is lost: the folder is still there and the start screen
         // will offer it again.
         window._eoLog('[RECOVER] load failed: ' + ((e && e.message) || e));
+        window._eoHideOpening();
         startScreen.classList.remove('hidden');
       });
       return true;
@@ -838,6 +846,7 @@
       localStorage.removeItem('eo-pending-open-path');
 
       startScreen.classList.add('hidden');
+      window._eoShowOpening(window._eoOpeningFileText(pendingPath));
 
       var docType = window._eoDocTypeForPath(pendingPath);
 
@@ -847,6 +856,7 @@
         openEditor(docType);
       }).catch(function(e) {
         window._eoLog('[EO] Error reopening file:', e);
+        window._eoHideOpening();
         startScreen.classList.remove('hidden');
         window._eoShowOpenError().catch(function(){});
       });
