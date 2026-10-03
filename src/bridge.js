@@ -319,6 +319,7 @@ var _UI_STRINGS = {
     noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
     openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.',
     openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.',
+    openingFile: 'Opening {name}…', creatingDocument: 'Creating document…',
     removeNoteSeparator: 'Note lines',
     noteSeparator: 'Note lines',
     noteSeparatorConfirm: 'Remove the note separator lines from this document? The lines above footnotes and endnotes are removed from the saved file.',
@@ -345,6 +346,7 @@ var _UI_STRINGS = {
     noRecentFiles: 'Todavía no hay archivos recientes', openFailed: 'No se pudo abrir el archivo',
     openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.',
     openErrorMsg: 'No se pudo abrir el archivo. No es un documento válido o está dañado.',
+    openingFile: 'Abriendo {name}…', creatingDocument: 'Creando documento…',
     removeNoteSeparator: 'Líneas de notas',
     noteSeparator: 'Líneas de notas',
     noteSeparatorConfirm: '¿Quitar las líneas separadoras de notas de este documento? Las líneas que aparecen encima de las notas al pie y de las notas al final se quitan del archivo guardado.',
@@ -371,6 +373,7 @@ var _UI_STRINGS = {
     noRecentFiles: 'Aucun fichier récent pour le moment', openFailed: 'Impossible d\'ouvrir le fichier',
     openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.',
     openErrorMsg: 'Impossible d\'ouvrir le fichier. Ce n\'est pas un document valide ou il est endommagé.',
+    openingFile: 'Ouverture de {name}…', creatingDocument: 'Création du document…',
     removeNoteSeparator: 'Lignes de notes',
     noteSeparator: 'Lignes de notes',
     noteSeparatorConfirm: 'Supprimer les lignes de séparation des notes de ce document ? Les lignes situées au-dessus des notes de bas de page et des notes de fin sont supprimées du fichier enregistré.',
@@ -397,6 +400,7 @@ var _UI_STRINGS = {
     noRecentFiles: 'Noch keine zuletzt verwendeten Dateien', openFailed: 'Datei konnte nicht geöffnet werden',
     openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.',
     openErrorMsg: 'Die Datei konnte nicht geöffnet werden. Sie ist kein gültiges Dokument oder sie ist beschädigt.',
+    openingFile: '{name} wird geöffnet…', creatingDocument: 'Dokument wird erstellt…',
     removeNoteSeparator: 'Trennlinien',
     noteSeparator: 'Trennlinien',
     noteSeparatorConfirm: 'Die Trennlinien der Fuß- und Endnoten aus diesem Dokument entfernen? Die Linien über den Fuß- und Endnoten werden aus der gespeicherten Datei entfernt.',
@@ -423,6 +427,7 @@ var _UI_STRINGS = {
     noRecentFiles: 'Nessun file recente', openFailed: 'Impossibile aprire il file',
     openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.',
     openErrorMsg: 'Impossibile aprire il file. Non è un documento valido oppure è danneggiato.',
+    openingFile: 'Apertura di {name}…', creatingDocument: 'Creazione del documento…',
     removeNoteSeparator: 'Linee delle note',
     noteSeparator: 'Linee delle note',
     noteSeparatorConfirm: 'Rimuovere le linee di separazione delle note da questo documento? Le linee sopra le note a piè di pagina e le note di chiusura vengono rimosse dal file salvato.',
@@ -449,6 +454,7 @@ var _UI_STRINGS = {
     noRecentFiles: 'Ainda não há arquivos recentes', openFailed: 'Não foi possível abrir o arquivo',
     openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.',
     openErrorMsg: 'Não foi possível abrir o arquivo. Não é um documento válido ou está danificado.',
+    openingFile: 'Abrindo {name}…', creatingDocument: 'Criando documento…',
     removeNoteSeparator: 'Linhas de notas',
     noteSeparator: 'Linhas de notas',
     noteSeparatorConfirm: 'Remover as linhas separadoras de notas deste documento? As linhas acima das notas de rodapé e das notas de fim são removidas do arquivo salvo.',
@@ -475,6 +481,7 @@ var _UI_STRINGS = {
     noRecentFiles: 'Недавних файлов пока нет', openFailed: 'Не удалось открыть файл',
     openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.',
     openErrorMsg: 'Не удалось открыть файл. Это не действительный документ или он повреждён.',
+    openingFile: 'Открытие {name}…', creatingDocument: 'Создание документа…',
     removeNoteSeparator: 'Линии сносок',
     noteSeparator: 'Линии сносок',
     noteSeparatorConfirm: 'Убрать из этого документа линии, отделяющие сноски? Линии над обычными и концевыми сносками будут удалены из сохранённого файла.',
@@ -501,6 +508,7 @@ var _UI_STRINGS = {
     noRecentFiles: 'Нещодавніх файлів поки немає', openFailed: 'Не вдалося відкрити файл',
     openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.',
     openErrorMsg: 'Не вдалося відкрити файл. Це не дійсний документ або його пошкоджено.',
+    openingFile: 'Відкриття {name}…', creatingDocument: 'Створення документа…',
     removeNoteSeparator: 'Лінії виносок',
     noteSeparator: 'Лінії виносок',
     noteSeparatorConfirm: 'Прибрати з цього документа лінії, що відокремлюють виноски? Лінії над звичайними та кінцевими виносками буде вилучено зі збереженого файлу.',
@@ -527,6 +535,7 @@ var _UI_STRINGS = {
     noRecentFiles: '暂无最近的文件', openFailed: '无法打开文件',
     openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。',
     openErrorMsg: '无法打开文件。它不是有效的文档，或者已损坏。',
+    openingFile: '正在打开 {name}…', creatingDocument: '正在创建文档…',
     removeNoteSeparator: '脚注/尾注线',
     noteSeparator: '脚注/尾注线',
     noteSeparatorConfirm: '要移除此文档中的脚注/尾注分隔线吗？脚注和尾注上方的横线将从保存的文件中移除。',
@@ -553,6 +562,7 @@ var _UI_STRINGS = {
     noRecentFiles: '最近使用したファイルはありません', openFailed: 'ファイルを開けませんでした',
     openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。',
     openErrorMsg: 'ファイルを開けませんでした。有効なドキュメントではないか、破損しています。',
+    openingFile: '{name} を開いています…', creatingDocument: 'ドキュメントを作成しています…',
     removeNoteSeparator: '注の区切り線',
     noteSeparator: '注の区切り線',
     noteSeparatorConfirm: 'この文書から注の区切り線を削除しますか？脚注と文末脚注の上にある線が、保存されるファイルから削除されます。',
@@ -612,6 +622,45 @@ function _eoShowOpenError() {
   );
 }
 window._eoShowOpenError = _eoShowOpenError;
+
+// Converting a file happens before the editor exists and reports no progress,
+// so the shell shows an indeterminate indicator until the editor takes over
+// with its own loading mask. Calling it again while visible only updates the text.
+function _eoShowOpening(text) {
+  var overlay = document.getElementById('opening');
+  if (!overlay) return;
+  document.getElementById('opening-text').textContent = text || '';
+  if (overlay.classList.contains('active')) return;
+  overlay.classList.add('active');
+  // The overlay already catches clicks; inert also stops a focused button
+  // from starting a second open on Enter or Space.
+  var startScreen = document.getElementById('start-screen');
+  if (startScreen) startScreen.inert = true;
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+}
+
+function _eoHideOpening() {
+  var overlay = document.getElementById('opening');
+  if (!overlay) return;
+  overlay.classList.remove('active');
+  var startScreen = document.getElementById('start-screen');
+  if (startScreen) startScreen.inert = false;
+}
+
+function _eoIsOpening() {
+  var overlay = document.getElementById('opening');
+  return !!overlay && overlay.classList.contains('active');
+}
+
+// A function replacement, so a file name containing "$&" is inserted as is.
+function _eoOpeningFileText(path) {
+  var name = String(path || '').replace(/\\/g, '/').split('/').pop();
+  return _t('openingFile').replace('{name}', function() { return name; });
+}
+
+window._eoShowOpening = _eoShowOpening;
+window._eoHideOpening = _eoHideOpening;
+window._eoOpeningFileText = _eoOpeningFileText;
 
 // Which editor a path belongs to. Shared with index.html so the start screen,
 // the reopen-after-reload path and the recent files list all agree.
@@ -1880,6 +1929,8 @@ window.AscDesktopEditor = {
   },
 
   LocalFileOpen: async function(path) {
+    // One open at a time: Ctrl+O stays live while the indicator is up.
+    if (_eoIsOpening()) return;
     if (!path) {
       var dialog = window.__TAURI__.dialog;
       path = await dialog.open({
@@ -1904,13 +1955,13 @@ window.AscDesktopEditor = {
       return;
     }
 
-    try {
-      var b64data = await invoke('open_file', { path: path });
-      _loadEditorBin(b64data, path, { path: path });
-    } catch(e) {
-      window._eoLog('[EO] Error opening file: ' + e);
-      await _eoShowOpenError();
+    // No editor mounted yet: open it the way the start screen's Open file
+    // button does. _loadEditorBin needs a mounted editor, so it cannot help here.
+    if (window._eoOpenPath) {
+      await window._eoOpenPath(path);
+      return;
     }
+    window._eoLog('[EO] LocalFileOpen: editor launcher unavailable, cannot open ' + path);
   },
 
   LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
@@ -2578,6 +2629,7 @@ listen('confirm-close', async () => {
 
 async function _eoOpenFromPath(filePath) {
   var docType = _eoDocTypeForPath(filePath);
+  _eoShowOpening(_eoOpeningFileText(filePath));
 
   try {
     var b64data = await invoke('open_file', { path: filePath });
@@ -2587,10 +2639,13 @@ async function _eoOpenFromPath(filePath) {
       window._openEditor(docType);
     } else {
       window._eoLog('[OPEN] WARN: editor launcher unavailable, using fallback');
+      // The fallback never reaches openEditor, which is what hides it.
+      _eoHideOpening();
       window.AscDesktopEditor.LocalFileOpen(filePath);
     }
   } catch(e) {
     window._eoLog('[EO] open-file: conversion failed: ' + (e.message || e));
+    _eoHideOpening();
     await _eoShowOpenError();
   }
 }

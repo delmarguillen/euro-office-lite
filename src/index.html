@@ -42,6 +42,24 @@
     }
     #placeholder.active { display: block; }
 
+    /* Full window so it also catches clicks meant for the start screen. */
+    #opening {
+      position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 1000;
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      gap: 1rem; background: rgba(30, 30, 46, 0.92); cursor: progress;
+    }
+    #opening.active { display: flex; }
+    .opening-spinner {
+      width: 36px; height: 36px; border-radius: 50%;
+      border: 3px solid #45475a; border-top-color: #89b4fa;
+      animation: opening-spin 0.8s linear infinite;
+    }
+    .opening-text {
+      font-size: 0.95rem; color: #a6adc8; max-width: 88vw;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    @keyframes opening-spin { to { transform: rotate(360deg); } }
+
     .lang-selector {
       position: absolute;
       top: 1rem;
@@ -182,6 +200,11 @@
   </div>
 
   <div id="placeholder"></div>
+
+  <div id="opening" role="status" aria-live="polite">
+    <div class="opening-spinner"></div>
+    <p class="opening-text" id="opening-text"></p>
+  </div>
 
   <script src="bridge.js"></script>
   <script src="button-hint-patch.js"></script>
