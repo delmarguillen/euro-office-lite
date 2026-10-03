@@ -210,14 +210,15 @@
           if (!app || !app.getController) continue;
           var controller = app.getController('Common.Controllers.Fonts') || app.getController('Fonts');
           var store = controller && controller.getCollection && controller.getCollection('Common.Collections.Fonts');
-          if (store && store.reset) {
+          if (store && store.reset && store.length > 0) {
             store.reset();
             collectionReset = true;
           }
         } catch(e) {}
       }
 
-      // With no collection yet, the normal first LoadDocumentFonts call will emit it.
+      // With no collection yet, or an empty one the UI has not filled, the editor's
+      // normal first font emission already carries the complete list.
       if (!collectionReset) return;
       var guiFonts = [];
       for (var i = 0; i < loader.fontInfos.length; i++) {

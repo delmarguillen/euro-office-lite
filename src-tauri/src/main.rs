@@ -45,6 +45,21 @@ fn log_startup(temp_dir: &std::path::Path, msg: &str) {
     }
 }
 
+// x2t runs with a different working directory, so a relative launch argument
+// must be anchored to ours. A plain join, not canonicalize: that would resolve
+// symlinks and, on Windows, add the \\?\ prefix to the path kept in recents.
+fn absolute_arg_path(arg: &str, cwd: &std::path::Path) -> Option<std::path::PathBuf> {
+    if arg.starts_with('-') {
+        return None;
+    }
+    let path = cwd.join(arg);
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 fn main() {
     // WebKitGTK's DMABUF renderer produces jagged/rough canvas rendering on some
     // drivers (Nvidia proprietary especially, issue #27). The Flatpak already sets
@@ -104,21 +119,21 @@ fn main() {
 
     let file_to_open: Option<String> = {
         let args: Vec<String> = std::env::args().collect();
-        if args.len() > 1 {
-            let path = &args[1];
-            if !path.starts_with('-') && std::path::Path::new(path).exists() {
-                let file_name = std::path::Path::new(path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("unknown");
-                log_startup(&temp_dir, &format!("Opening associated file: {}", file_name));
-                Some(path.clone())
-            } else {
-                None
-            }
-        } else {
-            None
+        // An empty base leaves a relative path untouched, which is what we can do
+        // when the working directory is unreadable.
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let path = args
+            .get(1)
+            .and_then(|arg| absolute_arg_path(arg, &cwd))
+            .and_then(|path| path.into_os_string().into_string().ok());
+        if let Some(ref path) = path {
+            let file_name = std::path::Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown");
+            log_startup(&temp_dir, &format!("Opening associated file: {}", file_name));
         }
+        path
     };
 
     let mut builder = tauri::Builder::default()
@@ -136,6 +151,7 @@ fn main() {
             modified: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
+            pending_open: Mutex::new(file_to_open),
         })
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
@@ -145,6 +161,7 @@ fn main() {
             file_ops::print_document,
             file_ops::create_new,
             file_ops::get_current_path,
+            file_ops::take_pending_open_file,
             file_ops::open_pdf_viewer,
             file_ops::convert_for_insert,
             file_ops::write_download_temp,
@@ -453,15 +470,6 @@ fn main() {
                             let _ = h.emit("confirm-close", ());
                         }
                     }
-                });
-            }
-
-            if let Some(ref file_path) = file_to_open {
-                let handle = app.handle().clone();
-                let fp = file_path.clone();
-                tauri::async_runtime::spawn(async move {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    let _ = handle.emit("open-file", fp);
                 });
             }
 
@@ -842,5 +850,70 @@ mod tests {
 
         let expected = std::fs::canonicalize(&store).expect("canonicalize store");
         assert_eq!(resolve(&root), vec![expected]);
+    }
+}
+
+#[cfg(test)]
+mod arg_path_tests {
+    use super::absolute_arg_path;
+    use std::path::PathBuf;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!("eo-arg-{}-{}", name, unique));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            TempDir(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn existing_absolute_path_is_kept() {
+        let temp = TempDir::new("abs");
+        let file = temp.0.join("doc.docx");
+        std::fs::write(&file, b"x").expect("write file");
+        let elsewhere = std::env::temp_dir();
+
+        assert_eq!(
+            absolute_arg_path(file.to_str().unwrap(), &elsewhere),
+            Some(file.clone())
+        );
+    }
+
+    #[test]
+    fn existing_relative_path_is_joined_to_cwd() {
+        let temp = TempDir::new("rel");
+        std::fs::write(temp.0.join("doc.docx"), b"x").expect("write file");
+
+        assert_eq!(
+            absolute_arg_path("doc.docx", &temp.0),
+            Some(temp.0.join("doc.docx"))
+        );
+    }
+
+    #[test]
+    fn missing_path_yields_none() {
+        let temp = TempDir::new("missing");
+
+        assert_eq!(absolute_arg_path("missing.docx", &temp.0), None);
+    }
+
+    #[test]
+    fn dash_argument_is_ignored() {
+        let temp = TempDir::new("dash");
+        std::fs::write(temp.0.join("-flag"), b"x").expect("write file");
+
+        assert_eq!(absolute_arg_path("-flag", &temp.0), None);
     }
 }
