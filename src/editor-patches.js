@@ -665,6 +665,7 @@
     };
 
     window._openEditor = openEditor;
+    window._eoOpenPath = _openPath;
     async function openEditor(docType) {
       // Font generation finishes in Tauri setup. Fetch its result before the
       // editor iframe is created so injection does not race LoadDocumentFonts.

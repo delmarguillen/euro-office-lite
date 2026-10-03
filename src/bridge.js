@@ -647,6 +647,11 @@ function _eoHideOpening() {
   if (startScreen) startScreen.inert = false;
 }
 
+function _eoIsOpening() {
+  var overlay = document.getElementById('opening');
+  return !!overlay && overlay.classList.contains('active');
+}
+
 // A function replacement, so a file name containing "$&" is inserted as is.
 function _eoOpeningFileText(path) {
   var name = String(path || '').replace(/\\/g, '/').split('/').pop();
@@ -1924,6 +1929,8 @@ window.AscDesktopEditor = {
   },
 
   LocalFileOpen: async function(path) {
+    // One open at a time: Ctrl+O stays live while the indicator is up.
+    if (_eoIsOpening()) return;
     if (!path) {
       var dialog = window.__TAURI__.dialog;
       path = await dialog.open({
@@ -1948,13 +1955,13 @@ window.AscDesktopEditor = {
       return;
     }
 
-    try {
-      var b64data = await invoke('open_file', { path: path });
-      _loadEditorBin(b64data, path, { path: path });
-    } catch(e) {
-      window._eoLog('[EO] Error opening file: ' + e);
-      await _eoShowOpenError();
+    // No editor mounted yet: open it the way the start screen's Open file
+    // button does. _loadEditorBin needs a mounted editor, so it cannot help here.
+    if (window._eoOpenPath) {
+      await window._eoOpenPath(path);
+      return;
     }
+    window._eoLog('[EO] LocalFileOpen: editor launcher unavailable, cannot open ' + path);
   },
 
   LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
