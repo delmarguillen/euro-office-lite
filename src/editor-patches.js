@@ -962,12 +962,23 @@
     }
 
     async function _openRecentFile(path) {
-      // Silent: this path keeps its own message for the dominant case, a file
-      // that disappeared between rendering the list and the click.
+      // Silent so the message can be chosen here: recent_files_state only lists
+      // files that exist, so a path still listed is damaged, not gone.
       if (await _openPath(path, true)) return;
-      await window.__TAURI__.dialog.message(_t('openFailedMsg'),
+      var state = null;
+      try {
+        state = await window.__TAURI__.core.invoke('recent_files_state');
+      } catch(e) {
+        _log('[EO] Recent files unavailable: ' + (e.message || e));
+      }
+      // Exact match: the clicked path is the backend's own string, unaltered.
+      var stillListed = !!state && state.files.some(function(file) {
+        return file.path === path;
+      });
+      await window.__TAURI__.dialog.message(
+        _t(stillListed ? 'openErrorMsg' : 'openFailedMsg'),
         { title: _t('openFailed'), kind: 'error' });
-      _refreshRecentFiles();
+      if (state) _renderRecentFiles(state);
     }
 
     function _renderRecentFiles(state) {
