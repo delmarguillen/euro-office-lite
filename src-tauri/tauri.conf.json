@@ -48,12 +48,12 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["docx", "doc", "odt", "rtf", "txt"],
+        "ext": ["docx", "doc", "odt", "rtf"],
         "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "description": "Document"
       },
       {
-        "ext": ["xlsx", "xls", "ods", "csv"],
+        "ext": ["xlsx", "xls", "ods"],
         "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "description": "Spreadsheet"
       },
