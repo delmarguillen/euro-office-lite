@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   build-frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -832,7 +832,7 @@ jobs:
     needs: [build-windows, build-macos, build-linux, build-flatpak]
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Download all installers
