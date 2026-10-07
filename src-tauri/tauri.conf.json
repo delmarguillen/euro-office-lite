@@ -48,18 +48,53 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["docx", "doc", "odt", "rtf"],
+        "ext": ["docx"],
         "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "description": "Document"
       },
       {
-        "ext": ["xlsx", "xls", "ods"],
+        "ext": ["doc"],
+        "mimeType": "application/msword",
+        "description": "Document"
+      },
+      {
+        "ext": ["odt"],
+        "mimeType": "application/vnd.oasis.opendocument.text",
+        "description": "Document"
+      },
+      {
+        "ext": ["rtf"],
+        "mimeType": "application/rtf",
+        "description": "Document"
+      },
+      {
+        "ext": ["xlsx"],
         "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "description": "Spreadsheet"
       },
       {
-        "ext": ["pptx", "ppt", "odp"],
+        "ext": ["xls"],
+        "mimeType": "application/vnd.ms-excel",
+        "description": "Spreadsheet"
+      },
+      {
+        "ext": ["ods"],
+        "mimeType": "application/vnd.oasis.opendocument.spreadsheet",
+        "description": "Spreadsheet"
+      },
+      {
+        "ext": ["pptx"],
         "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "description": "Presentation"
+      },
+      {
+        "ext": ["ppt"],
+        "mimeType": "application/vnd.ms-powerpoint",
+        "description": "Presentation"
+      },
+      {
+        "ext": ["odp"],
+        "mimeType": "application/vnd.oasis.opendocument.presentation",
         "description": "Presentation"
       }
     ],
