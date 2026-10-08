@@ -8,6 +8,7 @@ mod file_ops;
 mod note_separator;
 mod recent;
 mod recovery;
+mod text_import;
 
 use file_ops::AppState;
 use std::sync::Mutex;
