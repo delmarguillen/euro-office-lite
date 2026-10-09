@@ -16,6 +16,9 @@ pub struct AppState {
     pub recovery: Mutex<Option<crate::recovery::RecoverySession>>,
     // Path passed as a launch argument that the frontend has not opened yet.
     pub pending_open: Mutex<Option<String>>,
+    // Encoding and delimiter detected when the open document came from a CSV
+    // or TXT, so saving it back writes the file the way it was read.
+    pub text_options: Mutex<Option<crate::text_import::TextOptions>>,
 }
 
 pub(crate) fn log_event(state: &AppState, msg: &str) {
@@ -246,13 +249,31 @@ async fn open_file_inner(
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
 
+    let text_options = match crate::text_import::TextKind::for_path(Path::new(&source)) {
+        Some(kind) => {
+            let (head, complete) =
+                crate::text_import::read_head(Path::new(&source)).map_err(|e| {
+                    log_event(
+                        &state,
+                        &format!("[OPEN] failed file={} error=read head: {}", file_name, e),
+                    );
+                    e.to_string()
+                })?;
+            Some(crate::text_import::detect(&head, complete, kind))
+        }
+        None => None,
+    };
+
     log_event(
         &state,
         &format!(
-            "[OPEN] start file={} format={}{}",
+            "[OPEN] start file={} format={}{}{}",
             file_name,
             format_from,
-            if opened_blank { " empty=blank" } else { "" }
+            if opened_blank { " empty=blank" } else { "" },
+            text_options
+                .map(|o| format!(" encoding={} delimiter={:?}", o.encoding, o.delimiter))
+                .unwrap_or_default()
         ),
     );
 
@@ -263,6 +284,7 @@ async fn open_file_inner(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
+        text_options,
     )
     .await
     .map_err(|error| {
@@ -301,6 +323,9 @@ async fn open_file_inner(
 
     *state.current_file.lock().unwrap() = Some(input.clone());
     *state.modified.lock().unwrap() = false;
+    // None for anything that is not CSV or TXT: the options of the previous
+    // document must not leak into how this one is saved.
+    *state.text_options.lock().unwrap() = text_options;
 
     if opened_blank {
         // Nothing is on disk yet, so the entry waits for the first real save.
@@ -332,6 +357,7 @@ pub async fn save_file(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
+        text_options_for_save(&state, &dest),
     )
     .await?;
 
@@ -363,6 +389,7 @@ pub async fn save_file_as(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
+        text_options_for_save(&state, &dest),
     )
     .await?;
 
@@ -378,6 +405,20 @@ pub async fn save_file_as(
         super::recent::record(&app, &path);
     }
     Ok("ok".to_string())
+}
+
+// Without this, x2t writes every CSV as UTF-8 with commas, so saving over a
+// semicolon or windows-1252 file would rewrite it in another dialect. A Save As
+// to CSV or TXT reuses the options too: it is the same data, and whatever reads
+// the original most likely expects the copy in the same shape. A document that
+// did not come from CSV or TXT keeps x2t's defaults.
+fn text_options_for_save(state: &AppState, dest: &Path) -> Option<crate::text_import::TextOptions> {
+    let kind = crate::text_import::TextKind::for_path(dest)?;
+    state
+        .text_options
+        .lock()
+        .unwrap()
+        .map(|options| options.for_kind(kind))
 }
 
 #[tauri::command]
@@ -421,6 +462,7 @@ pub async fn print_document(
         8192,
         513,
         &state.temp_dir.to_string_lossy(),
+        None,
     )
     .await
     .map_err(|error| {
@@ -570,6 +612,7 @@ pub async fn convert_for_insert(
         format_from,
         format_to,
         &insert_dir.to_string_lossy(),
+        None,
     )
     .await?;
 
@@ -631,9 +674,9 @@ pub fn detect_format(path: &PathBuf) -> i32 {
 // first save comes from detect_format on the destination, so a 0-byte .odt is
 // edited in Word and saved as ODT.
 //
-// Deliberately absent: txt and csv (x2t asks for encoding options through a
-// dialog that is not wired up), pdf (nothing to edit), and the legacy doc/xls/ppt
-// (writing those back is not validated). Those keep the plain rejection.
+// Deliberately absent: pdf (nothing to edit) and the legacy doc/xls/ppt
+// (writing those back is not validated), which keep the plain rejection; and
+// txt and csv, which go to x2t as they are (an empty one as UTF-8 and comma).
 fn blank_template_for(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_lowercase();
     match ext.as_str() {

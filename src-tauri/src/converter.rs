@@ -9,6 +9,7 @@ pub async fn convert_file(
     _format_from: i32,
     format_to: i32,
     temp_dir: &str,
+    text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<String, String> {
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let binaries_dir = resource_dir.join("binaries");
@@ -27,11 +28,16 @@ pub async fn convert_file(
 <m_sFileTo>{}</m_sFileTo>
 <m_nFormatTo>{}</m_nFormatTo>
 <m_sTempDir>{}</m_sTempDir>
-</TaskQueueDataConvert>"#,
+{}</TaskQueueDataConvert>"#,
         input.replace('\\', "/"),
         output.replace('\\', "/"),
         format_to,
         temp_dir.replace('\\', "/"),
+        // Only set for CSV and TXT: x2t will not read them without an encoding
+        // and, for CSV, a delimiter (exit 89), and writes with these too.
+        text_options
+            .map(|options| options.xml_elements())
+            .unwrap_or_default(),
     );
     write_file(&params_path, &xml)?;
 
