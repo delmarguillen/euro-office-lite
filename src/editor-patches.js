@@ -779,7 +779,7 @@
       var dialog = window.__TAURI__.dialog;
       var path = await dialog.open({
         filters: [
-          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf'] },
+          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv'] },
           { name: _t('all'), extensions: ['*'] }
         ]
       });
