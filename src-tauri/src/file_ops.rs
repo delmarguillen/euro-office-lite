@@ -349,6 +349,7 @@ pub async fn save_file(
     let input = state.temp_dir.join("Editor.bin");
     let format_from = 8192;
     let format_to = detect_format(&dest);
+    let text_options = text_options_for_save(&state, &dest);
 
     super::converter::convert_file(
         &app,
@@ -357,9 +358,10 @@ pub async fn save_file(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
-        text_options_for_save(&state, &dest),
+        text_options,
     )
     .await?;
+    drop_added_bom(&state, &dest, text_options);
 
     // The 0-byte file this document was opened from now holds a real document,
     // so it earns its place in the recent list (#33).
@@ -381,6 +383,7 @@ pub async fn save_file_as(
     let input = state.temp_dir.join("Editor.bin");
     let format_from = 8192;
     let format_to = detect_format(&dest);
+    let text_options = text_options_for_save(&state, &dest);
 
     super::converter::convert_file(
         &app,
@@ -389,9 +392,10 @@ pub async fn save_file_as(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
-        text_options_for_save(&state, &dest),
+        text_options,
     )
     .await?;
+    drop_added_bom(&state, &dest, text_options);
 
     // A PDF export leaves the document itself untouched (current_file keeps
     // pointing at the editable file), so it does not belong in the list either.
@@ -419,6 +423,25 @@ fn text_options_for_save(state: &AppState, dest: &Path) -> Option<crate::text_im
         .lock()
         .unwrap()
         .map(|options| options.for_kind(kind))
+}
+
+// x2t puts a UTF-8 BOM on every UTF-8 file it writes; a file that had none
+// keeps having none, or the first header cell of a CSV reads "\u{feff}name".
+// The file is already saved by now, so a failure here is only logged.
+fn drop_added_bom(
+    state: &AppState,
+    dest: &Path,
+    text_options: Option<crate::text_import::TextOptions>,
+) {
+    let Some(options) = text_options else {
+        return;
+    };
+    if let Err(e) = crate::text_import::strip_added_bom(dest, options) {
+        log_event(
+            state,
+            &format!("[SAVE] could not drop the added BOM: {}", e),
+        );
+    }
 }
 
 #[tauri::command]
@@ -676,7 +699,8 @@ pub fn detect_format(path: &PathBuf) -> i32 {
 //
 // Deliberately absent: pdf (nothing to edit) and the legacy doc/xls/ppt
 // (writing those back is not validated), which keep the plain rejection; and
-// txt and csv, which go to x2t as they are (an empty one as UTF-8 and comma).
+// txt and csv, which x2t refuses when empty (exit 88), so they get the open
+// error too.
 fn blank_template_for(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_lowercase();
     match ext.as_str() {

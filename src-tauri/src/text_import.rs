@@ -46,6 +46,9 @@ pub struct TextOptions {
     pub encoding: u32,
     // Only CSV has one.
     pub delimiter: Option<u32>,
+    // Whether the file started with a UTF-8 BOM. x2t always writes one with
+    // UTF-8, so saving back has to drop it when the original had none.
+    pub utf8_bom: bool,
 }
 
 impl TextOptions {
@@ -94,12 +97,57 @@ pub fn detect(head: &[u8], complete: bool, kind: TextKind) -> TextOptions {
     TextOptions {
         encoding,
         delimiter,
+        utf8_bom: head.starts_with(UTF8_BOM),
     }
+}
+
+const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+
+// What a file x2t just wrote should hold instead, if anything: the same bytes
+// without the UTF-8 BOM x2t added, when the original had none. UTF-16 and
+// windows-1252 outputs are left as written.
+pub fn without_added_bom(written: &[u8], options: TextOptions) -> Option<&[u8]> {
+    if options.encoding != ENCODING_UTF8 || options.utf8_bom {
+        return None;
+    }
+    written.strip_prefix(UTF8_BOM)
+}
+
+// Rewrites `path` when without_added_bom says so. Through a temp file and a
+// rename, so a crash mid-rewrite cannot leave the user's file truncated. The
+// rename goes over the resolved target, so a symlink stays a symlink.
+pub fn strip_added_bom(path: &Path, options: TextOptions) -> std::io::Result<()> {
+    let path = &std::fs::canonicalize(path)?;
+    let written = std::fs::read(path)?;
+    let Some(stripped) = without_added_bom(&written, options) else {
+        return Ok(());
+    };
+    let tmp = temp_path_for(path);
+    let result = write_synced(&tmp, stripped, path).and_then(|_| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+// Next to `path`, so the rename stays on the same filesystem.
+fn temp_path_for(path: &Path) -> std::path::PathBuf {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!(".{}.{}.eo-tmp", name, std::process::id()))
+}
+
+fn write_synced(tmp: &Path, bytes: &[u8], original: &Path) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    // The rename replaces the file, so it takes the original's permissions.
+    std::fs::set_permissions(tmp, std::fs::metadata(original)?.permissions())
 }
 
 // Returns the encoding and the bytes after the BOM, if any.
 fn detect_encoding(head: &[u8], complete: bool) -> (u32, &[u8]) {
-    if let Some(body) = head.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+    if let Some(body) = head.strip_prefix(UTF8_BOM) {
         return (ENCODING_UTF8, body);
     }
     if let Some(body) = head.strip_prefix(&[0xFF, 0xFE]) {
@@ -238,7 +286,8 @@ mod tests {
             csv(b""),
             TextOptions {
                 encoding: ENCODING_UTF8,
-                delimiter: Some(DELIMITER_COMMA)
+                delimiter: Some(DELIMITER_COMMA),
+                utf8_bom: false
             }
         );
     }
@@ -256,7 +305,8 @@ mod tests {
             csv(&bytes),
             TextOptions {
                 encoding: ENCODING_UTF8,
-                delimiter: Some(DELIMITER_SEMICOLON)
+                delimiter: Some(DELIMITER_SEMICOLON),
+                utf8_bom: true
             }
         );
     }
@@ -267,7 +317,8 @@ mod tests {
             csv(&utf16le_with_bom("año\tcafé\tx\n1\t2\t3\n")),
             TextOptions {
                 encoding: ENCODING_UTF16_LE,
-                delimiter: Some(DELIMITER_TAB)
+                delimiter: Some(DELIMITER_TAB),
+                utf8_bom: false
             }
         );
     }
@@ -282,7 +333,8 @@ mod tests {
             csv(&bytes),
             TextOptions {
                 encoding: ENCODING_UTF16_BE,
-                delimiter: Some(DELIMITER_SEMICOLON)
+                delimiter: Some(DELIMITER_SEMICOLON),
+                utf8_bom: false
             }
         );
     }
@@ -295,7 +347,8 @@ mod tests {
             csv(bytes),
             TextOptions {
                 encoding: ENCODING_WINDOWS_1252,
-                delimiter: Some(DELIMITER_SEMICOLON)
+                delimiter: Some(DELIMITER_SEMICOLON),
+                utf8_bom: false
             }
         );
     }
@@ -323,7 +376,8 @@ mod tests {
             detect(b"a;b;c\n", true, TextKind::Txt),
             TextOptions {
                 encoding: ENCODING_UTF8,
-                delimiter: None
+                delimiter: None,
+                utf8_bom: false
             }
         );
     }
@@ -344,6 +398,7 @@ mod tests {
         let options = TextOptions {
             encoding: ENCODING_WINDOWS_1252,
             delimiter: Some(DELIMITER_SEMICOLON),
+            utf8_bom: false,
         };
         assert_eq!(options.for_kind(TextKind::Csv), options);
         assert_eq!(options.for_kind(TextKind::Txt).delimiter, None);
@@ -358,6 +413,7 @@ mod tests {
         let csv = TextOptions {
             encoding: ENCODING_UTF8,
             delimiter: Some(DELIMITER_SEMICOLON),
+            utf8_bom: false,
         };
         assert_eq!(
             csv.xml_elements(),
@@ -366,6 +422,7 @@ mod tests {
         let txt = TextOptions {
             encoding: ENCODING_WINDOWS_1252,
             delimiter: None,
+            utf8_bom: false,
         };
         assert_eq!(
             txt.xml_elements(),
@@ -386,6 +443,117 @@ mod tests {
         assert_eq!((head.as_slice(), complete), (&b"a;b\n"[..], true));
         let (head, complete) = read_head(&large).unwrap();
         assert_eq!((head.len(), complete), (HEAD_LEN, false));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn utf8(utf8_bom: bool) -> TextOptions {
+        TextOptions {
+            encoding: ENCODING_UTF8,
+            delimiter: Some(DELIMITER_SEMICOLON),
+            utf8_bom,
+        }
+    }
+
+    #[test]
+    fn the_bom_x2t_adds_goes_when_the_original_had_none() {
+        assert_eq!(
+            without_added_bom(b"\xEF\xBB\xBFa;b\n", utf8(false)),
+            Some(&b"a;b\n"[..])
+        );
+    }
+
+    #[test]
+    fn the_bom_stays_when_the_original_had_one() {
+        assert_eq!(without_added_bom(b"\xEF\xBB\xBFa;b\n", utf8(true)), None);
+    }
+
+    #[test]
+    fn nothing_to_strip_without_a_bom() {
+        assert_eq!(without_added_bom(b"a;b\n", utf8(false)), None);
+        assert_eq!(without_added_bom(b"", utf8(false)), None);
+    }
+
+    #[test]
+    fn utf16_and_1252_outputs_are_left_alone() {
+        for encoding in [ENCODING_UTF16_LE, ENCODING_UTF16_BE, ENCODING_WINDOWS_1252] {
+            let options = TextOptions {
+                encoding,
+                ..utf8(false)
+            };
+            assert_eq!(without_added_bom(b"\xEF\xBB\xBFa;b\n", options), None);
+        }
+    }
+
+    #[test]
+    fn a_txt_saved_from_a_csv_keeps_the_original_bom_choice() {
+        assert!(utf8(true).for_kind(TextKind::Txt).utf8_bom);
+        assert!(!utf8(false).for_kind(TextKind::Txt).utf8_bom);
+    }
+
+    #[test]
+    fn strip_added_bom_rewrites_the_file_in_place() {
+        let dir = std::env::temp_dir().join(format!("eo-text-bom-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let with_bom = dir.join("with.csv");
+        let empty = dir.join("empty.csv");
+        std::fs::write(&with_bom, b"\xEF\xBB\xBFa;b\n").unwrap();
+        std::fs::write(&empty, b"").unwrap();
+
+        strip_added_bom(&with_bom, utf8(false)).unwrap();
+        strip_added_bom(&empty, utf8(false)).unwrap();
+        assert_eq!(std::fs::read(&with_bom).unwrap(), b"a;b\n");
+        assert_eq!(std::fs::read(&empty).unwrap(), b"");
+
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["empty.csv", "with.csv"], "no temp file left behind");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_file_is_rewritten_through_the_link() {
+        let dir = std::env::temp_dir().join(format!("eo-text-bom-link-{}", std::process::id()));
+        let target_dir = dir.join("real");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let target = target_dir.join("data.csv");
+        let link = dir.join("link.csv");
+        std::fs::write(&target, b"\xEF\xBB\xBFa;b\n").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        strip_added_bom(&link, utf8(false)).unwrap();
+
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&target).unwrap(), b"a;b\n");
+        let left: Vec<String> = std::fs::read_dir(&target_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(left, ["data.csv"], "no temp file left next to the target");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_rewrite_leaves_the_saved_file_intact() {
+        // A directory squatting on the temp name makes File::create fail.
+        let dir = std::env::temp_dir().join(format!("eo-text-bom-fail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let saved = dir.join("saved.csv");
+        std::fs::write(&saved, b"\xEF\xBB\xBFa;b\n").unwrap();
+        let squatter = temp_path_for(&saved);
+        std::fs::create_dir_all(&squatter).unwrap();
+
+        assert!(strip_added_bom(&saved, utf8(false)).is_err());
+        assert_eq!(std::fs::read(&saved).unwrap(), b"\xEF\xBB\xBFa;b\n");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
