@@ -6,9 +6,12 @@ fn main() {
     // crate dirty, and `tauri dev` keeps serving whatever was embedded the last
     // time something else forced a rebuild.
     //
-    // Only the wrapper's own files are listed. frontendDist points at ../src,
-    // which also contains the sdkjs and web-apps submodules; walking those would
-    // add tens of thousands of paths to every build's dependency check.
+    // frontendDist is ../src-dist: a junction to ../src in dev on Windows, and a
+    // copy made by the staging scripts in a regular build, which is what gets
+    // embedded. Tracking the files there covers both. Only the wrapper's own
+    // files are listed; the directory also holds the sdkjs and web-apps trees,
+    // and walking those would add tens of thousands of paths to every build's
+    // dependency check.
     for file in [
         "index.html",
         "bridge.js",
@@ -16,7 +19,7 @@ fn main() {
         "font-patches.js",
         "editor-patches.js",
     ] {
-        println!("cargo:rerun-if-changed=../src/{file}");
+        println!("cargo:rerun-if-changed=../src-dist/{file}");
     }
 
     tauri_build::build()
