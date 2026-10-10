@@ -16,8 +16,8 @@ pub struct AppState {
     pub recovery: Mutex<Option<crate::recovery::RecoverySession>>,
     // Path passed as a launch argument that the frontend has not opened yet.
     pub pending_open: Mutex<Option<String>>,
-    // Encoding and delimiter detected when the open document came from a CSV
-    // or TXT, so saving it back writes the file the way it was read.
+    // Encoding, delimiter and line breaks detected when the open document came
+    // from a CSV or TXT, so saving it back writes the file the way it was read.
     pub text_options: Mutex<Option<crate::text_import::TextOptions>>,
 }
 
@@ -249,18 +249,17 @@ async fn open_file_inner(
         .and_then(|name| name.to_str())
         .unwrap_or("unknown");
 
-    let text_options = match crate::text_import::TextKind::for_path(Path::new(&source)) {
-        Some(kind) => {
-            let (head, complete) =
-                crate::text_import::read_head(Path::new(&source)).map_err(|e| {
-                    log_event(
-                        &state,
-                        &format!("[OPEN] failed file={} error=read head: {}", file_name, e),
-                    );
-                    e.to_string()
-                })?;
-            Some(crate::text_import::detect(&head, complete, kind))
-        }
+    let text_kind = crate::text_import::TextKind::for_path(Path::new(&source));
+    let text_options = match text_kind {
+        Some(kind) => Some(
+            crate::text_import::detect_file(Path::new(&source), kind).map_err(|e| {
+                log_event(
+                    &state,
+                    &format!("[OPEN] failed file={} error=detect: {}", file_name, e),
+                );
+                e.to_string()
+            })?,
+        ),
         None => None,
     };
 
@@ -272,22 +271,46 @@ async fn open_file_inner(
             format_from,
             if opened_blank { " empty=blank" } else { "" },
             text_options
-                .map(|o| format!(" encoding={} delimiter={:?}", o.encoding, o.delimiter))
+                .map(|o| format!(
+                    " encoding={} delimiter={:?} crlf={} trailing_breaks={}",
+                    o.encoding, o.delimiter, o.crlf, o.trailing_breaks
+                ))
                 .unwrap_or_default()
         ),
     );
 
-    super::converter::convert_file(
+    // x2t's UTF-8 CSV reader adds an empty row after a final line break, so it
+    // reads a copy without that break. current_file and the recent list keep
+    // the original path; only the conversion sees the copy.
+    let read_copy = match make_read_copy(&state, Path::new(&source), text_kind, text_options) {
+        Ok(copy) => copy,
+        Err(e) => {
+            log_event(
+                &state,
+                &format!("[OPEN] failed file={} error=read copy: {}", file_name, e),
+            );
+            return Err(e.to_string());
+        }
+    };
+    let convert_from = read_copy
+        .as_ref()
+        .map(|copy| copy.to_string_lossy().to_string())
+        .unwrap_or_else(|| source.clone());
+
+    let converted = super::converter::convert_file(
         &app,
-        &source,
+        &convert_from,
         &output.to_string_lossy(),
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
         text_options,
     )
-    .await
-    .map_err(|error| {
+    .await;
+    if let Some(copy) = &read_copy {
+        let _ = std::fs::remove_file(copy);
+    }
+    converted.map_err(|error| {
         log_event(
             &state,
             &format!("[OPEN] failed file={} error={}", file_name, error),
@@ -361,7 +384,7 @@ pub async fn save_file(
         text_options,
     )
     .await?;
-    drop_added_bom(&state, &dest, text_options);
+    finish_text_save(&state, &dest, text_options);
 
     // The 0-byte file this document was opened from now holds a real document,
     // so it earns its place in the recent list (#33).
@@ -395,7 +418,7 @@ pub async fn save_file_as(
         text_options,
     )
     .await?;
-    drop_added_bom(&state, &dest, text_options);
+    finish_text_save(&state, &dest, text_options);
 
     // A PDF export leaves the document itself untouched (current_file keeps
     // pointing at the editable file), so it does not belong in the list either.
@@ -425,23 +448,52 @@ fn text_options_for_save(state: &AppState, dest: &Path) -> Option<crate::text_im
         .map(|options| options.for_kind(kind))
 }
 
-// x2t puts a UTF-8 BOM on every UTF-8 file it writes; a file that had none
-// keeps having none, or the first header cell of a CSV reads "\u{feff}name".
-// The file is already saved by now, so a failure here is only logged.
-fn drop_added_bom(
+// x2t does not write CSV and TXT back the way they were read (BOM, line
+// endings, final breaks, and for TXT the encoding), so the saved file is put
+// back into the original's shape. It is already saved by now, so a failure
+// here is only logged.
+fn finish_text_save(
     state: &AppState,
     dest: &Path,
     text_options: Option<crate::text_import::TextOptions>,
 ) {
-    let Some(options) = text_options else {
+    let (Some(options), Some(kind)) = (text_options, crate::text_import::TextKind::for_path(dest))
+    else {
         return;
     };
-    if let Err(e) = crate::text_import::strip_added_bom(dest, options) {
-        log_event(
+    match crate::text_import::finish_saved_text(dest, kind, options) {
+        Ok(0) => {}
+        Ok(unmappable) => log_event(
             state,
-            &format!("[SAVE] could not drop the added BOM: {}", e),
-        );
+            &format!(
+                "[SAVE] {} characters windows-1252 cannot hold were written as '?'",
+                unmappable
+            ),
+        ),
+        Err(e) => log_event(
+            state,
+            &format!("[SAVE] could not restore the original text format: {}", e),
+        ),
     }
+}
+
+// Copy of a CSV for x2t to read, in the temp dir, when the original needs one.
+fn make_read_copy(
+    state: &AppState,
+    source: &Path,
+    kind: Option<crate::text_import::TextKind>,
+    options: Option<crate::text_import::TextOptions>,
+) -> std::io::Result<Option<PathBuf>> {
+    let (Some(kind), Some(options)) = (kind, options) else {
+        return Ok(None);
+    };
+    let cut = crate::text_import::read_copy_cut(source, kind, options)?;
+    if cut == 0 {
+        return Ok(None);
+    }
+    let copy = state.temp_dir.join("eo-read-copy.csv");
+    crate::text_import::copy_without_final_break(source, &copy, cut)?;
+    Ok(Some(copy))
 }
 
 #[tauri::command]
