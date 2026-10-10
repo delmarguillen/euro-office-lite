@@ -83,6 +83,11 @@
         "description": "Spreadsheet"
       },
       {
+        "ext": ["csv"],
+        "mimeType": "text/csv",
+        "description": "Spreadsheet"
+      },
+      {
         "ext": ["pptx"],
         "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "description": "Presentation"

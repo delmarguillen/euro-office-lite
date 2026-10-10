@@ -8,6 +8,7 @@ mod file_ops;
 mod note_separator;
 mod recent;
 mod recovery;
+mod text_import;
 
 use file_ops::AppState;
 use std::sync::Mutex;
@@ -152,6 +153,7 @@ fn main() {
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
             pending_open: Mutex::new(file_to_open),
+            text_options: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,

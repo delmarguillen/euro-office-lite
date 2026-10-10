@@ -14,8 +14,8 @@
     </p>
     <p>Features include:</p>
     <ul>
-      <li>Word processing with DOCX, DOC, ODT, and RTF support</li>
-      <li>Spreadsheets with XLSX, XLS and ODS support</li>
+      <li>Word processing with DOCX, DOC, ODT, RTF, and TXT support</li>
+      <li>Spreadsheets with XLSX, XLS, ODS, and CSV support</li>
       <li>Presentations with PPTX, PPT, and ODP support</li>
       <li>PDF export</li>
       <li>No internet connection required</li>
@@ -36,6 +36,7 @@
     <mediatype>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</mediatype>
     <mediatype>application/vnd.ms-excel</mediatype>
     <mediatype>application/vnd.oasis.opendocument.spreadsheet</mediatype>
+    <mediatype>text/csv</mediatype>
     <mediatype>application/vnd.openxmlformats-officedocument.presentationml.presentation</mediatype>
     <mediatype>application/vnd.ms-powerpoint</mediatype>
     <mediatype>application/vnd.oasis.opendocument.presentation</mediatype>
