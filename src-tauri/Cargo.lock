@@ -810,6 +810,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
+ "gtk",
  "image",
  "libc",
  "serde",
@@ -820,6 +821,7 @@ dependencies = [
  "tauri-plugin-printer-v2",
  "tauri-plugin-shell",
  "ureq",
+ "webkit2gtk",
  "zip",
 ]
 
