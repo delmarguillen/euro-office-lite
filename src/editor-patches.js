@@ -117,6 +117,24 @@
     // reports it as gesture events. It does not cover trackpad pinch on
     // Wayland: that arrives as a GDK_TOUCHPAD_PINCH event which WebKitGTK
     // consumes before the DOM sees anything, so it is handled in main.rs.
+    //
+    // Capture on the window runs before any listener in the frame. Off the
+    // canvases it also stops propagation, so the web-apps document handler
+    // cannot zoom the document from the toolbar, rulers or pasteboard either.
+    var _eoSawCtrlWheel = false;
+    function _eoGuardCtrlWheel(e) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      // Over the editor canvases sdkjs and web-apps zoom the document
+      // themselves and cancel the default, so the event goes through untouched.
+      if (_eoOverDocumentCanvas(e.target)) return;
+      if (!_eoSawCtrlWheel) {
+        _eoSawCtrlWheel = true;
+        window._eoLog('[EO] pinch: ctrl+wheel reached the DOM, deltaY=' + e.deltaY);
+      }
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
     function installPinchZoomGuard(win) {
       try {
         if (!win || !win.document) return;
@@ -133,20 +151,12 @@
         try { where = doc.location ? doc.location.href : '(no location)'; } catch(e) {}
         window._eoLog('[EO] pinch guard attached: ' + window._eoSafeSource(where));
 
-        var sawEvent = false;
-        doc.addEventListener('wheel', function(e) {
-          if (!(e.ctrlKey || e.metaKey)) return;
-          // Over the editor canvases sdkjs handles ctrl+wheel zoom itself and
-          // cancels the default, so the guard only needs to suppress the
-          // webview page zoom when the event lands on the surrounding chrome
-          // (toolbar, rulers, pasteboard).
-          if (_eoOverDocumentCanvas(e.target)) return;
-          if (!sawEvent) {
-            sawEvent = true;
-            window._eoLog('[EO] pinch: ctrl+wheel reached the DOM, deltaY=' + e.deltaY);
-          }
-          e.preventDefault();
-        }, { capture: true, passive: false });
+        // On the window, not the document: Blink skips a node's legacy
+        // mousewheel listeners when that node has any wheel listener, and
+        // web-apps zooms the editors from a mousewheel listener on the document.
+        // Passing the same function every time lets addEventListener drop the
+        // repeat when the window outlives its about:blank document.
+        win.addEventListener('wheel', _eoGuardCtrlWheel, { capture: true, passive: false });
 
         // WKWebView reports pinch as gesture events rather than ctrl+wheel.
         // gesturechange fires continuously for the duration of a pinch, so the
