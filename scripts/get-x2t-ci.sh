@@ -14,6 +14,26 @@ log() {
     echo "[$(date '+%H:%M:%S')] $1"
 }
 
+# sha256 of each zip in the 'dependencies' release. A replaced asset must
+# fail the build until its new digest is pinned here. A case statement keeps
+# this working on the bash 3.2 that macOS ships.
+expected_sha256() {
+    case "$1" in
+        x2t-binaries-linux-x64.zip)   echo "0bfe09d38022bd985fc9640dde71bfb9a7dc6f1b81a5781a3e7848aee755f161" ;;
+        x2t-binaries-macos-arm64.zip) echo "98f96186b15941a3e3d37ca6e6447fda6a4a55c507151fdda363d00b5db4c3e0" ;;
+        x2t-binaries-macos-x64.zip)   echo "4d548e676ba55226a49f65a70f2ad15df2b0716102cd68ed62ddcef148896db6" ;;
+        *) return 1 ;;
+    esac
+}
+
+sha256_of() {
+    if [ "$OS" = "Darwin" ]; then
+        shasum -a 256 "$1" | cut -d' ' -f1
+    else
+        sha256sum "$1" | cut -d' ' -f1
+    fi
+}
+
 log "=== get-x2t-ci.sh ==="
 log "System: $(uname -ms)"
 log "Repo: $REPO"
@@ -63,8 +83,36 @@ if ls "$TARGET_DIR"/$CHECK_PATTERN 1>/dev/null 2>&1; then
     exit 0
 fi
 
+if ! EXPECTED_SHA256="$(expected_sha256 "$ZIP_NAME")"; then
+    log "ERROR: no pinned sha256 for $ZIP_NAME; add it to expected_sha256()"
+    exit 1
+fi
+
+# Retry only the download (transient API/network errors); a checksum
+# mismatch below is never retried.
 log "Downloading $ZIP_NAME from 'dependencies' release..."
-gh release download dependencies --repo "$REPO" --pattern "$ZIP_NAME" --output "$TEMP_ZIP" --clobber
+attempt=1
+delay=10
+until gh release download dependencies --repo "$REPO" --pattern "$ZIP_NAME" --output "$TEMP_ZIP" --clobber; do
+    if [ "$attempt" -ge 3 ]; then
+        log "ERROR: download of $ZIP_NAME failed after $attempt attempts"
+        exit 1
+    fi
+    log "Download attempt $attempt failed; retrying in ${delay}s"
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+done
+
+ACTUAL_SHA256="$(sha256_of "$TEMP_ZIP")"
+if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+    log "ERROR: sha256 mismatch for $ZIP_NAME"
+    log "  expected: $EXPECTED_SHA256"
+    log "  actual:   $ACTUAL_SHA256"
+    rm -f "$TEMP_ZIP"
+    exit 1
+fi
+log "sha256 verified for $ZIP_NAME: $ACTUAL_SHA256"
 
 mkdir -p "$TARGET_DIR"
 
