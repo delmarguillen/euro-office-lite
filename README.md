@@ -1,8 +1,8 @@
 # Euro-Office Lite
 
-Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~89 MB (Windows), ~113-120 MB (macOS), ~121 MB (Linux .deb), ~82 MB (Flatpak). No cloud, no telemetry.
+Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~89 MB (Windows), ~113-120 MB (macOS), ~121 MB (Linux x64 .deb), ~82 MB (Flatpak). No cloud, no telemetry.
 
-Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 .deb and Flatpak).
+Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
 
 > **Alpha**: This project is in early development. Core features work (create, open, edit, save), but expect rough edges. Printing works on Windows; PDF export works on all platforms.
 
@@ -65,7 +65,7 @@ User <-> Tauri WebView2 <-> sdkjs/web-apps (editor UI)
 
 ## CI/CD
 
-Pushing a tag `v*` triggers the GitHub Actions workflow which builds Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64) installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
+Pushing a tag `v*` triggers the GitHub Actions workflow which builds Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64, ARM64) installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
 
 ## Installing on macOS
 
@@ -73,11 +73,14 @@ DMG builds are signed and notarized by Apple: download, open the DMG, drag to Ap
 
 ## Installing on Linux
 
-Install the `.deb` with `apt` so dependencies are resolved automatically:
+Install the `.deb` with `apt` so dependencies are resolved automatically. Use the `amd64` file on x64 machines and the `arm64` file on 64-bit ARM machines (for example a Raspberry Pi with a 64-bit OS):
 
 ```bash
-sudo apt install ./Euro-Office-Lite_<version>_amd64.deb
+sudo apt install ./Euro-Office-Lite_<version>_amd64.deb   # x64
+sudo apt install ./Euro-Office-Lite_<version>_arm64.deb   # ARM64
 ```
+
+The `.deb` needs glibc 2.34 or later: Debian 12 or later, Ubuntu 22.04 or later, or Raspberry Pi OS based on Debian 12 or later. Raspberry Pi OS based on Debian 11 is too old.
 
 Do **not** use `dpkg -i` directly, since it will not install the required `libwebkit2gtk-4.1-0` dependency.
 
