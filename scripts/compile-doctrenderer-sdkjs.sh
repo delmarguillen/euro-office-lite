@@ -28,6 +28,16 @@ echo "Compiling DoctRenderer sdkjs tag $TAG"
 git -C "$SDKJS" fetch "$REMOTE" tag "$TAG" --no-tags
 git -C "$SDKJS" checkout --detach "$TAG"
 
+# A tag in a repository we do not control can be moved; the commit cannot.
+if [ -n "${DOCTRENDERER_SDKJS_COMMIT:-}" ]; then
+    RESOLVED="$(git -C "$SDKJS" rev-parse "$TAG^{commit}")"
+    if [ "$RESOLVED" != "$DOCTRENDERER_SDKJS_COMMIT" ]; then
+        echo "ERROR: sdkjs tag $TAG resolves to $RESOLVED, expected $DOCTRENDERER_SDKJS_COMMIT"
+        exit 1
+    fi
+    echo "sdkjs tag $TAG verified at commit $RESOLVED"
+fi
+
 # Upstream sdkjs dropped the grunt harness after 8.2 (it builds via build.py);
 # the Euro-Office fork still carries it. Reuse the fork's build/ tooling
 # against the tagged sources - the configs/*.json format is unchanged.
