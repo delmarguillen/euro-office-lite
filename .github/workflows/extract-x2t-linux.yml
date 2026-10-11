@@ -1,22 +1,72 @@
 name: Extract x2t Linux binaries (one-shot)
 
+# Builds x2t-binaries-linux-<arch>.zip from the ONLYOFFICE Desktop Editors
+# .deb and publishes it to the 'dependencies' release that get-x2t-ci.sh reads.
+# The upload runs in its own job behind the 'dependencies' environment.
+
 on:
   workflow_dispatch:
     inputs:
+      arch:
+        description: 'Debian architecture of the ONLYOFFICE package'
+        type: choice
+        options:
+          - amd64
+          - arm64
+        default: 'amd64'
       onlyoffice_version:
-        description: 'ONLYOFFICE Desktop Editors version to download'
+        description: 'ONLYOFFICE Desktop Editors release tag (e.g. v8.2.0)'
         type: string
         default: 'v8.2.0'
+      deb_sha256:
+        description: 'Expected sha256 of onlyoffice-desktopeditors_<arch>.deb'
+        type: string
+        required: true
+      replace_existing:
+        description: 'Overwrite the zip if it already exists in the dependencies release'
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   extract:
-    runs-on: ubuntu-22.04
+    runs-on: ${{ inputs.arch == 'arm64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
+    permissions:
+      contents: read
+    outputs:
+      zip_name: ${{ steps.zip.outputs.zip_name }}
+      zip_sha256: ${{ steps.zip.outputs.zip_sha256 }}
+    env:
+      ARCH: ${{ inputs.arch }}
+      VERSION: ${{ inputs.onlyoffice_version }}
+      DEB_SHA256: ${{ inputs.deb_sha256 }}
     steps:
+      - name: Validate inputs
+        run: |
+          case "$ARCH" in
+            amd64|arm64) ;;
+            *) echo "ERROR: unsupported arch: $ARCH"; exit 1 ;;
+          esac
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: onlyoffice_version must look like v1.2.3"
+            exit 1
+          fi
+          if ! [[ "$DEB_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: deb_sha256 must be 64 lowercase hex characters"
+            exit 1
+          fi
+          # The runner has to match the package so ldd and the conversion test are real.
+          case "$ARCH:$(uname -m)" in
+            amd64:x86_64|arm64:aarch64) ;;
+            *) echo "ERROR: runner is $(uname -m), package is $ARCH"; exit 1 ;;
+          esac
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Diagnose environment
         run: |
@@ -24,104 +74,69 @@ jobs:
           uname -a
           lsb_release -a 2>/dev/null || cat /etc/os-release
           echo "Arch: $(uname -m)"
+          echo "glibc: $(ldd --version | head -1)"
           df -h /
           echo "::endgroup::"
 
-      - name: Download ONLYOFFICE .deb
+      - name: Download and verify ONLYOFFICE .deb
         run: |
-          VERSION="${{ github.event.inputs.onlyoffice_version }}"
-          URL="https://github.com/ONLYOFFICE/DesktopEditors/releases/download/${VERSION}/onlyoffice-desktopeditors_amd64.deb"
+          URL="https://github.com/ONLYOFFICE/DesktopEditors/releases/download/${VERSION}/onlyoffice-desktopeditors_${ARCH}.deb"
+          DEB="$RUNNER_TEMP/onlyoffice.deb"
           echo "Downloading: $URL"
-          curl -L -o /tmp/onlyoffice.deb "$URL"
-          ls -lh /tmp/onlyoffice.deb
+          curl -fL --retry 3 -o "$DEB" "$URL"
+          ls -lh "$DEB"
+          ACTUAL=$(sha256sum "$DEB" | cut -d' ' -f1)
+          echo "Expected sha256: $DEB_SHA256"
+          echo "Actual sha256:   $ACTUAL"
+          if [ "$ACTUAL" != "$DEB_SHA256" ]; then
+            echo "ERROR: .deb sha256 mismatch"
+            exit 1
+          fi
 
-      - name: Extract .deb and explore contents
+      - name: Extract x2t and dependencies
         run: |
-          mkdir -p /tmp/onlyoffice-extracted
-          cd /tmp/onlyoffice-extracted
+          EXTRACTED="$RUNNER_TEMP/onlyoffice-extracted"
+          STAGING="$RUNNER_TEMP/x2t-staging"
+          mkdir -p "$EXTRACTED" "$STAGING"
+          cd "$EXTRACTED"
 
-          echo "::group::Extract .deb (ar + tar)"
-          ar x /tmp/onlyoffice.deb
-          ls -la
-          echo "::endgroup::"
-
-          echo "::group::Extract data tarball"
+          ar x "$RUNNER_TEMP/onlyoffice.deb"
           if [ -f data.tar.xz ]; then
             tar xf data.tar.xz
           elif [ -f data.tar.gz ]; then
             tar xzf data.tar.gz
           elif [ -f data.tar.zst ]; then
             zstd -d data.tar.zst -o data.tar && tar xf data.tar
+          else
+            echo "ERROR: no data tarball in the .deb"
+            ls -la
+            exit 1
           fi
-          echo "::endgroup::"
 
-          echo "::group::Find converter directory"
-          find . -type d -name "converter" 2>/dev/null
-          echo "::endgroup::"
-
-          echo "::group::Find x2t binary"
-          find . -name "x2t" -type f 2>/dev/null
-          find . -name "x2t*" -type f 2>/dev/null
-          echo "::endgroup::"
-
-          echo "::group::Find shared libraries"
-          find . -name "*.so" -type f 2>/dev/null | head -40
-          find . -name "*.so.*" -type f -o -name "*.so.*" -type l 2>/dev/null | head -40
-          echo "::endgroup::"
-
-          echo "::group::Converter directory contents"
           CONVERTER_DIR=$(find . -type d -name "converter" | head -1)
-          if [ -n "$CONVERTER_DIR" ]; then
-            ls -la "$CONVERTER_DIR/"
-          fi
-          echo "::endgroup::"
-
-      - name: Extract x2t and dependencies
-        run: |
-          cd /tmp/onlyoffice-extracted
-          CONVERTER_DIR=$(find . -type d -name "converter" | head -1)
-
           if [ -z "$CONVERTER_DIR" ]; then
             echo "ERROR: converter directory not found"
-            echo "Full directory listing:"
             find . -maxdepth 5 -type d | head -50
             exit 1
           fi
-
-          echo "Converter dir: $CONVERTER_DIR"
-
-          STAGING="/tmp/x2t-staging"
-          mkdir -p "$STAGING"
-
-          # Find and copy x2t binary
           X2T_PATH=$(find "$CONVERTER_DIR" -name "x2t" -type f | head -1)
           if [ -z "$X2T_PATH" ]; then
-            echo "ERROR: x2t binary not found in converter directory"
+            echo "ERROR: x2t binary not found in $CONVERTER_DIR"
             ls -laR "$CONVERTER_DIR/"
             exit 1
           fi
-
           echo "x2t found at: $X2T_PATH"
           X2T_DIR=$(dirname "$X2T_PATH")
 
+          # x2t stays unsuffixed; get-x2t-ci.sh renames it to the target triple.
           cp "$X2T_PATH" "$STAGING/x2t"
           chmod +x "$STAGING/x2t"
-
-          # Copy all shared libraries (.so and .so.* symlinks/files)
           find "$X2T_DIR" -name "*.so" -exec cp -P {} "$STAGING/" \;
           find "$X2T_DIR" -name "*.so.*" -exec cp -P {} "$STAGING/" \;
-
-          # Copy config and data files
           find "$X2T_DIR" -name "*.config" -exec cp {} "$STAGING/" \;
           find "$X2T_DIR" -name "*.xml" -exec cp {} "$STAGING/" \;
           find "$X2T_DIR" -name "*.dat" -exec cp {} "$STAGING/" \;
 
-          # Copy DoctRenderer config
-          if [ -f "$X2T_DIR/DoctRenderer.config" ]; then
-            cp "$X2T_DIR/DoctRenderer.config" "$STAGING/"
-          fi
-
-          # Copy core-fonts if present
           PARENT_DIR=$(dirname "$X2T_DIR")
           if [ -d "$PARENT_DIR/core-fonts" ]; then
             cp -r "$PARENT_DIR/core-fonts" "$STAGING/core-fonts"
@@ -132,42 +147,180 @@ jobs:
           ls -la "$STAGING/"
           echo "File count: $(find "$STAGING" -type f | wc -l | tr -d ' ')"
           echo "Total size: $(du -sh "$STAGING" | cut -f1)"
-          echo "::endgroup::"
-
-          echo "::group::x2t binary verification"
           file "$STAGING/x2t"
           echo "::endgroup::"
 
-          echo "::group::Shared library dependencies"
-          ldd "$STAGING/x2t" || echo "(ldd failed — may need LD_LIBRARY_PATH)"
-          LD_LIBRARY_PATH="$STAGING" ldd "$STAGING/x2t" || echo "(still failed with LD_LIBRARY_PATH)"
-          echo "::endgroup::"
+      - name: Verify shared libraries
+        run: |
+          STAGING="$RUNNER_TEMP/x2t-staging"
+          if ! LDD_OUT=$(LD_LIBRARY_PATH="$STAGING" ldd "$STAGING/x2t"); then
+            echo "ERROR: ldd failed on x2t"
+            exit 1
+          fi
+          echo "$LDD_OUT"
+          if echo "$LDD_OUT" | grep -q "not found"; then
+            echo "ERROR: unresolved shared libraries:"
+            echo "$LDD_OUT" | grep "not found"
+            exit 1
+          fi
 
       - name: Create zip
+        id: zip
         run: |
-          cd /tmp/x2t-staging
-          zip -r /tmp/x2t-binaries-linux-x64.zip .
+          if [ "$ARCH" = "amd64" ]; then
+            ZIP_NAME="x2t-binaries-linux-x64.zip"
+          else
+            ZIP_NAME="x2t-binaries-linux-arm64.zip"
+          fi
+          mkdir -p "$RUNNER_TEMP/dist"
+          ZIP="$RUNNER_TEMP/dist/$ZIP_NAME"
+          (cd "$RUNNER_TEMP/x2t-staging" && zip -qr "$ZIP" .)
           echo "::group::Zip info"
-          ls -lh /tmp/x2t-binaries-linux-x64.zip
-          unzip -l /tmp/x2t-binaries-linux-x64.zip
+          ls -lh "$ZIP"
+          unzip -l "$ZIP"
           echo "::endgroup::"
 
-      - name: Upload zip as artifact (for inspection)
-        uses: actions/upload-artifact@v4
-        with:
-          name: x2t-binaries-linux-x64
-          path: /tmp/x2t-binaries-linux-x64.zip
+          ZIP_SHA256=$(sha256sum "$ZIP" | cut -d' ' -f1)
+          X2T_SHA256=$(sha256sum "$RUNNER_TEMP/x2t-staging/x2t" | cut -d' ' -f1)
+          echo "$ZIP_NAME sha256: $ZIP_SHA256"
+          echo "x2t sha256: $X2T_SHA256"
+          {
+            echo "zip_name=$ZIP_NAME"
+            echo "zip_sha256=$ZIP_SHA256"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### x2t Linux $ARCH from ONLYOFFICE $VERSION"
+            echo ""
+            echo "| File | sha256 |"
+            echo "| --- | --- |"
+            echo "| onlyoffice-desktopeditors_${ARCH}.deb | \`$DEB_SHA256\` |"
+            echo "| $ZIP_NAME | \`$ZIP_SHA256\` |"
+            echo "| x2t | \`$X2T_SHA256\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload to dependencies release
+      # Runs the zip as shipped, from a fresh unpack, so the test cannot leave
+      # files behind in the archive.
+      - name: Test x2t from the zip (docx to odt)
+        env:
+          ZIP_NAME: ${{ steps.zip.outputs.zip_name }}
         run: |
-          echo "Uploading x2t-binaries-linux-x64.zip to 'dependencies' release..."
-          gh release upload dependencies /tmp/x2t-binaries-linux-x64.zip --clobber
-          echo "Done. Verifying..."
-          gh release view dependencies
+          TEST_DIR="$RUNNER_TEMP/x2t-test"
+          RUN_DIR="$TEST_DIR/binaries"
+          mkdir -p "$RUN_DIR" "$TEST_DIR/tmp"
+          unzip -q "$RUNNER_TEMP/dist/$ZIP_NAME" -d "$RUN_DIR"
+          if ! LDD_OUT=$(LD_LIBRARY_PATH="$RUN_DIR" ldd "$RUN_DIR/x2t"); then
+            echo "ERROR: ldd failed on the unzipped x2t"
+            exit 1
+          fi
+          if echo "$LDD_OUT" | grep -q "not found"; then
+            echo "ERROR: unresolved shared libraries after unzip"
+            exit 1
+          fi
+
+          OUTPUT="$TEST_DIR/blank.odt"
+          PARAMS="$TEST_DIR/params.xml"
+          # Same parameter file the app passes to x2t; 67 is the ODT format code.
+          cat > "$PARAMS" <<PARAMS
+          <?xml version="1.0" encoding="utf-8"?>
+          <TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+          <m_sFileFrom>$GITHUB_WORKSPACE/src-tauri/templates/blank.docx</m_sFileFrom>
+          <m_sFileTo>$OUTPUT</m_sFileTo>
+          <m_nFormatTo>67</m_nFormatTo>
+          <m_sTempDir>$TEST_DIR/tmp</m_sTempDir>
+          </TaskQueueDataConvert>
+          PARAMS
+
+          set +e
+          (cd "$RUN_DIR" && LD_LIBRARY_PATH="$RUN_DIR" ./x2t "$PARAMS")
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "ERROR: x2t exited with code $STATUS"
+            exit 1
+          fi
+          if [ ! -s "$OUTPUT" ]; then
+            echo "ERROR: x2t exited 0 but produced no output"
+            exit 1
+          fi
+          echo "Conversion OK: $(wc -c < "$OUTPUT") bytes"
+
+      - name: Upload zip as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.zip.outputs.zip_name }}
+          path: ${{ runner.temp }}/dist/${{ steps.zip.outputs.zip_name }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: extract
+    runs-on: ubuntu-22.04
+    environment: dependencies
+    permissions:
+      contents: write
+    env:
+      ZIP_NAME: ${{ needs.extract.outputs.zip_name }}
+      EXPECTED_SHA256: ${{ needs.extract.outputs.zip_sha256 }}
+      REPLACE_EXISTING: ${{ inputs.replace_existing }}
+    steps:
+      - name: Download zip artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.extract.outputs.zip_name }}
+          path: ${{ runner.temp }}/dist
+
+      - name: Verify zip checksum
+        run: |
+          if ! [[ "$ZIP_NAME" =~ ^x2t-binaries-linux-(x64|arm64)\.zip$ ]]; then
+            echo "ERROR: unexpected zip name from extract job"
+            exit 1
+          fi
+          if ! [[ "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: extract job did not report a valid sha256"
+            exit 1
+          fi
+          ACTUAL=$(sha256sum "$RUNNER_TEMP/dist/$ZIP_NAME" | cut -d' ' -f1)
+          echo "Expected sha256: $EXPECTED_SHA256"
+          echo "Actual sha256:   $ACTUAL"
+          if [ "$ACTUAL" != "$EXPECTED_SHA256" ]; then
+            echo "ERROR: artifact sha256 does not match the extract job"
+            exit 1
+          fi
+
+      # gh output is never printed here: only asset names and the digest are
+      # read through --jq, and failures are reported with their exit code.
+      - name: Upload to dependencies release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cleanup
-        if: always()
         run: |
-          rm -rf /tmp/onlyoffice.deb /tmp/onlyoffice-extracted /tmp/x2t-staging
+          if ! ASSETS=$(gh release view dependencies --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null); then
+            echo "ERROR: could not read the dependencies release"
+            exit 1
+          fi
+
+          CLOBBER=()
+          if printf '%s\n' "$ASSETS" | grep -Fxq "$ZIP_NAME"; then
+            if [ "$REPLACE_EXISTING" != "true" ]; then
+              echo "ERROR: $ZIP_NAME already exists in dependencies; delete it or rerun with replace_existing"
+              exit 1
+            fi
+            echo "$ZIP_NAME exists and replace_existing is set: overwriting"
+            CLOBBER=(--clobber)
+          fi
+
+          set +e
+          gh release upload dependencies "$RUNNER_TEMP/dist/$ZIP_NAME" --repo "$GITHUB_REPOSITORY" "${CLOBBER[@]}" > /dev/null 2>&1
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "ERROR: gh release upload failed with exit code $STATUS"
+            exit 1
+          fi
+          echo "Uploaded $ZIP_NAME"
+
+          DIGEST=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/dependencies" --jq ".assets[] | select(.name == \"$ZIP_NAME\") | .digest" 2>/dev/null || true)
+          echo "Published digest: ${DIGEST:-<not reported>}"
+          if [ -n "$DIGEST" ] && [ "$DIGEST" != "sha256:$EXPECTED_SHA256" ]; then
+            echo "ERROR: published digest does not match the verified zip"
+            exit 1
+          fi
