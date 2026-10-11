@@ -25,6 +25,14 @@ libc = "0.2"
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-printer-v2 = "0.2.4"
 
+# Pinned to the version wry links, so PlatformWebview::inner() hands back a
+# WebView of the same type rather than a second, incompatible binding.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+# The WebKitWebView is a GtkWidget; gtk provides the event hook used to claim
+# the touchpad pinch. Same version webkit2gtk resolves, so nothing new is pulled.
+gtk = "0.18"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

@@ -462,6 +462,76 @@ fn main() {
                 #[cfg(debug_assertions)]
                 window.open_devtools();
 
+                // On Wayland a trackpad pinch arrives as a GDK_TOUCHPAD_PINCH event
+                // that WebKitGTK consumes at the widget level and turns into a scale
+                // of the whole interface. Two things were ruled out by testing: it
+                // does not go through the WebKitWebView zoom-level property, and it
+                // never reaches the DOM, so the JS wheel guard in editor-patches.js
+                // has nothing to cancel. None of the 64 WebKitSettings properties
+                // switch the gesture off. Claim the event before WebKit's own
+                // handler runs, which is the earliest public hook available.
+                #[cfg(target_os = "linux")]
+                {
+                    use gtk::prelude::*;
+                    let pinch_log = temp_dir.clone();
+                    let reported = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let eval_window = window.clone();
+                    if let Err(e) = window.with_webview(move |webview| {
+                        let wv = webview.inner();
+                        log_startup(&pinch_log, "pinch guard installed at GTK level");
+
+                        // gdk 0.18 mis-generates the phase accessor as is_phase() -> bool,
+                        // so gesture boundaries are inferred from the event timestamps
+                        // instead. scale() is relative to the start of the gesture, which
+                        // makes the ratio between consecutive events the useful quantity.
+                        let last_time = std::cell::Cell::new(0u32);
+                        let last_scale = std::cell::Cell::new(1.0f64);
+                        let pending = std::cell::Cell::new(1.0f64);
+
+                        wv.connect_event(move |_, event| {
+                            if event.event_type() != gtk::gdk::EventType::TouchpadPinch {
+                                return gtk::glib::Propagation::Proceed;
+                            }
+                            if !reported.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                log_startup(&pinch_log, "touchpad pinch seen at GTK level, event claimed");
+                            }
+
+                            if let Some(pinch) = event.downcast_ref::<gtk::gdk::EventTouchpadPinch>() {
+                                let time = pinch.time();
+                                let scale = pinch.scale();
+                                if time.saturating_sub(last_time.get()) > 300 {
+                                    // Long gap means a new gesture, so start a fresh
+                                    // baseline rather than comparing against the old one.
+                                    pending.set(1.0);
+                                } else if last_scale.get() > 0.0 {
+                                    pending.set(pending.get() * (scale / last_scale.get()));
+                                }
+                                last_scale.set(scale);
+                                last_time.set(time);
+
+                                // Apply in 10% steps so the document zoom moves the way it
+                                // does for Ctrl+= rather than sliding continuously, which
+                                // would re-render the canvas on every event.
+                                let ratio = pending.get();
+                                if !(0.9..=1.1).contains(&ratio) {
+                                    let step = if ratio > 1.0 { 10 } else { -10 };
+                                    pending.set(1.0);
+                                    // Position travels with the step so the page can
+                                    // decide whether the gesture is over the document
+                                    // rather than the surrounding chrome.
+                                    let (x, y) = pinch.position();
+                                    let _ = eval_window.eval(&format!(
+                                        "window.__eoPinchZoom && window.__eoPinchZoom({step},{x:.1},{y:.1})"
+                                    ));
+                                }
+                            }
+                            gtk::glib::Propagation::Stop
+                        });
+                    }) {
+                        log_startup(&temp_dir, &format!("ERROR: pinch guard not installed: {e}"));
+                    }
+                }
+
                 let h = handle.clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
