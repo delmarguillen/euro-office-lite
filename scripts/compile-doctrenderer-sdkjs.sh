@@ -9,6 +9,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SDKJS="$PROJECT_ROOT/src/sdkjs"
 BINARIES="$PROJECT_ROOT/src-tauri/binaries"
 TAG="${DOCTRENDERER_SDKJS_TAG:-v8.2.0.147}"
+# The Euro-Office sdkjs fork only carries tags up to 8.2; newer x2t builds
+# (e.g. the 9.4 aarch64 sidecar) need the matching tag from upstream.
+REMOTE="${DOCTRENDERER_SDKJS_REMOTE:-origin}"
 STAGING="${DOCTRENDERER_STAGING:-${RUNNER_TEMP:-/tmp}/doctrenderer-sdkjs}"
 ALLFONTS_SOURCE="${ALLFONTS_SOURCE:-$SDKJS/common/AllFonts.js}"
 UI_REF="$(git -C "$SDKJS" rev-parse HEAD)"
@@ -22,12 +25,25 @@ rm -rf "$STAGING"
 mkdir -p "$STAGING"
 
 echo "Compiling DoctRenderer sdkjs tag $TAG"
-git -C "$SDKJS" fetch origin tag "$TAG" --no-tags
+git -C "$SDKJS" fetch "$REMOTE" tag "$TAG" --no-tags
 git -C "$SDKJS" checkout --detach "$TAG"
+
+# Upstream sdkjs dropped the grunt harness after 8.2 (it builds via build.py);
+# the Euro-Office fork still carries it. Reuse the fork's build/ tooling
+# against the tagged sources - the configs/*.json format is unchanged.
+if [ ! -f "$SDKJS/build/Gruntfile.js" ]; then
+    echo "Restoring grunt build harness from $UI_REF"
+    git -C "$SDKJS" checkout "$UI_REF" -- build
+fi
 
 (
     cd "$SDKJS/build"
-    npm ci
+    # Upstream sdkjs tags ship no lockfile; the Euro-Office fork does.
+    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+        npm ci
+    else
+        npm install --no-audit --no-fund
+    fi
     for module in word cell slide; do
         echo "Compiling $module SDK"
         npx grunt "compile-$module" --desktop=true --level=SIMPLE --no-color
