@@ -1,6 +1,6 @@
 # Euro-Office Lite
 
-Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~89 MB (Windows), ~113-120 MB (macOS), ~121 MB (Linux x64 .deb), ~82 MB (Flatpak). No cloud, no telemetry.
+Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~89 MB (Windows), ~113-120 MB (macOS), ~121 MB (Linux x64 .deb), ~129 MB (Linux arm64 .deb), ~82 MB (Flatpak). No cloud, no telemetry.
 
 Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
 
