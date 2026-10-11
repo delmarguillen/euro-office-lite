@@ -20,6 +20,7 @@ log() {
 expected_sha256() {
     case "$1" in
         x2t-binaries-linux-x64.zip)   echo "0bfe09d38022bd985fc9640dde71bfb9a7dc6f1b81a5781a3e7848aee755f161" ;;
+        x2t-binaries-linux-arm64.zip) echo "4abf69447ba6be774881aaf85e04205b1e99801cef231b3c14aea0c3f24efef7" ;;
         x2t-binaries-macos-arm64.zip) echo "98f96186b15941a3e3d37ca6e6447fda6a4a55c507151fdda363d00b5db4c3e0" ;;
         x2t-binaries-macos-x64.zip)   echo "4d548e676ba55226a49f65a70f2ad15df2b0716102cd68ed62ddcef148896db6" ;;
         *) return 1 ;;
@@ -58,13 +59,11 @@ if [ "$OS" = "Darwin" ]; then
     CHECK_PATTERN="x2t-*-apple-darwin"
     VERIFY_CMD="otool -L"
 elif [ "$OS" = "Linux" ]; then
-    ZIP_NAME="x2t-binaries-linux-x64.zip"
     if [ "$ARCH" = "aarch64" ]; then
-        # The 'dependencies' release has no linux-arm64 zip; extract the
-        # sidecar from the ONLYOFFICE aarch64 package instead.
-        log "aarch64 host: delegating to extract-x2t-linux-arm64.sh"
-        exec bash "$SCRIPT_DIR/extract-x2t-linux-arm64.sh"
+        ZIP_NAME="x2t-binaries-linux-arm64.zip"
+        TRIPLE="aarch64-unknown-linux-gnu"
     else
+        ZIP_NAME="x2t-binaries-linux-x64.zip"
         TRIPLE="x86_64-unknown-linux-gnu"
     fi
     CHECK_PATTERN="x2t-*-linux-gnu"
@@ -144,10 +143,17 @@ file "$SIDECAR"
 log "Dependencies:"
 $VERIFY_CMD "$SIDECAR" 2>/dev/null || log "($VERIFY_CMD not available or failed)"
 
-# On Linux, verify with LD_LIBRARY_PATH pointing to extracted libs
+# On Linux, every library must resolve from the extracted ones: a missing
+# one would otherwise only surface later, when x2t first runs.
 if [ "$OS" = "Linux" ]; then
     log "Library resolution with LD_LIBRARY_PATH:"
-    LD_LIBRARY_PATH="$TARGET_DIR" ldd "$SIDECAR" 2>/dev/null || log "(ldd with LD_LIBRARY_PATH failed)"
+    LDD_OUT="$(LD_LIBRARY_PATH="$TARGET_DIR" ldd "$SIDECAR" 2>/dev/null)" || log "(ldd with LD_LIBRARY_PATH failed)"
+    echo "$LDD_OUT"
+    if echo "$LDD_OUT" | grep -q "not found"; then
+        log "ERROR: unresolved shared libraries for x2t-$TRIPLE:"
+        echo "$LDD_OUT" | grep "not found"
+        exit 1
+    fi
 fi
 
 COUNT=$(find "$TARGET_DIR" -type f | wc -l | tr -d ' ')
