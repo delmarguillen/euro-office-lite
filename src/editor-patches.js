@@ -176,6 +176,233 @@
       }
     }
 
+    // Aspect-locked objects on a slide size change (#49). sdkjs scales X and Y
+    // separately and records only the new sldSz in the history: its
+    // changeSlideSizeFunction rescales every object without history, also on
+    // undo, redo and when a co-author's change arrives. internalChangeSizes is
+    // reached only by a fresh resize, so wrapping it lets the uniform fit be set
+    // with the CXfrm setters in that same history point. Undo reverts the
+    // setters first and then sldSz replays the exact inverse stretch.
+
+    // Source without comments, so an uncompiled sdkjs reads like the bundle.
+    function _eoCodeOf(fn) {
+      return String(fn).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    }
+
+    // The fit relies on the original stretch being exactly invertible, so
+    // anything but the known non-uniform behaviour leaves sdkjs untouched.
+    function _eoAspectSelfTest(win) {
+      var pres = win.AscCommonSlide && win.AscCommonSlide.CPresentation;
+      var resize = pres && pres.prototype.internalChangeSizes;
+      if (typeof resize !== 'function') {
+        return 'CPresentation.prototype.internalChangeSizes is missing';
+      }
+      var code = _eoCodeOf(resize);
+      var setAt = code.indexOf('setSldSz');
+      if (setAt < 0 || code.indexOf('changeSlideSizeFunction', setAt) < 0) {
+        return 'internalChangeSizes no longer calls setSldSz and then changeSlideSizeFunction';
+      }
+      var formats = win.AscFormat;
+      var orig = formats.CShape.prototype.changeSize;
+      if (typeof orig !== 'function') return 'CShape.prototype.changeSize is missing';
+      if (_eoCodeOf(orig).indexOf('getNoChangeAspect') >= 0) {
+        return 'CShape.prototype.changeSize reads the aspect lock';
+      }
+      if (!formats.CImageShape || formats.CImageShape.prototype.changeSize !== orig) {
+        return 'CImageShape.prototype.changeSize is not CShape\'s';
+      }
+      // A locked fake 10x10 box at (10,10) with kw=2, kh=1, so a re-enabled
+      // upstream aspect branch reads as uniform.
+      var xfrm = {
+        offX: 10, offY: 10, extX: 10, extY: 10,
+        isNotNull: function() { return true; },
+        setOffX: function(v) { this.offX = v; },
+        setOffY: function(v) { this.offY = v; },
+        setExtX: function(v) { this.extX = v; },
+        setExtY: function(v) { this.extY = v; }
+      };
+      var fake = { spPr: { xfrm: xfrm }, group: null,
+        getNoChangeAspect: function() { return true; } };
+      try {
+        orig.call(fake, 2, 1);
+      } catch(e) {
+        return 'changeSize self-test threw: ' + (e.message || e);
+      }
+      if (xfrm.offX === 20 && xfrm.offY === 10 && xfrm.extX === 20 && xfrm.extY === 10) {
+        return null;
+      }
+      return 'changeSize self-test got off=(' + xfrm.offX + ',' + xfrm.offY + ') ext=(' +
+        xfrm.extX + ',' + xfrm.extY + '), expected off=(20,10) ext=(20,10)';
+    }
+
+    function _eoMakeAspectResize(win, orig) {
+      var formats = win.AscFormat;
+      var stretch = formats.CShape.prototype.changeSize;
+      // Recent fits per object, outside the history on purpose: undo needs
+      // none of it, and it only lets a manual resize back to the previous
+      // size restore the exact box instead of shrinking it again with min.
+      var memo = new WeakMap();
+      var MEMO_SIZE = 16;
+      function isInverse(a, b) { return Math.abs(a * b - 1) <= 1e-6; }
+      function near(a, b) { return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b)); }
+      function boxOf(x) {
+        return { offX: x.offX, offY: x.offY, extX: x.extX, extY: x.extY };
+      }
+      function sameBox(a, b) {
+        return near(a.offX, b.offX) && near(a.offY, b.offY) &&
+          near(a.extX, b.extX) && near(a.extY, b.extY);
+      }
+      // Only values that change go through the setters, so the history and
+      // co-authors get no empty changes.
+      function setBox(x, b) {
+        if (x.offX !== b.offX) x.setOffX(b.offX);
+        if (x.offY !== b.offY) x.setOffY(b.offY);
+        if (x.extX !== b.extX) x.setExtX(b.extX);
+        if (x.extY !== b.extY) x.setExtY(b.extY);
+      }
+      // Tables only move, groups scale a child space of their own and charts
+      // never report the lock: the fit is for objects that CShape's
+      // changeSize stretches, and only top-level ones.
+      function eligible(sp) {
+        return !!sp && !sp.group &&
+          (sp instanceof formats.CShape || sp instanceof formats.CImageShape) &&
+          sp.changeSize === stretch &&
+          typeof sp.getNoChangeAspect === 'function' && sp.getNoChangeAspect() &&
+          !!sp.spPr && !!sp.spPr.xfrm && sp.spPr.xfrm.isNotNull();
+      }
+      // Slides only. Masters and layouts keep the stock stretch: their locked
+      // pictures are often full-bleed backgrounds that a fit would leave as
+      // a band across every slide.
+      function collect(pres) {
+        var found = [];
+        var slides = pres.Slides || [];
+        for (var i = 0; i < slides.length; i++) {
+          var slide = slides[i];
+          var tree = (slide && slide.cSld && slide.cSld.spTree) || [];
+          var items = [];
+          for (var j = 0; j < tree.length; j++) {
+            var sp = tree[j];
+            if (!eligible(sp)) continue;
+            var tx = sp.txXfrm && sp.txXfrm.isNotNull() ? boxOf(sp.txXfrm) : null;
+            items.push({ sp: sp, xfrm: sp.spPr.xfrm, box: boxOf(sp.spPr.xfrm), tx: tx });
+          }
+          if (items.length) found.push({ slide: slide, w: slide.Width, h: slide.Height, items: items });
+        }
+        return found;
+      }
+      function fit(item, kw, kh) {
+        var sp = item.sp, x = item.xfrm, b = item.box;
+        var list = memo.get(sp) || [];
+        var hit = null;
+        for (var i = list.length - 1; i >= 0; i--) {
+          var e = list[i];
+          if (isInverse(kw, e.kw) && isInverse(kh, e.kh) && sameBox(b, e.after)) {
+            hit = e;
+            break;
+          }
+        }
+        var k = Math.min(kw, kh);
+        var cx = b.offX + b.extX / 2, cy = b.offY + b.extY / 2;
+        var target;
+        if (hit) {
+          target = hit.before;
+        } else {
+          // Upstream's commented branch: uniform size, scaled center.
+          var w = b.extX * k, h = b.extY * k;
+          target = { offX: cx * kw - w / 2, offY: cy * kh - h / 2, extX: w, extY: h };
+        }
+        setBox(x, target);
+        // The text box keeps its place relative to the shape instead of being
+        // stretched by kw/kh as the original does.
+        var tx = sp.txXfrm, t = item.tx;
+        if (tx && t && tx.isNotNull()) {
+          if (hit && hit.beforeTx) {
+            setBox(tx, hit.beforeTx);
+          } else {
+            var kt = hit ? (b.extX ? target.extX / b.extX : b.extY ? target.extY / b.extY : k) : k;
+            var ncx = target.offX + target.extX / 2, ncy = target.offY + target.extY / 2;
+            var tw = t.extX * kt, th = t.extY * kt;
+            setBox(tx, {
+              offX: ncx + (t.offX + t.extX / 2 - cx) * kt - tw / 2,
+              offY: ncy + (t.offY + t.extY / 2 - cy) * kt - th / 2,
+              extX: tw, extY: th
+            });
+          }
+        }
+        list.push({ kw: kw, kh: kh, before: b, beforeTx: t, after: boxOf(x) });
+        if (list.length > MEMO_SIZE) list.shift();
+        memo.set(sp, list);
+        if (sp.recalcTransform) sp.recalcTransform();
+      }
+      return function() {
+        var found = null;
+        try {
+          found = collect(this);
+        } catch(e) {
+          console.error('[EO] #49 aspect patch: ' + (e.message || e));
+        }
+        var result = orig.apply(this, arguments);
+        if (!found) return result;
+        try {
+          for (var i = 0; i < found.length; i++) {
+            var s = found[i];
+            // Per slide, as Slide.changeSize computes its own factors.
+            var kw = s.slide.Width / s.w, kh = s.slide.Height / s.h;
+            if (!(kw > 0 && kh > 0 && isFinite(kw) && isFinite(kh)) || near(kw, kh)) continue;
+            for (var j = 0; j < s.items.length; j++) fit(s.items[j], kw, kh);
+          }
+        } catch(e) {
+          console.error('[EO] #49 aspect patch: ' + (e.message || e));
+        }
+        return result;
+      };
+    }
+
+    function _installAspectResize(win) {
+      var proto = win.AscCommonSlide.CPresentation.prototype;
+      if (proto.internalChangeSizes && proto.internalChangeSizes._eoAspectWrapper) return;
+      var problem = _eoAspectSelfTest(win);
+      if (problem) {
+        console.error('[EO] #49 aspect patch: ' + problem);
+        return;
+      }
+      var wrapper = _eoMakeAspectResize(win, proto.internalChangeSizes);
+      wrapper._eoAspectWrapper = true;
+      proto.internalChangeSizes = wrapper;
+      win._eoLog('[EO] #49 aspect patch installed');
+    }
+
+    // The limit is generous because a slow machine can take over half a
+    // minute to bring the editor up. Only the main editor frame (named
+    // frameEditor by the docs API) reports a timeout: helper frames such as
+    // sdkjs's asc_pasteFrame share its URL but never load sdk-all.js.
+    function _watchAspectResize(win, limitMs) {
+      var done = false;
+      var interval = setInterval(function() {
+        try {
+          if (!win.AscCommonSlide || !win.AscCommonSlide.CPresentation ||
+              !win.AscFormat || !win.AscFormat.CShape) return;
+          done = true;
+          clearInterval(interval);
+          _installAspectResize(win);
+        } catch(e) {
+          done = true;
+          clearInterval(interval);
+          console.error('[EO] #49 aspect patch: ' + (e.message || e));
+        }
+      }, 50);
+      setTimeout(function() {
+        clearInterval(interval);
+        if (done) return;
+        var mainFrame = false;
+        try { mainFrame = !!win.frameElement && win.frameElement.name === 'frameEditor'; } catch(e) {}
+        if (mainFrame) {
+          console.error('[EO] #49 aspect patch: CPresentation not loaded after ' +
+            (limitMs / 1000) + 's, not installed');
+        }
+      }, limitMs);
+    }
+
     function injectBridgeDeep(win) {
       installPinchZoomGuard(win);
       try {
@@ -459,6 +686,15 @@
               }
             }, 50);
             setTimeout(function() { clearInterval(noteSepInterval); }, 30000);
+          }
+
+          // Aspect-locked objects on a slide size change (#49), see
+          // _eoMakeAspectResize. CPresentation lives in sdk-all.js, which sdkjs
+          // loads asynchronously, hence the wait.
+          if (!win._eoAspectPatchStarted &&
+              window.AscDesktopEditor._currentDocType === 'slide') {
+            win._eoAspectPatchStarted = true;
+            _watchAspectResize(win, 120000);
           }
 
           window._patchButtonHint(win);
