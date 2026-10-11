@@ -114,6 +114,164 @@ if (existsSync(slideBundlePath)) {
   }
 }
 
+// Turns a compiled-code template into a regex. <name> stands for a minified
+// identifier (repeats must match the first one), <*> for a short stretch of
+// code that may change freely, and tokens are joined with \s* because the
+// compiler breaks long lines between arbitrary tokens.
+function compiledShape(template) {
+  const names = new Set();
+  const source = template
+    .match(/<\*>|<\w+>|[A-Za-z_$][\w$]*|\S/g)
+    .map((token) => {
+      if (token === '<*>') return '[\\s\\S]{0,600}?';
+      const name = /^<(\w+)>$/.exec(token)?.[1];
+      if (!name) return escapeRegExp(token);
+      if (names.has(name)) return `\\k<${name}>`;
+      names.add(name);
+      return `(?<${name}>[A-Za-z_$][\\w$]*)`;
+    })
+    .join('\\s*');
+  return new RegExp(source, 'g');
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// The #49 aspect patch in editor-patches.js wraps
+// CPresentation.prototype.internalChangeSizes and fixes up locked objects with
+// the CXfrm setters after the stock resize. Undo stays exact only while the
+// resize path keeps this shape: internalChangeSizes records sldSz before
+// changeSlideSizeFunction, which rescales masters, layouts and slides without
+// history and is what the SlideSize change replays on undo, redo and from
+// co-authors; Slide.changeSize uses the slide's own size; and
+// CShape.prototype.changeSize, which CImageShape and CChartSpace copy, stretches
+// X and Y separately, which is exactly invertible. All of it lives in
+// sdk-all.js, not in sdk-all-min.js.
+const slideFullPath = path.join(distRoot, 'sdkjs', 'slide', 'sdk-all.js');
+if (existsSync(slideFullPath)) {
+  const bundle = await readFile(slideFullPath, 'utf8');
+  const problems = [];
+  // A missing name points at upstream; a present name with another shape can
+  // be either, so the message says which one it is.
+  const expectOne = (label, marker, template) => {
+    const found = [...bundle.matchAll(compiledShape(template))];
+    if (found.length === 1) return found[0];
+    if (!compiledShape(marker).test(bundle)) {
+      problems.push(`${label} is gone (renamed or removed upstream)`);
+    } else {
+      problems.push(`${label} has a new compiled shape (found ${found.length} matches)`);
+    }
+    return null;
+  };
+
+  expectOne(
+    'CPresentation.prototype.internalChangeSizes',
+    'CPresentation.prototype.internalChangeSizes=',
+    'CPresentation.prototype.internalChangeSizes=function(<w>,<h>,<t>){' +
+      'var <s>=new CSlideSize;<s>.setCX(<w>);<s>.setCY(<h>);<*>' +
+      'this.setSldSz(<s>);this.changeSlideSizeFunction()}',
+  );
+  expectOne(
+    'CPresentation.prototype.changeSlideSizeFunction',
+    'CPresentation.prototype.changeSlideSizeFunction=',
+    'CPresentation.prototype.changeSlideSizeFunction=function(){' +
+      'AscFormat.ExecuteNoHistory(function(){' +
+      'var <w>=this.GetWidthMM(),<h>=this.GetHeightMM()<*>' +
+      'this.slideMasters[<i>].changeSize(<w>,<h>);<*>' +
+      '.sldLayoutLst[<j>].changeSize(<w>,<h>)}<*>' +
+      'this.Slides[<k>].changeSize(<w>,<h>)},this,[])}',
+  );
+  expectOne(
+    'the SlideSize change handler',
+    'AscDFH.drawingsChangesMap[AscDFH.historyitem_Presentation_SlideSize]=',
+    'AscDFH.drawingsChangesMap[AscDFH.historyitem_Presentation_SlideSize]=' +
+      'function(<c>,<v>){<c>.sldSz=<v>;<c>.changeSlideSizeFunction()}',
+  );
+  expectOne(
+    'Slide.prototype.changeSize',
+    'Slide.prototype.changeSize=function',
+    'Slide.prototype.changeSize=function(<a>,<b>){' +
+      'var <kw>=<a>/this.Width,<kh>=<b>/this.Height;this.setSlideSize(<a>,<b>);' +
+      'this.cSld.forEachSp(function(<o>){<o>.changeSize(<kw>,<kh>)})}',
+  );
+
+  const exportsOf = (name) => [
+    ...bundle.matchAll(
+      new RegExp(`AscFormat\\s*\\.\\s*${name}\\s*=\\s*([A-Za-z_$][\\w$]*)`, 'g'),
+    ),
+  ];
+  const changeSizeDefs = [
+    ...bundle.matchAll(
+      compiledShape(
+        '<cls>.prototype.changeSize=function(<kw>,<kh>){' +
+          'if(this.spPr&&this.spPr.xfrm&&this.spPr.xfrm.isNotNull()){' +
+          'var <x>=this.spPr.xfrm;' +
+          '<x>.setOffX(<x>.offX*<kw>);<x>.setOffY(<x>.offY*<kh>);' +
+          '<x>.setExtX(<x>.extX*<kw>);<x>.setExtY(<x>.extY*<kh>)}' +
+          '(<t>=this.txXfrm)&&<t>.isNotNull()&&(' +
+          '<t>.setOffX(<t>.offX*<kw>),<t>.setOffY(<t>.offY*<kh>),' +
+          '<t>.setExtX(<t>.extX*<kw>),<t>.setExtY(<t>.extY*<kh>));' +
+          'this.recalcTransform&&this.recalcTransform()}',
+      ),
+    ),
+  ];
+  const shapeExports = exportsOf('CShape');
+  if (changeSizeDefs.length !== 1) {
+    problems.push(
+      `expected one non-uniform CShape.prototype.changeSize, found ${changeSizeDefs.length}`,
+    );
+  } else if (
+    shapeExports.length !== 1 ||
+    shapeExports[0][1] !== changeSizeDefs[0].groups.cls
+  ) {
+    problems.push('the non-uniform changeSize is not on the class exported as AscFormat.CShape');
+  }
+  for (const name of ['CImageShape', 'CChartSpace']) {
+    const classExports = exportsOf(name);
+    if (classExports.length !== 1) {
+      problems.push(`expected one AscFormat.${name} export, found ${classExports.length}`);
+      continue;
+    }
+    const exportAt = classExports[0].index;
+    const cls = escapeRegExp(classExports[0][1]);
+    // The last changeSize assignment on the class before its export must be
+    // a copy from a local alias of AscFormat.CShape.
+    const assignments = [
+      ...bundle
+        .slice(0, exportAt)
+        .matchAll(new RegExp(`(?<![\\w$.])${cls}\\s*\\.\\s*prototype\\s*\\.\\s*changeSize\\s*=`, 'g')),
+    ];
+    const last = assignments.at(-1);
+    const copy = last && compiledShape('<src>.prototype.changeSize').exec(
+      bundle.slice(last.index + last[0].length).replace(/^\s+/, ''),
+    );
+    if (!copy || copy.index !== 0) {
+      problems.push(`${name}.prototype.changeSize is no longer copied from another class`);
+      continue;
+    }
+    const src = escapeRegExp(copy.groups.src);
+    const aliases = [
+      ...bundle
+        .slice(0, last.index)
+        .matchAll(new RegExp(`(?<![\\w$.])${src}\\s*=\\s*([\\w$.]+)`, 'g')),
+    ];
+    if (aliases.at(-1)?.[1] !== 'AscFormat.CShape') {
+      problems.push(`${name}.prototype.changeSize is not copied from AscFormat.CShape`);
+    }
+  }
+  if (problems.length > 0) {
+    fail(
+      `#49 aspect patch guard: slide/sdk-all.js changed around the slide resize path ` +
+      `(${problems.join('; ')}). Compare internalChangeSizes and changeSlideSizeFunction ` +
+      'in sdkjs slide/Editor/Format/Presentation.js, changeSize in Slide.js and in ' +
+      'common/Drawings/Format/Shape.js, Image.js and ChartSpace.js with the previous sdkjs ' +
+      'tag. If the code changed, revisit the aspect patch in editor-patches.js before ' +
+      'releasing; if only the compiled output changed, update this check.',
+    );
+  }
+}
+
 for (const forbidden of [
   'sdkjs/develop',
   'sdkjs/pdf/src/engine/drawingfile_ie.js',
