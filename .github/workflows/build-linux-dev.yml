@@ -21,6 +21,7 @@ jobs:
   build-linux:
     runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           # The sdkjs tag has to match the x2t the target ships. x64 takes its
