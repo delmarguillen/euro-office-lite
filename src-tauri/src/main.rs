@@ -90,7 +90,16 @@ fn main() {
 
     // The root is shared by every instance; the document's files go in this
     // process's own folder under it (temp_layout.rs).
-    let temp_root = temp_layout::temp_root();
+    let root_choice = match temp_layout::temp_root(&context.config().identifier) {
+        Ok(choice) => choice,
+        Err(reason) => {
+            // Without a temp folder of its own no document can be opened or
+            // saved, and there is no log folder to write this to either.
+            eprintln!("Euro-Office Lite cannot start: no usable temp folder ({})", reason);
+            std::process::exit(1);
+        }
+    };
+    let temp_root = root_choice.path;
     std::fs::create_dir_all(&temp_root).ok();
     let instance = start_instance(&temp_root);
     let temp_dir = instance.dir.clone();
@@ -106,6 +115,13 @@ fn main() {
             std::env::consts::ARCH
         ),
     );
+    if let Some(note) = &root_choice.note {
+        log_startup(&format!(
+            "WARNING: temp folder {} is not the preferred one: {}",
+            temp_root.display(),
+            note
+        ));
+    }
     if !instance.holds_lock() {
         log_startup(&format!(
             "WARNING: could not lock the instance folder {}",

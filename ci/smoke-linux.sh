@@ -78,12 +78,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# The app puts its logs under $TMPDIR/euro-office-lite, so the launch has to use
-# the same TMPDIR this script reads from or the assertions would look at a
-# different file. Every process writes its own js-debug-<millis>-<pid>.log;
+# The app puts its logs under $TMPDIR/euro-office-lite-<uid>, so the launch has
+# to use the same TMPDIR this script reads from or the assertions would look at
+# a different file. Every process writes its own js-debug-<millis>-<pid>.log;
 # launch_app points APP_LOG at the one the process it started created.
 TMPROOT="${TMPDIR:-/tmp}"
-APP_LOG_DIR="$TMPROOT/euro-office-lite"
+APP_LOG_DIR="$TMPROOT/euro-office-lite-$(id -u)"
 APP_LOG=""
 
 PASSED=0

@@ -406,14 +406,175 @@ pub fn prune_logs(root: &Path, keep: usize, is_alive: impl Fn(&str) -> bool) -> 
 // Root
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
-pub fn temp_root() -> PathBuf {
-    PathBuf::from("/tmp/euro-office-lite")
+pub struct RootChoice {
+    pub path: PathBuf,
+    // Why the preferred folder was not used, for the log.
+    pub note: Option<String>,
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn temp_root() -> PathBuf {
-    std::env::temp_dir().join("euro-office-lite")
+// %TEMP% is already per user on Windows.
+#[cfg(target_os = "windows")]
+pub fn temp_root(_identifier: &str) -> Result<RootChoice, String> {
+    Ok(RootChoice {
+        path: std::env::temp_dir().join("euro-office-lite"),
+        note: None,
+    })
+}
+
+// On Linux and macOS the temp folder is shared by every account on the
+// machine, so the root is one folder per user, private to that user. If it
+// cannot be had (something else already sits under that name), the app's
+// cache folder in the user's home is next, which also keeps the font cache
+// across restarts. After that, a folder made new for this start: first in the
+// user's cache folder, then in the temp folder. Err when none can be had.
+#[cfg(unix)]
+pub fn temp_root(identifier: &str) -> Result<RootChoice, String> {
+    let uid = unsafe { libc::getuid() };
+    #[cfg(target_os = "macos")]
+    let shared_tmp = PathBuf::from("/tmp");
+    #[cfg(not(target_os = "macos"))]
+    let shared_tmp = std::env::temp_dir();
+
+    let mut candidates = vec![shared_tmp.join(format!("euro-office-lite-{}", uid))];
+    let mut fresh_in = Vec::new();
+    if let Some(cache) = user_cache_dir() {
+        let app_cache = cache.join(identifier);
+        candidates.push(app_cache.join("tmp"));
+        fresh_in.push(app_cache);
+    }
+    fresh_in.push(shared_tmp);
+    let counter = std::sync::atomic::AtomicU32::new(0);
+    choose_root(&candidates, &fresh_in, uid, || {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0);
+        format!(
+            "euro-office-lite-{}-{}-{}-{}",
+            uid,
+            std::process::id(),
+            nanos,
+            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )
+    })
+}
+
+// Where Tauri's app_cache_dir lives, worked out before Tauri is up.
+#[cfg(target_os = "macos")]
+fn user_cache_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
+    Some(PathBuf::from(home).join("Library/Caches"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn user_cache_dir() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+        let xdg = PathBuf::from(xdg);
+        if xdg.is_absolute() {
+            return Some(xdg);
+        }
+    }
+    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
+    Some(PathBuf::from(home).join(".cache"))
+}
+
+// Names tried per folder before moving on to the next one.
+#[cfg(unix)]
+const FRESH_TRIES: usize = 10;
+
+// The first candidate that is, or can be made, a private folder of this user;
+// failing that, a folder created new under one of `fresh_in`. Only a folder
+// this call created itself can be a new one, so nothing that already existed
+// under that name is taken, and every path returned has passed the checks.
+#[cfg(unix)]
+pub fn choose_root(
+    candidates: &[PathBuf],
+    fresh_in: &[PathBuf],
+    uid: u32,
+    fresh_name: impl Fn() -> String,
+) -> Result<RootChoice, String> {
+    let mut reasons = Vec::new();
+    for candidate in candidates {
+        match ensure_private_dir(candidate, uid) {
+            Ok(()) => {
+                return Ok(RootChoice {
+                    path: candidate.clone(),
+                    note: (!reasons.is_empty()).then(|| reasons.join("; ")),
+                })
+            }
+            Err(reason) => reasons.push(format!("{}: {}", candidate.display(), reason)),
+        }
+    }
+    for parent in fresh_in {
+        if !parent.exists() && std::fs::create_dir_all(parent).is_err() {
+            reasons.push(format!("{}: cannot be created", parent.display()));
+            continue;
+        }
+        let mut last_error = String::new();
+        for _ in 0..FRESH_TRIES {
+            let path = parent.join(fresh_name());
+            let made = create_private_dir(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|()| check_private_dir(&path, uid));
+            match made {
+                Ok(()) => {
+                    reasons.push(format!("using a new folder in {}", parent.display()));
+                    return Ok(RootChoice {
+                        path,
+                        note: Some(reasons.join("; ")),
+                    });
+                }
+                Err(reason) => last_error = reason,
+            }
+        }
+        reasons.push(format!(
+            "{}: no new folder could be made ({})",
+            parent.display(),
+            last_error
+        ));
+    }
+    Err(reasons.join("; "))
+}
+
+#[cfg(unix)]
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().mode(0o700).create(path)
+}
+
+// Creates the folder private (0700) if it is missing, then checks what is
+// actually there.
+#[cfg(unix)]
+pub fn ensure_private_dir(path: &Path, uid: u32) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    match create_private_dir(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    check_private_dir(path, uid)
+}
+
+// Looks at the folder without following links: a real directory, owned by
+// `uid`, with no access for group or others.
+#[cfg(unix)]
+fn check_private_dir(path: &Path, uid: u32) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if !meta.file_type().is_dir() {
+        return Err("not a plain folder".to_string());
+    }
+    if meta.uid() != uid {
+        return Err(format!("owned by uid {}", meta.uid()));
+    }
+    if meta.mode() & 0o077 != 0 {
+        return Err(format!("permissions {:o}", meta.mode() & 0o777));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

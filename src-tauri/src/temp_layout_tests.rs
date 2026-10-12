@@ -444,3 +444,138 @@ fn a_dead_generators_staging_folder_is_cleared() {
     assert!(!leftover.exists());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// --- the root on Linux and macOS ---------------------------------------------------
+//
+// Only compiled on Unix. A folder owned by another user cannot be made here
+// without root, so that case is left to the test machines.
+
+#[cfg(unix)]
+mod private_root {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn uid() -> u32 {
+        unsafe { libc::getuid() }
+    }
+
+    fn mode(path: &Path) -> u32 {
+        std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn a_missing_root_is_created_private() {
+        let base = scratch_root();
+        let root = base.join("root");
+
+        assert_eq!(ensure_private_dir(&root, uid()), Ok(()));
+        assert_eq!(mode(&root), 0o700);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_root_open_to_others_is_not_used() {
+        let base = scratch_root();
+        let root = base.join("root");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(ensure_private_dir(&root, uid()).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_link_in_place_of_the_root_is_not_used() {
+        let base = scratch_root();
+        let real = base.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let root = base.join("root");
+        std::os::unix::fs::symlink(&real, &root).unwrap();
+
+        assert!(ensure_private_dir(&root, uid()).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_file_in_place_of_the_root_is_not_used() {
+        let base = scratch_root();
+        let root = base.join("root");
+        std::fs::write(&root, b"").unwrap();
+
+        assert!(ensure_private_dir(&root, uid()).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // Same check with a uid that is not ours stands in for a folder another
+    // user created.
+    #[test]
+    fn a_root_owned_by_someone_else_is_not_used() {
+        let base = scratch_root();
+        let root = base.join("root");
+
+        assert!(ensure_private_dir(&root, uid().wrapping_add(1)).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_next_candidate_is_used_when_the_first_is_not_private() {
+        let base = scratch_root();
+        let first = base.join("first");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::set_permissions(&first, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let second = base.join("cache").join("app").join("tmp");
+
+        let choice = choose_root(&[first.clone(), second.clone()], &[], uid(), || {
+            "fresh".to_string()
+        })
+        .unwrap();
+
+        assert_eq!(choice.path, second);
+        assert_eq!(mode(&second), 0o700);
+        assert!(choice.note.is_some(), "the skipped folder is reported");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_fresh_folder_is_made_when_no_candidate_is_private() {
+        let base = scratch_root();
+        let first = base.join("first");
+        std::fs::write(&first, b"").unwrap();
+        let cache = base.join("cache");
+
+        let choice = choose_root(&[first], &[cache.clone(), base.clone()], uid(), || {
+            "fresh".to_string()
+        })
+        .unwrap();
+
+        assert_eq!(choice.path, cache.join("fresh"), "the user's cache folder comes first");
+        assert_eq!(mode(&choice.path), 0o700);
+        assert!(choice.note.unwrap().contains("new folder"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // A name that is already taken is never used as the new folder, whoever
+    // made it, and when nothing else is left there is no folder at all
+    // rather than an unchecked one.
+    #[test]
+    fn no_folder_that_existed_before_is_taken_as_a_new_one() {
+        let base = scratch_root();
+        let first = base.join("first");
+        std::fs::write(&first, b"").unwrap();
+        let taken = base.join("taken");
+        std::fs::create_dir(&taken).unwrap();
+        std::fs::set_permissions(&taken, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mine = base.join("mine");
+        std::fs::create_dir(&mine).unwrap();
+        std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let result = choose_root(&[first], &[base.clone()], uid(), || "taken".to_string());
+        assert!(result.is_err());
+
+        let result = choose_root(&[], &[base.clone()], uid(), || "mine".to_string());
+        assert!(result.is_err(), "even a private folder of ours is not new");
+        assert_eq!(mode(&taken), 0o755, "left as it was");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
