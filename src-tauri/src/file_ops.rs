@@ -5,7 +5,12 @@ use tauri::{Manager, State};
 
 pub struct AppState {
     pub current_file: Mutex<Option<PathBuf>>,
+    // This instance's own folder: everything that belongs to the open
+    // document (temp_layout.rs).
     pub temp_dir: PathBuf,
+    // Shared by every instance: the font cache and the logs.
+    pub temp_root: PathBuf,
+    pub instance: crate::temp_layout::Instance,
     pub modified: Mutex<bool>,
     // The path a 0-byte file was opened from (#33). It is not in the recent
     // list yet: the file still has no content, and an entry that opens to
@@ -21,17 +26,9 @@ pub struct AppState {
     pub text_options: Mutex<Option<crate::text_import::TextOptions>>,
 }
 
-pub(crate) fn log_event(state: &AppState, msg: &str) {
+pub(crate) fn log_event(_state: &AppState, msg: &str) {
     println!("{}", msg);
-    use std::io::Write;
-    let log_path = state.temp_dir.join("js-debug.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
-        let _ = writeln!(f, "{}", msg);
-    }
+    crate::temp_layout::append_log(msg);
 }
 
 // media/ holds the images inserted from disk (copy-to-media in main.rs) and x2t
@@ -47,7 +44,7 @@ pub(crate) fn log_event(state: &AppState, msg: &str) {
 // changes/ is in the list only to sweep what older versions left there: the
 // editor's changes now live in the recovery session folder (recovery.rs), never
 // in the temp dir.
-fn clear_document_temp(temp_dir: &std::path::Path) {
+pub(crate) fn clear_document_temp(temp_dir: &std::path::Path) {
     for dir in ["changes", "media", "insert_tmp", "downloads"] {
         let path = temp_dir.join(dir);
         if path.exists() {
@@ -59,8 +56,8 @@ fn clear_document_temp(temp_dir: &std::path::Path) {
 
 // x2t unpacks the document it is converting into <ext>_unpacked/ inside the temp
 // dir it is given, under a name that depends only on the extension, and leaves it
-// there. The temp dir is fixed and outlives the process, so that directory is
-// still sitting there the next time a document of the same type is opened.
+// there. The folder outlives each document, so that directory is still sitting
+// there the next time a document of the same type is opened.
 //
 // That is what made opening a 0-byte file show the previous document (#33):
 // x2t cannot unpack an empty file, but it finds the leftover docx_unpacked/,
@@ -304,6 +301,7 @@ async fn open_file_inner(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
+        &crate::temp_layout::fontdata_dir(&state.temp_root),
         text_options,
     )
     .await;
@@ -381,6 +379,7 @@ pub async fn save_file(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
+        &crate::temp_layout::fontdata_dir(&state.temp_root),
         text_options,
     )
     .await?;
@@ -415,6 +414,7 @@ pub async fn save_file_as(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
+        &crate::temp_layout::fontdata_dir(&state.temp_root),
         text_options,
     )
     .await?;
@@ -537,6 +537,7 @@ pub async fn print_document(
         8192,
         513,
         &state.temp_dir.to_string_lossy(),
+        &crate::temp_layout::fontdata_dir(&state.temp_root),
         None,
     )
     .await
@@ -687,6 +688,7 @@ pub async fn convert_for_insert(
         format_from,
         format_to,
         &insert_dir.to_string_lossy(),
+        &crate::temp_layout::fontdata_dir(&state.temp_root),
         None,
     )
     .await?;
@@ -717,7 +719,7 @@ pub async fn convert_for_insert(
 
 #[tauri::command]
 pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
-    let path = state.temp_dir.join("fontdata").join("AllFonts.js");
+    let path = crate::temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
     std::fs::read_to_string(&path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
 }
 

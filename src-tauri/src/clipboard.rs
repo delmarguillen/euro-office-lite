@@ -2,13 +2,9 @@ use crate::file_ops::AppState;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
-fn clipboard_log(temp_dir: &Path, msg: &str) {
+fn clipboard_log(msg: &str) {
     eprintln!("{}", msg);
-    let log_path = temp_dir.join("js-debug.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
-        use std::io::Write;
-        let _ = writeln!(f, "{}", msg);
-    }
+    crate::temp_layout::append_log(msg);
 }
 
 // Both clipboard reads are `async` commands whose blocking work runs on
@@ -58,7 +54,7 @@ fn read_clipboard_image_blocking(temp_dir: &Path) -> Result<Option<String>, Stri
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
         Err(e) => {
-            clipboard_log(temp_dir, &format!("[clipboard] Failed to open clipboard: {}", e));
+            clipboard_log(&format!("[clipboard] Failed to open clipboard: {}", e));
             return Ok(None);
         }
     };
@@ -67,24 +63,24 @@ fn read_clipboard_image_blocking(temp_dir: &Path) -> Result<Option<String>, Stri
     // not the actual image. file_list gives us the real file path.
     match read_clipboard_file_image(&mut clipboard, temp_dir) {
         Ok(Some(f)) => return Ok(Some(f)),
-        Ok(None) => clipboard_log(temp_dir, "[clipboard] file_list returned None, trying get_image"),
-        Err(e) => clipboard_log(temp_dir, &format!("[clipboard] file_list error: {}, trying get_image", e)),
+        Ok(None) => clipboard_log("[clipboard] file_list returned None, trying get_image"),
+        Err(e) => clipboard_log(&format!("[clipboard] file_list error: {}, trying get_image", e)),
     }
 
     let img = match clipboard.get_image() {
         Ok(img) => {
-            clipboard_log(temp_dir, &format!("[clipboard] get_image OK: {}x{}", img.width, img.height));
+            clipboard_log(&format!("[clipboard] get_image OK: {}x{}", img.width, img.height));
             img
         }
         Err(e) => {
-            clipboard_log(temp_dir, &format!("[clipboard] get_image failed: {}", e));
+            clipboard_log(&format!("[clipboard] get_image failed: {}", e));
             return Ok(None);
         }
     };
 
     let media_dir = temp_dir.join("media");
     if let Err(e) = std::fs::create_dir_all(&media_dir) {
-        clipboard_log(temp_dir, &format!("[clipboard] Failed to create media dir: {}", e));
+        clipboard_log(&format!("[clipboard] Failed to create media dir: {}", e));
         return Ok(None);
     }
 
@@ -99,17 +95,17 @@ fn read_clipboard_image_blocking(temp_dir: &Path) -> Result<Option<String>, Stri
         match image::ImageBuffer::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned()) {
             Some(buf) => buf,
             None => {
-                clipboard_log(temp_dir, "[clipboard] Failed to create image buffer");
+                clipboard_log("[clipboard] Failed to create image buffer");
                 return Ok(None);
             }
         };
 
     if let Err(e) = image_buf.save_with_format(&path, image::ImageFormat::Png) {
-        clipboard_log(temp_dir, &format!("[clipboard] Failed to save PNG: {}", e));
+        clipboard_log(&format!("[clipboard] Failed to save PNG: {}", e));
         return Ok(None);
     }
 
-    clipboard_log(temp_dir, &format!("[clipboard] Saved clipboard image to {:?}", path));
+    clipboard_log(&format!("[clipboard] Saved clipboard image to {:?}", path));
     Ok(Some(filename))
 }
 
@@ -120,11 +116,11 @@ fn read_clipboard_file_image(
     let files = match clipboard.get().file_list() {
         Ok(f) => {
             let paths: Vec<String> = f.iter().map(|p| format!("{:?}", p)).collect();
-            clipboard_log(temp_dir, &format!("[clipboard] file_list OK: {} files: [{}]", f.len(), paths.join(", ")));
+            clipboard_log(&format!("[clipboard] file_list OK: {} files: [{}]", f.len(), paths.join(", ")));
             f
         }
         Err(e) => {
-            clipboard_log(temp_dir, &format!("[clipboard] file_list failed: {}", e));
+            clipboard_log(&format!("[clipboard] file_list failed: {}", e));
             return Ok(None);
         }
     };
@@ -148,26 +144,26 @@ fn read_clipboard_file_image(
             .and_then(|e| e.to_str())
             .map(|e| IMAGE_EXTS.contains(&e.to_lowercase().as_str()))
             .unwrap_or(false);
-        clipboard_log(temp_dir, &format!("[clipboard] checking {:?} -> ext_match={}", p, ext_match));
+        clipboard_log(&format!("[clipboard] checking {:?} -> ext_match={}", p, ext_match));
         ext_match
     });
     let src = match src {
         Some(p) => {
             let exists = p.exists();
             let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-            clipboard_log(temp_dir, &format!("[clipboard] selected source: {:?} (exists={}, size={})", p, exists, size));
+            clipboard_log(&format!("[clipboard] selected source: {:?} (exists={}, size={})", p, exists, size));
             p
         }
         None => {
-            clipboard_log(temp_dir, "[clipboard] no image file found in file_list");
+            clipboard_log("[clipboard] no image file found in file_list");
             return Ok(None);
         }
     };
 
     let media_dir = temp_dir.join("media");
-    clipboard_log(temp_dir, &format!("[clipboard] media_dir: {:?}", media_dir));
+    clipboard_log(&format!("[clipboard] media_dir: {:?}", media_dir));
     if let Err(e) = std::fs::create_dir_all(&media_dir) {
-        clipboard_log(temp_dir, &format!("[clipboard] Failed to create media dir: {}", e));
+        clipboard_log(&format!("[clipboard] Failed to create media dir: {}", e));
         return Ok(None);
     }
 
@@ -179,19 +175,19 @@ fn read_clipboard_file_image(
     let dest_name = format!("clipboard_file_{}.{}", timestamp, ext);
     let dest = media_dir.join(&dest_name);
 
-    clipboard_log(temp_dir, &format!("[clipboard] copying {:?} -> {:?}", src, dest));
+    clipboard_log(&format!("[clipboard] copying {:?} -> {:?}", src, dest));
     match std::fs::copy(&src, &dest) {
         Ok(bytes) => {
-            clipboard_log(temp_dir, &format!("[clipboard] copy OK: {} bytes written", bytes));
+            clipboard_log(&format!("[clipboard] copy OK: {} bytes written", bytes));
         }
         Err(e) => {
-            clipboard_log(temp_dir, &format!("[clipboard] copy FAILED: {}", e));
+            clipboard_log(&format!("[clipboard] copy FAILED: {}", e));
             return Ok(None);
         }
     }
 
     let dest_exists = dest.exists();
     let dest_size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
-    clipboard_log(temp_dir, &format!("[clipboard] result: dest_name={}, dest_exists={}, dest_size={}", dest_name, dest_exists, dest_size));
+    clipboard_log(&format!("[clipboard] result: dest_name={}, dest_exists={}, dest_size={}", dest_name, dest_exists, dest_size));
     Ok(Some(dest_name))
 }

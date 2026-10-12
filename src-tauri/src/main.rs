@@ -8,6 +8,7 @@ mod file_ops;
 mod note_separator;
 mod recent;
 mod recovery;
+mod temp_layout;
 mod text_import;
 
 use file_ops::AppState;
@@ -34,16 +35,27 @@ fn percent_decode_str(input: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| input.to_string())
 }
 
-fn log_startup(temp_dir: &std::path::Path, msg: &str) {
-    use std::io::Write;
-    let log_path = temp_dir.join("js-debug.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
-        let _ = writeln!(f, "[STARTUP] {}", msg);
+fn log_startup(msg: &str) {
+    temp_layout::append_log(&format!("[STARTUP] {}", msg));
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+// Two tries: the id carries the millisecond, so the second one is a new folder.
+fn start_instance(root: &std::path::Path) -> temp_layout::Instance {
+    let pid = std::process::id();
+    for _ in 0..2 {
+        if let Ok(instance) = temp_layout::begin_instance(root, now_ms(), pid) {
+            return instance;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
+    temp_layout::unlocked_instance(root, now_ms(), pid)
 }
 
 // x2t runs with a different working directory, so a relative launch argument
@@ -76,24 +88,28 @@ fn main() {
     // The user-facing version comes from tauri.conf.json; Cargo's crate version stays independent.
     let app_version = context.package_info().version.clone();
 
-    #[cfg(target_os = "macos")]
-    let temp_dir = std::path::PathBuf::from("/tmp/euro-office-lite");
-    #[cfg(not(target_os = "macos"))]
-    let temp_dir = std::env::temp_dir().join("euro-office-lite");
-    std::fs::create_dir_all(&temp_dir).ok();
+    // The root is shared by every instance; the document's files go in this
+    // process's own folder under it (temp_layout.rs).
+    let temp_root = temp_layout::temp_root();
+    std::fs::create_dir_all(&temp_root).ok();
+    let instance = start_instance(&temp_root);
+    let temp_dir = instance.dir.clone();
 
-    {
-        use std::io::Write;
-        let log_path = temp_dir.join("js-debug.log");
-        if let Ok(mut f) = std::fs::File::create(&log_path) {
-            let _ = writeln!(
-                f,
-                "[STARTUP] Euro Office Lite {} platform={} arch={}",
-                app_version,
-                std::env::consts::OS,
-                std::env::consts::ARCH
-            );
-        }
+    temp_layout::start_log(
+        &temp_root,
+        &instance.id,
+        &format!(
+            "[STARTUP] Euro Office Lite {} platform={} arch={}",
+            app_version,
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    );
+    if !instance.holds_lock() {
+        log_startup(&format!(
+            "WARNING: could not lock the instance folder {}",
+            temp_dir.display()
+        ));
     }
 
     #[cfg(target_os = "linux")]
@@ -109,13 +125,10 @@ fn main() {
             .unwrap_or_else(|_| "unknown".to_string());
         let dmabuf = std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER")
             .unwrap_or_else(|_| "unset".to_string());
-        log_startup(
-            &temp_dir,
-            &format!(
-                "Linux distro={} session={} desktop={} WEBKIT_DISABLE_DMABUF_RENDERER={}",
-                distro, session, desktop, dmabuf
-            ),
-        );
+        log_startup(&format!(
+            "Linux distro={} session={} desktop={} WEBKIT_DISABLE_DMABUF_RENDERER={}",
+            distro, session, desktop, dmabuf
+        ));
     }
 
     let file_to_open: Option<String> = {
@@ -132,7 +145,7 @@ fn main() {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("unknown");
-            log_startup(&temp_dir, &format!("Opening associated file: {}", file_name));
+            log_startup(&format!("Opening associated file: {}", file_name));
         }
         path
     };
@@ -148,7 +161,9 @@ fn main() {
 
     builder.manage(AppState {
             current_file: Mutex::new(None),
-            temp_dir: temp_dir.clone(),
+            temp_dir,
+            temp_root: temp_root.clone(),
+            instance,
             modified: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
@@ -388,7 +403,7 @@ fn main() {
                 std::fs::read(abs_path).ok()
             } else if decoded_path.ends_with("sdkjs/common/AllFonts.js") {
                 let state = ctx.app_handle().state::<AppState>();
-                let generated = state.temp_dir.join("fontdata").join("AllFonts.js");
+                let generated = temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
                 std::fs::read(&generated).ok().or_else(|| {
                     let resource_dir = ctx.app_handle().path().resource_dir().unwrap_or_default();
                     let candidates = [
@@ -452,10 +467,15 @@ fn main() {
             let binaries_dir = resource_dir.join("binaries");
 
             if !binaries_dir.is_dir() {
-                log_startup(&temp_dir, "ERROR: bundled binaries directory is missing");
+                log_startup("ERROR: bundled binaries directory is missing");
             }
 
-            run_font_generation(&temp_dir, &binaries_dir);
+            run_font_generation(&temp_root, &binaries_dir);
+
+            // Off the startup path: nothing on screen waits for it.
+            let sweep_root = temp_root.clone();
+            let sweep_handle = app.handle().clone();
+            std::thread::spawn(move || sweep_leftovers(&sweep_handle, &sweep_root));
 
             let handle = app.handle().clone();
             if let Some(window) = app.get_webview_window("main") {
@@ -473,12 +493,11 @@ fn main() {
                 #[cfg(target_os = "linux")]
                 {
                     use gtk::prelude::*;
-                    let pinch_log = temp_dir.clone();
                     let reported = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let eval_window = window.clone();
                     if let Err(e) = window.with_webview(move |webview| {
                         let wv = webview.inner();
-                        log_startup(&pinch_log, "pinch guard installed at GTK level");
+                        log_startup("pinch guard installed at GTK level");
 
                         // gdk 0.18 mis-generates the phase accessor as is_phase() -> bool,
                         // so gesture boundaries are inferred from the event timestamps
@@ -493,7 +512,7 @@ fn main() {
                                 return gtk::glib::Propagation::Proceed;
                             }
                             if !reported.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                                log_startup(&pinch_log, "touchpad pinch seen at GTK level, event claimed");
+                                log_startup("touchpad pinch seen at GTK level, event claimed");
                             }
 
                             if let Some(pinch) = event.downcast_ref::<gtk::gdk::EventTouchpadPinch>() {
@@ -528,7 +547,7 @@ fn main() {
                             gtk::glib::Propagation::Stop
                         });
                     }) {
-                        log_startup(&temp_dir, &format!("ERROR: pinch guard not installed: {e}"));
+                        log_startup(&format!("ERROR: pinch guard not installed: {e}"));
                     }
                 }
 
@@ -555,9 +574,33 @@ fn main() {
         // killed process never runs this, which is the case the folder is for.
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
-                recovery::end_session(&app_handle.state::<AppState>(), true);
+                let state = app_handle.state::<AppState>();
+                recovery::end_session(&state, true);
+                state.instance.end();
             }
         });
+}
+
+// Folders and logs of instances that are gone. Which folders a crashed
+// document still needs is only known from the recovery folders, so without
+// them nothing is removed.
+fn sweep_leftovers(app: &tauri::AppHandle, root: &std::path::Path) {
+    let Ok(recover_root) = recovery::recover_root(app) else {
+        return;
+    };
+    let referenced = recovery::referenced_instances(&recover_root);
+    let removed =
+        temp_layout::sweep_dead_instances(root, now_ms(), &referenced, temp_layout::is_locked);
+    let pruned = temp_layout::prune_logs(root, temp_layout::LOGS_KEPT, |id| {
+        temp_layout::instance_alive(root, id)
+    });
+    if !removed.is_empty() || !pruned.is_empty() {
+        log_startup(&format!(
+            "Removed {} folders and {} logs of closed instances",
+            removed.len(),
+            pruned.len()
+        ));
+    }
 }
 
 // x2t does not use fontconfig: it scans a fixed list of directories
@@ -688,18 +731,18 @@ fn symlink_scan_roots() -> Vec<std::path::PathBuf> {
     Vec::new()
 }
 
-fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Path) {
-    let marker = temp_dir.join(".fonts_generated");
+fn run_font_generation(temp_root: &std::path::Path, binaries_dir: &std::path::Path) {
+    let marker = temp_root.join(".fonts_generated");
 
-    let allfonts_server = temp_dir.join("fontdata").join("AllFonts.js");
+    let allfonts_server = temp_layout::fontdata_dir(temp_root).join("AllFonts.js");
     if marker.exists() && allfonts_server.exists() {
         return;
     }
     if marker.exists() && !allfonts_server.exists() {
-        log_startup(temp_dir, "Marker exists but fontdata/AllFonts.js missing, regenerating");
+        log_startup("Marker exists but fontdata/AllFonts.js missing, regenerating");
     }
 
-    log_startup(temp_dir, "First-run font generation starting...");
+    log_startup("First-run font generation starting...");
 
     let mut search_dirs = vec![
         binaries_dir.to_path_buf(),
@@ -730,13 +773,13 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
     let x2t_exe = match x2t_exe {
         Some(p) => p,
         None => {
-            log_startup(temp_dir, "ERROR: x2t executable not found, cannot generate fonts");
+            log_startup("ERROR: x2t executable not found, cannot generate fonts");
             return;
         }
     };
 
     let fonts_dir = binaries_dir.join("fonts");
-    let fontdata_dir = temp_dir.join("fontdata");
+    let fontdata_dir = temp_layout::fontdata_dir(temp_root);
     let _ = std::fs::create_dir_all(&fontdata_dir);
     let fontdata_str = fontdata_dir.to_string_lossy().to_string();
     let fonts_str = fonts_dir.to_string_lossy().to_string();
@@ -747,19 +790,19 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
         .arg(&fontdata_str)
         .arg(&fonts_str);
     for dir in extra_font_dirs() {
-        log_startup(temp_dir, &format!("Extra font directory: {}", dir.display()));
+        log_startup(&format!("Extra font directory: {}", dir.display()));
         cmd.arg(dir);
     }
     let symlink_dirs = symlink_font_target_dirs(&symlink_scan_roots());
     for dir in &symlink_dirs {
-        log_startup(temp_dir, &format!("Symlink font target directory: {}", dir.display()));
+        log_startup(&format!("Symlink font target directory: {}", dir.display()));
         cmd.arg(dir);
     }
     if !symlink_dirs.is_empty() {
-        log_startup(
-            temp_dir,
-            &format!("Symlink font target directories resolved: {}", symlink_dirs.len()),
-        );
+        log_startup(&format!(
+            "Symlink font target directories resolved: {}",
+            symlink_dirs.len()
+        ));
     }
     #[cfg(target_os = "linux")]
     cmd.env("LD_LIBRARY_PATH", binaries_dir);
@@ -774,26 +817,20 @@ fn run_font_generation(temp_dir: &std::path::Path, binaries_dir: &std::path::Pat
                 let selection_size = std::fs::metadata(fontdata_dir.join("font_selection.bin"))
                     .map(|metadata| metadata.len())
                     .unwrap_or(0);
-                log_startup(
-                    temp_dir,
-                    &format!(
-                        "Font generation complete: AllFonts.js={} bytes, font_selection.bin={} bytes",
-                        allfonts_size, selection_size
-                    ),
-                );
+                log_startup(&format!(
+                    "Font generation complete: AllFonts.js={} bytes, font_selection.bin={} bytes",
+                    allfonts_size, selection_size
+                ));
             } else {
-                log_startup(
-                    temp_dir,
-                    &format!(
-                        "ERROR: Font generation failed (exit code {}): {}",
-                        code,
-                        String::from_utf8_lossy(&result.stderr).trim()
-                    ),
-                );
+                log_startup(&format!(
+                    "ERROR: Font generation failed (exit code {}): {}",
+                    code,
+                    String::from_utf8_lossy(&result.stderr).trim()
+                ));
             }
         }
         Err(e) => {
-            log_startup(temp_dir, &format!("ERROR: Font generation failed: {}", e));
+            log_startup(&format!("ERROR: Font generation failed: {}", e));
         }
     }
 }

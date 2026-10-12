@@ -9,13 +9,22 @@ pub async fn convert_file(
     _format_from: i32,
     format_to: i32,
     temp_dir: &str,
+    // The shared font cache: the PDF export reads it, every other conversion
+    // ignores it.
+    fontdata_dir: &std::path::Path,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<String, String> {
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let binaries_dir = resource_dir.join("binaries");
 
     if format_to == 513 {
-        return convert_to_pdf(&binaries_dir, input, output, std::path::Path::new(temp_dir));
+        return convert_to_pdf(
+            &binaries_dir,
+            input,
+            output,
+            std::path::Path::new(temp_dir),
+            fontdata_dir,
+        );
     }
 
     let params_path = params_path(std::path::Path::new(temp_dir), "convert");
@@ -67,24 +76,8 @@ pub async fn convert_file(
     }
 }
 
-fn log_pdf(temp_dir: &std::path::Path, msg: &str) {
-    use std::io::Write;
-    if let Err(e) = std::fs::create_dir_all(temp_dir) {
-        eprintln!(
-            "[PDF] Failed to create log directory {}: {}",
-            temp_dir.display(),
-            e
-        );
-        return;
-    }
-    let log_path = temp_dir.join("js-debug.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
-        let _ = writeln!(f, "[PDF] {}", msg);
-    }
+fn log_pdf(msg: &str) {
+    crate::temp_layout::append_log(&format!("[PDF] {}", msg));
 }
 
 fn path_error(action: &str, path: &std::path::Path, error: std::io::Error) -> String {
@@ -268,26 +261,23 @@ fn convert_to_pdf(
     input: &str,
     output: &str,
     temp_dir: &std::path::Path,
+    fontdata_dir: &std::path::Path,
 ) -> Result<String, String> {
     let binaries_dir = &strip_extended_prefix(binaries_dir);
     let output_name = std::path::Path::new(output)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown.pdf");
-    log_pdf(
-        temp_dir,
-        &format!(
-            "start platform={} output={}",
-            std::env::consts::OS,
-            output_name
-        ),
-    );
+    log_pdf(&format!(
+        "start platform={} output={}",
+        std::env::consts::OS,
+        output_name
+    ));
     let x2t_exe = find_x2t_exe(binaries_dir).map_err(|error| {
-        log_pdf(temp_dir, &format!("x2t discovery failed: {}", error));
+        log_pdf(&format!("x2t discovery failed: {}", error));
         error
     })?;
     let fonts_dir = binaries_dir.join("fonts");
-    let fontdata_dir = temp_dir.join("fontdata");
     let editors_dir = binaries_dir
         .parent()
         .unwrap_or(binaries_dir)
@@ -305,7 +295,7 @@ fn convert_to_pdf(
             allfonts_fontdata.display(),
             allfonts_binaries.display()
         );
-        log_pdf(temp_dir, &format!("setup failed: {}", error));
+        log_pdf(&format!("setup failed: {}", error));
         return Err(error);
     };
 
@@ -318,7 +308,7 @@ fn convert_to_pdf(
     };
 
     validate_editor_resources(&editors_dir).map_err(|error| {
-        log_pdf(temp_dir, &format!("setup failed: {}", error));
+        log_pdf(&format!("setup failed: {}", error));
         error
     })?;
 
@@ -355,10 +345,7 @@ fn convert_to_pdf(
     );
 
     let (run_dir, run_x2t, run_allfonts, run_fonts) = runtime.map_err(|error| {
-        log_pdf(
-            temp_dir,
-            &format!("setup failed strategy={}: {}", runtime_strategy, error),
-        );
+        log_pdf(&format!("setup failed strategy={}: {}", runtime_strategy, error));
         error
     })?;
 
@@ -399,7 +386,7 @@ fn convert_to_pdf(
 
     let result = cmd.output().map_err(|error| {
         let message = format!("Failed to spawn x2t: {}", error);
-        log_pdf(temp_dir, &message);
+        log_pdf(&message);
         message
     })?;
     let _ = std::fs::remove_file(&params_xml);
@@ -407,34 +394,25 @@ fn convert_to_pdf(
     let pdf_exists = std::path::Path::new(output).exists();
     let pdf_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
     if result.status.success() {
-        log_pdf(temp_dir, &format!("success pdf_size={}", pdf_size));
+        log_pdf(&format!("success pdf_size={}", pdf_size));
     } else {
-        log_pdf(
-            temp_dir,
-            &format!(
-                "failed exit={} pdf_exists={} pdf_size={}",
-                code, pdf_exists, pdf_size
-            ),
-        );
+        log_pdf(&format!(
+            "failed exit={} pdf_exists={} pdf_size={}",
+            code, pdf_exists, pdf_size
+        ));
     }
     if !result.status.success() && !result.stdout.is_empty() {
-        log_pdf(
-            temp_dir,
-            &format!("x2t stdout: {}", String::from_utf8_lossy(&result.stdout)),
-        );
+        log_pdf(&format!("x2t stdout: {}", String::from_utf8_lossy(&result.stdout)));
     }
     if !result.status.success() && !result.stderr.is_empty() {
-        log_pdf(
-            temp_dir,
-            &format!("x2t stderr: {}", String::from_utf8_lossy(&result.stderr)),
-        );
+        log_pdf(&format!("x2t stderr: {}", String::from_utf8_lossy(&result.stderr)));
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use std::os::unix::process::ExitStatusExt;
         if let Some(sig) = result.status.signal() {
-            log_pdf(temp_dir, &format!("x2t killed by signal {}", sig));
+            log_pdf(&format!("x2t killed by signal {}", sig));
         }
     }
 

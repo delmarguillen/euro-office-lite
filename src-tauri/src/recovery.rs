@@ -23,6 +23,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 
 use crate::file_ops::{log_event, AppState};
+use crate::temp_layout::{is_locked, take_lock};
 
 // Around 84 bytes per typed character, so half an hour of continuous typing is
 // well under a megabyte: this is a stop against a runaway loop filling the
@@ -60,6 +61,10 @@ pub struct DocInfo {
     pub saved_count: usize,
     #[serde(default)]
     pub created_ms: u64,
+    // The instance whose temp folder holds the document's images (the
+    // <millis>-<pid> of temp_layout). None in folders written before that.
+    #[serde(default)]
+    pub instance: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -382,53 +387,17 @@ pub fn scan_candidates(
     candidates
 }
 
-// ---------------------------------------------------------------------------
-// Locking
-// ---------------------------------------------------------------------------
-
-// No crate for this on purpose: fs2 and friends are a dependency for two calls,
-// and the backend already cannot be built on the work machine (CLAUDE.md), so
-// every added dependency is one that only CI can prove. Windows gets it from
-// the share mode, Unix from flock.
-#[cfg(target_os = "windows")]
-fn open_locked(path: &Path, create: bool) -> std::io::Result<std::fs::File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(create)
-        .share_mode(0)
-        .open(path)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn open_locked(path: &Path, create: bool) -> std::io::Result<std::fs::File> {
-    use std::os::unix::io::AsRawFd;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(create)
-        .open(path)?;
-    // Non-blocking: a lock that is taken has to answer "taken" right away, not
-    // hang the start screen behind another instance.
-    let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if taken != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(file)
-}
-
-pub fn take_lock(path: &Path) -> std::io::Result<std::fs::File> {
-    open_locked(path, true)
-}
-
-// A missing lock file is not a live process, and this must not create one:
-// scanning would then turn every folder it looked at into one holding a lock.
-pub fn is_locked(path: &Path) -> bool {
-    if !path.exists() {
-        return false;
-    }
-    open_locked(path, false).is_err()
+// The instances whose temp folders hold the images of a document that is
+// still in a recovery folder, so the sweep of dead instances leaves them.
+pub fn referenced_instances(root: &Path) -> std::collections::HashSet<String> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return std::collections::HashSet::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| read_doc_info(&entry.path()))
+        .filter_map(|info| info.instance)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -514,6 +483,7 @@ pub fn recovery_begin(
             app_version: app.package_info().version.to_string(),
             saved_count: 0,
             created_ms: now_ms(),
+            instance: Some(state.instance.id.clone()),
         },
     )?;
 
@@ -707,6 +677,26 @@ pub fn recovery_load(
 
     if let Some(path) = &path {
         *state.current_file.lock().unwrap() = Some(PathBuf::from(path));
+    }
+
+    // The folder only holds the document and its changes; the images it
+    // points at are in the temp folder of the instance that had it open. The
+    // recovered document replaces whatever this instance had, so its images
+    // are cleared like any open does, then the crashed instance's copied in.
+    crate::file_ops::clear_document_temp(&state.temp_dir);
+    let media_src = crate::temp_layout::recovery_media_source(
+        &state.temp_root,
+        info.as_ref().and_then(|info| info.instance.as_deref()),
+    );
+    match crate::temp_layout::copy_media(&media_src, &state.temp_dir.join("media")) {
+        Ok(copied) => log_event(&state, &format!("[RECOVER] images copied={}", copied)),
+        Err(e) => log_event(&state, &format!("[RECOVER] images not copied: {}", e)),
+    }
+    // From now on the images live here, and the crashed instance's folder is
+    // free to go.
+    if let Some(mut info) = info.clone() {
+        info.instance = Some(state.instance.id.clone());
+        let _ = write_doc_info(&dir, &info);
     }
 
     log_event(
@@ -1048,6 +1038,7 @@ mod tests {
                     app_version: "0.17.19-alpha".into(),
                     saved_count,
                     created_ms,
+                    instance: None,
                 },
             )
             .unwrap();
@@ -1197,46 +1188,5 @@ mod tests {
     fn scanning_a_root_that_does_not_exist_yet_is_a_noop() {
         let root = scratch().join("never-created");
         assert!(scan_unlocked(&root).is_empty());
-    }
-
-    // --- locking ----------------------------------------------------------
-
-    // The detection this whole design rests on: a lock file that no process
-    // holds opens without complaint, so a folder left by a killed process
-    // reads as recoverable rather than as live.
-    #[test]
-    fn an_orphan_lock_file_does_not_read_as_locked() {
-        let dir = scratch();
-        let path = dir.join(LOCK_FILE);
-        std::fs::write(&path, b"").unwrap();
-
-        assert!(!is_locked(&path));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_held_lock_reads_as_locked_and_frees_when_dropped() {
-        let dir = scratch();
-        let path = dir.join(LOCK_FILE);
-
-        let held = take_lock(&path).unwrap();
-        assert!(is_locked(&path), "a live session owns its folder");
-
-        drop(held);
-        assert!(!is_locked(&path), "the OS frees the lock when the process goes");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_missing_lock_file_is_not_created_by_the_check() {
-        let dir = scratch();
-        let path = dir.join(LOCK_FILE);
-
-        assert!(!is_locked(&path));
-        assert!(!path.exists(), "scanning must not lock the folders it looks at");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
