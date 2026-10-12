@@ -78,11 +78,13 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# The app puts its log under $TMPDIR/euro-office-lite, so the launch has to use
-# the same TMPDIR this script reads from or the assertions would look at a
-# different file.
+# The app puts its logs under $TMPDIR/euro-office-lite-<uid>, so the launch has
+# to use the same TMPDIR this script reads from or the assertions would look at
+# a different file. Every process writes its own js-debug-<millis>-<pid>.log;
+# launch_app points APP_LOG at the one the process it started created.
 TMPROOT="${TMPDIR:-/tmp}"
-APP_LOG="$TMPROOT/euro-office-lite/js-debug.log"
+APP_LOG_DIR="$TMPROOT/euro-office-lite-$(id -u)"
+APP_LOG=""
 
 PASSED=0
 XVFB_PID=""
@@ -181,11 +183,20 @@ start_xvfb() {
     say "Xvfb running on :$DISPLAY_NUM (pid $XVFB_PID)"
 }
 
+# The newest log by the numbers in its name: the last process started.
+latest_app_log() {
+    ls -1 "$APP_LOG_DIR" 2>/dev/null \
+        | grep -E '^js-debug-[0-9]+-[0-9]+\.log$' \
+        | sort -t- -k3,3n -k4,4n \
+        | tail -1 || true
+}
+
 # Launches the app and waits for the inspector target. Both inspector variables
 # are needed: the socket port accepts connections but does not speak HTTP, the
 # HTTP port is the one that serves the target list.
 launch_app() {
-    local phase="$1" waited=0
+    local phase="$1" waited=0 before current
+    before=$(latest_app_log)
     : >"$LAUNCH_LOG"
     setsid nohup env \
         DISPLAY=":$DISPLAY_NUM" \
@@ -197,6 +208,13 @@ launch_app() {
         if curl -s --max-time 5 "http://127.0.0.1:$HTTP_PORT/" 2>/dev/null \
             | grep -q 'socket/[0-9]*/[0-9]*/WebPage'; then
             ok "inspector-target-$phase" "up after ${waited}s"
+            # The log is created before the window, so by now it is there.
+            current=$(latest_app_log)
+            if [ -z "$current" ] || [ "$current" = "$before" ]; then
+                fail "app-log-$phase" "no new js-debug-*.log in $APP_LOG_DIR"
+            fi
+            APP_LOG="$APP_LOG_DIR/$current"
+            say "app log: $APP_LOG"
             return 0
         fi
         if ! pgrep -x euro-office-lit >/dev/null 2>&1 && [ "$waited" -ge 10 ]; then
@@ -288,8 +306,8 @@ assert_log_clean() {
     ok "$name" "no [JS-ERROR] / [IFRAME-ERROR]"
 }
 
-# The app truncates js-debug.log on every start, so the copy has to happen
-# before the next launch or the evidence is gone.
+# Each launch writes its own log; the copies keep them next to the launch
+# output under the name of the phase.
 save_log() {
     cp "$APP_LOG" "$DIAG_DIR/js-debug-$1.log" 2>/dev/null || true
     cp "$LAUNCH_LOG" "$DIAG_DIR/eo-launch-$1.log" 2>/dev/null || true
@@ -300,7 +318,6 @@ save_log() {
 start_xvfb
 
 say "expected version: $EXPECTED_VERSION"
-say "app log: $APP_LOG"
 
 launch_app "start"
 

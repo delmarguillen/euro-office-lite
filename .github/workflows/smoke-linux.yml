@@ -112,6 +112,6 @@ jobs:
           path: |
             /tmp/eo-smoke/
             /tmp/eo-launch.log
-            /tmp/euro-office-lite/js-debug.log
+            /tmp/euro-office-lite-*/js-debug-*.log
           if-no-files-found: warn
           retention-days: 7
