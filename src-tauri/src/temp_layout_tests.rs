@@ -703,6 +703,23 @@ fn a_partial_clear_stops_the_open_instead_of_mixing_two_documents() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// A media/ that cannot even be listed is not known to be empty: when moving and
+// removing it both fail, the open stops as it does for leftovers. Here it
+// cannot be listed because it is a file, which read_dir refuses on every OS.
+#[test]
+fn an_unlistable_media_folder_stops_the_open_instead_of_counting_as_empty() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    std::fs::write(a.dir.join("media"), ORIGIN_IMAGE).unwrap();
+
+    let outcome = begin_document_with(&a.dir, 1, 2, fail_rename, |_| {
+        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "in use"))
+    });
+    assert!(outcome.is_err(), "{:?}", outcome);
+    assert_eq!(read_doc_seq(&a.dir), Some(1), "the open document did not change");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // --- the root on Linux and macOS ---------------------------------------------------
 //
 // Only compiled on Unix. A folder owned by another user cannot be made here

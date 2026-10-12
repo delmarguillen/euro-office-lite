@@ -392,10 +392,14 @@ pub fn previous_media_dir(dir: &Path, seq: u64) -> PathBuf {
     dir.join(PREVIOUS_DOCS_DIR).join(seq.to_string()).join("media")
 }
 
-fn has_entries(dir: &Path) -> bool {
-    std::fs::read_dir(dir)
-        .map(|mut entries| entries.next().is_some())
-        .unwrap_or(false)
+// Ok(false) for a folder that is missing or empty. A folder that cannot be
+// listed is not known to be empty, so that is an error, not false.
+fn has_entries(dir: &Path) -> std::io::Result<bool> {
+    match std::fs::read_dir(dir) {
+        Ok(mut entries) => Ok(entries.next().is_some()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -432,7 +436,8 @@ pub fn begin_document_with(
 ) -> Result<OutgoingImages, String> {
     let media = dir.join("media");
     let mut outcome = OutgoingImages::None;
-    if has_entries(&media) {
+    // One that cannot be listed may still hold images: try to move it too.
+    if !matches!(has_entries(&media), Ok(false)) {
         let dest = previous_media_dir(dir, old_seq);
         let mut last_error = String::new();
         let mut moved = false;
@@ -462,11 +467,21 @@ pub fn begin_document_with(
             OutgoingImages::Dropped(last_error)
         };
     }
-    if has_entries(&media) {
-        return Err(format!(
-            "the previous document's images could not be cleared from {}",
-            media.display()
-        ));
+    match has_entries(&media) {
+        Ok(false) => {}
+        Ok(true) => {
+            return Err(format!(
+                "the previous document's images could not be cleared from {}",
+                media.display()
+            ))
+        }
+        Err(e) => {
+            return Err(format!(
+                "cannot tell whether {} still holds the previous document's images: {}",
+                media.display(),
+                e
+            ))
+        }
     }
     write_doc_seq(dir, new_seq).map_err(|e| format!("cannot record the open document: {}", e))?;
     prune_previous(dir, new_seq, PREVIOUS_DOCS_KEPT);
