@@ -114,8 +114,10 @@ Only English and Spanish come preinstalled for now; every other language is adde
 
 ## Log files
 
-- **Windows**: `%TEMP%\euro-office-lite\js-debug.log`
-- **macOS / Linux**: `/tmp/euro-office-lite/js-debug.log`
+Each window of the app writes its own log, `js-debug-<number>-<number>.log`. The newest one has the highest first number.
+
+- **Windows**: `%TEMP%\euro-office-lite\`
+- **macOS / Linux**: `/tmp/euro-office-lite-<user id>/` (`id -u` shows your user id)
 
 ## Credits and attribution
 
