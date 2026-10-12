@@ -94,10 +94,11 @@ fn main() {
     std::fs::create_dir_all(&temp_root).ok();
     let instance = start_instance(&temp_root);
     let temp_dir = instance.dir.clone();
+    let instance_id = instance.id.clone();
 
     temp_layout::start_log(
         &temp_root,
-        &instance.id,
+        &instance_id,
         &format!(
             "[STARTUP] Euro Office Lite {} platform={} arch={}",
             app_version,
@@ -470,7 +471,7 @@ fn main() {
                 log_startup("ERROR: bundled binaries directory is missing");
             }
 
-            run_font_generation(&temp_root, &binaries_dir);
+            run_font_generation(&temp_root, &instance_id, &binaries_dir);
 
             // Off the startup path: nothing on screen waits for it.
             let sweep_root = temp_root.clone();
@@ -731,17 +732,41 @@ fn symlink_scan_roots() -> Vec<std::path::PathBuf> {
     Vec::new()
 }
 
-fn run_font_generation(temp_root: &std::path::Path, binaries_dir: &std::path::Path) {
-    let marker = temp_root.join(".fonts_generated");
+// The font cache is shared by every instance and slow to build (about 30 s on
+// a Raspberry Pi), so an instance that starts while another is building it
+// waits for that run, up to this long, instead of building it again.
+const FONT_CACHE_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+const FONT_CACHE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-    let allfonts_server = temp_layout::fontdata_dir(temp_root).join("AllFonts.js");
-    if marker.exists() && allfonts_server.exists() {
-        return;
-    }
-    if marker.exists() && !allfonts_server.exists() {
+fn run_font_generation(
+    temp_root: &std::path::Path,
+    instance_id: &str,
+    binaries_dir: &std::path::Path,
+) {
+    let marker = temp_root.join(temp_layout::FONTS_MARKER);
+    if marker.exists() && !temp_layout::fonts_ready(temp_root) {
         log_startup("Marker exists but fontdata/AllFonts.js missing, regenerating");
     }
+    let outcome = temp_layout::ensure_font_cache(
+        temp_root,
+        instance_id,
+        |fontdata_dir: &std::path::Path| generate_fonts(fontdata_dir, binaries_dir),
+        FONT_CACHE_WAIT,
+        FONT_CACHE_POLL,
+    );
+    match outcome {
+        temp_layout::FontCache::GeneratedByOther => {
+            log_startup("Font cache built by another instance")
+        }
+        temp_layout::FontCache::GaveUp => log_startup(
+            "WARNING: another instance is still building the font cache, starting without it",
+        ),
+        _ => {}
+    }
+}
 
+// Runs x2t's font scan into `fontdata_dir` and reports whether it succeeded.
+fn generate_fonts(fontdata_dir: &std::path::Path, binaries_dir: &std::path::Path) -> bool {
     log_startup("First-run font generation starting...");
 
     let mut search_dirs = vec![
@@ -774,13 +799,11 @@ fn run_font_generation(temp_root: &std::path::Path, binaries_dir: &std::path::Pa
         Some(p) => p,
         None => {
             log_startup("ERROR: x2t executable not found, cannot generate fonts");
-            return;
+            return false;
         }
     };
 
     let fonts_dir = binaries_dir.join("fonts");
-    let fontdata_dir = temp_layout::fontdata_dir(temp_root);
-    let _ = std::fs::create_dir_all(&fontdata_dir);
     let fontdata_str = fontdata_dir.to_string_lossy().to_string();
     let fonts_str = fonts_dir.to_string_lossy().to_string();
 
@@ -810,7 +833,6 @@ fn run_font_generation(temp_root: &std::path::Path, binaries_dir: &std::path::Pa
         Ok(result) => {
             let code = result.status.code().unwrap_or(-1);
             if result.status.success() {
-                let _ = std::fs::write(&marker, "generated");
                 let allfonts_size = std::fs::metadata(fontdata_dir.join("AllFonts.js"))
                     .map(|metadata| metadata.len())
                     .unwrap_or(0);
@@ -821,16 +843,19 @@ fn run_font_generation(temp_root: &std::path::Path, binaries_dir: &std::path::Pa
                     "Font generation complete: AllFonts.js={} bytes, font_selection.bin={} bytes",
                     allfonts_size, selection_size
                 ));
+                true
             } else {
                 log_startup(&format!(
                     "ERROR: Font generation failed (exit code {}): {}",
                     code,
                     String::from_utf8_lossy(&result.stderr).trim()
                 ));
+                false
             }
         }
         Err(e) => {
             log_startup(&format!("ERROR: Font generation failed: {}", e));
+            false
         }
     }
 }

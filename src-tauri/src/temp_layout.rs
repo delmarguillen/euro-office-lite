@@ -17,6 +17,9 @@ use std::sync::{Mutex, OnceLock};
 pub const INSTANCES_DIR: &str = "instances";
 const INSTANCE_LOCK: &str = "instance.lock";
 const FONTDATA_DIR: &str = "fontdata";
+pub const FONTS_MARKER: &str = ".fonts_generated";
+const FONTS_LOCK: &str = "fonts.lock";
+const FONTS_STAGING_PREFIX: &str = "fontdata.new-";
 const LOG_PREFIX: &str = "js-debug-";
 const LOG_SUFFIX: &str = ".log";
 
@@ -203,6 +206,100 @@ pub fn sweep_dead_instances(
 
 pub fn fontdata_dir(root: &Path) -> PathBuf {
     root.join(FONTDATA_DIR)
+}
+
+pub fn fonts_ready(root: &Path) -> bool {
+    root.join(FONTS_MARKER).exists()
+        && std::fs::metadata(fontdata_dir(root).join("AllFonts.js"))
+            .map(|metadata| metadata.len() > 0)
+            .unwrap_or(false)
+}
+
+// Moves each generated file over its counterpart in fontdata/. A rename
+// replaces in one step, so an instance reading the cache meanwhile gets the
+// old file or the new one, never half of one.
+fn install_font_cache(staging: &Path, fontdata: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(fontdata)?;
+    for entry in std::fs::read_dir(staging)?.flatten() {
+        let target = fontdata.join(entry.file_name());
+        if entry.path().is_dir() {
+            let _ = std::fs::remove_dir_all(&target);
+        }
+        std::fs::rename(entry.path(), &target)?;
+    }
+    let _ = std::fs::remove_dir_all(staging);
+    Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+pub enum FontCache {
+    Ready,
+    Generated,
+    GeneratedByOther,
+    Failed,
+    GaveUp,
+}
+
+// Builds the shared font cache if it is missing. One instance generates at a
+// time; one that starts meanwhile waits for that run instead of writing the
+// same files, and after `timeout` goes on without it. `generate` writes into
+// the folder it is handed and reports success.
+pub fn ensure_font_cache(
+    root: &Path,
+    instance_id: &str,
+    generate: impl FnOnce(&Path) -> bool,
+    timeout: std::time::Duration,
+    poll: std::time::Duration,
+) -> FontCache {
+    if fonts_ready(root) {
+        return FontCache::Ready;
+    }
+    let started = std::time::Instant::now();
+    let mut waited = false;
+    let lock = loop {
+        match take_lock(&root.join(FONTS_LOCK)) {
+            Ok(lock) => break lock,
+            Err(_) if started.elapsed() >= timeout => return FontCache::GaveUp,
+            Err(_) => {
+                waited = true;
+                std::thread::sleep(poll);
+            }
+        }
+    };
+    if fonts_ready(root) {
+        return if waited {
+            FontCache::GeneratedByOther
+        } else {
+            FontCache::Ready
+        };
+    }
+    // Holding the lock means nobody else is generating, so a staging folder
+    // still here is what a generator that died left behind.
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(FONTS_STAGING_PREFIX) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let staging = root.join(format!("{}{}", FONTS_STAGING_PREFIX, instance_id));
+    let generated = std::fs::create_dir_all(&staging).is_ok() && generate(&staging);
+    let installed = generated
+        && install_font_cache(&staging, &fontdata_dir(root)).is_ok()
+        && write_replacing(&root.join(FONTS_MARKER), b"generated", instance_id).is_ok();
+    let _ = std::fs::remove_dir_all(&staging);
+    drop(lock);
+    if installed {
+        FontCache::Generated
+    } else {
+        FontCache::Failed
+    }
+}
+
+fn write_replacing(path: &Path, bytes: &[u8], tag: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension(format!("tmp-{}", tag));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
 }
 
 // ---------------------------------------------------------------------------

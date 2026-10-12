@@ -313,3 +313,134 @@ fn logs_of_live_instances_and_the_newest_dead_ones_are_kept() {
     assert!(root.join("prepare-dist.log").exists());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// --- shared font cache -----------------------------------------------------------
+
+fn write_fonts(dir: &Path, content: &[u8]) {
+    std::fs::write(dir.join("AllFonts.js"), content).unwrap();
+    std::fs::write(dir.join("font_selection.bin"), content).unwrap();
+}
+
+const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+// Another instance may be serving AllFonts.js while this one regenerates it,
+// so the generator works elsewhere and the result replaces the cache whole.
+#[test]
+fn the_generator_never_writes_into_the_live_cache() {
+    let root = scratch_root();
+    let live = fontdata_dir(&root);
+    std::fs::create_dir_all(&live).unwrap();
+    write_fonts(&live, b"old");
+    let reader = File::open(live.join("AllFonts.js")).unwrap();
+
+    let outcome = ensure_font_cache(
+        &root,
+        "1-1",
+        |dir: &Path| {
+            assert_ne!(dir, live.as_path(), "the generator got the live cache");
+            write_fonts(dir, b"new");
+            true
+        },
+        WAIT,
+        POLL,
+    );
+    drop(reader);
+
+    assert_eq!(outcome, FontCache::Generated);
+    assert_eq!(std::fs::read(live.join("AllFonts.js")).unwrap(), b"new");
+    assert_eq!(
+        ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL),
+        FontCache::Ready
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// A run that fails must not leave half a cache behind for the next start to
+// take as good.
+#[test]
+fn a_failed_generation_leaves_the_cache_as_it_was() {
+    let root = scratch_root();
+    let live = fontdata_dir(&root);
+    std::fs::create_dir_all(&live).unwrap();
+    write_fonts(&live, b"old");
+
+    let outcome = ensure_font_cache(
+        &root,
+        "1-1",
+        |dir: &Path| {
+            std::fs::write(dir.join("AllFonts.js"), b"half").unwrap();
+            false
+        },
+        WAIT,
+        POLL,
+    );
+
+    assert_eq!(outcome, FontCache::Failed);
+    assert_eq!(std::fs::read(live.join("AllFonts.js")).unwrap(), b"old");
+    assert!(!fonts_ready(&root));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// A second start while the first is generating waits for that run instead of
+// writing the same files at the same time.
+#[test]
+fn a_start_during_generation_waits_and_does_not_generate_again() {
+    let root = scratch_root();
+    let held = take_lock(&root.join(FONTS_LOCK)).unwrap();
+    let other_root = root.clone();
+    let other = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let live = fontdata_dir(&other_root);
+        std::fs::create_dir_all(&live).unwrap();
+        write_fonts(&live, b"theirs");
+        std::fs::write(other_root.join(FONTS_MARKER), b"generated").unwrap();
+        drop(held);
+    });
+
+    let outcome = ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL);
+    other.join().unwrap();
+
+    assert_eq!(outcome, FontCache::GeneratedByOther);
+    assert_eq!(std::fs::read(fontdata_dir(&root).join("AllFonts.js")).unwrap(), b"theirs");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_generator_that_never_finishes_is_not_waited_on_forever() {
+    let root = scratch_root();
+    let _held = take_lock(&root.join(FONTS_LOCK)).unwrap();
+
+    let outcome = ensure_font_cache(
+        &root,
+        "1-2",
+        |_: &Path| panic!("built while another instance holds the lock"),
+        std::time::Duration::from_millis(200),
+        POLL,
+    );
+
+    assert_eq!(outcome, FontCache::GaveUp);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_dead_generators_staging_folder_is_cleared() {
+    let root = scratch_root();
+    let leftover = root.join(format!("{}1-9", FONTS_STAGING_PREFIX));
+    std::fs::create_dir_all(&leftover).unwrap();
+    std::fs::write(leftover.join("AllFonts.js"), b"half").unwrap();
+
+    ensure_font_cache(
+        &root,
+        "2-1",
+        |dir: &Path| {
+            write_fonts(dir, b"new");
+            true
+        },
+        WAIT,
+        POLL,
+    );
+
+    assert!(!leftover.exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
