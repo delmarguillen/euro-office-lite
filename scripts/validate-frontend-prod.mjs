@@ -119,6 +119,26 @@ for (const moduleName of ['word', 'cell', 'slide']) {
       'common/clipboard_base.js and the paste listener in bridge.js.',
     );
   }
+  // The navigator.clipboard copy has no text/x-custom: the guard then knows the
+  // editor's copy by repeating this walk of sdkjs over the pasted HTML.
+  const classTags = [
+    ...bundle.matchAll(
+      compiledShape(
+        'function <find>(<node>){if(<node>.children&&<node>.children[0]){' +
+          'var <c>=<node>.children[0];<c>=<c>?<c>.getAttribute("class"):null;' +
+          'return null!=<c>&&(-1<<c>.indexOf("xslData;")||-1<<c>.indexOf("docData;")||' +
+          '-1<<c>.indexOf("pptData;")||-1<<c>.indexOf("pdfData;"))?<c>:<find>(<node>.children[0])}' +
+          'return null}',
+      ),
+    ),
+  ].length;
+  if (classTags !== 1) {
+    fail(
+      `Linux paste guard: ${moduleName}/sdk-all.js no longer finds its copies by the ` +
+      `xslData;/docData;/pptData;/pdfData; class tags (found ${classTags}). Check ` +
+      'searchBinaryClass in sdkjs common/wordcopypaste.js and findBinaryClass in bridge.js.',
+    );
+  }
 }
 
 const slideBundlePath = path.join(distRoot, 'sdkjs', 'slide', 'sdk-all-min.js');

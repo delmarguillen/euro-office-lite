@@ -115,6 +115,111 @@ function _eoHtmlIsJustImage(html) {
   return stripped.trim() === '';
 }
 
+// Linux Ctrl+V runs two paths for one keystroke: the keydown reads the native
+// clipboard for an image (Issue #24) and WebKitGTK's paste event feeds sdkjs.
+// Each keystroke gets a token through which its paste event tells the native
+// read what the clipboard carried.
+var LinuxPasteGuard = (function() {
+  var BINARY_TAGS = ['xslData;', 'docData;', 'pptData;', 'pdfData;'];
+  // The paste event lands 25-60 ms after the keydown; past this it is taken
+  // as not coming, and the native image goes in.
+  var VERDICT_WAIT_MS = 400;
+  // Oldest first: each paste event belongs to the oldest keystroke still
+  // waiting, so a second Ctrl+V never takes over the first one's event.
+  var pending = [];
+
+  // sdkjs's own searchBinaryClass (common/wordcopypaste.js), which it runs on
+  // the body of the pasted HTML: down the first element child of each level,
+  // looking for its binary tag in that element's class.
+  function findBinaryClass(node) {
+    while (node && node.children && node.children[0]) {
+      var child = node.children[0];
+      var cls = child.getAttribute('class');
+      if (cls != null) {
+        for (var i = 0; i < BINARY_TAGS.length; i++) {
+          if (cls.indexOf(BINARY_TAGS[i]) > -1) return cls;
+        }
+      }
+      node = child;
+    }
+    return null;
+  }
+
+  // sdkjs's own copy: "asc_internalData2;" in text/x-custom (classic copy), or
+  // its binary in the HTML (also the navigator.clipboard copy, which has no
+  // custom type but a PNG of the selection, so it must not count as an image).
+  function isEditorCopy(custom, html) {
+    if ((custom || '').indexOf('asc_internalData2;') === 0) return true;
+    if (!html) return false;
+    try {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      return findBinaryClass(doc.body) !== null;
+    } catch(e) {
+      return false;
+    }
+  }
+
+  // Keydown: a token whose `settled` promise gives the paste event's verdict
+  // ('internal', 'external'), or null when no paste event came in time.
+  function beginKeystroke() {
+    var token = { verdict: null };
+    token.settled = new Promise(function(resolve) { token.resolve = resolve; });
+    pending.push(token);
+    setTimeout(function() {
+      var at = pending.indexOf(token);
+      if (at !== -1) pending.splice(at, 1);
+      token.resolve(null);
+    }, VERDICT_WAIT_MS);
+    return token;
+  }
+
+  // Paste event: true when sdkjs must not paste, because the keystroke's
+  // native read inserts the image instead (a browser image copy would
+  // otherwise land twice). The editor's own copies always go to sdkjs.
+  function onPaste(cd) {
+    var token = pending.shift();
+    if (!token) return false;
+    var plain = '', html = '', custom = '';
+    try {
+      plain = (cd && cd.getData('text/plain')) || '';
+      html = (cd && cd.getData('text/html')) || '';
+      custom = (cd && cd.getData('text/x-custom')) || '';
+    } catch(e) {}
+    var internal = isEditorCopy(custom, html);
+    token.verdict = internal ? 'internal' : 'external';
+    token.resolve(token.verdict);
+    return !internal && !plain && (!html || _eoHtmlIsJustImage(html));
+  }
+
+  // Native read found an image: hand it to `insert` once the paste event has
+  // spoken, unless that event carried the editor's own copy (sdkjs pastes it;
+  // the image would be a picture of the copied slide or selection). `insert`
+  // returns whether it went in.
+  function afterNativeImage(token, imageFile, insert) {
+    var readAt = Date.now();
+    return token.settled.then(function(verdict) {
+      var waited = Date.now() - readAt;
+      if (verdict === 'internal') {
+        window._eoLog('[EO] Ctrl+V: native image skipped, the editor pasted its own copy');
+        return false;
+      }
+      if (!insert(imageFile)) return false;
+      window._eoLog('[EO] Ctrl+V: clipboard image inserted ' + imageFile +
+        ' (paste verdict ' + verdict + ', waited ' + waited + ' ms)');
+      return true;
+    });
+  }
+
+  return {
+    isEditorCopy: isEditorCopy,
+    beginKeystroke: beginKeystroke,
+    onPaste: onPaste,
+    afterNativeImage: afterNativeImage
+  };
+})();
+// For checking the detection in a real webview from the inspector.
+window._eoIsEditorCopy = LinuxPasteGuard.isEditorCopy;
+
 // Replays the SDK's own internal copy buffer, mirroring what sdkjs's
 // Button_Paste does when the system clipboard is unreachable. Used when a
 // clipboard probe times out because our webview owns the X11 selection and
@@ -971,6 +1076,13 @@ function _eoSaveAsFilters(docType, requestedExt, currentPath, isLinux) {
   return [match || all[0]];
 }
 
+// The address of the open document's images, which carries its key: what
+// tells one open document from the next in the same editor.
+function _eoOpenDocumentUrl(ref) {
+  var urls = ref && ref.ew && ref.ew.AscCommon && ref.ew.AscCommon.g_oDocumentUrls;
+  return urls ? urls.documentUrl : null;
+}
+
 function _getEditor() {
   var ew = window.AscDesktopEditor._editorWindow || _findEditorWindow(window);
   if (ew) window.AscDesktopEditor._editorWindow = ew;
@@ -1063,6 +1175,20 @@ function _loadEditorBin(b64data, fileName, options) {
         // e.key === 'v' check needs the already-normalized key.
         KeyboardLayoutShim.install(editorDoc);
 
+        // Once per editor: if WebKitGTK ever grants clipboard-write, sdkjs
+        // copies through navigator.clipboard instead, which the paste guard
+        // recognises by the HTML class only. The check deciding it is async.
+        if (!window._eoNewCopyLogged) {
+          window._eoNewCopyLogged = true;
+          setTimeout(function() {
+            try {
+              var cb = ref.ew.AscCommon.g_clipboardBase;
+              window._eoLog('[EO] clipboard: sdkjs isUseNewCopy=' +
+                (cb && cb.isUseNewCopy ? cb.isUseNewCopy() : 'unavailable'));
+            } catch(e) {}
+          }, 3000);
+        }
+
         editorDoc.addEventListener('keydown', function(e) {
           // WebKitGTK matches its native copy/cut/paste editing commands by
           // keyval, so with a non-Latin layout they never run (the clipboard
@@ -1089,12 +1215,10 @@ function _loadEditorBin(b64data, fileName, options) {
               return;
             }
             if (e.key === 'v') {
-              // Issue #24: mark the native read as in flight so the paste
-              // listener below can block the SDK's duplicate insertion. With
-              // non-Latin layouts WebKitGTK normally fires no paste event at
-              // all; the timeout covers that case.
-              window._eoLinuxPasteInFlight = true;
-              setTimeout(function() { window._eoLinuxPasteInFlight = false; }, 400);
+              // Issue #24: let the paste listener below block the SDK's
+              // duplicate insertion. With non-Latin layouts WebKitGTK normally
+              // fires no paste event at all; the token then just expires.
+              LinuxPasteGuard.beginKeystroke();
               // read_clipboard_text hangs ~30s when our own webview owns the
               // clipboard (it cannot answer the selection request while
               // waiting). In that case the last in-app copy IS
@@ -1134,26 +1258,26 @@ function _loadEditorBin(b64data, fileName, options) {
             }
           }
           if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
-            // Issue #24: mark the native read as in flight so the paste
-            // listener below can block the SDK's duplicate insertion of the
-            // same keystroke (it fires ~50ms later on the same document).
-            window._eoLinuxPasteInFlight = true;
-            setTimeout(function() { window._eoLinuxPasteInFlight = false; }, 400);
-            // Marked by the paste listener when the editor pastes its own copy,
-            // so this keystroke cannot also insert a native image. Only helps
-            // when the paste event comes before the native read finishes.
-            var pasteToken = { internal: false };
-            window._eoLinuxPasteToken = pasteToken;
+            // Issue #24: the paste listener below blocks the SDK's duplicate
+            // insertion of the same keystroke (it fires ~50ms later on the same
+            // document), and tells this read whether sdkjs is pasting its own
+            // copy, in which case no native image goes in.
+            var keystroke = LinuxPasteGuard.beginKeystroke();
+            // The image belongs to the document this key was pressed in; the
+            // verdict can take up to the wait, and the editor may move on.
+            var target = _getEditor();
+            var targetDoc = _eoOpenDocumentUrl(target);
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
-              if (imageFile && pasteToken.internal) {
-                window._eoLog('[EO] Ctrl+V: native image skipped, the editor pasted its own copy');
-              } else if (imageFile) {
-                var ref = _getEditor();
-                if (ref.editor) {
-                  ref.editor.AddImageUrl([imageFile]);
-                  window._eoLog('[EO] Ctrl+V: clipboard image inserted ' + imageFile);
+              if (!imageFile) return;
+              LinuxPasteGuard.afterNativeImage(keystroke, imageFile, function(file) {
+                var now = _getEditor();
+                if (!now.editor || now.editor !== target.editor || _eoOpenDocumentUrl(now) !== targetDoc) {
+                  window._eoLog('[EO] Ctrl+V: native image dropped, the document changed while waiting');
+                  return false;
                 }
-              }
+                now.editor.AddImageUrl([file]);
+                return true;
+              });
             });
           }
         }, true);
@@ -1169,27 +1293,12 @@ function _loadEditorBin(b64data, fileName, options) {
         // the interceptor's read is in flight and the payload is image-shaped,
         // block the SDK handler: this capture listener runs before sdkjs's
         // bubble-phase ones, so stopPropagation is enough. Anything carrying
-        // plain text (web text, in-app copies) must pass through untouched.
-        if (isLinux && window._eoLinuxPasteInFlight) {
-          window._eoLinuxPasteInFlight = false;
-          var suppressPlain = '';
-          var suppressHtml = '';
-          var suppressCustom = '';
-          try {
-            suppressPlain = cd ? cd.getData('text/plain') : '';
-            suppressHtml = cd ? cd.getData('text/html') : '';
-            suppressCustom = (cd && cd.getData('text/x-custom')) || '';
-          } catch(suppressErr) {}
-          // sdkjs tags its own copies this way (a slide or a picture copies as
-          // a lone <img> plus its binary): those must reach its paste handler.
-          if (suppressCustom.indexOf('asc_internalData2;') === 0) {
-            if (window._eoLinuxPasteToken) window._eoLinuxPasteToken.internal = true;
-          } else if (!suppressPlain && (!suppressHtml || _eoHtmlIsJustImage(suppressHtml))) {
-            window._eoLog('[EO] paste: SDK paste suppressed (image payload, native read in flight)');
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-          }
+        // plain text (web text) or the editor's own copy must pass through.
+        if (isLinux && LinuxPasteGuard.onPaste(cd)) {
+          window._eoLog('[EO] paste: SDK paste suppressed (image payload, native read in flight)');
+          e.preventDefault();
+          e.stopPropagation();
+          return;
         }
         if (!cd) return;
         var imagePath = ClipboardHelper.extractImageUriFromPaste(cd);
