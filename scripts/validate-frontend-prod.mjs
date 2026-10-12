@@ -92,6 +92,35 @@ if (existsSync(editorPatchesPath)) {
   }
 }
 
+// The Linux paste guard in bridge.js lets a paste through when text/x-custom
+// starts with asc_internalData2;, the tag sdkjs puts on its own copies. If the
+// tag moves, the guard would swallow those pastes again (a slide copies as a
+// lone <img> plus that binary).
+for (const moduleName of ['word', 'cell', 'slide']) {
+  const bundlePath = path.join(distRoot, 'sdkjs', moduleName, 'sdk-all.js');
+  // Missing means nothing was checked: that must not read as a pass.
+  if (!existsSync(bundlePath)) {
+    fail(
+      `Linux paste guard: sdkjs/${moduleName}/sdk-all.js is missing, ` +
+      `so the internal copy tag could not be checked`,
+    );
+    continue;
+  }
+  const bundle = await readFile(bundlePath, 'utf8');
+  const tagged = [
+    ...bundle.matchAll(
+      compiledShape('"text/x-custom"==<r>?this.ClosureParams.setData(<r>,"asc_internalData2;"+<p>)'),
+    ),
+  ].length;
+  if (tagged !== 1) {
+    fail(
+      `Linux paste guard: ${moduleName}/sdk-all.js no longer tags its internal copies ` +
+      `as text/x-custom "asc_internalData2;" (found ${tagged}). Check sdkjs ` +
+      'common/clipboard_base.js and the paste listener in bridge.js.',
+    );
+  }
+}
+
 const slideBundlePath = path.join(distRoot, 'sdkjs', 'slide', 'sdk-all-min.js');
 if (existsSync(slideBundlePath)) {
   const slideBundle = await readFile(slideBundlePath, 'utf8');

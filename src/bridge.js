@@ -1130,8 +1130,15 @@ function _loadEditorBin(b64data, fileName, options) {
             // same keystroke (it fires ~50ms later on the same document).
             window._eoLinuxPasteInFlight = true;
             setTimeout(function() { window._eoLinuxPasteInFlight = false; }, 400);
+            // Marked by the paste listener when the editor pastes its own copy,
+            // so this keystroke cannot also insert a native image. Only helps
+            // when the paste event comes before the native read finishes.
+            var pasteToken = { internal: false };
+            window._eoLinuxPasteToken = pasteToken;
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
-              if (imageFile) {
+              if (imageFile && pasteToken.internal) {
+                window._eoLog('[EO] Ctrl+V: native image skipped, the editor pasted its own copy');
+              } else if (imageFile) {
                 var ref = _getEditor();
                 if (ref.editor) {
                   ref.editor.AddImageUrl([imageFile]);
@@ -1158,11 +1165,17 @@ function _loadEditorBin(b64data, fileName, options) {
           window._eoLinuxPasteInFlight = false;
           var suppressPlain = '';
           var suppressHtml = '';
+          var suppressCustom = '';
           try {
             suppressPlain = cd ? cd.getData('text/plain') : '';
             suppressHtml = cd ? cd.getData('text/html') : '';
+            suppressCustom = (cd && cd.getData('text/x-custom')) || '';
           } catch(suppressErr) {}
-          if (!suppressPlain && (!suppressHtml || _eoHtmlIsJustImage(suppressHtml))) {
+          // sdkjs tags its own copies this way (a slide or a picture copies as
+          // a lone <img> plus its binary): those must reach its paste handler.
+          if (suppressCustom.indexOf('asc_internalData2;') === 0) {
+            if (window._eoLinuxPasteToken) window._eoLinuxPasteToken.internal = true;
+          } else if (!suppressPlain && (!suppressHtml || _eoHtmlIsJustImage(suppressHtml))) {
             window._eoLog('[EO] paste: SDK paste suppressed (image payload, native read in flight)');
             e.preventDefault();
             e.stopPropagation();
