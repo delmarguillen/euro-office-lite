@@ -63,7 +63,10 @@ var ClipboardHelper = (function() {
           if (img && (img.indexOf('data:') === 0 || img.indexOf('blob:') === 0)) {
             results.push({ url: img, path: img });
           } else {
-            results.push({ url: AscCommon.g_oDocumentUrls.getUrl(img), path: img });
+            // As sdkjs's own desktop sendImgUrls does: an image of another
+            // document is copied in and a web one downloaded, mixed batch or not.
+            var local = window.AscDesktopEditor.LocalFileGetImageUrl(img);
+            results.push({ url: AscCommon.g_oDocumentUrls.getUrl(local), path: local });
           }
         }
         callback(results);
