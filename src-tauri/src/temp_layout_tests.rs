@@ -605,6 +605,27 @@ fn only_the_open_documents_images_are_served() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// The request URIs as each webview delivers them to the protocol handler.
+#[test]
+fn the_doc_key_request_is_recognised_in_every_form_it_arrives() {
+    for uri in [
+        "ascdesktop://doc-key/",
+        "ascdesktop://doc-key",
+        "ascdesktop://localhost/doc-key",
+        "http://ascdesktop.localhost/doc-key",
+    ] {
+        assert!(is_doc_key_path(protocol_path(uri)), "{}", uri);
+    }
+    for uri in ["ascdesktop://doc-keys/", "ascdesktop://docmedia/doc-key", "ascdesktop://doc-key/x"] {
+        assert!(!is_doc_key_path(protocol_path(uri)), "{}", uri);
+    }
+    assert_eq!(
+        protocol_path("http://ascdesktop.localhost/docmedia/1000-1/2/media/image1.png"),
+        "docmedia/1000-1/2/media/image1.png"
+    );
+    assert_eq!(protocol_path("ascdesktop://import-media/x"), "import-media/x");
+}
+
 #[test]
 fn media_addresses_that_leave_the_folder_are_rejected() {
     for path in [

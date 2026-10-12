@@ -985,19 +985,25 @@ function _eoSetDocumentUrls(ref) {
     return;
   }
   var key = '';
+  var failure = '';
   try {
     var xhr = new XMLHttpRequest();
     xhr.open('GET', ASC_PROTO_BASE + 'doc-key', false);
     xhr.send(null);
     if (xhr.status === 200) key = xhr.responseText;
-  } catch(e) {}
+    else failure = 'status ' + xhr.status;
+  } catch(e) {
+    failure = (e && e.message) || String(e);
+  }
   if (key) {
     urls.documentUrl = ASC_PROTO_BASE + 'docmedia/' + key;
     window._eoLog('[EO] docmedia key=' + key);
   } else {
     // Images will not show; still better than an address shared with others.
+    // console.error so the smoke tests count it on every platform.
     urls.documentUrl = ASC_PROTO_BASE + 'docmedia';
-    window._eoLog('[EO] ERROR: doc-key unavailable, document images will not load');
+    console.error('[EO] doc-key unavailable (' + (failure || 'empty answer') +
+      '): document images will not load');
   }
   var origGetImageUrl = urls.getImageUrl;
   urls.getImageUrl = function(strPath) {

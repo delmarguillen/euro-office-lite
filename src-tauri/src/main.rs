@@ -227,13 +227,7 @@ fn main() {
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let uri = request.uri().to_string();
-            let path = uri
-                .strip_prefix("ascdesktop://")
-                .or_else(|| uri.strip_prefix("ascdesktop:///"))
-                .or_else(|| uri.strip_prefix("http://ascdesktop.localhost/"))
-                .or_else(|| uri.strip_prefix("https://ascdesktop.localhost/"))
-                .unwrap_or("");
-            let path = path.strip_prefix("localhost/").unwrap_or(path);
+            let path = temp_layout::protocol_path(&uri);
 
             #[cfg(debug_assertions)]
             eprintln!("[ascdesktop] uri={}", uri);
@@ -275,7 +269,7 @@ fn main() {
             }
 
             // The address the bridge gives the open document's images.
-            if decoded_path == "doc-key" {
+            if temp_layout::is_doc_key_path(&decoded_path) {
                 let state = ctx.app_handle().state::<AppState>();
                 let doc = file_ops::open_document(&state);
                 return tauri::http::Response::builder()

@@ -356,6 +356,25 @@ pub fn doc_key(id: &str, seq: u64) -> String {
     format!("{}/{}", id, seq)
 }
 
+// What follows the scheme and host of an ascdesktop request: WebKitGTK and
+// WKWebView send ascdesktop://<path>, at times with a localhost host, and
+// WebView2 http://ascdesktop.localhost/<path>.
+pub fn protocol_path(uri: &str) -> &str {
+    let path = uri
+        .strip_prefix("ascdesktop://")
+        .or_else(|| uri.strip_prefix("ascdesktop:///"))
+        .or_else(|| uri.strip_prefix("http://ascdesktop.localhost/"))
+        .or_else(|| uri.strip_prefix("https://ascdesktop.localhost/"))
+        .unwrap_or("");
+    path.strip_prefix("localhost/").unwrap_or(path)
+}
+
+// The bridge asks for ascdesktop://doc-key. WebKit reads doc-key as the host
+// and hands the request over as ascdesktop://doc-key/, empty path made "/".
+pub fn is_doc_key_path(path: &str) -> bool {
+    path == "doc-key" || path == "doc-key/"
+}
+
 // Tells other instances which document the media/ of this one belongs to.
 pub fn write_doc_seq(dir: &Path, seq: u64) -> std::io::Result<()> {
     write_replacing(&dir.join(DOC_SEQ_FILE), seq.to_string().as_bytes(), "seq")
