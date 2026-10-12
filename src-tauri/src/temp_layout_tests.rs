@@ -445,6 +445,243 @@ fn a_dead_generators_staging_folder_is_cleared() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// --- images pasted from another document ----------------------------------------
+
+const ORIGIN_IMAGE: &[u8] = b"origin: four coloured quadrants";
+const DEST_IMAGE: &[u8] = b"destination: plain purple";
+
+// What open_file does to an instance's folder: the outgoing document's images
+// leave media/, then x2t writes the next document's. Returns the new number.
+fn open_doc(dir: &Path, seq: u64, images: &[(&str, &[u8])]) -> u64 {
+    begin_document(dir, seq, seq + 1).unwrap();
+    let media = dir.join("media");
+    std::fs::create_dir_all(&media).unwrap();
+    for (name, bytes) in images {
+        std::fs::write(media.join(name), bytes).unwrap();
+    }
+    seq + 1
+}
+
+fn started(root: &Path, millis: u64, pid: u32) -> Instance {
+    let instance = begin_instance(root, millis, pid).unwrap();
+    write_doc_seq(&instance.dir, 1).unwrap();
+    instance
+}
+
+// The address a copy writes into the clipboard (bridge documentUrl + sdkjs).
+fn image_url(id: &str, seq: u64, name: &str) -> String {
+    format!("ascdesktop://docmedia/{}/media/{}", doc_key(id, seq), name)
+}
+
+fn paste(root: &Path, instance: &Instance, seq: u64, url: &str) -> Option<String> {
+    let doc = OpenDocument { root, id: &instance.id, dir: &instance.dir, seq };
+    import_media(&doc, url, crate::file_ops::stage_bytes_into_media)
+}
+
+fn media_file(dir: &Path, name: &str) -> Option<Vec<u8>> {
+    std::fs::read(dir.join("media").join(name)).ok()
+}
+
+// Same window: copy in one document, open another with its own image1, paste.
+#[test]
+fn an_image_of_the_previous_document_is_copied_in_beside_this_ones() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let first = open_doc(&a.dir, 1, &[("image1.png", ORIGIN_IMAGE)]);
+    let copied = image_url(&a.id, first, "image1.png");
+    let second = open_doc(&a.dir, first, &[("image1.png", DEST_IMAGE)]);
+
+    let name = paste(&root, &a, second, &copied).expect("pasted image");
+    assert_eq!(media_file(&a.dir, &name).as_deref(), Some(ORIGIN_IMAGE));
+    assert_eq!(media_file(&a.dir, "image1.png").as_deref(), Some(DEST_IMAGE));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_image_of_the_previous_document_reaches_a_document_without_images() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let first = open_doc(&a.dir, 1, &[("image1.png", ORIGIN_IMAGE)]);
+    let copied = image_url(&a.id, first, "image1.png");
+    let second = open_doc(&a.dir, first, &[]);
+
+    let name = paste(&root, &a, second, &copied).expect("pasted image");
+    assert_eq!(media_file(&a.dir, &name).as_deref(), Some(ORIGIN_IMAGE));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_image_of_another_open_instance_is_copied_in() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let b = started(&root, 1_000, 2);
+    let a_seq = open_doc(&a.dir, 1, &[("image1.png", ORIGIN_IMAGE)]);
+    let b_seq = open_doc(&b.dir, 1, &[("image1.png", DEST_IMAGE)]);
+
+    let name = paste(&root, &b, b_seq, &image_url(&a.id, a_seq, "image1.png")).expect("pasted image");
+    assert_eq!(media_file(&b.dir, &name).as_deref(), Some(ORIGIN_IMAGE));
+    assert_eq!(media_file(&b.dir, "image1.png").as_deref(), Some(DEST_IMAGE));
+    assert_eq!(media_file(&a.dir, "image1.png").as_deref(), Some(ORIGIN_IMAGE));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_image_of_an_instance_that_opened_another_document_since_is_still_found() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let b = started(&root, 1_000, 2);
+    let a_first = open_doc(&a.dir, 1, &[("image1.png", ORIGIN_IMAGE)]);
+    let copied = image_url(&a.id, a_first, "image1.png");
+    open_doc(&a.dir, a_first, &[("image1.png", b"a later document")]);
+    let b_seq = open_doc(&b.dir, 1, &[]);
+
+    let name = paste(&root, &b, b_seq, &copied).expect("pasted image");
+    assert_eq!(media_file(&b.dir, &name).as_deref(), Some(ORIGIN_IMAGE));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// The source switches documents between reading its media/ and checking the
+// number again: the next document's file under the same name must not leak.
+#[test]
+fn a_document_switch_mid_read_never_hands_out_the_next_documents_image() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let first = open_doc(&a.dir, 1, &[("image1.png", ORIGIN_IMAGE)]);
+    let image = parse_media_path(&image_url(&a.id, first, "image1.png")).expect("address");
+
+    let bytes = read_document_image(&root, &image, || {
+        open_doc(&a.dir, first, &[("image1.png", b"the next document")]);
+    });
+    assert_eq!(bytes.as_deref(), Some(ORIGIN_IMAGE));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// The source instance was closed: absent, never this document's image1.
+#[test]
+fn an_image_whose_source_is_gone_is_not_resolved_to_one_of_ours() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let b = started(&root, 1_000, 2);
+    let a_seq = open_doc(&a.dir, 1, &[("image1.png", ORIGIN_IMAGE)]);
+    let copied = image_url(&a.id, a_seq, "image1.png");
+    a.end();
+    let b_seq = open_doc(&b.dir, 1, &[("image1.png", DEST_IMAGE)]);
+
+    assert_eq!(paste(&root, &b, b_seq, &copied), None);
+    assert_eq!(media_file(&b.dir, "image1.png").as_deref(), Some(DEST_IMAGE));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Copy and paste inside one document: same name, nothing copied.
+#[test]
+fn pasting_within_the_open_document_copies_nothing() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let seq = open_doc(&a.dir, 1, &[("image1.png", ORIGIN_IMAGE)]);
+
+    let name = paste(&root, &a, seq, &image_url(&a.id, seq, "image1.png"));
+    assert_eq!(name.as_deref(), Some("image1.png"));
+    assert_eq!(std::fs::read_dir(a.dir.join("media")).unwrap().count(), 1);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn only_the_open_documents_images_are_served() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let b = started(&root, 1_000, 2);
+    let a_seq = open_doc(&a.dir, 1, &[("image1.png", ORIGIN_IMAGE)]);
+    let b_seq = open_doc(&b.dir, 1, &[("image1.png", DEST_IMAGE)]);
+    let b_doc = OpenDocument { root: &root, id: &b.id, dir: &b.dir, seq: b_seq };
+
+    let own = format!("docmedia/{}/media/image1.png", doc_key(&b.id, b_seq));
+    assert_eq!(serve_media_path(&b_doc, &own), Some(b.dir.join("media").join("image1.png")));
+    let foreign = format!("docmedia/{}/media/image1.png", doc_key(&a.id, a_seq));
+    assert_eq!(serve_media_path(&b_doc, &foreign), None);
+    let earlier = format!("docmedia/{}/media/image1.png", doc_key(&b.id, b_seq - 1));
+    assert_eq!(serve_media_path(&b_doc, &earlier), None);
+    // The address every document had before, still in older clipboards.
+    assert_eq!(serve_media_path(&b_doc, "docmedia/media/image1.png"), None);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn media_addresses_that_leave_the_folder_are_rejected() {
+    for path in [
+        "docmedia/1000-1/2/media/../Editor.bin",
+        "docmedia/1000-1/2/media/..",
+        "docmedia/1000-1/2/media/a/b.png",
+        "docmedia/1000-1/2/media/a\\b.png",
+        "docmedia/../1000-1/2/media/image1.png",
+        "docmedia/1000-1/x/media/image1.png",
+        "docmedia/1000-1/2/other/image1.png",
+        "docmedia/1000-1/2/media/",
+        "docmedia/media/image1.png",
+    ] {
+        assert_eq!(parse_media_path(path), None, "{}", path);
+    }
+    let image = |seq: u64| MediaRef { instance: "1000-1".into(), seq, name: "image1.png".into() };
+    assert_eq!(
+        parse_media_path("docmedia/1000-1/2/media/ascdesktop://docmedia/1000-1/3/media/image1.png"),
+        Some(image(3))
+    );
+    assert_eq!(parse_media_path("docmedia/1000-1/2/media/media/image1.png"), Some(image(2)));
+}
+
+#[test]
+fn only_the_last_three_previous_documents_are_kept() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let mut seq = 1;
+    for i in 0..6u8 {
+        seq = open_doc(&a.dir, seq, &[("image1.png", &[i][..])]);
+    }
+    let mut kept: Vec<u64> = std::fs::read_dir(a.dir.join("previous"))
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().and_then(|name| name.parse().ok()))
+        .collect();
+    kept.sort();
+    assert_eq!(kept, vec![seq - 3, seq - 2, seq - 1]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn fail_rename(_: &Path, _: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "file in use"))
+}
+
+// When the images cannot be moved aside they are cleared as before: a later
+// paste from that document is absent, the next document starts clean.
+#[test]
+fn images_that_cannot_be_moved_aside_are_cleared_as_before() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let seq = open_doc(&a.dir, 1, &[("image1.png", ORIGIN_IMAGE)]);
+
+    let outcome = begin_document_with(&a.dir, seq, seq + 1, fail_rename, |path| std::fs::remove_dir_all(path));
+    assert!(matches!(outcome, Ok(OutgoingImages::Dropped(_))), "{:?}", outcome);
+    assert!(!a.dir.join("media").exists());
+    assert_eq!(read_doc_seq(&a.dir), Some(seq + 1));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// If they cannot be cleared either, the open stops: two documents' images must
+// never share media/.
+#[test]
+fn a_partial_clear_stops_the_open_instead_of_mixing_two_documents() {
+    let root = scratch_root();
+    let a = started(&root, 1_000, 1);
+    let seq = open_doc(&a.dir, 1, &[("image1.png", ORIGIN_IMAGE), ("image2.png", ORIGIN_IMAGE)]);
+
+    let outcome = begin_document_with(&a.dir, seq, seq + 1, fail_rename, |path| {
+        std::fs::remove_file(path.join("image1.png"))?;
+        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "image2.png in use"))
+    });
+    assert!(outcome.is_err(), "{:?}", outcome);
+    assert_eq!(read_doc_seq(&a.dir), Some(seq), "the open document did not change");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // --- the root on Linux and macOS ---------------------------------------------------
 //
 // Only compiled on Unix. A folder owned by another user cannot be made here

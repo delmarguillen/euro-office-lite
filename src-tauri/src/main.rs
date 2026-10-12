@@ -104,6 +104,8 @@ fn main() {
     let instance = start_instance(&temp_root);
     let temp_dir = instance.dir.clone();
     let instance_id = instance.id.clone();
+    // Document 1 is whatever the instance shows first (temp_layout.rs).
+    let _ = temp_layout::write_doc_seq(&temp_dir, 1);
 
     temp_layout::start_log(
         &temp_root,
@@ -181,6 +183,7 @@ fn main() {
             temp_dir,
             temp_root: temp_root.clone(),
             instance,
+            doc_seq: std::sync::atomic::AtomicU64::new(1),
             modified: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
@@ -238,17 +241,13 @@ fn main() {
             let decoded_path = percent_decode_str(path);
 
             if decoded_path.starts_with("docmedia/") {
-                let raw_path = &decoded_path[9..];
-                let rel_path = if let Some(pos) = raw_path.find("ascdesktop://docmedia/") {
-                    &raw_path[pos + 21..]
-                } else {
-                    raw_path
-                };
-                let rel_path = rel_path.trim_start_matches('/');
-                let rel_path = rel_path.replace("media/media/", "media/");
                 let state = ctx.app_handle().state::<AppState>();
-                let full_path = state.temp_dir.join(&rel_path);
-                if let Ok(data) = std::fs::read(&full_path) {
+                let served = temp_layout::serve_media_path(
+                    &file_ops::open_document(&state),
+                    &decoded_path,
+                )
+                .and_then(|full_path| std::fs::read(full_path).ok());
+                if let Some(data) = served {
                     let fp: &str = decoded_path.as_ref();
                     let ct = if fp.ends_with(".png") { "image/png" }
                         else if fp.ends_with(".jpg") || fp.ends_with(".jpeg") { "image/jpeg" }
@@ -273,6 +272,55 @@ fn main() {
                     .header("Access-Control-Allow-Origin", "*")
                     .body(b"Not Found".to_vec())
                     .unwrap();
+            }
+
+            // The address the bridge gives the open document's images.
+            if decoded_path == "doc-key" {
+                let state = ctx.app_handle().state::<AppState>();
+                let doc = file_ops::open_document(&state);
+                return tauri::http::Response::builder()
+                    .status(200)
+                    .header("Content-Type", "text/plain")
+                    .header("Cache-Control", "no-store")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(temp_layout::doc_key(doc.id, doc.seq).into_bytes())
+                    .unwrap();
+            }
+
+            // An image pasted from another document: copied into this one's
+            // media/, answered with the name to reference it by.
+            if let Some(url) = decoded_path.strip_prefix("import-media/") {
+                let state = ctx.app_handle().state::<AppState>();
+                let imported = temp_layout::import_media(
+                    &file_ops::open_document(&state),
+                    url,
+                    file_ops::stage_bytes_into_media,
+                );
+                let shown: String = url.chars().take(200).collect();
+                return match imported {
+                    Some(name) => {
+                        file_ops::log_event(
+                            &state,
+                            &format!("[PASTE] imported {} -> {}", shown, name),
+                        );
+                        tauri::http::Response::builder()
+                            .status(200)
+                            .header("Content-Type", "text/plain")
+                            .header("Cache-Control", "no-store")
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body(name.into_bytes())
+                            .unwrap()
+                    }
+                    None => {
+                        file_ops::log_event(&state, &format!("[PASTE] source gone {}", shown));
+                        tauri::http::Response::builder()
+                            .status(404)
+                            .header("Cache-Control", "no-store")
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body(b"Not Found".to_vec())
+                            .unwrap()
+                    }
+                };
             }
 
             if decoded_path.starts_with("copy-to-media/") {

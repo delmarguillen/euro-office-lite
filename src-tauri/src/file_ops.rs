@@ -11,6 +11,9 @@ pub struct AppState {
     // Shared by every instance: the font cache and the logs.
     pub temp_root: PathBuf,
     pub instance: crate::temp_layout::Instance,
+    // Number of the document open in this instance: part of its images'
+    // addresses (temp_layout.rs, "Document images").
+    pub doc_seq: std::sync::atomic::AtomicU64,
     pub modified: Mutex<bool>,
     // The path a 0-byte file was opened from (#33). It is not in the recent
     // list yet: the file still has no content, and an entry that opens to
@@ -29,6 +32,41 @@ pub struct AppState {
 pub(crate) fn log_event(_state: &AppState, msg: &str) {
     println!("{}", msg);
     crate::temp_layout::append_log(msg);
+}
+
+pub(crate) fn open_document(state: &AppState) -> crate::temp_layout::OpenDocument<'_> {
+    crate::temp_layout::OpenDocument {
+        root: &state.temp_root,
+        id: &state.instance.id,
+        dir: &state.temp_dir,
+        seq: state.doc_seq.load(std::sync::atomic::Ordering::SeqCst),
+    }
+}
+
+// The instance is about to hold another document. Its images get a new
+// address, the outgoing ones stay pasteable under theirs, and the rest of the
+// outgoing document's files go as before. Err stops the open: media/ could not
+// be emptied, and the next document must not land among the old images.
+pub(crate) fn switch_document(state: &AppState) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    let old = state.doc_seq.load(Ordering::SeqCst);
+    match crate::temp_layout::begin_document(&state.temp_dir, old, old + 1) {
+        Ok(outcome) => {
+            if let crate::temp_layout::OutgoingImages::Dropped(reason) = outcome {
+                log_event(
+                    state,
+                    &format!("[OPEN] previous document's images not kept: {}", reason),
+                );
+            }
+            state.doc_seq.store(old + 1, Ordering::SeqCst);
+        }
+        Err(error) => {
+            log_event(state, &format!("[OPEN] failed error={}", error));
+            return Err(error);
+        }
+    }
+    clear_document_temp(&state.temp_dir);
+    Ok(())
 }
 
 // media/ holds the images inserted from disk (copy-to-media in main.rs) and x2t
@@ -231,7 +269,7 @@ async fn open_file_inner(
         }
     }
 
-    clear_document_temp(&state.temp_dir);
+    switch_document(&state)?;
 
     // Editor.bin also outlives the process, and it is read back after the
     // conversion. Dropping it first means a conversion that reports success
@@ -707,7 +745,14 @@ pub async fn convert_for_insert(
     let mut images = serde_json::Map::new();
     for (name, staged) in stage_insert_media(&insert_dir.join("media"), &state.temp_dir.join("media"))
     {
-        let img_url = format!("ascdesktop://docmedia/media/{}", staged);
+        // Under the open document's address, or sdkjs would take it for an
+        // image of another document.
+        let doc = open_document(&state);
+        let img_url = format!(
+            "ascdesktop://docmedia/{}/media/{}",
+            crate::temp_layout::doc_key(doc.id, doc.seq),
+            staged
+        );
         images.insert(name, serde_json::Value::String(img_url));
     }
 

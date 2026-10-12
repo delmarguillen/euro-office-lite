@@ -337,6 +337,226 @@ pub fn copy_media(src: &Path, dest: &Path) -> std::io::Result<usize> {
 }
 
 // ---------------------------------------------------------------------------
+// Document images
+// ---------------------------------------------------------------------------
+//
+// Every document an instance opens gets the next number, and the editor
+// addresses its images as docmedia/<instance>/<number>/media/<name>. sdkjs
+// copies an image only when its address is not under the open document's, so
+// this is what makes a paste from another document bring that document's
+// image instead of whatever this one holds under the same name.
+
+const DOC_SEQ_FILE: &str = "doc.seq";
+const PREVIOUS_DOCS_DIR: &str = "previous";
+
+// Earlier documents of an instance whose images stay pasteable.
+pub const PREVIOUS_DOCS_KEPT: u64 = 3;
+
+pub fn doc_key(id: &str, seq: u64) -> String {
+    format!("{}/{}", id, seq)
+}
+
+// Tells other instances which document the media/ of this one belongs to.
+pub fn write_doc_seq(dir: &Path, seq: u64) -> std::io::Result<()> {
+    write_replacing(&dir.join(DOC_SEQ_FILE), seq.to_string().as_bytes(), "seq")
+}
+
+pub fn read_doc_seq(dir: &Path) -> Option<u64> {
+    std::fs::read_to_string(dir.join(DOC_SEQ_FILE))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+pub fn previous_media_dir(dir: &Path, seq: u64) -> PathBuf {
+    dir.join(PREVIOUS_DOCS_DIR).join(seq.to_string()).join("media")
+}
+
+fn has_entries(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
+#[derive(Debug, PartialEq)]
+pub enum OutgoingImages {
+    None,
+    Kept,
+    // Could not be moved aside, so they were removed as before; a later paste
+    // from that document finds nothing.
+    Dropped(String),
+}
+
+pub fn begin_document(dir: &Path, old_seq: u64, new_seq: u64) -> Result<OutgoingImages, String> {
+    begin_document_with(
+        dir,
+        old_seq,
+        new_seq,
+        |from, to| std::fs::rename(from, to),
+        |path| std::fs::remove_dir_all(path),
+    )
+}
+
+// The instance is replacing its document: the outgoing one's images leave
+// media/ before the next document's arrive. Order matters to an instance
+// reading them meanwhile (read_document_image): they reach previous/<old>/ before
+// the number moves on, and the new document only writes after it has.
+// Err means media/ still holds some of them, and opening another document on
+// top would mix two documents' images under the same names.
+pub fn begin_document_with(
+    dir: &Path,
+    old_seq: u64,
+    new_seq: u64,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    remove: impl Fn(&Path) -> std::io::Result<()>,
+) -> Result<OutgoingImages, String> {
+    let media = dir.join("media");
+    let mut outcome = OutgoingImages::None;
+    if has_entries(&media) {
+        let dest = previous_media_dir(dir, old_seq);
+        let mut last_error = String::new();
+        let mut moved = false;
+        match dest.parent().map(std::fs::create_dir_all) {
+            Some(Ok(())) => {
+                // Windows refuses while a file inside is open; that is brief.
+                for attempt in 0..3 {
+                    if attempt > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    match rename(&media, &dest) {
+                        Ok(()) => {
+                            moved = true;
+                            break;
+                        }
+                        Err(e) => last_error = e.to_string(),
+                    }
+                }
+            }
+            Some(Err(e)) => last_error = e.to_string(),
+            None => last_error = "no parent folder".to_string(),
+        }
+        outcome = if moved {
+            OutgoingImages::Kept
+        } else {
+            let _ = remove(&media);
+            OutgoingImages::Dropped(last_error)
+        };
+    }
+    if has_entries(&media) {
+        return Err(format!(
+            "the previous document's images could not be cleared from {}",
+            media.display()
+        ));
+    }
+    write_doc_seq(dir, new_seq).map_err(|e| format!("cannot record the open document: {}", e))?;
+    prune_previous(dir, new_seq, PREVIOUS_DOCS_KEPT);
+    Ok(outcome)
+}
+
+pub fn prune_previous(dir: &Path, current_seq: u64, keep: u64) -> Vec<u64> {
+    let mut removed = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir.join(PREVIOUS_DOCS_DIR)) else {
+        return removed;
+    };
+    for entry in entries.flatten() {
+        let Some(seq) = entry.file_name().to_str().and_then(|name| name.parse::<u64>().ok()) else {
+            continue;
+        };
+        if seq.saturating_add(keep) < current_seq && std::fs::remove_dir_all(entry.path()).is_ok() {
+            removed.push(seq);
+        }
+    }
+    removed
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct MediaRef {
+    pub instance: String,
+    pub seq: u64,
+    pub name: String,
+}
+
+// One path component that stays inside media/.
+fn is_plain_name(name: &str) -> bool {
+    let separator = |c: char| c == '/' || c == '\\' || c == '\0' || (cfg!(windows) && c == ':');
+    !name.is_empty() && name != "." && name != ".." && !name.contains(separator)
+}
+
+// `path` is percent-decoded. sdkjs sometimes appends a full image address to
+// the document's, so the last docmedia/ is the one that names the image.
+pub fn parse_media_path(path: &str) -> Option<MediaRef> {
+    let start = path.rfind("docmedia/")? + "docmedia/".len();
+    let rest = path[start..].replace("media/media/", "media/");
+    let mut parts = rest.splitn(4, '/');
+    let instance = parts.next()?;
+    let seq = parts.next()?;
+    let media = parts.next()?;
+    let name = parts.next()?;
+    if media != "media" || parse_id(instance).is_none() || !is_plain_name(name) {
+        return None;
+    }
+    if seq.is_empty() || !seq.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(MediaRef {
+        instance: instance.to_string(),
+        seq: seq.parse().ok()?,
+        name: name.to_string(),
+    })
+}
+
+pub struct OpenDocument<'a> {
+    pub root: &'a Path,
+    pub id: &'a str,
+    pub dir: &'a Path,
+    pub seq: u64,
+}
+
+// What docmedia/ serves: only the open document's images. Any other address
+// is not found, so the screen never shows an image the file will not keep.
+pub fn serve_media_path(doc: &OpenDocument, path: &str) -> Option<PathBuf> {
+    let image = parse_media_path(path)?;
+    (image.instance == doc.id && image.seq == doc.seq).then(|| doc.dir.join("media").join(image.name))
+}
+
+// The bytes behind an image address of any instance and document, or None when
+// they are gone. `between_reads` lets tests switch documents mid-read.
+pub fn read_document_image(root: &Path, image: &MediaRef, between_reads: impl Fn()) -> Option<Vec<u8>> {
+    let dir = instance_dir(root, &image.instance);
+    if read_doc_seq(&dir) == Some(image.seq) {
+        if let Ok(bytes) = std::fs::read(dir.join("media").join(&image.name)) {
+            between_reads();
+            // A switch in between may have put the next document's file under
+            // this name: only a number that did not move proves these bytes.
+            if read_doc_seq(&dir) == Some(image.seq) {
+                return Some(bytes);
+            }
+        }
+    }
+    std::fs::read(previous_media_dir(&dir, image.seq).join(&image.name)).ok()
+}
+
+// Brings the image at `url` into the open document's media/ and returns the
+// name to reference it by. None when its source is gone: the caller must leave
+// the image missing rather than fall back to a same-named one of its own.
+pub fn import_media(
+    doc: &OpenDocument,
+    url: &str,
+    stage: impl FnOnce(&Path, &str, &[u8]) -> Option<String>,
+) -> Option<String> {
+    let image = parse_media_path(url)?;
+    if image.instance == doc.id && image.seq == doc.seq {
+        let own = doc.dir.join("media").join(&image.name);
+        return own.is_file().then(|| image.name);
+    }
+    let bytes = read_document_image(doc.root, &image, || {})?;
+    let media = doc.dir.join("media");
+    std::fs::create_dir_all(&media).ok()?;
+    stage(&media, &image.name, &bytes)
+}
+
+// ---------------------------------------------------------------------------
 // Logs
 // ---------------------------------------------------------------------------
 

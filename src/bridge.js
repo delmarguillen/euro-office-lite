@@ -975,6 +975,38 @@ function _getEditor() {
   return { ew: ew, editor: editor };
 }
 
+// Each document gets its own image address (docmedia/<instance>/<number>), so
+// sdkjs treats an image pasted from another document as foreign and asks for
+// it to be copied in, instead of resolving its bare name against this one.
+function _eoSetDocumentUrls(ref) {
+  var urls = ref.ew && ref.ew.AscCommon && ref.ew.AscCommon.g_oDocumentUrls;
+  if (!urls) {
+    window._eoLog('[EO] WARN: g_oDocumentUrls not available at load time');
+    return;
+  }
+  var key = '';
+  try {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', ASC_PROTO_BASE + 'doc-key', false);
+    xhr.send(null);
+    if (xhr.status === 200) key = xhr.responseText;
+  } catch(e) {}
+  if (key) {
+    urls.documentUrl = ASC_PROTO_BASE + 'docmedia/' + key;
+    window._eoLog('[EO] docmedia key=' + key);
+  } else {
+    // Images will not show; still better than an address shared with others.
+    urls.documentUrl = ASC_PROTO_BASE + 'docmedia';
+    window._eoLog('[EO] ERROR: doc-key unavailable, document images will not load');
+  }
+  var origGetImageUrl = urls.getImageUrl;
+  urls.getImageUrl = function(strPath) {
+    if (strPath && strPath.indexOf(ASC_PROTO_BASE) === 0)
+      return strPath;
+    return origGetImageUrl.call(this, strPath);
+  };
+}
+
 // `options` carries what the file name alone cannot say: the display name of a
 // document with no path yet, and the recovery payload for a document being
 // replayed.
@@ -989,17 +1021,7 @@ function _loadEditorBin(b64data, fileName, options) {
       bytes[i] = binaryStr.charCodeAt(i);
     }
 
-    if (ref.ew.AscCommon && ref.ew.AscCommon.g_oDocumentUrls) {
-      ref.ew.AscCommon.g_oDocumentUrls.documentUrl = ASC_PROTO_BASE + 'docmedia';
-      var origGetImageUrl = ref.ew.AscCommon.g_oDocumentUrls.getImageUrl;
-      ref.ew.AscCommon.g_oDocumentUrls.getImageUrl = function(strPath) {
-        if (strPath && strPath.indexOf(ASC_PROTO_BASE) === 0)
-          return strPath;
-        return origGetImageUrl.call(this, strPath);
-      };
-    } else {
-      window._eoLog('[EO] WARN: g_oDocumentUrls not available at load time');
-    }
+    _eoSetDocumentUrls(ref);
 
     ClipboardHelper.installUrlPipelineOverrides(ref.ew.AscCommon);
 
@@ -1883,6 +1905,7 @@ window.AscDesktopEditor = {
             recovery: pending.recovery || null
           });
         } else {
+          _eoSetDocumentUrls(ref);
           var emptyData = ref.ew.AscCommon.getEmpty();
           var file = new ref.ew.AscCommon.OpenFileResult();
           file.data = emptyData;
@@ -2191,6 +2214,22 @@ window.AscDesktopEditor = {
   LocalFileGetImageUrl: function(url) {
     if (!url) return url;
     if (url.indexOf('data:') === 0 || url.indexOf('blob:') === 0) return url;
+    // An image of another document, or of an earlier one in this window:
+    // copied into this document's media/ under a name that clashes with none.
+    if (url.indexOf(ASC_PROTO_BASE + 'docmedia/') === 0) {
+      try {
+        var importXhr = new XMLHttpRequest();
+        importXhr.open('GET', ASC_PROTO_BASE + 'import-media/' + encodeURIComponent(url), false);
+        importXhr.send(null);
+        if (importXhr.status === 200 && importXhr.responseText) return importXhr.responseText;
+      } catch(e) {
+        window._eoLog('[EO] paste: image import error: ' + (e.message || e));
+      }
+      window._eoLog('[EO] paste: image source gone ' + _eoLimitLogText(url, 160));
+      // A name nothing will ever stage: the image stays missing, never shows
+      // one of this document's own.
+      return 'eo-missing-' + Date.now() + '-' + (url.split('/').pop() || 'image');
+    }
     if (url.indexOf(ASC_PROTO_BASE) === 0) return url;
     var protocol = (url.indexOf('http://') === 0 || url.indexOf('https://') === 0)
       ? 'download-to-media' : 'copy-to-media';

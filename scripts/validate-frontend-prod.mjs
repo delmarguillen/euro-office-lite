@@ -272,6 +272,60 @@ if (existsSync(slideFullPath)) {
   }
 }
 
+// A paste from another document brings its images only because sdkjs's desktop
+// layer decides "this document's image or another's" by the documentUrl prefix
+// the bridge sets per document, and hands the others to LocalFileGetImageUrl,
+// which copies them in. If either path changes upstream, pasted images go back
+// to resolving to this document's own images of the same name.
+for (const moduleName of ['word', 'cell', 'slide']) {
+  const bundlePath = path.join(distRoot, 'sdkjs', moduleName, 'sdk-all.js');
+  // Missing means nothing was checked: that must not read as a pass.
+  if (!existsSync(bundlePath)) {
+    fail(
+      `cross-document paste guard: sdkjs/${moduleName}/sdk-all.js is missing, ` +
+      `so image paste could not be checked`,
+    );
+    continue;
+  }
+  const bundle = await readFile(bundlePath, 'utf8');
+  const problems = [];
+  const expectOne = (label, template) => {
+    const found = [...bundle.matchAll(compiledShape(template))].length;
+    if (found !== 1) problems.push(`${label} (found ${found})`);
+  };
+  expectOne(
+    'GetObjectsForImageDownload copies only what getImageLocal rejects',
+    'function <f>(<list>,<same>){for(var <byUrl>=[],<urls>=[],<i>=0;<i><<list>.length;++<i>){' +
+      'var <img>=<list>[<i>],<u>=<img>.Url;' +
+      '!<u>||<d>.getImageLocal(<u>)||<d>.isThemeUrl(<u>)||(<urls>.push(<u>),<byUrl>.push([<img>]))}',
+  );
+  expectOne(
+    'the desktop getImageLocal goes by the documentUrl prefix',
+    'prot.getImageLocal=function(<u>){<u>=<u>?<u>.replaceAll("%20"," "):"";' +
+      'var <p>=this.documentUrl+"/media/";return 0===<u>.indexOf(<p>)?<u>.substring(<p>.length):',
+  );
+  expectOne(
+    'the desktop sendImgUrls asks LocalFileGetImageUrl',
+    'AscCommon.sendImgUrls=function(<a>,<b>,<c>){<a>=[];for(var <i>=0;<i><<b>.length;<i>++){' +
+      'var <f>=window.AscDesktopEditor.LocalFileGetImageUrl(<b>[<i>]);' +
+      '<a>[<i>]={url:AscCommon.g_oDocumentUrls.getUrl(<f>),path:<f>}}<c>(<a>)}',
+  );
+  expectOne(
+    'NativeCorrectImageUrlOnPaste asks LocalFileGetImageUrl',
+    'NativeCorrectImageUrlOnPaste=function(<a>){return window.AscDesktopEditor.LocalFileGetImageUrl(<a>)}',
+  );
+  if (problems.length > 0) {
+    fail(
+      `cross-document paste guard: ${moduleName}/sdk-all.js changed around image paste ` +
+      `(${problems.join('; ')}). Compare GetObjectsForImageDownload in sdkjs ` +
+      'common/wordcopypaste.js and the DocumentUrls overrides and sendImgUrls in ' +
+      'common/Local/common.js with the previous sdkjs tag. If the logic changed, revisit ' +
+      '_eoSetDocumentUrls and LocalFileGetImageUrl in bridge.js; if only the compiled ' +
+      'output changed, update this check.',
+    );
+  }
+}
+
 for (const forbidden of [
   'sdkjs/develop',
   'sdkjs/pdf/src/engine/drawingfile_ie.js',
