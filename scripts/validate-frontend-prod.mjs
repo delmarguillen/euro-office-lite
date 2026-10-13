@@ -92,6 +92,55 @@ if (existsSync(editorPatchesPath)) {
   }
 }
 
+// The Linux paste guard in bridge.js lets a paste through when text/x-custom
+// starts with asc_internalData2;, the tag sdkjs puts on its own copies. If the
+// tag moves, the guard would swallow those pastes again (a slide copies as a
+// lone <img> plus that binary).
+for (const moduleName of ['word', 'cell', 'slide']) {
+  const bundlePath = path.join(distRoot, 'sdkjs', moduleName, 'sdk-all.js');
+  // Missing means nothing was checked: that must not read as a pass.
+  if (!existsSync(bundlePath)) {
+    fail(
+      `Linux paste guard: sdkjs/${moduleName}/sdk-all.js is missing, ` +
+      `so the internal copy tag could not be checked`,
+    );
+    continue;
+  }
+  const bundle = await readFile(bundlePath, 'utf8');
+  const tagged = [
+    ...bundle.matchAll(
+      compiledShape('"text/x-custom"==<r>?this.ClosureParams.setData(<r>,"asc_internalData2;"+<p>)'),
+    ),
+  ].length;
+  if (tagged !== 1) {
+    fail(
+      `Linux paste guard: ${moduleName}/sdk-all.js no longer tags its internal copies ` +
+      `as text/x-custom "asc_internalData2;" (found ${tagged}). Check sdkjs ` +
+      'common/clipboard_base.js and the paste listener in bridge.js.',
+    );
+  }
+  // The navigator.clipboard copy has no text/x-custom: the guard then knows the
+  // editor's copy by repeating this walk of sdkjs over the pasted HTML.
+  const classTags = [
+    ...bundle.matchAll(
+      compiledShape(
+        'function <find>(<node>){if(<node>.children&&<node>.children[0]){' +
+          'var <c>=<node>.children[0];<c>=<c>?<c>.getAttribute("class"):null;' +
+          'return null!=<c>&&(-1<<c>.indexOf("xslData;")||-1<<c>.indexOf("docData;")||' +
+          '-1<<c>.indexOf("pptData;")||-1<<c>.indexOf("pdfData;"))?<c>:<find>(<node>.children[0])}' +
+          'return null}',
+      ),
+    ),
+  ].length;
+  if (classTags !== 1) {
+    fail(
+      `Linux paste guard: ${moduleName}/sdk-all.js no longer finds its copies by the ` +
+      `xslData;/docData;/pptData;/pdfData; class tags (found ${classTags}). Check ` +
+      'searchBinaryClass in sdkjs common/wordcopypaste.js and findBinaryClass in bridge.js.',
+    );
+  }
+}
+
 const slideBundlePath = path.join(distRoot, 'sdkjs', 'slide', 'sdk-all-min.js');
 if (existsSync(slideBundlePath)) {
   const slideBundle = await readFile(slideBundlePath, 'utf8');
@@ -268,6 +317,60 @@ if (existsSync(slideFullPath)) {
       'common/Drawings/Format/Shape.js, Image.js and ChartSpace.js with the previous sdkjs ' +
       'tag. If the code changed, revisit the aspect patch in editor-patches.js before ' +
       'releasing; if only the compiled output changed, update this check.',
+    );
+  }
+}
+
+// A paste from another document brings its images only because sdkjs's desktop
+// layer decides "this document's image or another's" by the documentUrl prefix
+// the bridge sets per document, and hands the others to LocalFileGetImageUrl,
+// which copies them in. If either path changes upstream, pasted images go back
+// to resolving to this document's own images of the same name.
+for (const moduleName of ['word', 'cell', 'slide']) {
+  const bundlePath = path.join(distRoot, 'sdkjs', moduleName, 'sdk-all.js');
+  // Missing means nothing was checked: that must not read as a pass.
+  if (!existsSync(bundlePath)) {
+    fail(
+      `cross-document paste guard: sdkjs/${moduleName}/sdk-all.js is missing, ` +
+      `so image paste could not be checked`,
+    );
+    continue;
+  }
+  const bundle = await readFile(bundlePath, 'utf8');
+  const problems = [];
+  const expectOne = (label, template) => {
+    const found = [...bundle.matchAll(compiledShape(template))].length;
+    if (found !== 1) problems.push(`${label} (found ${found})`);
+  };
+  expectOne(
+    'GetObjectsForImageDownload copies only what getImageLocal rejects',
+    'function <f>(<list>,<same>){for(var <byUrl>=[],<urls>=[],<i>=0;<i><<list>.length;++<i>){' +
+      'var <img>=<list>[<i>],<u>=<img>.Url;' +
+      '!<u>||<d>.getImageLocal(<u>)||<d>.isThemeUrl(<u>)||(<urls>.push(<u>),<byUrl>.push([<img>]))}',
+  );
+  expectOne(
+    'the desktop getImageLocal goes by the documentUrl prefix',
+    'prot.getImageLocal=function(<u>){<u>=<u>?<u>.replaceAll("%20"," "):"";' +
+      'var <p>=this.documentUrl+"/media/";return 0===<u>.indexOf(<p>)?<u>.substring(<p>.length):',
+  );
+  expectOne(
+    'the desktop sendImgUrls asks LocalFileGetImageUrl',
+    'AscCommon.sendImgUrls=function(<a>,<b>,<c>){<a>=[];for(var <i>=0;<i><<b>.length;<i>++){' +
+      'var <f>=window.AscDesktopEditor.LocalFileGetImageUrl(<b>[<i>]);' +
+      '<a>[<i>]={url:AscCommon.g_oDocumentUrls.getUrl(<f>),path:<f>}}<c>(<a>)}',
+  );
+  expectOne(
+    'NativeCorrectImageUrlOnPaste asks LocalFileGetImageUrl',
+    'NativeCorrectImageUrlOnPaste=function(<a>){return window.AscDesktopEditor.LocalFileGetImageUrl(<a>)}',
+  );
+  if (problems.length > 0) {
+    fail(
+      `cross-document paste guard: ${moduleName}/sdk-all.js changed around image paste ` +
+      `(${problems.join('; ')}). Compare GetObjectsForImageDownload in sdkjs ` +
+      'common/wordcopypaste.js and the DocumentUrls overrides and sendImgUrls in ' +
+      'common/Local/common.js with the previous sdkjs tag. If the logic changed, revisit ' +
+      '_eoSetDocumentUrls and LocalFileGetImageUrl in bridge.js; if only the compiled ' +
+      'output changed, update this check.',
     );
   }
 }

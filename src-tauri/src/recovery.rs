@@ -675,15 +675,16 @@ pub fn recovery_load(
         .unwrap_or_else(|| id.clone());
     let path = info.as_ref().and_then(|info| info.path.clone());
 
-    if let Some(path) = &path {
-        *state.current_file.lock().unwrap() = Some(PathBuf::from(path));
-    }
-
     // The folder only holds the document and its changes; the images it
     // points at are in the temp folder of the instance that had it open. The
     // recovered document replaces whatever this instance had, so its images
     // are cleared like any open does, then the crashed instance's copied in.
-    crate::file_ops::clear_document_temp(&state.temp_dir);
+    crate::file_ops::switch_document(&state)?;
+
+    if let Some(path) = &path {
+        *state.current_file.lock().unwrap() = Some(PathBuf::from(path));
+    }
+
     let media_src = crate::temp_layout::recovery_media_source(
         &state.temp_root,
         info.as_ref().and_then(|info| info.instance.as_deref()),
