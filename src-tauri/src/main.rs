@@ -803,7 +803,7 @@ fn run_font_generation(
 ) {
     let marker = temp_root.join(temp_layout::FONTS_MARKER);
     if marker.exists() && !temp_layout::fonts_ready(temp_root) {
-        log_startup("Marker exists but fontdata/AllFonts.js missing, regenerating");
+        log_startup("Marker exists but the font cache is missing or stale, regenerating");
     }
     let outcome = temp_layout::ensure_font_cache(
         temp_root,

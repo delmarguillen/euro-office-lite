@@ -445,6 +445,80 @@ fn a_dead_generators_staging_folder_is_cleared() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// What x2t writes for one bundled font when the scan gets the \\?\ form of
+// the fonts folder, and when it gets the plain one.
+const ALLFONTS_EXTENDED: &[u8] =
+    b"window[\"__fonts_files\"] = [\"/?/C:/App/binaries/fonts/LiberationSerif-Regular.ttf\"];";
+const ALLFONTS_PLAIN: &[u8] =
+    b"window[\"__fonts_files\"] = [\"C:/App/binaries/fonts/LiberationSerif-Regular.ttf\"];";
+const SELECTION_EXTENDED: &[u8] =
+    b"\x10Liberation Serif\\\\?\\C:\\App\\binaries\\fonts\\LiberationSerif-Regular.ttf";
+const SELECTION_PLAIN: &[u8] =
+    b"\x10Liberation Serif C:\\App\\binaries\\fonts\\LiberationSerif-Regular.ttf";
+
+fn write_cache(dir: &Path, allfonts: &[u8], selection: &[u8]) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("AllFonts.js"), allfonts).unwrap();
+    std::fs::write(dir.join("font_selection.bin"), selection).unwrap();
+}
+
+#[test]
+fn extended_paths_are_found_in_either_cache_file() {
+    let root = scratch_root();
+    let live = fontdata_dir(&root);
+
+    write_cache(&live, ALLFONTS_EXTENDED, SELECTION_PLAIN);
+    assert!(has_extended_paths(&live), "AllFonts.js lists /?/C:/...");
+    write_cache(&live, ALLFONTS_PLAIN, SELECTION_EXTENDED);
+    assert!(
+        has_extended_paths(&live),
+        "font_selection.bin lists \\\\?\\C:\\..."
+    );
+    write_cache(&live, ALLFONTS_PLAIN, SELECTION_PLAIN);
+    assert!(
+        !has_extended_paths(&live),
+        "a cache with plain paths is good"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// A cache an earlier version left with \\?\ paths makes the PDF export swap
+// the bundled fonts for another one, so it is rebuilt, and only once.
+#[cfg(target_os = "windows")]
+#[test]
+fn a_windows_cache_with_extended_paths_is_rebuilt_once() {
+    let root = scratch_root();
+    let live = fontdata_dir(&root);
+    write_cache(&live, ALLFONTS_EXTENDED, SELECTION_EXTENDED);
+    std::fs::write(root.join(FONTS_MARKER), b"generated").unwrap();
+
+    let outcome = ensure_font_cache(
+        &root,
+        "1-1",
+        |dir: &Path| {
+            write_cache(dir, ALLFONTS_PLAIN, SELECTION_PLAIN);
+            true
+        },
+        WAIT,
+        POLL,
+    );
+
+    assert_eq!(outcome, FontCache::Generated);
+    assert_eq!(
+        std::fs::read(live.join("AllFonts.js")).unwrap(),
+        ALLFONTS_PLAIN
+    );
+    assert_eq!(
+        std::fs::read(live.join("font_selection.bin")).unwrap(),
+        SELECTION_PLAIN
+    );
+    assert_eq!(
+        ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL),
+        FontCache::Ready
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // --- images pasted from another document ----------------------------------------
 
 const ORIGIN_IMAGE: &[u8] = b"origin: four coloured quadrants";
