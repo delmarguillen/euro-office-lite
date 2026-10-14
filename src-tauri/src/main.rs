@@ -823,6 +823,23 @@ fn run_font_generation(
     }
 }
 
+// x2t writes the font paths exactly as it receives them into AllFonts.js and
+// font_selection.bin, and the PDF export reads them back from there, so the
+// scan never gets the \\?\ form of the bundled fonts folder.
+fn font_scan_command(
+    x2t_exe: &std::path::Path,
+    fontdata_dir: &std::path::Path,
+    binaries_dir: &std::path::Path,
+) -> std::process::Command {
+    let binaries_dir = converter::strip_extended_prefix(binaries_dir);
+    let mut cmd = std::process::Command::new(converter::strip_extended_prefix(x2t_exe));
+    cmd.current_dir(&binaries_dir)
+        .arg("-create-allfonts")
+        .arg(fontdata_dir)
+        .arg(binaries_dir.join("fonts"));
+    cmd
+}
+
 // Runs x2t's font scan into `fontdata_dir` and reports whether it succeeded.
 fn generate_fonts(fontdata_dir: &std::path::Path, binaries_dir: &std::path::Path) -> bool {
     log_startup("First-run font generation starting...");
@@ -861,15 +878,7 @@ fn generate_fonts(fontdata_dir: &std::path::Path, binaries_dir: &std::path::Path
         }
     };
 
-    let fonts_dir = binaries_dir.join("fonts");
-    let fontdata_str = fontdata_dir.to_string_lossy().to_string();
-    let fonts_str = fonts_dir.to_string_lossy().to_string();
-
-    let mut cmd = std::process::Command::new(&x2t_exe);
-    cmd.current_dir(binaries_dir)
-        .arg("-create-allfonts")
-        .arg(&fontdata_str)
-        .arg(&fonts_str);
+    let mut cmd = font_scan_command(&x2t_exe, fontdata_dir, binaries_dir);
     for dir in extra_font_dirs() {
         log_startup(&format!("Extra font directory: {}", dir.display()));
         cmd.arg(dir);
@@ -1107,5 +1116,46 @@ mod arg_path_tests {
         std::fs::write(temp.0.join("-flag"), b"x").expect("write file");
 
         assert_eq!(absolute_arg_path("-flag", &temp.0), None);
+    }
+}
+
+#[cfg(test)]
+mod font_scan_tests {
+    use super::font_scan_command;
+    use std::path::{Path, PathBuf};
+
+    // resource_dir() on Windows: the scan used to receive this spelling and
+    // x2t wrote it into the cache as /?/C:/... and \\?\C:\... An install on a
+    // network share comes as \\?\UNC\server\... and must stay absolute.
+    #[test]
+    fn the_font_scan_never_sees_the_extended_prefix() {
+        let cases = [
+            (r"\\?\C:\Apps\Euro-Office-Lite", r"C:\Apps\Euro-Office-Lite"),
+            (
+                r"\\?\UNC\server\share\Euro-Office-Lite",
+                r"\\server\share\Euro-Office-Lite",
+            ),
+        ];
+        for (given, plain) in cases {
+            let given = PathBuf::from(given);
+            let plain = PathBuf::from(plain);
+            let cmd = font_scan_command(
+                &given.join("x2t.exe"),
+                Path::new(r"C:\Temp\euro-office-lite\fontdata.new-1-2"),
+                &given.join("binaries"),
+            );
+
+            let args: Vec<PathBuf> = cmd.get_args().map(PathBuf::from).collect();
+            assert_eq!(
+                args,
+                vec![
+                    PathBuf::from("-create-allfonts"),
+                    PathBuf::from(r"C:\Temp\euro-office-lite\fontdata.new-1-2"),
+                    plain.join("binaries").join("fonts"),
+                ]
+            );
+            assert_eq!(Path::new(cmd.get_program()), plain.join("x2t.exe"));
+            assert_eq!(cmd.get_current_dir(), Some(plain.join("binaries").as_path()));
+        }
     }
 }

@@ -227,10 +227,25 @@ fn validate_editor_resources(editors_dir: &std::path::Path) -> Result<(), String
     }
     Ok(())
 }
-fn strip_extended_prefix(p: &std::path::Path) -> std::path::PathBuf {
+// On Windows, resource_dir() and canonicalize() return \\?\C:\... paths. x2t
+// copies whatever spelling it is given into its font cache, and its PDF export
+// cannot open fonts listed under that prefix, so paths handed to x2t drop it.
+// Only drive and UNC forms have a plain spelling (C:\..., \\server\...); any
+// other form, such as \\?\Volume{GUID}\..., is kept as it is.
+pub(crate) fn strip_extended_prefix(p: &std::path::Path) -> std::path::PathBuf {
     let s = p.to_string_lossy();
-    if s.starts_with("\\\\?\\") {
-        std::path::PathBuf::from(&s[4..])
+    let Some(rest) = s.strip_prefix(r"\\?\") else {
+        return p.to_path_buf();
+    };
+    let bytes = rest.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        std::path::PathBuf::from(rest)
+    } else if let Some(share) = rest
+        .get(..4)
+        .filter(|head| head.eq_ignore_ascii_case(r"UNC\"))
+        .map(|_| &rest[4..])
+    {
+        std::path::PathBuf::from(format!(r"\\{}", share))
     } else {
         p.to_path_buf()
     }
@@ -705,6 +720,31 @@ mod tests {
         let second = params_path(temp_dir, "pdf");
 
         assert_ne!(first, second, "each conversion needs its own params file");
+    }
+
+    // Plain strings, so it runs anywhere: only the spelling is under test.
+    #[test]
+    fn the_extended_prefix_is_dropped_only_where_a_plain_form_exists() {
+        use std::path::{Path, PathBuf};
+        let cases = [
+            (r"\\?\C:\App\binaries", r"C:\App\binaries"),
+            (
+                r"\\?\UNC\server\share\App\binaries",
+                r"\\server\share\App\binaries",
+            ),
+            (
+                r"\\?\Volume{0b1c2d3e-0000-0000-0000-000000000000}\App\binaries",
+                r"\\?\Volume{0b1c2d3e-0000-0000-0000-000000000000}\App\binaries",
+            ),
+            (r"C:\App\binaries", r"C:\App\binaries"),
+        ];
+        let wrong: Vec<(&str, PathBuf)> = cases
+            .iter()
+            .map(|(given, expected)| (*given, *expected, strip_extended_prefix(Path::new(given))))
+            .filter(|(_, expected, got)| got != &PathBuf::from(expected))
+            .map(|(given, _, got)| (given, got))
+            .collect();
+        assert!(wrong.is_empty(), "wrong spellings: {:?}", wrong);
     }
 }
 
