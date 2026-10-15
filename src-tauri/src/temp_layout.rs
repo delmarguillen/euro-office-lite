@@ -213,6 +213,20 @@ pub fn fonts_ready(root: &Path) -> bool {
         && std::fs::metadata(fontdata_dir(root).join("AllFonts.js"))
             .map(|metadata| metadata.len() > 0)
             .unwrap_or(false)
+        && !(cfg!(target_os = "windows") && has_extended_paths(&fontdata_dir(root)))
+}
+
+// Windows caches built from the \\?\ form of the bundled fonts folder list
+// those fonts as /?/C:/... (AllFonts.js) and \\?\C:\... (font_selection.bin).
+// The PDF export cannot open them and substitutes another font, so such a
+// cache counts as missing and is rebuilt once.
+fn has_extended_paths(fontdata: &Path) -> bool {
+    let contains = |name: &str, needle: &[u8]| {
+        std::fs::read(fontdata.join(name))
+            .map(|bytes| bytes.windows(needle.len()).any(|window| window == needle))
+            .unwrap_or(false)
+    };
+    contains("AllFonts.js", b"\"/?/") || contains("font_selection.bin", br"\\?\")
 }
 
 // Moves each generated file over its counterpart in fontdata/. A rename
