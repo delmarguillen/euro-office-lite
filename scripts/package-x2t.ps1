@@ -26,7 +26,8 @@ $tempStaging = Join-Path $env:TEMP "x2t-package-staging"
 if (Test-Path $tempStaging) { Remove-Item $tempStaging -Recurse -Force }
 New-Item -ItemType Directory -Path $tempStaging -Force | Out-Null
 
-Get-ChildItem $binDir -Exclude "*.log", "x2t-aarch64-pc-windows-msvc.exe" | ForEach-Object {
+# The font cache in binaries/ was built on this machine and lists its paths; the app builds its own.
+Get-ChildItem $binDir -Exclude "*.log", "x2t-aarch64-pc-windows-msvc.exe", "AllFonts.js", "font_selection.bin", "fontdata" | ForEach-Object {
     if ($_.PSIsContainer) {
         Copy-Item $_.FullName -Destination (Join-Path $tempStaging $_.Name) -Recurse
     } else {
