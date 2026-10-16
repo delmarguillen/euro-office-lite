@@ -128,3 +128,7 @@ What this project adds on top: the Tauri v2 native shell and desktop bridge, mac
 ## License
 
 [AGPL-3.0](LICENSE)
+
+## Code signing policy
+
+Windows releases will be signed with a certificate provided by SignPath Foundation, using free code signing provided by SignPath.io. Releases are built from this repository by GitHub Actions and approved for signing by the maintainer, Delmar Guillén.
