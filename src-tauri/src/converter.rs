@@ -303,6 +303,8 @@ fn convert_to_pdf(
     let allfonts_js = if is_nonempty_file(&allfonts_fontdata) {
         allfonts_fontdata
     } else if is_nonempty_file(&allfonts_binaries) {
+        // No font cache yet: the bundled list only knows the fonts shipped with the app.
+        log_pdf(&format!("font cache missing, using {}", allfonts_binaries.display()));
         allfonts_binaries
     } else {
         let error = format!(
