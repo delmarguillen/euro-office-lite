@@ -208,11 +208,17 @@ pub fn fontdata_dir(root: &Path) -> PathBuf {
     root.join(FONTDATA_DIR)
 }
 
+// x2t's scan always writes both files and the PDF export uses both, so a
+// cache missing either is a half-installed one and counts as missing.
 pub fn fonts_ready(root: &Path) -> bool {
-    root.join(FONTS_MARKER).exists()
-        && std::fs::metadata(fontdata_dir(root).join("AllFonts.js"))
+    let nonempty = |name: &str| {
+        std::fs::metadata(fontdata_dir(root).join(name))
             .map(|metadata| metadata.len() > 0)
             .unwrap_or(false)
+    };
+    root.join(FONTS_MARKER).exists()
+        && nonempty("AllFonts.js")
+        && nonempty("font_selection.bin")
         && !(cfg!(target_os = "windows") && has_extended_paths(&fontdata_dir(root)))
 }
 

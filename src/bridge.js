@@ -421,6 +421,8 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'The current document has unsaved changes. Do you want to discard them and open another file?',
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
     saveError: 'Save error', saveErrorMsg: 'Could not save the file.\n\nTarget format not compatible with this document type.',
+    pdfFontsErrorMsg: 'The PDF could not be created because the app could not prepare its fonts. Try again in a moment. If it keeps failing, restart Euro-Office Lite.',
+    printError: 'Print failed', printErrorMsg: 'The document could not be printed. Please try again.',
     documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
     recoveredDocuments: 'Recovered documents', recover: 'Recover', discard: 'Discard', discardAll: 'Discard all',
     recentFiles: 'Recent files', rememberRecent: 'Remember recent files', clearRecent: 'Clear',
@@ -448,6 +450,8 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y abrir otro archivo?',
     unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
     saveError: 'Error al guardar', saveErrorMsg: 'No se pudo guardar el archivo.\n\nFormato de destino no compatible con este tipo de documento.',
+    pdfFontsErrorMsg: 'No se pudo crear el PDF porque la aplicación no pudo preparar sus fuentes. Inténtelo de nuevo en un momento. Si sigue fallando, reinicie Euro-Office Lite.',
+    printError: 'Error al imprimir', printErrorMsg: 'No se pudo imprimir el documento. Inténtelo de nuevo.',
     documents: 'Documentos', all: 'Todos', plainText: 'Texto plano', user: 'Usuario', language: 'Idioma',
     recoveredDocuments: 'Documentos recuperados', recover: 'Recuperar', discard: 'Descartar', discardAll: 'Descartar todo',
     recentFiles: 'Archivos recientes', rememberRecent: 'Recordar archivos recientes', clearRecent: 'Limpiar',
@@ -475,6 +479,8 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et ouvrir un autre fichier ?',
     unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
     saveError: 'Erreur de sauvegarde', saveErrorMsg: 'Impossible d\'enregistrer le fichier.\n\nFormat de destination incompatible avec ce type de document.',
+    pdfFontsErrorMsg: 'Impossible de créer le PDF, car l\'application n\'a pas pu préparer ses polices. Réessayez dans un instant. Si le problème persiste, redémarrez Euro-Office Lite.',
+    printError: 'Échec de l\'impression', printErrorMsg: 'Impossible d\'imprimer le document. Veuillez réessayer.',
     documents: 'Documents', all: 'Tous', plainText: 'Texte brut', user: 'Utilisateur', language: 'Langue',
     recoveredDocuments: 'Documents récupérés', recover: 'Récupérer', discard: 'Abandonner', discardAll: 'Tout abandonner',
     recentFiles: 'Fichiers récents', rememberRecent: 'Mémoriser les fichiers récents', clearRecent: 'Effacer',
@@ -502,6 +508,8 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und eine andere Datei öffnen?',
     unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
     saveError: 'Speicherfehler', saveErrorMsg: 'Die Datei konnte nicht gespeichert werden.\n\nZielformat nicht kompatibel mit diesem Dokumenttyp.',
+    pdfFontsErrorMsg: 'Das PDF konnte nicht erstellt werden, weil die App ihre Schriftarten nicht vorbereiten konnte. Versuchen Sie es gleich noch einmal. Wenn der Fehler weiterhin auftritt, starten Sie Euro-Office Lite neu.',
+    printError: 'Druckfehler', printErrorMsg: 'Das Dokument konnte nicht gedruckt werden. Bitte versuchen Sie es erneut.',
     documents: 'Dokumente', all: 'Alle', plainText: 'Nur Text', user: 'Benutzer', language: 'Sprache',
     recoveredDocuments: 'Wiederhergestellte Dokumente', recover: 'Wiederherstellen', discard: 'Verwerfen', discardAll: 'Alle verwerfen',
     recentFiles: 'Zuletzt verwendete Dateien', rememberRecent: 'Zuletzt verwendete Dateien merken', clearRecent: 'Leeren',
@@ -529,6 +537,8 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e aprire un altro file?',
     unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
     saveError: 'Errore di salvataggio', saveErrorMsg: 'Impossibile salvare il file.\n\nFormato di destinazione non compatibile con questo tipo di documento.',
+    pdfFontsErrorMsg: 'Impossibile creare il PDF perché l\'app non è riuscita a preparare i suoi caratteri. Riprova tra un momento. Se il problema persiste, riavvia Euro-Office Lite.',
+    printError: 'Errore di stampa', printErrorMsg: 'Impossibile stampare il documento. Riprova.',
     documents: 'Documenti', all: 'Tutti', plainText: 'Testo normale', user: 'Utente', language: 'Lingua',
     recoveredDocuments: 'Documenti recuperati', recover: 'Recupera', discard: 'Scarta', discardAll: 'Scarta tutto',
     recentFiles: 'File recenti', rememberRecent: 'Ricorda i file recenti', clearRecent: 'Cancella',
@@ -556,6 +566,8 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'O documento atual tem alterações não salvas. Deseja descartá-las e abrir outro arquivo?',
     unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
     saveError: 'Erro ao salvar', saveErrorMsg: 'Não foi possível salvar o arquivo.\n\nFormato de destino não compatível com este tipo de documento.',
+    pdfFontsErrorMsg: 'Não foi possível criar o PDF porque o aplicativo não conseguiu preparar suas fontes. Tente novamente em instantes. Se o problema continuar, reinicie o Euro-Office Lite.',
+    printError: 'Erro ao imprimir', printErrorMsg: 'Não foi possível imprimir o documento. Tente novamente.',
     documents: 'Documentos', all: 'Todos', plainText: 'Texto simples', user: 'Usuário', language: 'Idioma',
     recoveredDocuments: 'Documentos recuperados', recover: 'Recuperar', discard: 'Descartar', discardAll: 'Descartar tudo',
     recentFiles: 'Arquivos recentes', rememberRecent: 'Lembrar arquivos recentes', clearRecent: 'Limpar',
@@ -583,6 +595,8 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Текущий документ содержит несохранённые изменения. Отменить их и открыть другой файл?',
     unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
     saveError: 'Ошибка сохранения', saveErrorMsg: 'Не удалось сохранить файл.\n\nФормат назначения несовместим с этим типом документа.',
+    pdfFontsErrorMsg: 'Не удалось создать PDF, так как приложению не удалось подготовить шрифты. Повторите попытку через несколько секунд. Если ошибка повторится, перезапустите Euro-Office Lite.',
+    printError: 'Ошибка печати', printErrorMsg: 'Не удалось напечатать документ. Повторите попытку.',
     documents: 'Документы', all: 'Все', plainText: 'Обычный текст', user: 'Пользователь', language: 'Язык',
     recoveredDocuments: 'Восстановленные документы', recover: 'Восстановить', discard: 'Отклонить', discardAll: 'Отклонить всё',
     recentFiles: 'Недавние файлы', rememberRecent: 'Запоминать недавние файлы', clearRecent: 'Очистить',
@@ -610,6 +624,8 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і відкрити інший файл?',
     unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
     saveError: 'Помилка збереження', saveErrorMsg: 'Не вдалося зберегти файл.\n\nФормат призначення несумісний із цим типом документа.',
+    pdfFontsErrorMsg: 'Не вдалося створити PDF, оскільки застосунку не вдалося підготувати шрифти. Спробуйте ще раз за мить. Якщо помилка повториться, перезапустіть Euro-Office Lite.',
+    printError: 'Помилка друку', printErrorMsg: 'Не вдалося надрукувати документ. Спробуйте ще раз.',
     documents: 'Документи', all: 'Усі', plainText: 'Звичайний текст', user: 'Користувач', language: 'Мова',
     recoveredDocuments: 'Відновлені документи', recover: 'Відновити', discard: 'Відхилити', discardAll: 'Відхилити все',
     recentFiles: 'Нещодавні файли', rememberRecent: 'Запам\'ятовувати нещодавні файли', clearRecent: 'Очистити',
@@ -637,6 +653,8 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: '当前文档有未保存的更改。是否放弃更改并打开另一个文件？',
     unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
     saveError: '保存错误', saveErrorMsg: '无法保存文件。\n\n目标格式与此文档类型不兼容。',
+    pdfFontsErrorMsg: '无法创建 PDF，因为应用无法准备字体。请稍后重试。如果问题仍然存在，请重新启动 Euro-Office Lite。',
+    printError: '打印错误', printErrorMsg: '无法打印文档。请重试。',
     documents: '文档', all: '所有文件', plainText: '纯文本', user: '用户', language: '语言',
     recoveredDocuments: '已恢复的文档', recover: '恢复', discard: '丢弃', discardAll: '全部丢弃',
     recentFiles: '最近的文件', rememberRecent: '记住最近的文件', clearRecent: '清除',
@@ -664,6 +682,8 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: '現在のドキュメントには未保存の変更があります。変更を破棄して別のファイルを開きますか？',
     unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
     saveError: '保存エラー', saveErrorMsg: 'ファイルを保存できませんでした。\n\n対象の形式はこのドキュメントタイプと互換性がありません。',
+    pdfFontsErrorMsg: 'アプリがフォントを準備できなかったため、PDF を作成できませんでした。しばらくしてからもう一度お試しください。問題が解決しない場合は、Euro-Office Lite を再起動してください。',
+    printError: '印刷エラー', printErrorMsg: 'ドキュメントを印刷できませんでした。もう一度お試しください。',
     documents: 'ドキュメント', all: 'すべて', plainText: 'プレーンテキスト', user: 'ユーザー', language: '言語',
     recoveredDocuments: '復元されたドキュメント', recover: '復元', discard: '破棄', discardAll: 'すべて破棄',
     recentFiles: '最近使用したファイル', rememberRecent: '最近使用したファイルを記憶する', clearRecent: 'クリア',
@@ -1081,6 +1101,13 @@ function _eoSaveAsFilters(docType, requestedExt, currentPath, isLinux) {
 function _eoOpenDocumentUrl(ref) {
   var urls = ref && ref.ew && ref.ew.AscCommon && ref.ew.AscCommon.g_oDocumentUrls;
   return urls ? urls.documentUrl : null;
+}
+
+// The backend refuses a PDF it cannot make with the user's fonts and starts
+// its error with this, so the dialog can say why.
+function _eoIsFontCacheError(error) {
+  var text = (error && error.message) || String(error);
+  return text.indexOf('font-cache-unavailable') === 0;
 }
 
 function _getEditor() {
@@ -2200,7 +2227,7 @@ window.AscDesktopEditor = {
           } catch(saveErr) {
             window._eoLog('[EO] SaveAs failed: ' + saveErr);
             await window.__TAURI__.dialog.message(
-              _t('saveErrorMsg'),
+              _eoIsFontCacheError(saveErr) ? _t('pdfFontsErrorMsg') : _t('saveErrorMsg'),
               { title: _t('saveError'), kind: 'error' }
             );
             if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
@@ -2528,8 +2555,8 @@ window.AscDesktopEditor = {
       window.AscDesktopEditor._isPrinting = true;
       var binData = ref.editor.asc_nativeGetFile();
       if (!binData) {
-        window._eoLog('[EO] Print aborted: asc_nativeGetFile returned no data');
-        return;
+        // Through the catch below, so the user is told and the editor released.
+        throw new Error('Print aborted: asc_nativeGetFile returned no data');
       }
 
       var b64;
@@ -2561,6 +2588,15 @@ window.AscDesktopEditor = {
       }
     } catch(e) {
       window._eoLog('[EO] Print: ERROR: ' + (e.message || e));
+      // Without this a failed print looks like nothing happened.
+      try {
+        await window.__TAURI__.dialog.message(
+          _eoIsFontCacheError(e) ? _t('pdfFontsErrorMsg') : _t('printErrorMsg'),
+          { title: _t('printError'), kind: 'error' }
+        );
+      } catch(dialogErr) {
+        window._eoLog('[EO] Print: error dialog failed: ' + dialogErr);
+      }
       if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
         ref.ew.DesktopOfflineAppDocumentEndSave(1);
       }
