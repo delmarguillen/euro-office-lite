@@ -165,7 +165,7 @@ for (const moduleName of ['word', 'cell', 'slide']) {
       `internal HTML paste: ${moduleName}/sdk-all.js changed (${htmlPasteProblems.join('; ')}). ` +
       'Check the copy writers in sdkjs common/wordcopypaste.js and cell/model/clipboard.js, ' +
       '_private_onpaste, CommonIframe_PasteStart and Paste_End in common/clipboard_base.js, ' +
-      'and _eoHtmlIsEditorCopy / _eoPasteEditorHtmlFromClipboard in bridge.js.',
+      'and _eoHtmlIsEditorCopy / _eoPasteEditorCopyFirst in bridge.js.',
     );
   }
 }

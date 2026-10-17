@@ -1,14 +1,17 @@
 // Drives the two paste paths of src/bridge.js that never see a paste event,
 // AscDesktopEditor.Paste() (the Paste button and context menu, every platform)
-// and Ctrl+V with a non-Latin layout on Linux, with an editor copy that only
-// reaches the system clipboard as HTML (a slide, an image, a chart: no text,
-// no image flavor). Checks that:
+// and Ctrl+V with a non-Latin layout on Linux, with editor copies (sdkjs's
+// binary in a class of the HTML flavor) and with other clipboard contents.
+// Checks that:
 //
 //   - the editor copy goes to sdkjs's HTML paste once, with the sequence of
 //     its own paste handler (flag, long-action counter, pastedFrom, iframe
 //     paste), and leaves the counter where it was;
-//   - HTML that is not an editor copy (a browser's "Copy Image") does not;
-//   - text still wins when there is text, and an empty clipboard stays empty;
+//   - it goes first, also when the same copy carries text (a sheet's active
+//     cell, a document paragraph) or an image;
+//   - HTML that is not an editor copy (a browser's "Copy Image") does not, and
+//     external text and images take the same path as before;
+//   - an empty clipboard stays empty;
 //   - the decision itself (_eoHtmlIsEditorCopy) on the shapes sdkjs writes.
 //
 // The fake CommonIframe_PasteStart ends in Paste_End, as sdkjs's does.
@@ -21,6 +24,7 @@ const results = [];
 const slideCopy = '<img width="1284" height="724" src="data:image/png;base64,iVBORw0KGgo=" class="pptData;20600;RE9DWQ==">';
 const docCopy = '<span style="font-size:11pt" class="docData;1675;RE9DWQ==">x</span>';
 const cellCopy = '<html><body><span class="xslData;7067;RE9DWQ==">1</span></body></html>\0\0';
+const cellImageCopy = '<html><body><span class="xslData;7067;RE9DWQ=="><img src="data:image/png;base64,iVBORw0KGgo="></span></body></html>';
 const browserImage = '<meta charset="utf-8"><img src="http://127.0.0.1:8765/img.png" alt="">';
 const webText = '<p class="MsoNormal" style="margin:0">Hello</p>';
 
@@ -119,16 +123,60 @@ function resultLine(bridge, prefix) {
 }
 
 // The full sdkjs sequence, once, with the counter back where it was.
-function checkSequence(label, bridge, html) {
+function checkSequence(label, bridge, html, text = '') {
   const s = state(bridge);
   const start = s.starts[0];
   check(results, `${label}: one CommonIframe_PasteStart`, s.starts.length === 1, `calls=${s.starts.length}`);
   check(results, `${label}: flag set, counter raised, pastedFrom cleared before it`,
     !!start && start.flag === true && start.counter === 1 && start.pastedFrom === null,
     start ? `flag=${start.flag}, counter=${start.counter}, pastedFrom=${start.pastedFrom}` : '');
-  check(results, `${label}: given the clipboard HTML`, !!start && start.html === html && start.text === '');
+  check(results, `${label}: given the clipboard HTML`, !!start && start.html === html && start.text === text,
+    start ? `text=${JSON.stringify(start.text)}` : '');
   check(results, `${label}: Paste_End balanced it`,
     s.steps === 'increment,start,end,decrement' && s.counter === 0 && s.flag === false, s.steps);
+}
+
+// What goes first when the clipboard carries more than one flavor. An editor
+// copy (binary tag in its HTML) goes before its own text and image; anything
+// else takes the old order, text then image.
+async function orderCases(label, bridge, run, result) {
+  // A picture copied in a sheet: sdkjs also puts the active cell's text.
+  reset(bridge);
+  clip = { text: 'ORIGEN hoja', image: null, html: cellImageCopy };
+  await run();
+  checkSequence(`${label}, sheet image with the active cell's text`, bridge, cellImageCopy, 'ORIGEN hoja');
+  check(results, `${label}, sheet image: result=internal-html, no text pasted`,
+    result() === 'internal-html' && state(bridge).pasted === 0, `result=${result()}, text pastes=${state(bridge).pasted}`);
+
+  // A formatted paragraph copied in a document.
+  reset(bridge);
+  clip = { text: 'Hello', image: null, html: docCopy };
+  await run();
+  check(results, `${label}, document text with its editor HTML: result=internal-html`,
+    result() === 'internal-html' && state(bridge).starts.length === 1 && state(bridge).pasted === 0, result());
+
+  // External text with a web page's HTML, and with no HTML at all.
+  for (const [what, html] of [['web HTML', webText], ['no HTML', null]]) {
+    reset(bridge);
+    clip = { text: 'Hello', image: null, html };
+    await run();
+    check(results, `${label}, external text with ${what}: result=text as before`,
+      result() === 'text' && state(bridge).pasted === 1 && state(bridge).starts.length === 0, result());
+  }
+
+  // An external image (a browser's "Copy Image").
+  reset(bridge);
+  clip = { text: null, image: 'clipboard_1.png', html: browserImage };
+  await run();
+  check(results, `${label}, external image: result=image as before`,
+    result() === 'image' && state(bridge).inserted === 1 && state(bridge).starts.length === 0, result());
+
+  // An editor copy that also offers an image: the image is a render of it.
+  reset(bridge);
+  clip = { text: null, image: 'clipboard_2.png', html: slideCopy };
+  await run();
+  check(results, `${label}, editor copy with an image flavor: result=internal-html, no image inserted`,
+    result() === 'internal-html' && state(bridge).inserted === 0 && state(bridge).starts.length === 1, result());
 }
 
 // --- AscDesktopEditor.Paste() on each platform ------------------------------
@@ -165,22 +213,7 @@ for (const platform of ['Linux x86_64', 'Win32', 'MacIntel']) {
   check(results, `(iii) Paste() ${name}: result=empty`,
     resultLine(bridge, '[CLIPBOARD] paste result=') === 'empty', resultLine(bridge, '[CLIPBOARD] paste result='));
 
-  // (iv) Text present: text wins, the HTML is not even read.
-  reset(bridge);
-  clip = { text: 'Hello', image: null, html: slideCopy };
-  await paste();
-  check(results, `(iv) Paste() ${name}, text present: pasted as text`,
-    resultLine(bridge, '[CLIPBOARD] paste result=') === 'text' && state(bridge).pasted === 1 &&
-    state(bridge).starts.length === 0 && !reads.html,
-    `result=${resultLine(bridge, '[CLIPBOARD] paste result=')}, html reads=${reads.html || 0}`);
-
-  // An image present: the image wins, as today.
-  reset(bridge);
-  clip = { text: null, image: 'clipboard_1.png', html: slideCopy };
-  await paste();
-  check(results, `Paste() ${name}, image present: pasted as image`,
-    resultLine(bridge, '[CLIPBOARD] paste result=') === 'image' && state(bridge).inserted === 1 &&
-    state(bridge).starts.length === 0);
+  await orderCases(`Paste() ${name}`, bridge, paste, () => resultLine(bridge, '[CLIPBOARD] paste result='));
 
   // (v) Nothing at all.
   reset(bridge);
@@ -214,6 +247,19 @@ for (const platform of ['Linux x86_64', 'Win32', 'MacIntel']) {
     state(bridge).counter === 0 && state(bridge).flag === false &&
     resultLine(bridge, '[CLIPBOARD] paste result=') === 'internal-html-error',
     `counter=${state(bridge).counter}, ${resultLine(bridge, '[CLIPBOARD] paste result=')}`);
+
+  // sdkjs without its HTML paste: the editor copy falls back to the old order.
+  reset(bridge);
+  const pasteStart = cb.CommonIframe_PasteStart;
+  delete cb.CommonIframe_PasteStart;
+  clip = { text: 'Hello', image: null, html: slideCopy };
+  await sb.AscDesktopEditor.Paste();
+  cb.CommonIframe_PasteStart = pasteStart;
+  check(results, 'no HTML paste in sdkjs: editor copy with text falls back to result=text',
+    resultLine(bridge, '[CLIPBOARD] paste result=') === 'text' && state(bridge).pasted === 1 &&
+    state(bridge).counter === 0 &&
+    bridge.logs.some((line) => line.includes('internal html paste unavailable, falling back')),
+    resultLine(bridge, '[CLIPBOARD] paste result='));
   bridge.stopTimers();
 }
 
@@ -254,19 +300,7 @@ for (const platform of ['Linux x86_64', 'Win32', 'MacIntel']) {
   check(results, '(iii) KeyShim v, browser image HTML: not pasted as HTML, result=empty',
     state(bridge).starts.length === 0 && keyResult() === 'empty', keyResult());
 
-  // (iv) Text wins.
-  reset(bridge);
-  clip = { text: 'Hello', image: null, html: slideCopy };
-  await cyrillicCtrlV();
-  check(results, '(iv) KeyShim v, text present: result=text, HTML not read',
-    keyResult() === 'text' && state(bridge).starts.length === 0 && !reads.html, keyResult());
-
-  // Image wins.
-  reset(bridge);
-  clip = { text: null, image: 'clipboard_2.png', html: slideCopy };
-  await cyrillicCtrlV();
-  check(results, 'KeyShim v, image present: result=image',
-    keyResult() === 'image' && state(bridge).inserted === 1 && state(bridge).starts.length === 0, keyResult());
+  await orderCases('KeyShim v', bridge, cyrillicCtrlV, keyResult);
 
   // (v) Empty.
   reset(bridge);
