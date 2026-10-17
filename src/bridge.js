@@ -115,6 +115,60 @@ function _eoHtmlIsJustImage(html) {
   return stripped.trim() === '';
 }
 
+// True when an HTML clipboard flavor is a copy made inside the editor: sdkjs
+// puts its binary in an element's class behind one of these tags. Plain string
+// work, so it also runs where there is no DOM (and in the Node checks).
+function _eoHtmlIsEditorCopy(html) {
+  if (!html || typeof html !== 'string') return false;
+  var tags = ['docData;', 'xslData;', 'pptData;', 'pdfData;'];
+  var classAttr = /\sclass\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+  var match;
+  while ((match = classAttr.exec(html)) !== null) {
+    var value = match[1] !== undefined ? match[1] : match[2] !== undefined ? match[2] : match[3];
+    for (var i = 0; i < tags.length; i++) {
+      if (value.indexOf(tags[i]) !== -1) return true;
+    }
+  }
+  return false;
+}
+
+// For the paste paths that never see a paste event (the Paste menu, Ctrl+V
+// with a non-Latin layout on Linux): an editor copy without text or image
+// flavors only reaches the system clipboard as HTML. Reads it and, if it is
+// one, pastes it as sdkjs's paste handler does with an event's HTML. Returns
+// the result to log, or null when the clipboard holds no editor copy.
+async function _eoPasteEditorHtmlFromClipboard(ref) {
+  var html = null;
+  try {
+    html = await invoke('read_clipboard_html');
+  } catch(e) {
+    window._eoLog('[EO] Clipboard html read failed: ' + (e.message || e));
+    return null;
+  }
+  if (!_eoHtmlIsEditorCopy(html)) return null;
+  var cb = ref.ew && ref.ew.AscCommon && ref.ew.AscCommon.g_clipboardBase;
+  var api = cb && cb.Api;
+  if (!api || !cb.CommonIframe_PasteStart || !api.incrementCounterLongAction) return 'internal-html-unavailable';
+  if (api.isLongAction && api.isLongAction()) return 'internal-html-busy';
+  // sdkjs cuts the event's HTML after </html> the same way.
+  var end = html.indexOf('</html>');
+  if (end !== -1) html = html.substring(0, end + '</html>'.length);
+  // _private_onpaste's sequence; CommonIframe_PasteStart ends in Paste_End,
+  // which lowers the long-action counter again.
+  cb.PasteFlag = true;
+  api.incrementCounterLongAction();
+  cb.pastedFrom = null;
+  try {
+    cb.CommonIframe_PasteStart(html, '');
+  } catch(e) {
+    // A throw before Paste_End would leave the editor locked in a long action.
+    if (cb.PasteFlag && cb.Paste_End) cb.Paste_End();
+    window._eoLog('[EO] internal html paste error: ' + (e.message || e));
+    return 'internal-html-error';
+  }
+  return 'internal-html';
+}
+
 // Linux Ctrl+V runs two paths for one keystroke: the keydown reads the native
 // clipboard for an image (Issue #24) and WebKitGTK's paste event feeds sdkjs.
 // Each keystroke gets a token through which its paste event tells the native
@@ -1270,12 +1324,14 @@ function _loadEditorBin(b64data, fileName, options) {
                     (_eoPasteFromLastCopyBinary(refV) ? 'internal' : 'timeout-no-internal'));
                   return;
                 }
-                ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
+                return ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
                   if (imageFile) {
                     refV.editor.AddImageUrl([imageFile]);
                     window._eoLog('[EO] KeyShim v: result=image');
                   } else {
-                    window._eoLog('[EO] KeyShim v: result=empty');
+                    return _eoPasteEditorHtmlFromClipboard(refV).then(function(htmlResult) {
+                      window._eoLog('[EO] KeyShim v: result=' + (htmlResult || 'empty'));
+                    });
                   }
                 });
               }).catch(function(err) {
@@ -2510,7 +2566,8 @@ window.AscDesktopEditor = {
       }
       return;
     }
-    window._eoLog('[CLIPBOARD] paste result=empty');
+    var htmlResult = await _eoPasteEditorHtmlFromClipboard(_getEditor());
+    window._eoLog('[CLIPBOARD] paste result=' + (htmlResult || 'empty'));
   },
   Cut: function() {
     var ref = _getEditor();
