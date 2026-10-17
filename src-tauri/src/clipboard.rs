@@ -38,6 +38,57 @@ fn read_clipboard_text_blocking() -> Result<Option<String>, String> {
     }
 }
 
+// The HTML flavor, for copies made inside the editor that carry no text or
+// image: sdkjs keeps its binary in a class of the copied HTML. Same blocking
+// pattern as read_clipboard_text.
+#[tauri::command]
+pub async fn read_clipboard_html() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(read_clipboard_html_blocking)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("[clipboard] read_clipboard_html task failed: {}", e);
+            Ok(None)
+        })
+}
+
+fn read_clipboard_html_blocking() -> Result<Option<String>, String> {
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(c) => c,
+        Err(e) => {
+            clipboard_log(&format!("[clipboard] Failed to open clipboard: {}", e));
+            return Ok(None);
+        }
+    };
+
+    // The clipboard is user data: log only its size and whether it is an
+    // editor copy, never its content.
+    match clipboard.get().html() {
+        Ok(html) if !html.is_empty() => {
+            clipboard_log(&format!(
+                "[clipboard] html: {} bytes, sdkjs_binary={}",
+                html.len(),
+                has_sdkjs_binary_tag(&html)
+            ));
+            Ok(Some(html))
+        }
+        Ok(_) => {
+            clipboard_log("[clipboard] html: empty");
+            Ok(None)
+        }
+        Err(e) => {
+            clipboard_log(&format!("[clipboard] html: none ({})", e));
+            Ok(None)
+        }
+    }
+}
+
+// Tags sdkjs writes before its binary in the copied HTML's class, per editor.
+fn has_sdkjs_binary_tag(html: &str) -> bool {
+    ["docData;", "xslData;", "pptData;", "pdfData;"]
+        .iter()
+        .any(|tag| html.contains(tag))
+}
+
 #[tauri::command]
 pub async fn read_clipboard_image(state: State<'_, AppState>) -> Result<Option<String>, String> {
     // Clone the path out of the state: the blocking closure outlives the borrow.
@@ -190,4 +241,24 @@ fn read_clipboard_file_image(
     let dest_size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
     clipboard_log(&format!("[clipboard] result: dest_name={}, dest_exists={}, dest_size={}", dest_name, dest_exists, dest_size));
     Ok(Some(dest_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_sdkjs_binary_tag;
+
+    #[test]
+    fn editor_copies_are_tagged() {
+        assert!(has_sdkjs_binary_tag(r#"<img src="data:image/png;base64,AA==" class="pptData;20600;RE9D">"#));
+        assert!(has_sdkjs_binary_tag(r#"<span class="xslData;7067;AAA">x</span>"#));
+        assert!(has_sdkjs_binary_tag(r#"<p class="docData;1803;AAA">x</p>"#));
+        assert!(has_sdkjs_binary_tag(r#"<div class="pdfData;10;AAA"></div>"#));
+    }
+
+    #[test]
+    fn other_html_is_not() {
+        assert!(!has_sdkjs_binary_tag(""));
+        assert!(!has_sdkjs_binary_tag(r#"<img src="http://127.0.0.1:8765/img.png">"#));
+        assert!(!has_sdkjs_binary_tag("<p>pptData without the separator</p>"));
+    }
 }
