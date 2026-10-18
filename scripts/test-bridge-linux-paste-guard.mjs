@@ -195,5 +195,19 @@ for (const nativeFirst of [false, true]) {
     line ? line.replace(/^.*\(/, '(') : `inserted=${inserted()}`);
 }
 
+// (v) Native read empty and a paste event without an image: nothing goes in
+// and the log says no image reached the app.
+{
+  reset();
+  nativeReads(null, true);
+  keydown();
+  await sleep(15);
+  pasteEvent({});
+  await sleep(500);
+  const line = bridge.logs.find((entry) => entry.includes('no image reached the app'));
+  check(results, '(v) empty native read, no image in the event: no insertion and a log line',
+    inserted() === 0 && !!line, `inserted=${inserted()}, line=${line ? 'yes' : 'no'}`);
+}
+
 bridge.stopTimers();
 finish(results);
