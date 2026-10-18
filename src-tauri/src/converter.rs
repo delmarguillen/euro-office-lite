@@ -2,7 +2,7 @@ use tauri::AppHandle;
 use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
-use crate::x2t_task::{self, params_path, write_file, xml_escape, FONT_CACHE_ERROR};
+use crate::x2t_task::{self, convert_params_xml, params_path, write_file, FONT_CACHE_ERROR};
 
 pub async fn convert_file(
     app: &AppHandle,
@@ -68,16 +68,13 @@ pub async fn convert_file(
     );
     write_file(&params_path, &xml)?;
 
-    let mut sidecar = app
+    let sidecar = app
         .shell()
         .sidecar("x2t")
         .map_err(|e| e.to_string())?
         .current_dir(&binaries_dir)
-        .args([params_path.to_string_lossy().as_ref()]);
-    #[cfg(target_os = "linux")]
-    {
-        sidecar = sidecar.envs([("LD_LIBRARY_PATH", binaries_dir.to_string_lossy().as_ref())]);
-    }
+        .args([params_path.to_string_lossy().as_ref()])
+        .envs(x2t_task::convert_env(&binaries_dir));
     let result = sidecar.output().await.map_err(|e| e.to_string())?;
 
     let _ = std::fs::remove_file(&params_path);
@@ -134,83 +131,10 @@ fn ensure_pdf_font_cache(
     }
 }
 
-// Paths are passed raw and escaped here, once. `extra` is already XML: the
-// numeric CSV/TXT elements from TextOptions::xml_elements.
-fn convert_params_xml(
-    input: &str,
-    output: &str,
-    format_to: i32,
-    temp_dir: &str,
-    extra: &str,
-) -> String {
-    format!(
-        r#"<?xml version="1.0" encoding="utf-8"?>
-<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                      xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-<m_sFileFrom>{}</m_sFileFrom>
-<m_sFileTo>{}</m_sFileTo>
-<m_nFormatTo>{}</m_nFormatTo>
-<m_sTempDir>{}</m_sTempDir>
-{}</TaskQueueDataConvert>"#,
-        xml_escape(&input.replace('\\', "/")),
-        xml_escape(&output.replace('\\', "/")),
-        format_to,
-        xml_escape(&temp_dir.replace('\\', "/")),
-        extra,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::x2t_task::pdf_font_list;
-
-    #[test]
-    fn plain_paths_give_the_same_convert_params_as_before() {
-        let xml = convert_params_xml(
-            r"C:\Users\u\Doc.docx",
-            r"C:\Temp\eo\Editor.bin",
-            8192,
-            r"C:\Temp\eo",
-            "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n",
-        );
-        assert_eq!(
-            xml,
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
-<TaskQueueDataConvert xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n                      \
-xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
-<m_sFileFrom>C:/Users/u/Doc.docx</m_sFileFrom>\n\
-<m_sFileTo>C:/Temp/eo/Editor.bin</m_sFileTo>\n\
-<m_nFormatTo>8192</m_nFormatTo>\n\
-<m_sTempDir>C:/Temp/eo</m_sTempDir>\n\
-<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n\
-</TaskQueueDataConvert>"
-        );
-    }
-
-    #[test]
-    fn convert_params_escape_every_path_in_name_and_folder() {
-        let xml = convert_params_xml(
-            "/home/u/Q&A/R&D.docx",
-            "/tmp/a<b>/s<r>.docx",
-            65,
-            "/tmp/T&C",
-            "",
-        );
-        assert!(xml.contains("<m_sFileFrom>/home/u/Q&amp;A/R&amp;D.docx</m_sFileFrom>"));
-        assert!(xml.contains("<m_sFileTo>/tmp/a&lt;b&gt;/s&lt;r&gt;.docx</m_sFileTo>"));
-        assert!(xml.contains("<m_sTempDir>/tmp/T&amp;C</m_sTempDir>"));
-        assert!(!xml.contains("Q&A") && !xml.contains("a<b>") && !xml.contains("T&C"));
-    }
-
-    #[test]
-    fn convert_params_keep_the_text_options_as_markup() {
-        let extra =
-            "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n<m_nCsvDelimiter>2</m_nCsvDelimiter>\n";
-        let xml = convert_params_xml("/d/A&amp;B.csv", "/t/Editor.bin", 8192, "/t", extra);
-        assert!(xml.contains(extra));
-        assert!(xml.contains("<m_sFileFrom>/d/A&amp;amp;B.csv</m_sFileFrom>"));
-    }
 
     const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
     const POLL: std::time::Duration = std::time::Duration::from_millis(10);

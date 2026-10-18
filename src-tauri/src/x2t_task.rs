@@ -261,7 +261,7 @@ fn validate_editor_resources(editors_dir: &std::path::Path) -> Result<(), String
 // A path with &, < or > anywhere makes the params XML invalid and x2t exits 88
 // without writing anything; x2t decodes the entities back, so the file keeps
 // its literal name. Every value goes in element text, never in an attribute.
-pub fn xml_escape(value: &str) -> String {
+fn xml_escape(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for c in value.chars() {
         match c {
@@ -272,6 +272,50 @@ pub fn xml_escape(value: &str) -> String {
         }
     }
     escaped
+}
+
+// Paths are passed raw and escaped here, once. `extra` is already XML: the
+// numeric CSV/TXT elements from TextOptions::xml_elements.
+pub fn convert_params_xml(
+    input: &str,
+    output: &str,
+    format_to: i32,
+    temp_dir: &str,
+    extra: &str,
+) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                      xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<m_sFileFrom>{}</m_sFileFrom>
+<m_sFileTo>{}</m_sFileTo>
+<m_nFormatTo>{}</m_nFormatTo>
+<m_sTempDir>{}</m_sTempDir>
+{}</TaskQueueDataConvert>"#,
+        xml_escape(&input.replace('\\', "/")),
+        xml_escape(&output.replace('\\', "/")),
+        format_to,
+        xml_escape(&temp_dir.replace('\\', "/")),
+        extra,
+    )
+}
+
+// The variables the app sets when it runs x2t for an open, save or export:
+// the library folder on Linux, nothing elsewhere. The value goes through
+// to_string_lossy, as the sidecar call always passed it.
+pub fn convert_env(binaries_dir: &std::path::Path) -> Vec<(&'static str, std::ffi::OsString)> {
+    #[cfg(target_os = "linux")]
+    {
+        vec![(
+            "LD_LIBRARY_PATH",
+            binaries_dir.to_string_lossy().into_owned().into(),
+        )]
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = binaries_dir;
+        Vec::new()
+    }
 }
 
 // Paths are passed raw and escaped here, once.
@@ -653,6 +697,27 @@ fn link_editor_resources(
         symlink_path(&source, &work_editors.join(relative_path))?;
     }
     Ok(())
+}
+
+// x2t format ids, shared with the editors: web-apps uses the same numbers in
+// utils.defines.FileFormat to pick the icon and to filter the Open Recent list.
+pub fn detect_format(path: &std::path::Path) -> i32 {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("docx") => 65,
+        Some("doc") => 66,
+        Some("odt") => 67,
+        Some("rtf") => 68,
+        Some("txt") => 69,
+        Some("xlsx") => 257,
+        Some("xls") => 258,
+        Some("ods") => 259,
+        Some("csv") => 260,
+        Some("pptx") => 129,
+        Some("ppt") => 130,
+        Some("odp") => 131,
+        Some("pdf") => 513,
+        _ => 0,
+    }
 }
 
 #[cfg(test)]
@@ -1155,5 +1220,79 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         );
         assert!(work.join("dictionaries").is_dir());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plain_paths_give_the_same_convert_params_as_before() {
+        let xml = convert_params_xml(
+            r"C:\Users\u\Doc.docx",
+            r"C:\Temp\eo\Editor.bin",
+            8192,
+            r"C:\Temp\eo",
+            "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n",
+        );
+        assert_eq!(
+            xml,
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+<TaskQueueDataConvert xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n                      \
+xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
+<m_sFileFrom>C:/Users/u/Doc.docx</m_sFileFrom>\n\
+<m_sFileTo>C:/Temp/eo/Editor.bin</m_sFileTo>\n\
+<m_nFormatTo>8192</m_nFormatTo>\n\
+<m_sTempDir>C:/Temp/eo</m_sTempDir>\n\
+<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n\
+</TaskQueueDataConvert>"
+        );
+    }
+
+    #[test]
+    fn convert_params_escape_every_path_in_name_and_folder() {
+        let xml = convert_params_xml(
+            "/home/u/Q&A/R&D.docx",
+            "/tmp/a<b>/s<r>.docx",
+            65,
+            "/tmp/T&C",
+            "",
+        );
+        assert!(xml.contains("<m_sFileFrom>/home/u/Q&amp;A/R&amp;D.docx</m_sFileFrom>"));
+        assert!(xml.contains("<m_sFileTo>/tmp/a&lt;b&gt;/s&lt;r&gt;.docx</m_sFileTo>"));
+        assert!(xml.contains("<m_sTempDir>/tmp/T&amp;C</m_sTempDir>"));
+        assert!(!xml.contains("Q&A") && !xml.contains("a<b>") && !xml.contains("T&C"));
+    }
+
+    #[test]
+    fn convert_params_keep_the_text_options_as_markup() {
+        let extra =
+            "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n<m_nCsvDelimiter>2</m_nCsvDelimiter>\n";
+        let xml = convert_params_xml("/d/A&amp;B.csv", "/t/Editor.bin", 8192, "/t", extra);
+        assert!(xml.contains(extra));
+        assert!(xml.contains("<m_sFileFrom>/d/A&amp;amp;B.csv</m_sFileFrom>"));
+    }
+
+    #[test]
+    fn the_convert_env_is_the_library_folder_on_linux_only() {
+        let env = convert_env(std::path::Path::new("/opt/Euro Office/binaries"));
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                env,
+                vec![("LD_LIBRARY_PATH", std::ffi::OsString::from("/opt/Euro Office/binaries"))]
+            );
+        } else {
+            assert!(env.is_empty(), "{:?}", env);
+        }
+    }
+
+    #[test]
+    fn convert_params_without_text_options_have_no_extra_elements() {
+        let xml = convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", "");
+        assert!(xml.ends_with("<m_sTempDir>/t</m_sTempDir>\n</TaskQueueDataConvert>"), "{}", xml);
+    }
+
+    #[test]
+    fn detect_format_maps_pdf_to_the_x2t_export_id() {
+        // 513 is the value both PDF paths branch on before calling the converter.
+        assert_eq!(detect_format(std::path::Path::new("/tmp/out.pdf")), 513);
+        assert_eq!(detect_format(std::path::Path::new("/tmp/out.docx")), 65);
+        assert_eq!(detect_format(std::path::Path::new("/tmp/out.unknown")), 0);
     }
 }
