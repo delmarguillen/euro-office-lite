@@ -10,6 +10,8 @@ mod x2t_task;
 #[allow(dead_code)]
 mod text_import;
 
+mod layout;
+
 const USAGE: &str = "\
 usage:
   corpus run --install-root <dir> --corpus <dir> --out <dir> [--work <dir>] [--only <doc>] [--label <k=v>]
