@@ -10,8 +10,31 @@ if (Test-Path (Join-Path $targetDir "x2t-x86_64-pc-windows-msvc.exe")) {
     exit 0
 }
 
+# sha256 of x2t-binaries.zip in the 'dependencies' release. A replaced asset
+# must fail the build until its new digest is pinned here.
+$expectedSha256 = '8d27e54dfa39cb60672753969fb5b76833f274a3aa9140e0e6cbbae1b67f64b9'
+
+# Retry only the download (transient API/network errors); a checksum
+# mismatch below is never retried.
 Write-Host "Downloading x2t binaries from 'dependencies' release..."
-gh release download dependencies --repo $repo --pattern $zipName --output $tempZip
+$attempt = 1
+$delay = 10
+while ($true) {
+    gh release download dependencies --repo $repo --pattern $zipName --output $tempZip --clobber
+    if ($LASTEXITCODE -eq 0) { break }
+    if ($attempt -ge 3) { throw "download of $zipName failed after $attempt attempts" }
+    Write-Host "Download attempt $attempt failed; retrying in ${delay}s"
+    Start-Sleep -Seconds $delay
+    $attempt++
+    $delay *= 2
+}
+
+$actualSha256 = (Get-FileHash $tempZip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualSha256 -ne $expectedSha256) {
+    Remove-Item $tempZip -Force
+    throw "sha256 mismatch for ${zipName}: expected $expectedSha256, actual $actualSha256"
+}
+Write-Host "sha256 verified for ${zipName}: $actualSha256"
 
 if (-not (Test-Path $targetDir)) {
     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
