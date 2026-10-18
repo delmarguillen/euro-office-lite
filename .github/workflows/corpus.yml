@@ -18,10 +18,6 @@ on:
         required: false
         default: installer-x86_64-unknown-linux-gnu
         type: string
-  # TEMPORARY: workflow_dispatch only works once this file is on the default
-  # branch, so the arc's branch is validated on push. Remove before merging.
-  push:
-    branches: [feat/corpus-f1-linux]
 
 permissions:
   contents: read
@@ -36,9 +32,6 @@ jobs:
   corpus-linux-x64:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
-    env:
-      # Build & Release run of v0.17.35-alpha, for the temporary push trigger.
-      DEFAULT_RUN_ID: "39122843626"
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -51,7 +44,7 @@ jobs:
           INPUT_RUN_ID: ${{ inputs.run_id }}
           INPUT_ARTIFACT: ${{ inputs.artifact }}
         run: |
-          RUN_ID="${INPUT_RUN_ID:-$DEFAULT_RUN_ID}"
+          RUN_ID="$INPUT_RUN_ID"
           ARTIFACT="${INPUT_ARTIFACT:-installer-x86_64-unknown-linux-gnu}"
           if ! [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]]; then
             echo "ERROR: run_id must be a number"; exit 1
