@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
+pub use crate::x2t_task::detect_format;
+
 pub struct AppState {
     pub current_file: Mutex<Option<PathBuf>>,
     // This instance's own folder: everything that belongs to the open
@@ -768,27 +770,6 @@ pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
 }
 
-// x2t format ids, shared with the editors: web-apps uses the same numbers in
-// utils.defines.FileFormat to pick the icon and to filter the Open Recent list.
-pub fn detect_format(path: &PathBuf) -> i32 {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("docx") => 65,
-        Some("doc") => 66,
-        Some("odt") => 67,
-        Some("rtf") => 68,
-        Some("txt") => 69,
-        Some("xlsx") => 257,
-        Some("xls") => 258,
-        Some("ods") => 259,
-        Some("csv") => 260,
-        Some("pptx") => 129,
-        Some("ppt") => 130,
-        Some("odp") => 131,
-        Some("pdf") => 513,
-        _ => 0,
-    }
-}
-
 // File managers on Linux create 0-byte files from their "New document" menu and
 // opening one is an ordinary desktop flow, so an empty file is treated as a new
 // document that saves back to that path (#33, proposed by the reporter).
@@ -1336,13 +1317,5 @@ mod tests {
             None,
             "every later save would otherwise re-record the same file"
         );
-    }
-
-    #[test]
-    fn detect_format_maps_pdf_to_the_x2t_export_id() {
-        // 513 is the value both PDF paths branch on before calling the converter.
-        assert_eq!(detect_format(&PathBuf::from("/tmp/out.pdf")), 513);
-        assert_eq!(detect_format(&PathBuf::from("/tmp/out.docx")), 65);
-        assert_eq!(detect_format(&PathBuf::from("/tmp/out.unknown")), 0);
     }
 }
