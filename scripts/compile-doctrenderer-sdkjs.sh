@@ -29,6 +29,7 @@ git -C "$SDKJS" fetch "$REMOTE" tag "$TAG" --no-tags
 git -C "$SDKJS" checkout --detach "$TAG"
 
 # A tag in a repository we do not control can be moved; the commit cannot.
+[ -z "${CI:-}" ] || [ -n "${DOCTRENDERER_SDKJS_COMMIT:-}" ] || { echo "ERROR: DOCTRENDERER_SDKJS_COMMIT is required in CI"; exit 1; }
 if [ -n "${DOCTRENDERER_SDKJS_COMMIT:-}" ]; then
     RESOLVED="$(git -C "$SDKJS" rev-parse "$TAG^{commit}")"
     if [ "$RESOLVED" != "$DOCTRENDERER_SDKJS_COMMIT" ]; then

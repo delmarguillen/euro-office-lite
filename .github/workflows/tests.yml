@@ -32,7 +32,7 @@ jobs:
       # Sin submodules: los tests no tocan sdkjs ni web-apps, y traerlos aquí
       # costaría más que compilar el crate.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Linux system dependencies
         run: |
@@ -47,7 +47,7 @@ jobs:
             libssl-dev
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
       # The corpus crate includes src-tauri/src/x2t_task.rs and text_import.rs
       # by path: building it here fails as soon as either file needs Tauri or
@@ -56,7 +56,7 @@ jobs:
         run: cargo test --locked --manifest-path tools/corpus/Cargo.toml
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
