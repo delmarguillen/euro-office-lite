@@ -2,6 +2,8 @@ use tauri::AppHandle;
 use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
+use crate::x2t_task::{find_x2t, params_path, strip_extended_prefix};
+
 pub async fn convert_file(
     app: &AppHandle,
     input: &str,
@@ -289,50 +291,6 @@ fn validate_editor_resources(editors_dir: &std::path::Path) -> Result<(), String
     }
     Ok(())
 }
-// On Windows, resource_dir() and canonicalize() return \\?\C:\... paths. x2t
-// copies whatever spelling it is given into its font cache, and its PDF export
-// cannot open fonts listed under that prefix, so paths handed to x2t drop it.
-// Only drive and UNC forms have a plain spelling (C:\..., \\server\...); any
-// other form, such as \\?\Volume{GUID}\..., is kept as it is.
-pub(crate) fn strip_extended_prefix(p: &std::path::Path) -> std::path::PathBuf {
-    let s = p.to_string_lossy();
-    let Some(rest) = s.strip_prefix(r"\\?\") else {
-        return p.to_path_buf();
-    };
-    let bytes = rest.as_bytes();
-    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-        std::path::PathBuf::from(rest)
-    } else if let Some(share) = rest
-        .get(..4)
-        .filter(|head| head.eq_ignore_ascii_case(r"UNC\"))
-        .map(|_| &rest[4..])
-    {
-        std::path::PathBuf::from(format!(r"\\{}", share))
-    } else {
-        p.to_path_buf()
-    }
-}
-
-/// Where to write the params file x2t is invoked with. Every path inside the
-/// XML is absolute, so the file does not need to sit next to the output; the
-/// print path has always written it into temp_dir and works on all three
-/// platforms. Keeping it there is what stops a PDF export from leaving
-/// `x2t_params.xml` behind in the user's folder (#35), which the cleanup after
-/// the run cannot guarantee on its own (a crash or a kill skips it). The name
-/// is unique per call so two conversions in the same session cannot clobber
-/// each other's params.
-fn params_path(temp_dir: &std::path::Path, tag: &str) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    temp_dir.join(format!(
-        "x2t_params_{}_{}_{}.xml",
-        tag,
-        std::process::id(),
-        unique
-    ))
-}
-
 // A path with &, < or > anywhere makes the params XML invalid and x2t exits 88
 // without writing anything; x2t decodes the entities back, so the file keeps
 // its literal name. Every value goes in element text, never in an attribute.
@@ -412,7 +370,7 @@ fn convert_to_pdf(
         std::env::consts::OS,
         output_name
     ));
-    let x2t_exe = find_x2t_exe(binaries_dir).map_err(|error| {
+    let x2t_exe = find_x2t(binaries_dir, crate::app_exe_dir().as_deref()).map_err(|error| {
         log_pdf(&format!("x2t discovery failed: {}", error));
         error
     })?;
@@ -754,76 +712,9 @@ fn link_editor_resources(
     Ok(())
 }
 
-fn find_x2t_exe(binaries_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    let mut search_dirs = vec![
-        binaries_dir.to_path_buf(),
-        binaries_dir.parent().unwrap_or(binaries_dir).to_path_buf(),
-    ];
-    if let Some(resources) = binaries_dir.parent() {
-        if let Some(contents) = resources.parent() {
-            let macos_dir = contents.join("MacOS");
-            if macos_dir.exists() {
-                search_dirs.push(macos_dir);
-            }
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            search_dirs.push(exe_dir.to_path_buf());
-        }
-    }
-    for dir in &search_dirs {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if is_x2t_binary(&name) {
-                    return Ok(entry.path());
-                }
-            }
-        }
-    }
-    Err("x2t executable not found".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // The #35 regression: convert_to_pdf used to drop the params file next to
-    // the PDF it was writing, so every export left an x2t_params.xml in the
-    // user's folder. The params file belongs in the app temp directory.
-    #[test]
-    fn params_stay_out_of_the_output_folder() {
-        let temp_dir = std::path::Path::new("/tmp/eo-app");
-        let output_dir = std::path::Path::new("/home/user/Documents");
-
-        for tag in ["pdf", "convert"] {
-            let path = params_path(temp_dir, tag);
-
-            assert_eq!(
-                path.parent(),
-                Some(temp_dir),
-                "params must be written to temp_dir, never beside the output (#35)"
-            );
-            assert_ne!(
-                path.parent(),
-                Some(output_dir),
-                "params must never land in the folder the user picked (#35)"
-            );
-        }
-    }
-
-    // Two exports in the same session must not share a params file: the second
-    // would overwrite the first while x2t is still reading it.
-    #[test]
-    fn params_path_is_unique_per_call() {
-        let temp_dir = std::path::Path::new("/tmp/eo-app");
-
-        let first = params_path(temp_dir, "pdf");
-        let second = params_path(temp_dir, "pdf");
-
-        assert_ne!(first, second, "each conversion needs its own params file");
-    }
 
     #[test]
     fn xml_escape_covers_the_three_markup_characters() {
@@ -1106,38 +997,5 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 
         assert!(error.starts_with(FONT_CACHE_ERROR), "{}", error);
         let _ = std::fs::remove_dir_all(&base);
-    }
-
-    // Plain strings, so it runs anywhere: only the spelling is under test.
-    #[test]
-    fn the_extended_prefix_is_dropped_only_where_a_plain_form_exists() {
-        use std::path::{Path, PathBuf};
-        let cases = [
-            (r"\\?\C:\App\binaries", r"C:\App\binaries"),
-            (
-                r"\\?\UNC\server\share\App\binaries",
-                r"\\server\share\App\binaries",
-            ),
-            (
-                r"\\?\Volume{0b1c2d3e-0000-0000-0000-000000000000}\App\binaries",
-                r"\\?\Volume{0b1c2d3e-0000-0000-0000-000000000000}\App\binaries",
-            ),
-            (r"C:\App\binaries", r"C:\App\binaries"),
-        ];
-        let wrong: Vec<(&str, PathBuf)> = cases
-            .iter()
-            .map(|(given, expected)| (*given, *expected, strip_extended_prefix(Path::new(given))))
-            .filter(|(_, expected, got)| got != &PathBuf::from(expected))
-            .map(|(given, _, got)| (given, got))
-            .collect();
-        assert!(wrong.is_empty(), "wrong spellings: {:?}", wrong);
-    }
-}
-
-pub fn is_x2t_binary(name: &str) -> bool {
-    if cfg!(target_os = "windows") {
-        (name.starts_with("x2t-") || name == "x2t.exe") && name.ends_with(".exe")
-    } else {
-        (name.starts_with("x2t-") && !name.contains('.')) || name == "x2t"
     }
 }

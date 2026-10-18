@@ -10,6 +10,7 @@ mod recent;
 mod recovery;
 mod temp_layout;
 mod text_import;
+mod x2t_task;
 
 use file_ops::AppState;
 use std::sync::Mutex;
@@ -832,8 +833,8 @@ fn font_scan_command(
     fontdata_dir: &std::path::Path,
     binaries_dir: &std::path::Path,
 ) -> std::process::Command {
-    let binaries_dir = converter::strip_extended_prefix(binaries_dir);
-    let mut cmd = std::process::Command::new(converter::strip_extended_prefix(x2t_exe));
+    let binaries_dir = x2t_task::strip_extended_prefix(binaries_dir);
+    let mut cmd = std::process::Command::new(x2t_task::strip_extended_prefix(x2t_exe));
     cmd.current_dir(&binaries_dir)
         .arg("-create-allfonts")
         .arg(fontdata_dir)
@@ -841,39 +842,20 @@ fn font_scan_command(
     cmd
 }
 
+// The folder of the running executable: the last place x2t is looked for.
+fn app_exe_dir() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+}
+
 // Runs x2t's font scan into `fontdata_dir` and reports whether it succeeded.
 fn generate_fonts(fontdata_dir: &std::path::Path, binaries_dir: &std::path::Path) -> bool {
     log_startup("First-run font generation starting...");
 
-    let mut search_dirs = vec![
-        binaries_dir.to_path_buf(),
-        binaries_dir.parent().unwrap_or(binaries_dir).to_path_buf(),
-    ];
-    if let Some(resources) = binaries_dir.parent() {
-        if let Some(contents) = resources.parent() {
-            let macos_dir = contents.join("MacOS");
-            if macos_dir.exists() {
-                search_dirs.push(macos_dir);
-            }
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            search_dirs.push(exe_dir.to_path_buf());
-        }
-    }
-    let x2t_exe = search_dirs.iter().find_map(|dir| {
-        std::fs::read_dir(dir).ok().and_then(|rd| {
-            rd.filter_map(|e| e.ok()).find(|e| {
-                let n = e.file_name().to_string_lossy().to_string();
-                converter::is_x2t_binary(&n)
-            })
-        })
-    }).map(|e| e.path());
-
-    let x2t_exe = match x2t_exe {
-        Some(p) => p,
-        None => {
+    let x2t_exe = match x2t_task::find_x2t(binaries_dir, app_exe_dir().as_deref()) {
+        Ok(p) => p,
+        Err(_) => {
             log_startup("ERROR: x2t executable not found, cannot generate fonts");
             return false;
         }
