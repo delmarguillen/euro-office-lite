@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.text">
+ <office:meta>
+  <dc:title>CJK sample</dc:title>
+ </office:meta>
+ <office:font-face-decls>
+  <style:font-face style:name="Liberation Serif" svg:font-family="'Liberation Serif'" style:font-family-generic="roman" style:font-pitch="variable"/>
+  <style:font-face style:name="Noto Sans CJK SC" svg:font-family="'Noto Sans CJK SC'" style:font-pitch="variable"/>
+ </office:font-face-decls>
+ <office:styles>
+  <style:default-style style:family="paragraph">
+   <style:text-properties style:font-name="Liberation Serif" fo:font-size="12pt" style:font-name-asian="Noto Sans CJK SC" style:font-size-asian="12pt" style:font-name-complex="Noto Sans CJK SC" style:font-size-complex="12pt" fo:language="en" fo:country="US"/>
+  </style:default-style>
+  <style:style style:name="Standard" style:family="paragraph" style:class="text"/>
+ </office:styles>
+ <office:automatic-styles>
+  <style:style style:name="Script" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties /><style:text-properties style:language-asian="zh" style:country-asian="CN"/></style:style>
+ </office:automatic-styles>
+ <office:body>
+  <office:text>
+   <text:p text:style-name="Standard">CJK system fonts sample</text:p>
+   <text:p text:style-name="Script">你好，世界。这是一个用于转换测试的段落。</text:p>
+   <text:p text:style-name="Script">こんにちは、世界。これは変換テスト用の段落です。</text:p>
+  </office:text>
+ </office:body>
+</office:document>

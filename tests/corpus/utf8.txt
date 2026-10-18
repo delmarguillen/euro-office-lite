@@ -1,0 +1,2 @@
+First line
+Segunda línea con ñ

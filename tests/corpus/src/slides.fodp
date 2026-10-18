@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.presentation">
+ <office:meta>
+  <dc:title>Corpus slides</dc:title>
+ </office:meta>
+ <office:font-face-decls>
+  <style:font-face style:name="Liberation Sans" svg:font-family="'Liberation Sans'" style:font-family-generic="swiss" style:font-pitch="variable"/>
+  <style:font-face style:name="Liberation Serif" svg:font-family="'Liberation Serif'" style:font-family-generic="roman" style:font-pitch="variable"/>
+ </office:font-face-decls>
+ <office:styles>
+  <style:default-style style:family="graphic">
+   <style:graphic-properties draw:stroke="none" draw:fill="none"/>
+   <style:text-properties style:font-name="Liberation Sans" fo:font-size="24pt" style:font-name-asian="Liberation Sans" style:font-name-complex="Liberation Sans" fo:language="en" fo:country="US"/>
+  </style:default-style>
+  <style:presentation-page-layout style:name="AL1T0">
+   <presentation:placeholder presentation:object="title" svg:x="2cm" svg:y="6cm" svg:width="24cm" svg:height="3cm"/>
+   <presentation:placeholder presentation:object="subtitle" svg:x="2cm" svg:y="10cm" svg:width="24cm" svg:height="3cm"/>
+  </style:presentation-page-layout>
+  <style:presentation-page-layout style:name="AL2T1">
+   <presentation:placeholder presentation:object="title" svg:x="2cm" svg:y="1cm" svg:width="24cm" svg:height="3cm"/>
+   <presentation:placeholder presentation:object="outline" svg:x="2cm" svg:y="5cm" svg:width="24cm" svg:height="9cm"/>
+  </style:presentation-page-layout>
+ </office:styles>
+ <office:automatic-styles>
+  <style:page-layout style:name="PM1"><style:page-layout-properties fo:margin-top="0cm" fo:margin-bottom="0cm" fo:margin-left="0cm" fo:margin-right="0cm" fo:page-width="28cm" fo:page-height="15.75cm" style:print-orientation="landscape"/></style:page-layout>
+  <style:page-layout style:name="PM2"><style:page-layout-properties fo:margin-top="0cm" fo:margin-bottom="0cm" fo:margin-left="0cm" fo:margin-right="0cm" fo:page-width="21cm" fo:page-height="29.7cm" style:print-orientation="portrait"/></style:page-layout>
+  <style:style style:name="dp1" style:family="drawing-page"/>
+  <style:style style:name="TitleP" style:family="paragraph"><style:text-properties style:font-name="Liberation Sans" fo:font-size="36pt" fo:font-weight="bold"/></style:style>
+  <style:style style:name="BodyP" style:family="paragraph"><style:text-properties style:font-name="Liberation Serif" fo:font-size="24pt"/></style:style>
+  <style:style style:name="NoteP" style:family="paragraph"><style:text-properties style:font-name="Liberation Sans" fo:font-size="12pt"/></style:style>
+ </office:automatic-styles>
+ <office:master-styles>
+  <style:master-page style:name="Default" style:page-layout-name="PM1" draw:style-name="dp1">
+   <presentation:notes style:page-layout-name="PM2"/>
+  </style:master-page>
+ </office:master-styles>
+ <office:body>
+  <office:presentation>
+   <draw:page draw:name="Slide1" draw:style-name="dp1" draw:master-page-name="Default" presentation:presentation-page-layout-name="AL1T0">
+    <draw:frame presentation:class="title" svg:x="2cm" svg:y="6cm" svg:width="24cm" svg:height="3cm">
+     <draw:text-box><text:p text:style-name="TitleP">Corpus slide title</text:p></draw:text-box>
+    </draw:frame>
+    <draw:frame presentation:class="subtitle" svg:x="2cm" svg:y="10cm" svg:width="24cm" svg:height="3cm">
+     <draw:text-box><text:p text:style-name="BodyP">First slide subtitle</text:p></draw:text-box>
+    </draw:frame>
+    <presentation:notes draw:style-name="dp1">
+     <draw:page-thumbnail presentation:class="page" svg:x="2cm" svg:y="2cm" svg:width="17cm" svg:height="9.5cm" draw:page-number="1"/>
+     <draw:frame presentation:class="notes" svg:x="2cm" svg:y="13cm" svg:width="17cm" svg:height="12cm">
+      <draw:text-box><text:p text:style-name="NoteP">Speaker note for the first slide</text:p></draw:text-box>
+     </draw:frame>
+    </presentation:notes>
+   </draw:page>
+   <draw:page draw:name="Slide2" draw:style-name="dp1" draw:master-page-name="Default" presentation:presentation-page-layout-name="AL2T1">
+    <draw:frame presentation:class="title" svg:x="2cm" svg:y="1cm" svg:width="24cm" svg:height="3cm">
+     <draw:text-box><text:p text:style-name="TitleP">Second slide heading</text:p></draw:text-box>
+    </draw:frame>
+    <draw:frame presentation:class="outline" svg:x="2cm" svg:y="5cm" svg:width="14cm" svg:height="9cm">
+     <draw:text-box>
+      <text:p text:style-name="BodyP">Content line one</text:p>
+      <text:p text:style-name="BodyP">Content line two</text:p>
+     </draw:text-box>
+    </draw:frame>
+    <draw:frame draw:name="Shapes" svg:x="17cm" svg:y="6cm" svg:width="8cm" svg:height="5cm">
+     <draw:image><office:binary-data>@SHAPES_PNG_BASE64@</office:binary-data></draw:image>
+    </draw:frame>
+    <presentation:notes draw:style-name="dp1">
+     <draw:page-thumbnail presentation:class="page" svg:x="2cm" svg:y="2cm" svg:width="17cm" svg:height="9.5cm" draw:page-number="2"/>
+     <draw:frame presentation:class="notes" svg:x="2cm" svg:y="13cm" svg:width="17cm" svg:height="12cm">
+      <draw:text-box><text:p text:style-name="NoteP">Speaker note for the second slide</text:p></draw:text-box>
+     </draw:frame>
+    </presentation:notes>
+   </draw:page>
+  </office:presentation>
+ </office:body>
+</office:document>

@@ -3,3 +3,6 @@
 
 # Hunspell dictionaries are byte-exact runtime data: never convert their line endings
 src/dictionaries/** -text
+
+# Conversion corpus fixtures are compared byte for byte (CSV and TXT line endings included)
+tests/corpus/** -text

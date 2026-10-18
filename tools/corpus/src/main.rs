@@ -12,6 +12,7 @@ mod text_import;
 
 mod allfonts;
 mod layout;
+mod manifest;
 mod run;
 mod sha256;
 mod tsv;
