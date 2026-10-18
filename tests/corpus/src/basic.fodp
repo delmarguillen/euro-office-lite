@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.presentation">
+ <office:meta>
+  <dc:title>Basic ODP</dc:title>
+ </office:meta>
+ <office:font-face-decls>
+  <style:font-face style:name="Liberation Sans" svg:font-family="'Liberation Sans'" style:font-family-generic="swiss" style:font-pitch="variable"/>
+ </office:font-face-decls>
+ <office:styles>
+  <style:default-style style:family="graphic">
+   <style:graphic-properties draw:stroke="none" draw:fill="none"/>
+   <style:text-properties style:font-name="Liberation Sans" fo:font-size="24pt" style:font-name-asian="Liberation Sans" style:font-name-complex="Liberation Sans" fo:language="en" fo:country="US"/>
+  </style:default-style>
+  <style:presentation-page-layout style:name="AL1T0">
+   <presentation:placeholder presentation:object="title" svg:x="2cm" svg:y="6cm" svg:width="24cm" svg:height="3cm"/>
+   <presentation:placeholder presentation:object="subtitle" svg:x="2cm" svg:y="10cm" svg:width="24cm" svg:height="3cm"/>
+  </style:presentation-page-layout>
+ </office:styles>
+ <office:automatic-styles>
+  <style:page-layout style:name="PM1"><style:page-layout-properties fo:margin-top="0cm" fo:margin-bottom="0cm" fo:margin-left="0cm" fo:margin-right="0cm" fo:page-width="28cm" fo:page-height="15.75cm" style:print-orientation="landscape"/></style:page-layout>
+  <style:style style:name="dp1" style:family="drawing-page"/>
+  <style:style style:name="TitleP" style:family="paragraph"><style:text-properties style:font-name="Liberation Sans" fo:font-size="36pt" fo:font-weight="bold"/></style:style>
+ </office:automatic-styles>
+ <office:master-styles>
+  <style:master-page style:name="Default" style:page-layout-name="PM1" draw:style-name="dp1"/>
+ </office:master-styles>
+ <office:body>
+  <office:presentation>
+   <draw:page draw:name="Slide1" draw:style-name="dp1" draw:master-page-name="Default" presentation:presentation-page-layout-name="AL1T0">
+    <draw:frame presentation:class="title" svg:x="2cm" svg:y="6cm" svg:width="24cm" svg:height="3cm">
+     <draw:text-box><text:p text:style-name="TitleP">Basic ODP title</text:p></draw:text-box>
+    </draw:frame>
+    <draw:frame presentation:class="subtitle" svg:x="2cm" svg:y="10cm" svg:width="24cm" svg:height="3cm">
+     <draw:text-box><text:p>Basic ODP subtitle</text:p></draw:text-box>
+    </draw:frame>
+   </draw:page>
+  </office:presentation>
+ </office:body>
+</office:document>

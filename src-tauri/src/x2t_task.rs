@@ -720,6 +720,33 @@ pub fn detect_format(path: &std::path::Path) -> i32 {
     }
 }
 
+// File managers on Linux create 0-byte files from their "New document" menu and
+// opening one is an ordinary desktop flow, so an empty file is treated as a new
+// document that saves back to that path (#33, proposed by the reporter).
+// The blank template only decides which editor opens: the format written on the
+// first save comes from detect_format on the destination, so a 0-byte .odt is
+// edited in Word and saved as ODT.
+//
+// Deliberately absent: pdf (nothing to edit) and the legacy doc/xls/ppt
+// (writing those back is not validated), which keep the plain rejection; and
+// txt and csv, which x2t refuses when empty (exit 88), so they get the open
+// error too.
+pub fn blank_template_for(path: &std::path::Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_lowercase();
+    match ext.as_str() {
+        "docx" | "odt" | "rtf" => Some("templates/blank.docx"),
+        "xlsx" | "ods" => Some("templates/blank.xlsx"),
+        "pptx" | "odp" => Some("templates/blank.pptx"),
+        _ => None,
+    }
+}
+
+pub fn is_empty_file(path: &std::path::Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.len() == 0)
+        .unwrap_or(false)
+}
+
 // x2t does not use fontconfig: it scans a fixed list of directories
 // (/usr/share/fonts, /usr/share/X11/fonts, /usr/local/share/fonts and a couple more),
 // so fonts installed per user or exposed by the Flatpak host mounts are invisible to
@@ -1505,6 +1532,24 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.pdf")), 513);
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.docx")), 65);
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.unknown")), 0);
+    }
+
+    #[test]
+    fn blank_template_covers_the_three_editors_and_nothing_else() {
+        let template = |name: &str| blank_template_for(std::path::Path::new(name));
+
+        assert_eq!(template("/tmp/empty.docx"), Some("templates/blank.docx"));
+        // The editor comes from the extension, and ODF and RTF are edited in the
+        // same one: the format is only decided when the document is written.
+        assert_eq!(template("/tmp/empty.odt"), Some("templates/blank.docx"));
+        assert_eq!(template("/tmp/EMPTY.ODS"), Some("templates/blank.xlsx"));
+        assert_eq!(template("/tmp/empty.odp"), Some("templates/blank.pptx"));
+
+        // Out of scope on purpose: these keep failing the open instead.
+        for unsupported in ["/tmp/empty.txt", "/tmp/empty.csv", "/tmp/empty.pdf",
+                            "/tmp/empty.doc", "/tmp/empty.xyz", "/tmp/empty"] {
+            assert_eq!(template(unsupported), None, "{} must not open blank", unsupported);
+        }
     }
 
     #[test]

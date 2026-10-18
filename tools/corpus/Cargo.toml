@@ -1,0 +1,13 @@
+[package]
+name = "corpus"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Runs the conversion corpus through the app's own x2t code"
+
+# Its own workspace: this crate is not part of src-tauri's.
+[workspace]
+
+# No dependencies on purpose: it builds anywhere the app's x2t code builds,
+# without the app's dependency tree.
+[dependencies]

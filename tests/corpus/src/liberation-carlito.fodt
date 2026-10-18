@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.text">
+ <office:meta>
+  <dc:title>Liberation and Carlito faces</dc:title>
+ </office:meta>
+ <office:font-face-decls>
+  <style:font-face style:name="Liberation Serif" svg:font-family="'Liberation Serif'" style:font-family-generic="roman" style:font-pitch="variable"/>
+  <style:font-face style:name="Liberation Sans" svg:font-family="'Liberation Sans'" style:font-family-generic="swiss" style:font-pitch="variable"/>
+  <style:font-face style:name="Liberation Mono" svg:font-family="'Liberation Mono'" style:font-family-generic="modern" style:font-pitch="fixed"/>
+  <style:font-face style:name="Carlito" svg:font-family="Carlito" style:font-family-generic="swiss" style:font-pitch="variable"/>
+ </office:font-face-decls>
+ <office:styles>
+  <style:default-style style:family="paragraph">
+   <style:text-properties style:font-name="Liberation Serif" fo:font-size="12pt" style:font-name-asian="Liberation Serif" style:font-size-asian="12pt" style:font-name-complex="Liberation Serif" style:font-size-complex="12pt" fo:language="en" fo:country="US"/>
+  </style:default-style>
+  <style:style style:name="Standard" style:family="paragraph" style:class="text"/>
+ </office:styles>
+ <office:automatic-styles>
+  <style:style style:name="SerifR" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Serif"/></style:style>
+  <style:style style:name="SerifI" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Serif" fo:font-style="italic"/></style:style>
+  <style:style style:name="SerifB" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Serif" fo:font-weight="bold"/></style:style>
+  <style:style style:name="SerifBI" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Serif" fo:font-weight="bold" fo:font-style="italic"/></style:style>
+  <style:style style:name="SansR" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Sans"/></style:style>
+  <style:style style:name="SansI" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Sans" fo:font-style="italic"/></style:style>
+  <style:style style:name="SansB" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Sans" fo:font-weight="bold"/></style:style>
+  <style:style style:name="SansBI" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Sans" fo:font-weight="bold" fo:font-style="italic"/></style:style>
+  <style:style style:name="MonoR" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Mono"/></style:style>
+  <style:style style:name="MonoI" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Mono" fo:font-style="italic"/></style:style>
+  <style:style style:name="MonoB" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Mono" fo:font-weight="bold"/></style:style>
+  <style:style style:name="MonoBI" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Liberation Mono" fo:font-weight="bold" fo:font-style="italic"/></style:style>
+  <style:style style:name="CarlR" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Carlito"/></style:style>
+  <style:style style:name="CarlI" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Carlito" fo:font-style="italic"/></style:style>
+  <style:style style:name="CarlB" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Carlito" fo:font-weight="bold"/></style:style>
+  <style:style style:name="CarlBI" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties style:font-name="Carlito" fo:font-weight="bold" fo:font-style="italic"/></style:style>
+ </office:automatic-styles>
+ <office:body>
+  <office:text>
+   <text:p text:style-name="SerifR">Serif regular sample text</text:p>
+   <text:p text:style-name="SerifI">Serif italic sample text</text:p>
+   <text:p text:style-name="SerifB">Serif bold sample text</text:p>
+   <text:p text:style-name="SerifBI">Serif bold italic sample text</text:p>
+   <text:p text:style-name="SansR">Sans regular sample text</text:p>
+   <text:p text:style-name="SansI">Sans italic sample text</text:p>
+   <text:p text:style-name="SansB">Sans bold sample text</text:p>
+   <text:p text:style-name="SansBI">Sans bold italic sample text</text:p>
+   <text:p text:style-name="MonoR">Mono regular sample text</text:p>
+   <text:p text:style-name="MonoI">Mono italic sample text</text:p>
+   <text:p text:style-name="MonoB">Mono bold sample text</text:p>
+   <text:p text:style-name="MonoBI">Mono bold italic sample text</text:p>
+   <text:p text:style-name="CarlR">Carlito regular sample text</text:p>
+   <text:p text:style-name="CarlI">Carlito italic sample text</text:p>
+   <text:p text:style-name="CarlB">Carlito bold sample text</text:p>
+   <text:p text:style-name="CarlBI">Carlito bold italic sample text</text:p>
+  </office:text>
+ </office:body>
+</office:document>

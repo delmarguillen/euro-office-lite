@@ -481,6 +481,27 @@ pub fn copy_without_final_break(source: &Path, copy: &Path, cut: u64) -> std::io
     file.set_len(len.saturating_sub(cut))
 }
 
+// Copy of a CSV for x2t to read, in `temp_dir`, when the original needs one.
+// Takes the folder instead of the app state so the corpus can open files the
+// same way.
+pub fn prepare_read_copy(
+    source: &Path,
+    temp_dir: &Path,
+    kind: Option<TextKind>,
+    options: Option<TextOptions>,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    let (Some(kind), Some(options)) = (kind, options) else {
+        return Ok(None);
+    };
+    let cut = read_copy_cut(source, kind, options)?;
+    if cut == 0 {
+        return Ok(None);
+    }
+    let copy = temp_dir.join("eo-read-copy.csv");
+    copy_without_final_break(source, &copy, cut)?;
+    Ok(Some(copy))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1056,6 +1077,52 @@ mod tests {
         assert_eq!(std::fs::read(&copy).unwrap(), b"a;b\r\nc;d");
         assert_eq!(std::fs::read(&source).unwrap(), b"a;b\r\nc;d\r\n");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn read_copy_dirs(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("eo-read-copy-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let temp = dir.join("temp");
+        std::fs::create_dir_all(&temp).unwrap();
+        (dir, temp)
+    }
+
+    fn prepared(source: &Path, temp: &Path) -> Option<std::path::PathBuf> {
+        let kind = TextKind::for_path(source);
+        let options = kind.map(|kind| detect_file(source, kind).unwrap());
+        prepare_read_copy(source, temp, kind, options).unwrap()
+    }
+
+    #[test]
+    fn a_utf8_csv_with_a_final_break_is_read_from_a_copy_in_the_temp_dir() {
+        let (dir, temp) = read_copy_dirs("lf");
+        let source = dir.join("data.csv");
+        std::fs::write(&source, b"a,b\nc,d\n").unwrap();
+
+        let copy = prepared(&source, &temp);
+
+        assert_eq!(copy, Some(temp.join("eo-read-copy.csv")));
+        assert_eq!(std::fs::read(temp.join("eo-read-copy.csv")).unwrap(), b"a,b\nc,d");
+        assert_eq!(std::fs::read(&source).unwrap(), b"a,b\nc,d\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_read_copy_without_a_final_break_in_1252_or_for_other_files() {
+        let (dir, temp) = read_copy_dirs("none");
+        let cases: [(&str, &[u8]); 4] = [
+            ("nofinal.csv", b"a,b\nc,d"),
+            ("latin.csv", b"a\xF1o;caf\xE9\n"),
+            ("notes.txt", b"a\nb\n"),
+            ("book.docx", b"PK"),
+        ];
+        for (name, bytes) in cases {
+            let source = dir.join(name);
+            std::fs::write(&source, bytes).unwrap();
+            assert_eq!(prepared(&source, &temp), None, "{}", name);
+        }
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "nothing written");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

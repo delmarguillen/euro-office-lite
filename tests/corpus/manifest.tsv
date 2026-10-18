@@ -1,0 +1,32 @@
+file	class	steps	expect	variants	save_as	note
+@templates/blank.docx	comparable	open,save,pdf		plain		installer template: default font of the word editor, what a 0-byte docx opens
+@templates/blank.xlsx	comparable	open,save,pdf		plain		installer template: default font of the cell editor
+@templates/blank.pptx	comparable	open,save,pdf		plain		installer template: default font of the slide editor
+liberation-carlito.docx	comparable	open,save,pdf	Serif regular sample text|Serif italic sample text|Serif bold sample text|Serif bold italic sample text|Sans regular sample text|Sans italic sample text|Sans bold sample text|Sans bold italic sample text|Mono regular sample text|Mono italic sample text|Mono bold sample text|Mono bold italic sample text|Carlito regular sample text|Carlito italic sample text|Carlito bold sample text|Carlito bold italic sample text	plain		every bundled face; a PDF without its text fails here
+justified.docx	comparable	open,pdf	Justified layout reference|Justified paragraph begins here|This is the last sentence of the justified paragraph.	plain		line breaks of a justified Liberation Serif paragraph
+amp-name.docx	comparable	open,save,pdf	Ampersand name sample	special-name,special-temp		& < > in the file, folder and temp paths given to x2t
+metadata.docx	comparable	open,save	Metadata sample body	plain		title, subject, keywords and author survive a save; app.application records the writer
+rich.docx	comparable	open,save,pdf	Rich document heading|Footnote text sample|First numbered item|Second bullet item|Cell B2 text|Rich header text|Rich footer text|Closing paragraph of the rich document.	plain		table, header, footer, footnote, lists, headings and an image
+cyrillic-greek.docx	comparable	open,save,pdf	Cyrillic and Greek sample|Привет мир из корпуса|Быстрая проверка шрифта|ΑΛΦΑ ΒΗΤΑ ΓΑΜΜΑ ΔΕΛΤΑ|ΚΑΛΗΜΕΡΑ ΚΟΣΜΕ	plain		Cyrillic and Greek in the bundled Liberation fonts
+sheet.ods	comparable	open,save,pdf	Corpus sheet header|Apples|Population	plain	xlsx,csv	formulas, dates, number formats, two sheets, merged cells; the xlsx x2t writes is checked for its font names
+sheet.xlsx	system-fonts	open,save,pdf	Corpus sheet header|Apples|Population	plain	csv	the same sheet as LibreOffice exports it: names Arial
+slides.odp	comparable	open,save,pdf	Corpus slide title|Second slide heading|Content line two	plain	pptx	two layouts, an image and speaker notes; the pptx x2t writes is checked for its font names
+slides.pptx	system-fonts	open,save,pdf	Corpus slide title|Second slide heading|Content line two	plain		the same slides as LibreOffice exports them: names Arial and Times New Roman
+basic.odt	comparable	open,save,pdf	Basic ODT title|Second ODT paragraph	plain		ODF text import and save
+basic.ods	comparable	open,save,pdf	Basic ODS label|Doubled	plain		ODF spreadsheet import and save
+basic.odp	comparable	open,save,pdf	Basic ODP title|Basic ODP subtitle	plain		ODF presentation import and save
+utf8-bom-semicolon-crlf.csv	comparable	open,save		plain		UTF-8 BOM, semicolon, CRLF, final break
+utf8-comma-lf-final.csv	comparable	open,save		plain		UTF-8 without BOM with a final break: opened from the read copy
+utf8-comma-nofinal.csv	comparable	open,save		plain		no final break: no read copy
+win1252-semicolon.csv	comparable	open,save		plain		windows-1252 accents and ñ
+utf16le-tab.csv	comparable	open,save		plain		UTF-16 LE BOM and tabs
+quoted-delimiter.csv	comparable	open,save		plain		quoted fields holding ; and doubled quotes
+empty-lines.csv	comparable	open,save		plain		an empty line in the middle
+utf8.txt	comparable	open,save		plain		TXT in UTF-8 without BOM, LF
+win1252-crlf.txt	comparable	open,save		plain		TXT in windows-1252 with CRLF
+utf16be.txt	comparable	open,save		plain		TXT in UTF-16 BE
+@empty:empty.docx	comparable	open,save		plain		0-byte docx opens the blank template and saves to its own name
+@empty:empty.csv	comparable	open	fail:open:88	plain		x2t refuses an empty CSV (exit 88)
+cjk.docx	system-fonts	open,save,pdf	CJK system fonts sample	plain		Chinese and Japanese, drawn with whatever the runner has
+arabic-rtl.docx	system-fonts	open,save,pdf	Arabic system fonts sample	plain		Arabic right-to-left paragraph
+hebrew.docx	system-fonts	open,save,pdf	Hebrew system fonts sample	plain		Hebrew right-to-left paragraph

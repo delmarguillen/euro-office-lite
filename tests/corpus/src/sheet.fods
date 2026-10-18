@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<office:document xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2" xmlns:dc="http://purl.org/dc/elements/1.1/" office:version="1.3" office:mimetype="application/vnd.oasis.opendocument.spreadsheet">
+ <office:meta>
+  <dc:title>Corpus sheet</dc:title>
+ </office:meta>
+ <office:font-face-decls>
+  <style:font-face style:name="Liberation Sans" svg:font-family="'Liberation Sans'" style:font-family-generic="swiss" style:font-pitch="variable"/>
+ </office:font-face-decls>
+ <office:styles>
+  <style:default-style style:family="table-cell">
+   <style:text-properties style:font-name="Liberation Sans" fo:font-size="10pt" style:font-name-asian="Liberation Sans" style:font-name-complex="Liberation Sans" fo:language="en" fo:country="US"/>
+  </style:default-style>
+  <style:style style:name="Default" style:family="table-cell"><style:text-properties style:font-name="Liberation Sans"/></style:style>
+  <number:date-style style:name="Date">
+   <number:year number:style="long"/><number:text>-</number:text><number:month number:style="long"/><number:text>-</number:text><number:day number:style="long"/>
+  </number:date-style>
+  <number:percentage-style style:name="Percent">
+   <number:number number:decimal-places="1" number:min-decimal-places="1" number:min-integer-digits="1"/><number:text>%</number:text>
+  </number:percentage-style>
+  <number:currency-style style:name="Euro">
+   <number:number number:decimal-places="2" number:min-decimal-places="2" number:min-integer-digits="1" number:grouping="true"/><number:text> </number:text><number:currency-symbol number:language="de" number:country="DE">€</number:currency-symbol>
+  </number:currency-style>
+  <number:number-style style:name="Thousands">
+   <number:number number:decimal-places="0" number:min-decimal-places="0" number:min-integer-digits="1" number:grouping="true"/>
+  </number:number-style>
+  <style:style style:name="DateCell" style:family="table-cell" style:parent-style-name="Default" style:data-style-name="Date"/>
+  <style:style style:name="PercentCell" style:family="table-cell" style:parent-style-name="Default" style:data-style-name="Percent"/>
+  <style:style style:name="EuroCell" style:family="table-cell" style:parent-style-name="Default" style:data-style-name="Euro"/>
+  <style:style style:name="ThousandsCell" style:family="table-cell" style:parent-style-name="Default" style:data-style-name="Thousands"/>
+  <style:style style:name="HeaderCell" style:family="table-cell" style:parent-style-name="Default"><style:text-properties fo:font-weight="bold"/></style:style>
+ </office:styles>
+ <office:automatic-styles>
+  <style:style style:name="ta1" style:family="table" style:master-page-name="Default"><style:table-properties table:display="true"/></style:style>
+  <style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/></style:page-layout>
+  <style:style style:name="co1" style:family="table-column"><style:table-column-properties style:column-width="3.5cm"/></style:style>
+ </office:automatic-styles>
+ <office:master-styles>
+  <style:master-page style:name="Default" style:page-layout-name="pm1">
+   <style:header style:display="false"/>
+   <style:footer style:display="false"/>
+  </style:master-page>
+ </office:master-styles>
+ <office:body>
+  <office:spreadsheet>
+   <table:table table:name="Data" table:style-name="ta1">
+    <table:table-column table:style-name="co1" table:number-columns-repeated="4" table:default-cell-style-name="Default"/>
+    <table:table-row>
+     <table:table-cell table:style-name="HeaderCell" table:number-columns-spanned="4" table:number-rows-spanned="1" office:value-type="string"><text:p>Corpus sheet header</text:p></table:table-cell>
+     <table:covered-table-cell table:number-columns-repeated="3"/>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell table:style-name="HeaderCell" office:value-type="string"><text:p>Item</text:p></table:table-cell>
+     <table:table-cell table:style-name="HeaderCell" office:value-type="string"><text:p>Date</text:p></table:table-cell>
+     <table:table-cell table:style-name="HeaderCell" office:value-type="string"><text:p>Amount</text:p></table:table-cell>
+     <table:table-cell table:style-name="HeaderCell" office:value-type="string"><text:p>Share</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Apples</text:p></table:table-cell>
+     <table:table-cell table:style-name="DateCell" office:value-type="date" office:date-value="2024-03-15"><text:p>2024-03-15</text:p></table:table-cell>
+     <table:table-cell table:style-name="EuroCell" office:value-type="currency" office:currency="EUR" office:value="1234.5"><text:p>1,234.50 €</text:p></table:table-cell>
+     <table:table-cell table:style-name="PercentCell" office:value-type="percentage" office:value="0.125"><text:p>12.5%</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Pears</text:p></table:table-cell>
+     <table:table-cell table:style-name="DateCell" office:value-type="date" office:date-value="2024-12-31"><text:p>2024-12-31</text:p></table:table-cell>
+     <table:table-cell table:style-name="EuroCell" office:value-type="currency" office:currency="EUR" office:value="98765.25"><text:p>98,765.25 €</text:p></table:table-cell>
+     <table:table-cell table:style-name="PercentCell" office:value-type="percentage" office:value="0.875"><text:p>87.5%</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell table:style-name="HeaderCell" office:value-type="string"><text:p>Total</text:p></table:table-cell>
+     <table:table-cell/>
+     <table:table-cell table:style-name="EuroCell" table:formula="of:=SUM([.C3:.C4])" office:value-type="currency" office:currency="EUR" office:value="99999.75"><text:p>99,999.75 €</text:p></table:table-cell>
+     <table:table-cell table:style-name="PercentCell" table:formula="of:=[.D3]+[.D4]" office:value-type="percentage" office:value="1"><text:p>100.0%</text:p></table:table-cell>
+    </table:table-row>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Population</text:p></table:table-cell>
+     <table:table-cell/>
+     <table:table-cell table:style-name="ThousandsCell" office:value-type="float" office:value="1234567"><text:p>1,234,567</text:p></table:table-cell>
+     <table:table-cell/>
+    </table:table-row>
+   </table:table>
+   <table:table table:name="Second" table:style-name="ta1">
+    <table:table-column table:style-name="co1" table:number-columns-repeated="2" table:default-cell-style-name="Default"/>
+    <table:table-row>
+     <table:table-cell office:value-type="string"><text:p>Second sheet label</text:p></table:table-cell>
+     <table:table-cell table:formula="of:=[$Data.C5]*2" office:value-type="float" office:value="199999.5"><text:p>199999.5</text:p></table:table-cell>
+    </table:table-row>
+   </table:table>
+  </office:spreadsheet>
+ </office:body>
+</office:document>
