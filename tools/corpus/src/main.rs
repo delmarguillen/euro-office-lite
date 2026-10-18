@@ -13,6 +13,9 @@ mod text_import;
 mod allfonts;
 mod layout;
 mod manifest;
+mod normalize;
+mod pdf;
+mod report;
 mod run;
 mod sha256;
 mod tsv;
@@ -109,6 +112,23 @@ fn main() {
                 Ok(()) => 0,
                 Err(run::Infra(message)) => {
                     eprintln!("corpus run: {}", message);
+                    2
+                }
+            }
+        }
+        "report" => {
+            args.only_known(&["out"]).unwrap_or_else(|e| usage_error(&e));
+            let out = args.required("out").unwrap_or_else(|e| usage_error(&e));
+            match report::report(&out) {
+                Ok(failures) if failures.is_empty() => 0,
+                Ok(failures) => {
+                    for failure in &failures {
+                        eprintln!("FAIL {}", failure);
+                    }
+                    1
+                }
+                Err(run::Infra(message)) => {
+                    eprintln!("corpus report: {}", message);
                     2
                 }
             }
