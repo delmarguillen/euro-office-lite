@@ -2,8 +2,9 @@
 // functions the app calls, and writes what happened to the --out folder.
 
 use crate::layout::{self, Layout, Os};
+use crate::manifest::{self, Entry, Source};
 use crate::tsv::Table;
-use crate::{allfonts, sha256, x2t_task};
+use crate::{allfonts, sha256, text_import, x2t_task};
 use std::path::{Path, PathBuf};
 
 pub struct RunArgs {
@@ -36,6 +37,7 @@ impl Log {
 
 // An infrastructure failure: the install or the font cache is not usable, so
 // no conversion result would mean anything. The binary exits 2.
+#[derive(Debug)]
 pub struct Infra(pub String);
 
 pub struct X2tInfo {
@@ -207,7 +209,474 @@ pub fn run(args: &RunArgs) -> Result<(), Infra> {
     let log = Log::create(&args.out.join("log.txt")).map_err(Infra)?;
     let prepared = prepare(args, &log)?;
     write_env(&args.out, &prepared.env).map_err(Infra)?;
+
+    let entries = manifest::read(&args.corpus).map_err(Infra)?;
+    // report reads the expected text and the classes from this copy.
+    std::fs::copy(args.corpus.join("manifest.tsv"), args.out.join("manifest.tsv"))
+        .map_err(|e| Infra(format!("cannot copy the manifest: {}", e)))?;
+    let mut table = Table::new(&RUN_COLUMNS);
+    for (n, entry) in entries.iter().enumerate() {
+        if let Some(only) = &args.only {
+            if only != &entry.doc && only != &entry.id() {
+                continue;
+            }
+        }
+        for variant in &entry.variants {
+            let doc = DocRun {
+                args,
+                prepared: &prepared,
+                log: &log,
+                entry,
+                variant,
+                n: n + 1,
+            };
+            for row in doc.run() {
+                log.line("[RUN]", &format!("{} {} {} {}", entry.doc, variant, row.step, row.status));
+                table.push(row.cells(&entry.doc, variant));
+            }
+        }
+    }
+    table.write(&args.out.join("run.tsv")).map_err(Infra)?;
     Ok(())
+}
+
+pub const RUN_COLUMNS: [&str; 11] = [
+    "doc", "variant", "step", "status", "exit", "signal", "size", "sha256", "output", "ms", "message",
+];
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StepRow {
+    pub step: String,
+    pub status: String,
+    pub exit: String,
+    pub signal: String,
+    pub size: String,
+    pub sha256: String,
+    // Relative to --out, with forward slashes.
+    pub output: String,
+    pub ms: u128,
+    pub message: String,
+}
+
+impl StepRow {
+    fn cells(&self, doc: &str, variant: &str) -> Vec<String> {
+        vec![
+            doc.to_string(),
+            variant.to_string(),
+            self.step.clone(),
+            self.status.clone(),
+            self.exit.clone(),
+            self.signal.clone(),
+            self.size.clone(),
+            self.sha256.clone(),
+            self.output.clone(),
+            self.ms.to_string(),
+            self.message.clone(),
+        ]
+    }
+}
+
+// The steps of one document in the order file_ops runs them: open first,
+// then save, each save as, and the PDF export.
+pub fn plan(entry: &Entry) -> Vec<String> {
+    let mut steps = vec!["open".to_string()];
+    if entry.has_step("save") {
+        steps.push("save".to_string());
+    }
+    for ext in &entry.save_as {
+        steps.push(format!("save_as.{}", ext));
+    }
+    if entry.has_step("pdf") {
+        steps.push("pdf".to_string());
+    }
+    steps
+}
+
+// Runs `execute` for each planned step. Nothing runs after a failed open,
+// since there is no Editor.bin. Only the exit code the manifest names, in the
+// step it names, is expected-fail; a signal, a spawn or setup error, another
+// code or an empty output stay failures, and a success is unexpected-ok.
+pub fn run_steps(entry: &Entry, mut execute: impl FnMut(&str) -> StepRow) -> Vec<StepRow> {
+    let mut rows = Vec::new();
+    let mut opened = true;
+    for step in plan(entry) {
+        if !opened {
+            rows.push(StepRow {
+                step,
+                status: "skipped".into(),
+                message: "the open failed".into(),
+                ..StepRow::default()
+            });
+            continue;
+        }
+        let mut row = execute(&step);
+        row.step = step.clone();
+        if step == "open" && row.status != "ok" {
+            opened = false;
+        }
+        if let Some(failure) = entry.expect_fail.as_ref().filter(|f| f.step == step) {
+            if row.status == "ok" {
+                row.status = "unexpected-ok".into();
+            } else if row.status == "exit" && row.exit == failure.exit.to_string() {
+                row.status = "expected-fail".into();
+            }
+        }
+        rows.push(row);
+    }
+    rows
+}
+
+// How an x2t run ended: exit code, signal, and whether it wrote anything.
+pub fn classify(success: bool, code: Option<i32>, signal: Option<i32>, output_size: u64) -> (String, String, String) {
+    let exit = code.map(|c| c.to_string()).unwrap_or_default();
+    let signal_text = signal.map(|s| s.to_string()).unwrap_or_default();
+    let status = if signal.is_some() {
+        "signal"
+    } else if !success {
+        "exit"
+    } else if output_size == 0 {
+        "empty"
+    } else {
+        "ok"
+    };
+    (status.to_string(), exit, signal_text)
+}
+
+// convert_to_pdf reports how x2t ended only through its log lines and error
+// text, so the outcome is read back from them.
+pub fn classify_pdf(result: &Result<String, String>, lines: &[String], output_size: u64) -> (String, String, String) {
+    let signal = lines
+        .iter()
+        .find_map(|l| l.strip_prefix("x2t killed by signal "))
+        .and_then(|s| s.trim().parse::<i32>().ok());
+    let code = lines
+        .iter()
+        .find_map(|l| l.strip_prefix("failed exit="))
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse::<i32>().ok());
+    match result {
+        Ok(_) => classify(true, Some(0), None, output_size),
+        Err(message) if message.starts_with("Failed to spawn x2t") => ("spawn".into(), String::new(), String::new()),
+        Err(_) if signal.is_some() || code.is_some() => classify(false, code.filter(|c| *c != -999), signal, output_size),
+        // Setup failed before x2t ran: font cache, editor files, work folder.
+        Err(_) => ("error".into(), String::new(), String::new()),
+    }
+}
+
+fn truncate(message: &str) -> String {
+    let message = message.trim();
+    match message.char_indices().nth(500) {
+        Some((i, _)) => format!("{}...", &message[..i]),
+        None => message.to_string(),
+    }
+}
+
+fn relative(out: &Path, path: &Path) -> String {
+    path.strip_prefix(out)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn error_row(message: impl std::fmt::Display) -> StepRow {
+    StepRow {
+        status: "error".into(),
+        message: truncate(&message.to_string()),
+        ..StepRow::default()
+    }
+}
+
+struct DocRun<'a> {
+    args: &'a RunArgs,
+    prepared: &'a Prepared,
+    log: &'a Log,
+    entry: &'a Entry,
+    variant: &'a str,
+    n: usize,
+}
+
+// Where one document and variant lives while it runs.
+struct Paths {
+    // The file the app would open: a copy of the fixture, the installed
+    // template, or a 0-byte file.
+    source: PathBuf,
+    // Where a plain Save writes: the opened file, as current_file in the app,
+    // or a file next to it for a template (create_new leaves no current file).
+    save_target: PathBuf,
+    temp_dir: PathBuf,
+    out_dir: PathBuf,
+}
+
+impl DocRun<'_> {
+    fn paths(&self) -> Result<Paths, String> {
+        let os = Os::current();
+        let work = &self.args.work;
+        let in_dir = work.join(format!("in-{}-{}", self.n, self.variant));
+        let temp_dir = if self.variant == "special-temp" {
+            work.join(layout::special_temp_dir(os)).join(format!("doc-{}", self.n))
+        } else {
+            work.join(format!("doc-{}-{}", self.n, self.variant))
+        };
+        let out_dir = self.args.out.join("files").join(self.entry.id()).join(self.variant);
+        for dir in [&in_dir, &temp_dir, &out_dir] {
+            // A fresh temp_dir per document is what switch_document and
+            // clear_document_temp give the app.
+            let _ = std::fs::remove_dir_all(dir);
+            std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {}", dir.display(), e))?;
+        }
+        let name = self.entry.file_name().to_string();
+        let local = if self.variant == "special-name" {
+            let (dir, file) = layout::special_names(os, &self.entry.extension());
+            in_dir.join(dir).join(file)
+        } else {
+            in_dir.join(&name)
+        };
+        if let Some(parent) = local.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {}", parent.display(), e))?;
+        }
+        let original = out_dir.join(format!("original.{}", self.entry.extension()));
+        let (source, save_target) = match &self.entry.source {
+            Source::Fixture(file) => {
+                let fixture = self.args.corpus.join(file);
+                std::fs::copy(&fixture, &local).map_err(|e| format!("cannot copy {}: {}", fixture.display(), e))?;
+                std::fs::copy(&fixture, &original).map_err(|e| format!("cannot copy {}: {}", fixture.display(), e))?;
+                (local.clone(), local)
+            }
+            Source::Installed(path) => {
+                let installed = self.prepared.layout.resource_dir.join(path);
+                std::fs::copy(&installed, &original)
+                    .map_err(|e| format!("cannot copy {}: {}", installed.display(), e))?;
+                (installed, local)
+            }
+            Source::Empty(_) => {
+                std::fs::write(&local, b"").map_err(|e| format!("cannot create {}: {}", local.display(), e))?;
+                (local.clone(), local)
+            }
+        };
+        Ok(Paths {
+            source,
+            save_target,
+            temp_dir,
+            out_dir,
+        })
+    }
+
+    fn run(&self) -> Vec<StepRow> {
+        let paths = match self.paths() {
+            Ok(paths) => paths,
+            Err(message) => return run_steps(self.entry, |_| error_row(&message)),
+        };
+        let mut text_options = None;
+        run_steps(self.entry, |step| {
+            let started = std::time::Instant::now();
+            let mut row = match step {
+                "open" => self.open(&paths, &mut text_options),
+                "save" => self.save(&paths, &paths.save_target, "save", text_options),
+                "pdf" => self.pdf(&paths),
+                other => {
+                    let ext = other.trim_start_matches("save_as.");
+                    let dest = paths.save_target.with_extension(ext);
+                    self.save(&paths, &dest, other, text_options)
+                }
+            };
+            row.ms = started.elapsed().as_millis();
+            row
+        })
+    }
+
+    fn binaries(&self) -> &Path {
+        &self.prepared.layout.binaries_dir
+    }
+
+    // The sidecar call converter::convert_file makes for every conversion
+    // that is not a PDF.
+    fn convert(
+        &self,
+        input: &Path,
+        output: &Path,
+        format_to: i32,
+        temp_dir: &Path,
+        options: Option<text_import::TextOptions>,
+    ) -> Result<std::process::Output, String> {
+        let params = x2t_task::params_path(temp_dir, "convert");
+        let xml = x2t_task::convert_params_xml(
+            &input.to_string_lossy(),
+            &output.to_string_lossy(),
+            format_to,
+            &temp_dir.to_string_lossy(),
+            &options.map(|o| o.xml_elements()).unwrap_or_default(),
+        );
+        x2t_task::write_file(&params, &xml)?;
+        let mut command = std::process::Command::new(&self.prepared.layout.sidecar);
+        command
+            .current_dir(self.binaries())
+            .arg(params.to_string_lossy().as_ref())
+            .envs(x2t_task::convert_env(self.binaries()))
+            .stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NO_WINDOW, as the app's sidecar call.
+            command.creation_flags(0x0800_0000);
+        }
+        let result = command.output().map_err(|e| format!("Failed to spawn x2t: {}", e));
+        let _ = std::fs::remove_file(&params);
+        result
+    }
+
+    fn outcome(&self, result: Result<std::process::Output, String>, output: &Path) -> StepRow {
+        let output_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+        let process = match result {
+            Ok(process) => process,
+            Err(message) => {
+                return StepRow {
+                    status: "spawn".into(),
+                    message: truncate(&message),
+                    ..StepRow::default()
+                }
+            }
+        };
+        #[cfg(unix)]
+        let signal = std::os::unix::process::ExitStatusExt::signal(&process.status);
+        #[cfg(not(unix))]
+        let signal: Option<i32> = None;
+        let (status, exit, signal) = classify(process.status.success(), process.status.code(), signal, output_size);
+        let message = if status == "ok" {
+            String::new()
+        } else {
+            truncate(&format!(
+                "{} {}",
+                String::from_utf8_lossy(&process.stderr),
+                String::from_utf8_lossy(&process.stdout)
+            ))
+        };
+        let mut row = StepRow {
+            status,
+            exit,
+            signal,
+            message,
+            ..StepRow::default()
+        };
+        if output_size > 0 {
+            row.size = output_size.to_string();
+            row.sha256 = sha256::file_hex(output).unwrap_or_default();
+        }
+        row
+    }
+
+    // open_file_inner: a 0-byte file opens the blank template, CSV and TXT
+    // are detected and maybe read from a copy, and Editor.bin must not be empty.
+    fn open(&self, paths: &Paths, text_options: &mut Option<text_import::TextOptions>) -> StepRow {
+        let mut source = paths.source.clone();
+        if x2t_task::is_empty_file(&source) {
+            if let Some(template) = x2t_task::blank_template_for(&source) {
+                source = self.prepared.layout.resource_dir.join(template);
+            }
+        }
+        let kind = text_import::TextKind::for_path(&source);
+        let options = match kind.map(|kind| text_import::detect_file(&source, kind)).transpose() {
+            Ok(options) => options,
+            Err(e) => return error_row(format!("detect: {}", e)),
+        };
+        let read_copy = match text_import::prepare_read_copy(&source, &paths.temp_dir, kind, options) {
+            Ok(copy) => copy,
+            Err(e) => return error_row(format!("read copy: {}", e)),
+        };
+        let editor_bin = paths.temp_dir.join("Editor.bin");
+        let result = self.convert(
+            read_copy.as_deref().unwrap_or(&source),
+            &editor_bin,
+            8192,
+            &paths.temp_dir,
+            options,
+        );
+        if let Some(copy) = &read_copy {
+            let _ = std::fs::remove_file(copy);
+        }
+        *text_options = options;
+        self.outcome(result, &editor_bin)
+    }
+
+    // save_file and save_file_as: the original's CSV/TXT options when both
+    // ends are text, then finish_saved_text puts the original's shape back.
+    fn save(
+        &self,
+        paths: &Paths,
+        dest: &Path,
+        step: &str,
+        text_options: Option<text_import::TextOptions>,
+    ) -> StepRow {
+        let kind = text_import::TextKind::for_path(dest);
+        let options = kind.and_then(|kind| text_options.map(|o| o.for_kind(kind)));
+        let editor_bin = paths.temp_dir.join("Editor.bin");
+        let format_to = x2t_task::detect_format(dest);
+        let result = self.convert(&editor_bin, dest, format_to, &paths.temp_dir, options);
+        let mut finish_error = None;
+        if let (Some(kind), Some(options)) = (kind, options) {
+            if dest.exists() {
+                if let Err(e) = text_import::finish_saved_text(dest, kind, options) {
+                    finish_error = Some(format!("finish_saved_text: {}", e));
+                }
+            }
+        }
+        let mut row = self.outcome(result, dest);
+        if let Some(error) = finish_error {
+            row.message = truncate(&format!("{} {}", error, row.message));
+        }
+        let kept = if step == "save" { format!("save.{}", extension(dest)) } else { step.to_string() };
+        self.keep(&mut row, dest, &paths.out_dir.join(kept));
+        row
+    }
+
+    fn pdf(&self, paths: &Paths) -> StepRow {
+        let dest = paths.save_target.with_extension("pdf");
+        let lines = std::cell::RefCell::new(Vec::new());
+        let prefix = format!("[PDF] {}/{}", self.entry.doc, self.variant);
+        let result = x2t_task::convert_to_pdf(
+            self.binaries(),
+            Some(&self.prepared.layout.exe_dir_plain),
+            &paths.temp_dir.join("Editor.bin").to_string_lossy(),
+            &dest.to_string_lossy(),
+            &paths.temp_dir,
+            &self.prepared.fontdata,
+            &|line| {
+                self.log.line(&prefix, line);
+                lines.borrow_mut().push(line.to_string());
+            },
+        );
+        let output_size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        let (status, exit, signal) = classify_pdf(&result, &lines.borrow(), output_size);
+        let mut row = StepRow {
+            status,
+            exit,
+            signal,
+            message: result.err().map(|e| truncate(&e)).unwrap_or_default(),
+            ..StepRow::default()
+        };
+        if output_size > 0 {
+            row.size = output_size.to_string();
+            row.sha256 = sha256::file_hex(&dest).unwrap_or_default();
+        }
+        self.keep(&mut row, &dest, &paths.out_dir.join("export.pdf"));
+        row
+    }
+
+    // Copies an output into --out under a plain name: names with < or > cannot
+    // go into the uploaded artifact. The file must exist under its own name
+    // first, which is what the special-name variant checks.
+    fn keep(&self, row: &mut StepRow, written: &Path, kept: &Path) {
+        if !written.is_file() {
+            return;
+        }
+        match std::fs::copy(written, kept) {
+            Ok(_) => row.output = relative(&self.args.out, kept),
+            Err(e) => row.message = truncate(&format!("cannot keep the output: {} {}", e, row.message)),
+        }
+    }
+}
+
+fn extension(path: &Path) -> String {
+    path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -219,6 +688,115 @@ mod tests {
         let usage = "\nOOX/binary file converter. Version: 8.2.0.147\nUsage: x2t ...\n";
         assert_eq!(version_line(usage), Some("OOX/binary file converter. Version: 8.2.0.147".into()));
         assert_eq!(version_line("Usage: x2t\n"), None);
+    }
+
+    fn entry(steps: &str, save_as: &str, expect: &str) -> Entry {
+        let text = format!(
+            "file\tclass\tsteps\texpect\tvariants\tsave_as\tnote\na.ods\tcomparable\t{}\t{}\t\t{}\t\n",
+            steps, expect, save_as
+        );
+        manifest::parse(&text).unwrap().remove(0)
+    }
+
+    fn ok() -> StepRow {
+        StepRow { status: "ok".into(), ..StepRow::default() }
+    }
+
+    #[test]
+    fn steps_follow_the_app_order() {
+        assert_eq!(plan(&entry("pdf,save,open", "xlsx,csv", "x")), vec!["open", "save", "save_as.xlsx", "save_as.csv", "pdf"]);
+        assert_eq!(plan(&entry("open", "", "")), vec!["open"]);
+    }
+
+    #[test]
+    fn a_failed_open_skips_the_rest_but_a_failed_save_does_not() {
+        let e = entry("open,save,pdf", "csv", "x");
+        let rows = run_steps(&e, |step| if step == "open" { StepRow { status: "exit".into(), ..StepRow::default() } } else { panic!("{} ran", step) });
+        let statuses: Vec<&str> = rows.iter().map(|r| r.status.as_str()).collect();
+        assert_eq!(statuses, vec!["exit", "skipped", "skipped", "skipped"]);
+        assert_eq!(rows[3].step, "pdf");
+
+        let rows = run_steps(&e, |step| if step == "save" { StepRow { status: "signal".into(), ..StepRow::default() } } else { ok() });
+        let statuses: Vec<&str> = rows.iter().map(|r| r.status.as_str()).collect();
+        assert_eq!(statuses, vec!["ok", "signal", "ok", "ok"]);
+    }
+
+    #[test]
+    fn an_expected_failure_is_marked_and_a_surprise_success_too() {
+        let e = entry("open", "", "fail:open:88");
+        let failed = run_steps(&e, |_| StepRow { status: "exit".into(), exit: "88".into(), ..StepRow::default() });
+        assert_eq!(failed[0].status, "expected-fail");
+        assert_eq!(failed[0].exit, "88");
+        assert_eq!(run_steps(&e, |_| ok())[0].status, "unexpected-ok");
+    }
+
+    // A crash or any other failure must not pass for the expected one.
+    #[test]
+    fn only_the_named_exit_code_is_the_expected_failure() {
+        let e = entry("open", "", "fail:open:88");
+        let row = |status: &str, exit: &str, signal: &str| StepRow {
+            status: status.into(),
+            exit: exit.into(),
+            signal: signal.into(),
+            ..StepRow::default()
+        };
+        for (given, kept) in [
+            (row("signal", "", "11"), "signal"),
+            (row("spawn", "", ""), "spawn"),
+            (row("error", "", ""), "error"),
+            (row("exit", "89", ""), "exit"),
+            (row("empty", "0", ""), "empty"),
+        ] {
+            let got = run_steps(&e, |_| given.clone());
+            assert_eq!(got[0].status, kept, "{:?}", given);
+        }
+    }
+
+    // The expectation belongs to one step: the others report as usual.
+    #[test]
+    fn the_expected_failure_applies_to_its_own_step_only() {
+        let e = entry("open,save", "", "fail:save:88");
+        let rows = run_steps(&e, |step| {
+            if step == "open" {
+                ok()
+            } else {
+                StepRow { status: "exit".into(), exit: "88".into(), ..StepRow::default() }
+            }
+        });
+        assert_eq!(rows[0].status, "ok");
+        assert_eq!(rows[1].status, "expected-fail");
+    }
+
+    #[test]
+    fn x2t_outcomes_are_classified() {
+        let c = |s, code, sig, size| classify(s, code, sig, size).0;
+        assert_eq!(c(true, Some(0), None, 10), "ok");
+        assert_eq!(c(true, Some(0), None, 0), "empty");
+        assert_eq!(c(false, Some(88), None, 0), "exit");
+        assert_eq!(classify(false, None, Some(11), 0), ("signal".into(), String::new(), "11".into()));
+    }
+
+    #[test]
+    fn pdf_outcomes_are_read_from_the_log() {
+        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(classify_pdf(&Ok("ok".into()), &[], 500).0, "ok");
+        assert_eq!(classify_pdf(&Ok("ok".into()), &[], 0).0, "empty");
+        let failed = classify_pdf(&Err("x2t conversion failed (exit code 89): ".into()), &lines(&["failed exit=89 pdf_exists=false pdf_size=0"]), 0);
+        assert_eq!(failed, ("exit".into(), "89".into(), String::new()));
+        let killed = classify_pdf(
+            &Err("x2t conversion failed (exit code -999): ".into()),
+            &lines(&["failed exit=-999 pdf_exists=false pdf_size=0", "x2t killed by signal 11"]),
+            0,
+        );
+        assert_eq!(killed, ("signal".into(), String::new(), "11".into()));
+        assert_eq!(classify_pdf(&Err("Failed to spawn x2t: nope".into()), &[], 0).0, "spawn");
+        assert_eq!(classify_pdf(&Err("font-cache-unavailable: x".into()), &lines(&["setup failed: x"]), 0).0, "error");
+    }
+
+    #[test]
+    fn long_messages_are_cut_on_a_character() {
+        let long = "é".repeat(600);
+        assert_eq!(truncate(&long).chars().count(), 503);
     }
 
     #[test]
