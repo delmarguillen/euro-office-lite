@@ -788,8 +788,10 @@ jobs:
 
       - name: Import GPG key
         if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          FLATPAK_GPG_KEY: ${{ secrets.FLATPAK_GPG_KEY }}
         run: |
-          echo "${{ secrets.FLATPAK_GPG_KEY }}" | gpg --batch --import
+          printf '%s\n' "$FLATPAK_GPG_KEY" | gpg --batch --import
           GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format long | grep sec | head -1 | awk '{print $2}' | cut -d'/' -f2)
           echo "GPG_KEY_ID=$GPG_KEY_ID" >> $GITHUB_ENV
 
@@ -821,7 +823,7 @@ jobs:
 
       - name: Export GPG public key
         if: startsWith(github.ref, 'refs/tags/v')
-        run: gpg --export --armor $GPG_KEY_ID > flatpak/repo/euro-office-flatpak.gpg
+        run: gpg --export --armor "$GPG_KEY_ID" > flatpak/repo/euro-office-flatpak.gpg
 
       - name: Build single-file bundle
         run: |
