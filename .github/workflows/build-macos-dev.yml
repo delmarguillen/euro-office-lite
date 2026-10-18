@@ -180,6 +180,11 @@ jobs:
           echo "x2t resource copy created ($(wc -c < src-tauri/binaries/x2t) bytes)"
 
       - name: Prepare DoctRenderer resources
+        # The macOS x2t is 8.2, so its sdkjs comes from the fork's 8.2 tag,
+        # checked against the commit that tag points to today.
+        env:
+          DOCTRENDERER_SDKJS_TAG: v8.2.0.147
+          DOCTRENDERER_SDKJS_COMMIT: cfbea04cffefe72e1797ba4ed488771124d6e252
         run: |
           echo "::group::Copy fonts to binaries"
           mkdir -p src-tauri/binaries/fonts
