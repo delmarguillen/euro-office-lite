@@ -9,10 +9,12 @@ on:
   push:
     paths:
       - 'src-tauri/**'
+      - 'tools/corpus/**'
       - '.github/workflows/tests.yml'
   pull_request:
     paths:
       - 'src-tauri/**'
+      - 'tools/corpus/**'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -46,6 +48,12 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      # The corpus crate includes src-tauri/src/x2t_task.rs and text_import.rs
+      # by path: building it here fails as soon as either file needs Tauri or
+      # names crate::, and runs their unit tests without the app's dependencies.
+      - name: Corpus crate tests
+        run: cargo test --locked --manifest-path tools/corpus/Cargo.toml
 
       - name: Cache cargo
         uses: actions/cache@v4
