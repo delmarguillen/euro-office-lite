@@ -319,7 +319,12 @@ async fn open_file_inner(
     // x2t's UTF-8 CSV reader adds an empty row after a final line break, so it
     // reads a copy without that break. current_file and the recent list keep
     // the original path; only the conversion sees the copy.
-    let read_copy = match make_read_copy(&state, Path::new(&source), text_kind, text_options) {
+    let read_copy = match crate::text_import::prepare_read_copy(
+        Path::new(&source),
+        &state.temp_dir,
+        text_kind,
+        text_options,
+    ) {
         Ok(copy) => copy,
         Err(e) => {
             log_event(
@@ -515,25 +520,6 @@ fn finish_text_save(
             &format!("[SAVE] could not restore the original text format: {}", e),
         ),
     }
-}
-
-// Copy of a CSV for x2t to read, in the temp dir, when the original needs one.
-fn make_read_copy(
-    state: &AppState,
-    source: &Path,
-    kind: Option<crate::text_import::TextKind>,
-    options: Option<crate::text_import::TextOptions>,
-) -> std::io::Result<Option<PathBuf>> {
-    let (Some(kind), Some(options)) = (kind, options) else {
-        return Ok(None);
-    };
-    let cut = crate::text_import::read_copy_cut(source, kind, options)?;
-    if cut == 0 {
-        return Ok(None);
-    }
-    let copy = state.temp_dir.join("eo-read-copy.csv");
-    crate::text_import::copy_without_final_break(source, &copy, cut)?;
-    Ok(Some(copy))
 }
 
 #[tauri::command]
