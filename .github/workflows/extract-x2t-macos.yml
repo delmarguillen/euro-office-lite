@@ -1,10 +1,14 @@
 name: Extract x2t macOS binaries (one-shot)
 
+# Builds x2t-binaries-macos-<arch>.zip from the ONLYOFFICE Desktop Editors
+# DMG and publishes it to the 'dependencies' release that get-x2t-ci.sh reads.
+# The upload runs in its own job behind the 'dependencies' environment.
+
 on:
   workflow_dispatch:
     inputs:
       onlyoffice_version:
-        description: 'ONLYOFFICE Desktop Editors version to download'
+        description: 'ONLYOFFICE Desktop Editors release tag (e.g. v8.2.0)'
         type: string
         default: 'v8.2.0'
       arch:
@@ -14,16 +18,50 @@ on:
           - arm64
           - x86_64
         default: 'arm64'
+      dmg_sha256:
+        description: 'Expected sha256 of the ONLYOFFICE DMG for that arch'
+        type: string
+        required: true
+      replace_existing:
+        description: 'Overwrite the zip if it already exists in the dependencies release'
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   extract:
     runs-on: macos-latest
+    permissions:
+      contents: read
+    outputs:
+      zip_name: ${{ steps.zip.outputs.zip_name }}
+      zip_sha256: ${{ steps.zip.outputs.zip_sha256 }}
+    env:
+      ARCH: ${{ inputs.arch }}
+      VERSION: ${{ inputs.onlyoffice_version }}
+      DMG_SHA256: ${{ inputs.dmg_sha256 }}
     steps:
+      - name: Validate inputs
+        run: |
+          case "$ARCH" in
+            arm64|x86_64) ;;
+            *) echo "ERROR: unsupported arch: $ARCH"; exit 1 ;;
+          esac
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: onlyoffice_version must look like v1.2.3"
+            exit 1
+          fi
+          if ! [[ "$DMG_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: dmg_sha256 must be 64 lowercase hex characters"
+            exit 1
+          fi
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Diagnose environment
         run: |
@@ -34,11 +72,8 @@ jobs:
           df -h /
           echo "::endgroup::"
 
-      - name: Download ONLYOFFICE DMG
+      - name: Download and verify ONLYOFFICE DMG
         run: |
-          VERSION="${{ github.event.inputs.onlyoffice_version }}"
-          ARCH="${{ github.event.inputs.arch }}"
-
           if [ "$ARCH" = "arm64" ]; then
             DMG_ASSET="ONLYOFFICE-arm.dmg"
           else
@@ -47,8 +82,15 @@ jobs:
 
           URL="https://github.com/ONLYOFFICE/DesktopEditors/releases/download/${VERSION}/${DMG_ASSET}"
           echo "Downloading: $URL (arch=$ARCH)"
-          curl -L -o /tmp/onlyoffice.dmg "$URL"
+          curl -fL --retry 3 -o /tmp/onlyoffice.dmg "$URL"
           ls -lh /tmp/onlyoffice.dmg
+          ACTUAL=$(shasum -a 256 /tmp/onlyoffice.dmg | cut -d' ' -f1)
+          echo "Expected sha256: $DMG_SHA256"
+          echo "Actual sha256:   $ACTUAL"
+          if [ "$ACTUAL" != "$DMG_SHA256" ]; then
+            echo "ERROR: DMG sha256 mismatch"
+            exit 1
+          fi
 
       - name: Mount DMG and explore contents
         run: |
@@ -174,8 +216,8 @@ jobs:
           exit $FAIL
 
       - name: Create zip
+        id: zip
         run: |
-          ARCH="${{ github.event.inputs.arch }}"
           if [ "$ARCH" = "arm64" ]; then
             ZIP_NAME="x2t-binaries-macos-arm64.zip"
           else
@@ -189,25 +231,104 @@ jobs:
           unzip -l "/tmp/${ZIP_NAME}"
           echo "::endgroup::"
 
-          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
+          ZIP_SHA256=$(shasum -a 256 "/tmp/${ZIP_NAME}" | cut -d' ' -f1)
+          echo "$ZIP_NAME sha256: $ZIP_SHA256"
+          {
+            echo "zip_name=$ZIP_NAME"
+            echo "zip_sha256=$ZIP_SHA256"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### x2t macOS $ARCH from ONLYOFFICE $VERSION"
+            echo ""
+            echo "| File | sha256 |"
+            echo "| --- | --- |"
+            echo "| ONLYOFFICE DMG | \`$DMG_SHA256\` |"
+            echo "| $ZIP_NAME | \`$ZIP_SHA256\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload zip as artifact (for inspection)
-        uses: actions/upload-artifact@v4
+      - name: Upload zip as artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ github.event.inputs.arch == 'arm64' && 'x2t-binaries-macos-arm64' || 'x2t-binaries-macos-x64' }}
-          path: /tmp/${{ env.ZIP_NAME }}
-
-      - name: Upload to dependencies release
-        run: |
-          echo "Uploading ${ZIP_NAME} to 'dependencies' release..."
-          gh release upload dependencies "/tmp/${ZIP_NAME}" --clobber
-          echo "Done. Verifying..."
-          gh release view dependencies
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ steps.zip.outputs.zip_name }}
+          path: /tmp/${{ steps.zip.outputs.zip_name }}
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Unmount DMG
         if: always()
         run: |
           hdiutil detach /tmp/onlyoffice 2>/dev/null || true
           rm -f /tmp/onlyoffice.dmg
+
+  publish:
+    needs: extract
+    runs-on: ubuntu-22.04
+    environment: dependencies
+    permissions:
+      contents: write
+    env:
+      ZIP_NAME: ${{ needs.extract.outputs.zip_name }}
+      EXPECTED_SHA256: ${{ needs.extract.outputs.zip_sha256 }}
+      REPLACE_EXISTING: ${{ inputs.replace_existing }}
+    steps:
+      - name: Download zip artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.extract.outputs.zip_name }}
+          path: ${{ runner.temp }}/dist
+
+      - name: Verify zip checksum
+        run: |
+          if ! [[ "$ZIP_NAME" =~ ^x2t-binaries-macos-(arm64|x64)\.zip$ ]]; then
+            echo "ERROR: unexpected zip name from extract job"
+            exit 1
+          fi
+          if ! [[ "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "ERROR: extract job did not report a valid sha256"
+            exit 1
+          fi
+          ACTUAL=$(sha256sum "$RUNNER_TEMP/dist/$ZIP_NAME" | cut -d' ' -f1)
+          echo "Expected sha256: $EXPECTED_SHA256"
+          echo "Actual sha256:   $ACTUAL"
+          if [ "$ACTUAL" != "$EXPECTED_SHA256" ]; then
+            echo "ERROR: artifact sha256 does not match the extract job"
+            exit 1
+          fi
+
+      # gh output is never printed here: only asset names and the digest are
+      # read through --jq, and failures are reported with their exit code.
+      - name: Upload to dependencies release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! ASSETS=$(gh release view dependencies --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null); then
+            echo "ERROR: could not read the dependencies release"
+            exit 1
+          fi
+
+          CLOBBER=()
+          if printf '%s\n' "$ASSETS" | grep -Fxq "$ZIP_NAME"; then
+            if [ "$REPLACE_EXISTING" != "true" ]; then
+              echo "ERROR: $ZIP_NAME already exists in dependencies; delete it or rerun with replace_existing"
+              exit 1
+            fi
+            echo "$ZIP_NAME exists and replace_existing is set: overwriting"
+            CLOBBER=(--clobber)
+          fi
+
+          set +e
+          gh release upload dependencies "$RUNNER_TEMP/dist/$ZIP_NAME" --repo "$GITHUB_REPOSITORY" "${CLOBBER[@]}" > /dev/null 2>&1
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "ERROR: gh release upload failed with exit code $STATUS"
+            exit 1
+          fi
+          echo "Uploaded $ZIP_NAME"
+
+          DIGEST=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/dependencies" --jq ".assets[] | select(.name == \"$ZIP_NAME\") | .digest" 2>/dev/null || true)
+          echo "Published digest: ${DIGEST:-<not reported>}"
+          if [ -n "$DIGEST" ] && [ "$DIGEST" != "sha256:$EXPECTED_SHA256" ]; then
+            echo "ERROR: published digest does not match the verified zip"
+            exit 1
+          fi
