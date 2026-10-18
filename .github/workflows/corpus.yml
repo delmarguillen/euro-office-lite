@@ -1,0 +1,133 @@
+name: Conversion corpus (Linux x64)
+
+# Converts tests/corpus with the x2t of a Build & Release (or Dev Build)
+# installer, through the same Rust code the app runs (src-tauri/src/x2t_task.rs
+# and text_import.rs), and reports per document and step. Informative: it fails
+# on crashes, non-zero exits, empty outputs and PDFs missing their expected
+# text, never on differences.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run id of the build to take the Linux installer from"
+        required: true
+        type: string
+      artifact:
+        description: "Artifact holding the .deb: installer-... (Build & Release) or deb-... (Dev Build)"
+        required: false
+        default: installer-x86_64-unknown-linux-gnu
+        type: string
+  # TEMPORARY: workflow_dispatch only works once this file is on the default
+  # branch, so the arc's branch is validated on push. Remove before merging.
+  push:
+    branches: [feat/corpus-f1-linux]
+
+permissions:
+  contents: read
+  # Downloading an artifact from a different run needs the Actions API.
+  actions: read
+
+concurrency:
+  group: corpus-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  corpus-linux-x64:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      # Build & Release run of v0.17.35-alpha, for the temporary push trigger.
+      DEFAULT_RUN_ID: "39122843626"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Both inputs reach a shell and an action input, so both are checked
+      # against a closed pattern first.
+      - name: Resolve build run and artifact
+        id: run
+        env:
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          INPUT_ARTIFACT: ${{ inputs.artifact }}
+        run: |
+          RUN_ID="${INPUT_RUN_ID:-$DEFAULT_RUN_ID}"
+          ARTIFACT="${INPUT_ARTIFACT:-installer-x86_64-unknown-linux-gnu}"
+          if ! [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]]; then
+            echo "ERROR: run_id must be a number"; exit 1
+          fi
+          if ! [[ "$ARTIFACT" =~ ^(installer|deb)-x86_64-unknown-linux-gnu$ ]]; then
+            echo "ERROR: artifact must be installer-x86_64-unknown-linux-gnu or deb-x86_64-unknown-linux-gnu"; exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+
+      - name: Download Linux installer from the build run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ steps.run.outputs.artifact }}
+          path: installer/
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install report tools and remove the runner's Liberation fonts
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/corpus-out"
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils unzip
+          # x2t scans the system fonts too, and one row per family wins: a
+          # system Liberation would replace the bundled one in every PDF.
+          dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' 'fonts-liberation*' 2>/dev/null \
+            | tee "$RUNNER_TEMP/corpus-out/runner-liberation-before.txt" || true
+          PKGS=$(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'fonts-liberation*' 2>/dev/null \
+            | awk '$1 ~ /^ii/ {print $2}' || true)
+          if [ -n "$PKGS" ]; then
+            sudo apt-get remove -y $PKGS 2>&1 | tee "$RUNNER_TEMP/corpus-out/apt-remove.log"
+          fi
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Build the corpus binary
+        run: cargo build --locked --release --manifest-path tools/corpus/Cargo.toml
+
+      - name: Extract the installer and run the corpus twice
+        run: |
+          set -euo pipefail
+          DEB=$(find installer -maxdepth 2 -name 'Euro-Office-Lite_*.deb' -print -quit)
+          [ -n "$DEB" ] || { echo "ERROR: no Euro-Office-Lite_*.deb in the artifact"; ls -laR installer; exit 1; }
+          OUT="$RUNNER_TEMP/corpus-out"
+          dpkg-deb -f "$DEB" Package Version Architecture | tee "$OUT/package.txt"
+          ROOT="$RUNNER_TEMP/eol-root"
+          dpkg-deb -x "$DEB" "$ROOT"
+          BIN=tools/corpus/target/release/corpus
+          for n in 1 2; do
+            "$BIN" run --install-root "$ROOT" --corpus tests/corpus \
+              --out "$OUT/run$n" --work "$RUNNER_TEMP/corpus-work$n" --label "git=$GITHUB_SHA"
+          done
+
+      # Two identical runs must agree: a difference is a volatile value the
+      # normalization misses, and the job fails on it like on a hard failure.
+      - name: Report and compare
+        run: |
+          set -uo pipefail
+          OUT="$RUNNER_TEMP/corpus-out"
+          BIN=tools/corpus/target/release/corpus
+          status=0
+          "$BIN" report --out "$OUT/run1" || status=$?
+          "$BIN" report --out "$OUT/run2" || true
+          same=0
+          "$BIN" compare "$OUT/run1" "$OUT/run2" --summary "$OUT/determinism.md" || same=$?
+          cat "$OUT/run1/summary.md" "$OUT/determinism.md" >> "$GITHUB_STEP_SUMMARY" || true
+          [ "$status" -ne 0 ] || status=$same
+          exit $status
+
+      - name: Upload corpus results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: corpus-linux-x64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/corpus-out/
+          if-no-files-found: warn
+          retention-days: 7
