@@ -15,6 +15,29 @@ const IGNORED_ENV: [&str; 6] = ["install_root", "exe", "resource_dir", "binaries
 // their normalized parts and text instead.
 const BYTES_NOT_COMPARED: [&str; 7] = ["docx", "xlsx", "pptx", "odt", "ods", "odp", "pdf"];
 
+// x2t's Editor.bin from a CSV or TXT differs between two runs of the same
+// input (same size, other bytes), so opening one is judged by its size and by
+// the saved file, which the round trip compares byte for byte.
+fn is_text_document(doc: &str) -> bool {
+    let doc = doc.to_lowercase();
+    doc.ends_with(".csv") || doc.ends_with(".txt")
+}
+
+// The Editor.bin size of a CSV or TXT open, compared within 1%.
+fn is_text_open_size(key: &Key) -> bool {
+    let (source, doc, _, step, check) = key;
+    step == "open"
+        && is_text_document(doc)
+        && ((source == "run" && check == "size") || (source == "report" && check == "editor.size"))
+}
+
+pub fn within_one_percent(a: &str, b: &str) -> bool {
+    match (a.parse::<u64>(), b.parse::<u64>()) {
+        (Ok(a), Ok(b)) => a.abs_diff(b) * 100 <= a.max(b),
+        _ => a == b,
+    }
+}
+
 fn key(source: &str, doc: &str, variant: &str, step: &str, check: &str) -> Key {
     (source.into(), doc.into(), variant.into(), step.into(), check.into())
 }
@@ -33,7 +56,10 @@ pub fn values(env: &Table, run: &Table, report: &Table) -> BTreeMap<Key, String>
         let ext = output.rsplit('.').next().unwrap_or("").to_lowercase();
         let mut fields = vec!["status", "exit", "signal", "output"];
         if output.is_empty() || !BYTES_NOT_COMPARED.contains(&ext.as_str()) {
-            fields.extend(["size", "sha256"]);
+            fields.push("size");
+            if !(step == "open" && is_text_document(doc)) {
+                fields.push("sha256");
+            }
         }
         for field in fields {
             map.insert(key("run", doc, variant, step, field), run.get(row, field).to_string());
@@ -43,6 +69,9 @@ pub fn values(env: &Table, run: &Table, report: &Table) -> BTreeMap<Key, String>
         let check = report.get(row, "check");
         // What x2t writes as the application is recorded, not compared (#41).
         if check.starts_with("app.") {
+            continue;
+        }
+        if check == "editor.sha256" && is_text_document(report.get(row, "doc")) {
             continue;
         }
         map.insert(
@@ -64,6 +93,7 @@ impl Line {
     pub fn verdict(&self) -> &'static str {
         match (&self.a, &self.b) {
             (Some(a), Some(b)) if a == b => "same",
+            (Some(a), Some(b)) if is_text_open_size(&self.key) && within_one_percent(a, b) => "same",
             (Some(_), Some(_)) => "diff",
             _ => "missing",
         }
@@ -121,6 +151,21 @@ pub fn compare(a: &Path, b: &Path, summary: Option<&Path>) -> Result<usize, Infr
                 ));
             }
         }
+        let sizes: Vec<&Line> = lines.iter().filter(|l| l.key.0 == "run" && is_text_open_size(&l.key)).collect();
+        if !sizes.is_empty() {
+            s.push_str("\nEditor.bin size when opening CSV and TXT (compared within 1%):\n\n| Doc | Variant | A | B | |\n|---|---|---|---|---|\n");
+            for line in sizes {
+                let flag = if line.verdict() == "same" { "" } else { "differs by more than 1%" };
+                s.push_str(&format!(
+                    "| {} | {} | {} | {} | {} |\n",
+                    line.key.1,
+                    line.key.2,
+                    line.a.clone().unwrap_or_default(),
+                    line.b.clone().unwrap_or_default(),
+                    flag
+                ));
+            }
+        }
         std::fs::write(path, s).map_err(|e| Infra(format!("cannot write {}: {}", path.display(), e)))?;
     }
     Ok(wrong.len())
@@ -154,6 +199,50 @@ a.docx\tplain\tsave\tapp.application\tx2t 8.2\n";
         assert!(lines.iter().all(|l| l.verdict() == "same"), "{:?}", lines.iter().filter(|l| l.verdict() != "same").collect::<Vec<_>>());
     }
 
+    const TEXT_RUN: &str = "doc\tvariant\tstep\tstatus\texit\tsignal\tsize\tsha256\toutput\tms\tmessage\n\
+c.csv\tplain\topen\tok\t0\t\t1600\tbin1\t\t10\t\n\
+d.docx\tplain\topen\tok\t0\t\t4000\tbin1\t\t10\t\n";
+    const TEXT_REPORT: &str = "doc\tvariant\tstep\tcheck\tvalue\n\
+c.csv\tplain\topen\teditor.size\t1600\n\
+c.csv\tplain\topen\teditor.sha256\tbin1\n";
+
+    fn text_lines(size_b: &str) -> Vec<Line> {
+        let a = values(&table(ENV), &table(TEXT_RUN), &table(TEXT_REPORT));
+        let run_b = TEXT_RUN.replace("1600\tbin1", &format!("{}\tbin2", size_b));
+        let report_b = TEXT_REPORT.replace("1600", size_b).replace("bin1", "bin2");
+        let b = values(&table(ENV), &table(&run_b), &table(&report_b));
+        lines(&a, &b)
+    }
+
+    fn not_same(lines: &[Line]) -> Vec<String> {
+        lines.iter().filter(|l| l.verdict() != "same").map(|l| format!("{}/{}/{}", l.key.0, l.key.1, l.key.4)).collect()
+    }
+
+    // The Editor.bin of a CSV open changes bytes between identical runs.
+    #[test]
+    fn a_csv_editor_bin_is_judged_by_its_size_within_one_percent() {
+        assert!(not_same(&text_lines("1600")).is_empty(), "{:?}", not_same(&text_lines("1600")));
+        assert!(not_same(&text_lines("1615")).is_empty(), "{:?}", not_same(&text_lines("1615")));
+        assert_eq!(not_same(&text_lines("1620")), vec!["report/c.csv/editor.size", "run/c.csv/size"]);
+    }
+
+    #[test]
+    fn other_documents_still_compare_the_editor_bin_bytes() {
+        let a = values(&table(ENV), &table(TEXT_RUN), &table(TEXT_REPORT));
+        let run_b = TEXT_RUN.replace("4000\tbin1", "4000\tbin9");
+        let b = values(&table(ENV), &table(&run_b), &table(TEXT_REPORT));
+        assert_eq!(not_same(&lines(&a, &b)), vec!["run/d.docx/sha256"]);
+    }
+
+    #[test]
+    fn one_percent_is_measured_on_the_larger_size() {
+        assert!(within_one_percent("1000", "1010"));
+        assert!(!within_one_percent("1000", "1011"));
+        assert!(within_one_percent("0", "0"));
+        assert!(!within_one_percent("0", "5"));
+        assert!(!within_one_percent("", "5"));
+    }
+
     #[test]
     fn a_changed_value_or_a_missing_row_is_reported() {
         let a = values(&table(ENV), &table(RUN), &table(REPORT));
@@ -183,7 +272,9 @@ a.docx\tplain\tsave\tapp.application\tx2t 8.2\n";
             let dir = root.join(run);
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("env.tsv"), ENV).unwrap();
-            std::fs::write(dir.join("run.tsv"), RUN.replace("csv1", sha)).unwrap();
+            // A CSV open whose Editor.bin bytes differ per run, as x2t's do.
+            let csv_open = format!("c.csv\tplain\topen\tok\t0\t\t1600\tbin-{}\t\t10\t\n", run);
+            std::fs::write(dir.join("run.tsv"), RUN.replace("csv1", sha) + &csv_open).unwrap();
             std::fs::write(dir.join("report.tsv"), REPORT).unwrap();
         }
         let summary = root.join("determinism.md");
@@ -192,6 +283,7 @@ a.docx\tplain\tsave\tapp.application\tx2t 8.2\n";
         assert!(text.contains("1 differ or are missing"), "{}", text);
         assert!(text.contains("| run | b.csv | plain | save | sha256 | csv1 | csv2 | diff |"), "{}", text);
         assert!(root.join("compare.tsv").is_file());
+        assert!(text.contains("Editor.bin size when opening CSV and TXT"), "{}", text);
         let _ = std::fs::remove_dir_all(&root);
     }
 }
