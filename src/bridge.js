@@ -1374,7 +1374,14 @@ function _loadEditorBin(b64data, fileName, options) {
             var target = _getEditor();
             var targetDoc = _eoOpenDocumentUrl(target);
             ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
-              if (!imageFile) return;
+              if (!imageFile) {
+                keystroke.settled.then(function(verdict) {
+                  if (verdict !== 'internal') {
+                    window._eoLog('[EO] Ctrl+V: no image reached the app (native read empty, paste event without image)');
+                  }
+                });
+                return;
+              }
               LinuxPasteGuard.afterNativeImage(keystroke, imageFile, function(file) {
                 var now = _getEditor();
                 if (!now.editor || now.editor !== target.editor || _eoOpenDocumentUrl(now) !== targetDoc) {

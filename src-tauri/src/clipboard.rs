@@ -102,6 +102,11 @@ pub async fn read_clipboard_image(state: State<'_, AppState>) -> Result<Option<S
 }
 
 fn read_clipboard_image_blocking(temp_dir: &Path) -> Result<Option<String>, String> {
+    // Session type of this read, to tell Wayland from X11 in the log.
+    clipboard_log(&format!(
+        "[clipboard] read start (wayland_display={})",
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() { "yes" } else { "no" }
+    ));
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
         Err(e) => {
