@@ -752,8 +752,6 @@ jobs:
   build-flatpak:
     needs: [build-linux]
     runs-on: ubuntu-22.04
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout
@@ -840,14 +838,21 @@ jobs:
           name: installer-flatpak
           path: flatpak/euro-office-lite.flatpak
 
-      - name: Deploy repo to GitHub Pages
+      # Tarred so the deploy job gets the repo exactly as built (a plain
+      # artifact upload drops dotfiles). Hard links are stored as plain files
+      # because the deploy job only accepts regular files and directories.
+      - name: Pack Flatpak repo for deploy
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847 # v3
+        run: tar -C flatpak --hard-dereference -cf "$RUNNER_TEMP/flatpak-repo.tar" repo
+
+      - name: Upload Flatpak repo artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: flatpak/repo
-          destination_dir: repo
-          keep_files: false
+          name: flatpak-repo
+          path: ${{ runner.temp }}/flatpak-repo.tar
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Upload Flatpak logs on failure
         if: failure()
@@ -857,9 +862,64 @@ jobs:
           path: /tmp/flatpak-build.log
           if-no-files-found: warn
 
+  # Only this job can write to the repo: the Flatpak build above runs
+  # flatpak-builder and a restored cache with a read-only token.
+  deploy-flatpak-repo:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-flatpak]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Flatpak repo artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: flatpak-repo
+          path: ${{ runner.temp }}
+
+      # The Pages action copies with cp -L, so a symlink in the repo would
+      # publish whatever it points to on this runner. An OSTree archive repo
+      # holds only regular files and directories, so anything else fails here.
+      # This step gets no token; only paths and types are ever printed.
+      - name: Unpack and check Flatpak repo
+        run: |
+          TAR="$RUNNER_TEMP/flatpak-repo.tar"
+          if ! LISTING=$(tar -tvf "$TAR"); then
+            echo "ERROR: cannot list the Flatpak repo archive"
+            exit 1
+          fi
+          BAD_TYPES=$(printf '%s\n' "$LISTING" | grep -Ev '^[-d]' || true)
+          LINKS=$(printf '%s\n' "$LISTING" | grep -E ' (link to|->) ' || true)
+          BAD_PATHS=$(tar -tf "$TAR" | grep -E '^/|(^|/)\.\.(/|$)' || true)
+          if [ -n "$BAD_TYPES$LINKS$BAD_PATHS" ]; then
+            echo "ERROR: the Flatpak repo archive has entries other than plain files and directories, or unsafe paths:"
+            printf '%s\n' "$BAD_TYPES" "$LINKS" | sort -u | awk 'NF { t = substr($1, 1, 1); $1 = $2 = $3 = $4 = $5 = ""; sub(/^ +/, ""); print "  type " t ": " $0 }'
+            printf '%s\n' "$BAD_PATHS" | awk 'NF { print "  path: " $0 }'
+            exit 1
+          fi
+
+          mkdir -p flatpak
+          tar -C flatpak -xf "$TAR"
+          OTHER=$(find flatpak/repo ! -type f ! -type d -printf '%y %p\n')
+          if [ -n "$OTHER" ]; then
+            echo "ERROR: the unpacked Flatpak repo has entries other than plain files and directories:"
+            printf '%s\n' "$OTHER" | sed 's/^/  /'
+            exit 1
+          fi
+          echo "Flatpak repo: $(find flatpak/repo -type f | wc -l) files, $(find flatpak/repo -type d | wc -l) directories"
+
+      - name: Deploy repo to GitHub Pages
+        uses: peaceiris/actions-gh-pages@373f7f263a76c20808c831209c920827a82a2847 # v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: flatpak/repo
+          destination_dir: repo
+          keep_files: false
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-windows, build-macos, build-linux, build-flatpak]
+    needs: [build-windows, build-macos, build-linux, build-flatpak, deploy-flatpak-repo]
     permissions:
       contents: write
     runs-on: ubuntu-24.04
