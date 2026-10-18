@@ -115,6 +115,77 @@ function _eoHtmlIsJustImage(html) {
   return stripped.trim() === '';
 }
 
+// True when an HTML clipboard flavor is a copy made inside the editor: sdkjs
+// puts its binary in an element's class behind one of these tags. Plain string
+// work, so it also runs where there is no DOM (and in the Node checks).
+function _eoHtmlIsEditorCopy(html) {
+  if (!html || typeof html !== 'string') return false;
+  var tags = ['docData;', 'xslData;', 'pptData;', 'pdfData;'];
+  var classAttr = /\sclass\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi;
+  var match;
+  while ((match = classAttr.exec(html)) !== null) {
+    var value = match[1] !== undefined ? match[1] : match[2] !== undefined ? match[2] : match[3];
+    for (var i = 0; i < tags.length; i++) {
+      if (value.indexOf(tags[i]) !== -1) return true;
+    }
+  }
+  return false;
+}
+
+// A clipboard read that gives up after `ms` (null then, or on error), so a
+// read that hangs never blocks a paste path on its way to its own fallbacks.
+function _eoReadClipboardWithin(command, ms) {
+  return Promise.race([
+    invoke(command),
+    new Promise(function(resolve) { setTimeout(function() { resolve(null); }, ms); })
+  ]).catch(function(e) {
+    window._eoLog('[EO] Clipboard ' + command + ' failed: ' + (e.message || e));
+    return null;
+  });
+}
+
+// Kept short: every paste waits on it, and a clipboard arboard cannot see only times out.
+var EO_CLIPBOARD_HTML_WAIT_MS = 850;
+
+// For the paste paths that never see a paste event (the Paste menu, Ctrl+V
+// with a non-Latin layout on Linux), checked before text and image as sdkjs's
+// own paste does: the clipboard has one owner, so with the editor's binary in
+// its HTML any text (a sheet's active cell) or image (a render of the
+// selection) is part of that same copy. Pastes it as sdkjs's paste handler
+// does with an event's HTML. Returns the result to log, or null when the
+// clipboard holds no editor copy and the caller goes on as before.
+async function _eoPasteEditorCopyFirst(ref) {
+  var html = await _eoReadClipboardWithin('read_clipboard_html', EO_CLIPBOARD_HTML_WAIT_MS);
+  if (!_eoHtmlIsEditorCopy(html)) return null;
+  // sdkjs hands its HTML paste the text flavor too ("keep text only" uses it).
+  var text = await _eoReadClipboardWithin('read_clipboard_text', 1200);
+  var cb = ref.ew && ref.ew.AscCommon && ref.ew.AscCommon.g_clipboardBase;
+  var api = cb && cb.Api;
+  if (!api || !cb.CommonIframe_PasteStart || !api.incrementCounterLongAction) {
+    // Without sdkjs's HTML paste, the old order still pastes the text or image.
+    window._eoLog('[EO] internal html paste unavailable, falling back');
+    return null;
+  }
+  if (api.isLongAction && api.isLongAction()) return 'internal-html-busy';
+  // sdkjs cuts the event's HTML after </html> the same way.
+  var end = html.indexOf('</html>');
+  if (end !== -1) html = html.substring(0, end + '</html>'.length);
+  // _private_onpaste's sequence; CommonIframe_PasteStart ends in Paste_End,
+  // which lowers the long-action counter again.
+  cb.PasteFlag = true;
+  api.incrementCounterLongAction();
+  cb.pastedFrom = null;
+  try {
+    cb.CommonIframe_PasteStart(html, typeof text === 'string' ? text : '');
+  } catch(e) {
+    // A throw before Paste_End would leave the editor locked in a long action.
+    if (cb.PasteFlag && cb.Paste_End) cb.Paste_End();
+    window._eoLog('[EO] internal html paste error: ' + (e.message || e));
+    return 'internal-html-error';
+  }
+  return 'internal-html';
+}
+
 // Linux Ctrl+V runs two paths for one keystroke: the keydown reads the native
 // clipboard for an image (Issue #24) and WebKitGTK's paste event feeds sdkjs.
 // Each keystroke gets a token through which its paste event tells the native
@@ -1253,10 +1324,18 @@ function _loadEditorBin(b64data, fileName, options) {
               // buffer like Button_Paste does. A fast empty read means an
               // external owner without text: probe for an image as usual.
               var TIMED_OUT = { timedOut: true };
-              var timeoutP = new Promise(function(resolve) {
-                setTimeout(function() { resolve(TIMED_OUT); }, 1200);
-              });
-              Promise.race([invoke('read_clipboard_text'), timeoutP]).then(function(text) {
+              var EDITOR_COPY = { editorCopy: true };
+              _eoPasteEditorCopyFirst(_getEditor()).then(function(htmlResult) {
+                if (htmlResult) {
+                  window._eoLog('[EO] KeyShim v: result=' + htmlResult);
+                  return EDITOR_COPY;
+                }
+                var timeoutP = new Promise(function(resolve) {
+                  setTimeout(function() { resolve(TIMED_OUT); }, 1200);
+                });
+                return Promise.race([invoke('read_clipboard_text'), timeoutP]);
+              }).then(function(text) {
+                if (text === EDITOR_COPY) return;
                 var refV = _getEditor();
                 if (!refV.editor || !refV.ew || !refV.ew.AscCommon) return;
                 var fmt = refV.ew.AscCommon.c_oAscClipboardDataFormat;
@@ -1270,7 +1349,7 @@ function _loadEditorBin(b64data, fileName, options) {
                     (_eoPasteFromLastCopyBinary(refV) ? 'internal' : 'timeout-no-internal'));
                   return;
                 }
-                ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
+                return ClipboardHelper.readNativeClipboardImage().then(function(imageFile) {
                   if (imageFile) {
                     refV.editor.AddImageUrl([imageFile]);
                     window._eoLog('[EO] KeyShim v: result=image');
@@ -2444,6 +2523,11 @@ window.AscDesktopEditor = {
     var platform = _isWindows ? 'win' : _isMac ? 'mac' : 'linux';
     var order = _isMac ? 'image-first' : 'text-first';
     window._eoLog('[CLIPBOARD] paste platform=' + platform + ' order=' + order);
+    var editorCopy = await _eoPasteEditorCopyFirst(_getEditor());
+    if (editorCopy) {
+      window._eoLog('[CLIPBOARD] paste result=' + editorCopy);
+      return;
+    }
     var imageFile = null;
     var text = null;
     var probeImage = async function() {

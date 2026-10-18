@@ -213,6 +213,7 @@ fn main() {
             note_separator::remove_note_separator,
             clipboard::read_clipboard_image,
             clipboard::read_clipboard_text,
+            clipboard::read_clipboard_html,
             recent::recent_files_state,
             recent::set_recent_files_enabled,
             recent::clear_recent_files,

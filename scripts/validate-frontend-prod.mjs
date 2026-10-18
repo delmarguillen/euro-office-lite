@@ -139,6 +139,35 @@ for (const moduleName of ['word', 'cell', 'slide']) {
       'searchBinaryClass in sdkjs common/wordcopypaste.js and findBinaryClass in bridge.js.',
     );
   }
+  // The Paste menu and the non-Latin Ctrl+V read the clipboard HTML and know an
+  // editor copy by these tags in a class (_eoHtmlIsEditorCopy), then paste it
+  // with the sequence of sdkjs's own paste handler.
+  const htmlPasteProblems = [];
+  const writerTags = moduleName === 'cell'
+    ? ['docData;', 'pptData;', 'pdfData;', 'xslData;']
+    : ['docData;', 'pptData;', 'pdfData;'];
+  for (const tag of writerTags) {
+    if (!new RegExp(`"${tag}"\\s*\\+`).test(bundle)) {
+      htmlPasteProblems.push(`no copy writes "${tag}"`);
+    }
+  }
+  if (!/this\.PasteFlag\s*=\s*(?:!0|true)\s*[;,]\s*this\.Api\.incrementCounterLongAction\(\)\s*[;,]\s*this\.pastedFrom\s*=\s*null/.test(bundle)) {
+    htmlPasteProblems.push('the paste handler no longer starts with PasteFlag, incrementCounterLongAction, pastedFrom');
+  }
+  if (!/CommonIframe_PasteStart\s*:\s*function\s*\([\s\S]{0,3000}?\.Paste_End\(\)\s*;?\s*\}/.test(bundle)) {
+    htmlPasteProblems.push('CommonIframe_PasteStart no longer ends in Paste_End');
+  }
+  if (!/Paste_End\s*:\s*function\s*\(\)\s*\{[^}]*\.decrementCounterLongAction\(\)[^}]*this\.PasteFlag\s*=\s*(?:!1|false)/.test(bundle)) {
+    htmlPasteProblems.push('Paste_End no longer lowers the long-action counter and the paste flag');
+  }
+  if (htmlPasteProblems.length > 0) {
+    fail(
+      `internal HTML paste: ${moduleName}/sdk-all.js changed (${htmlPasteProblems.join('; ')}). ` +
+      'Check the copy writers in sdkjs common/wordcopypaste.js and cell/model/clipboard.js, ' +
+      '_private_onpaste, CommonIframe_PasteStart and Paste_End in common/clipboard_base.js, ' +
+      'and _eoHtmlIsEditorCopy / _eoPasteEditorCopyFirst in bridge.js.',
+    );
+  }
 }
 
 const slideBundlePath = path.join(distRoot, 'sdkjs', 'slide', 'sdk-all-min.js');
