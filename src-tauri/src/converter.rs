@@ -44,22 +44,14 @@ pub async fn convert_file(
 
     let params_path = params_path(std::path::Path::new(temp_dir), "convert");
 
-    let xml = format!(
-        r#"<?xml version="1.0" encoding="utf-8"?>
-<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                      xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-<m_sFileFrom>{}</m_sFileFrom>
-<m_sFileTo>{}</m_sFileTo>
-<m_nFormatTo>{}</m_nFormatTo>
-<m_sTempDir>{}</m_sTempDir>
-{}</TaskQueueDataConvert>"#,
-        input.replace('\\', "/"),
-        output.replace('\\', "/"),
+    let xml = convert_params_xml(
+        input,
+        output,
         format_to,
-        temp_dir.replace('\\', "/"),
+        temp_dir,
         // Only set for CSV and TXT: x2t will not read them without an encoding
         // and, for CSV, a delimiter (exit 89), and writes with these too.
-        text_options
+        &text_options
             .map(|options| options.xml_elements())
             .unwrap_or_default(),
     );
@@ -341,6 +333,68 @@ fn params_path(temp_dir: &std::path::Path, tag: &str) -> std::path::PathBuf {
     ))
 }
 
+// A path with &, < or > anywhere makes the params XML invalid and x2t exits 88
+// without writing anything; x2t decodes the entities back, so the file keeps
+// its literal name. Every value goes in element text, never in an attribute.
+fn xml_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+// Paths are passed raw and escaped here, once. `extra` is already XML: the
+// numeric CSV/TXT elements from TextOptions::xml_elements.
+fn convert_params_xml(
+    input: &str,
+    output: &str,
+    format_to: i32,
+    temp_dir: &str,
+    extra: &str,
+) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                      xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<m_sFileFrom>{}</m_sFileFrom>
+<m_sFileTo>{}</m_sFileTo>
+<m_nFormatTo>{}</m_nFormatTo>
+<m_sTempDir>{}</m_sTempDir>
+{}</TaskQueueDataConvert>"#,
+        xml_escape(&input.replace('\\', "/")),
+        xml_escape(&output.replace('\\', "/")),
+        format_to,
+        xml_escape(&temp_dir.replace('\\', "/")),
+        extra,
+    )
+}
+
+// Paths are passed raw and escaped here, once.
+fn pdf_params_xml(input: &str, output: &str, fonts_dir: &str, allfonts: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                      xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<m_sFileFrom>{}</m_sFileFrom>
+<m_sFileTo>{}</m_sFileTo>
+<m_nFormatTo>513</m_nFormatTo>
+<m_bEmbeddedFonts>true</m_bEmbeddedFonts>
+<m_sFontDir>{}</m_sFontDir>
+<m_sAllFontsPath>{}</m_sAllFontsPath>
+</TaskQueueDataConvert>"#,
+        xml_escape(input),
+        xml_escape(output),
+        xml_escape(&fonts_dir.replace('\\', "/")),
+        xml_escape(&allfonts.replace('\\', "/")),
+    )
+}
+
 fn convert_to_pdf(
     binaries_dir: &std::path::Path,
     input: &str,
@@ -429,21 +483,11 @@ fn convert_to_pdf(
     let allfonts_abs =
         std::fs::canonicalize(&run_allfonts).unwrap_or_else(|_| run_allfonts.clone());
 
-    let xml = format!(
-        r#"<?xml version="1.0" encoding="utf-8"?>
-<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                      xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-<m_sFileFrom>{}</m_sFileFrom>
-<m_sFileTo>{}</m_sFileTo>
-<m_nFormatTo>513</m_nFormatTo>
-<m_bEmbeddedFonts>true</m_bEmbeddedFonts>
-<m_sFontDir>{}</m_sFontDir>
-<m_sAllFontsPath>{}</m_sAllFontsPath>
-</TaskQueueDataConvert>"#,
+    let xml = pdf_params_xml(
         input,
         output,
-        fonts_dir_for_xml.to_string_lossy().replace('\\', "/"),
-        allfonts_abs.to_string_lossy().replace('\\', "/"),
+        &fonts_dir_for_xml.to_string_lossy(),
+        &allfonts_abs.to_string_lossy(),
     );
     write_file(&params_xml, &xml)?;
 
@@ -779,6 +823,120 @@ mod tests {
         let second = params_path(temp_dir, "pdf");
 
         assert_ne!(first, second, "each conversion needs its own params file");
+    }
+
+    #[test]
+    fn xml_escape_covers_the_three_markup_characters() {
+        assert_eq!(
+            xml_escape("/home/u/Q&A/R&D.docx"),
+            "/home/u/Q&amp;A/R&amp;D.docx"
+        );
+        assert_eq!(
+            xml_escape("/home/u/a<b>/c<d>.pdf"),
+            "/home/u/a&lt;b&gt;/c&lt;d&gt;.pdf"
+        );
+        // Quotes stay: every value is element text.
+        assert_eq!(xml_escape(r#"/it's "q".docx"#), r#"/it's "q".docx"#);
+        assert_eq!(xml_escape("/home/u/plain.docx"), "/home/u/plain.docx");
+    }
+
+    // A name that already looks escaped is still a literal name, so its & is
+    // escaped like any other and x2t gets back exactly A&amp;B.docx.
+    #[test]
+    fn xml_escape_runs_once_on_entity_lookalikes() {
+        assert_eq!(xml_escape("/d/A&amp;B.docx"), "/d/A&amp;amp;B.docx");
+        assert_eq!(xml_escape("/d/x&lt;y.docx"), "/d/x&amp;lt;y.docx");
+    }
+
+    #[test]
+    fn plain_paths_give_the_same_convert_params_as_before() {
+        let xml = convert_params_xml(
+            r"C:\Users\u\Doc.docx",
+            r"C:\Temp\eo\Editor.bin",
+            8192,
+            r"C:\Temp\eo",
+            "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n",
+        );
+        assert_eq!(
+            xml,
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+<TaskQueueDataConvert xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n                      \
+xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
+<m_sFileFrom>C:/Users/u/Doc.docx</m_sFileFrom>\n\
+<m_sFileTo>C:/Temp/eo/Editor.bin</m_sFileTo>\n\
+<m_nFormatTo>8192</m_nFormatTo>\n\
+<m_sTempDir>C:/Temp/eo</m_sTempDir>\n\
+<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n\
+</TaskQueueDataConvert>"
+        );
+    }
+
+    #[test]
+    fn plain_paths_give_the_same_pdf_params_as_before() {
+        let xml = pdf_params_xml(
+            "/home/u/Doc.docx",
+            "/home/u/Doc.pdf",
+            r"C:\eo\fonts",
+            r"C:\eo\AllFonts.js",
+        );
+        assert_eq!(
+            xml,
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+<TaskQueueDataConvert xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n                      \
+xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
+<m_sFileFrom>/home/u/Doc.docx</m_sFileFrom>\n\
+<m_sFileTo>/home/u/Doc.pdf</m_sFileTo>\n\
+<m_nFormatTo>513</m_nFormatTo>\n\
+<m_bEmbeddedFonts>true</m_bEmbeddedFonts>\n\
+<m_sFontDir>C:/eo/fonts</m_sFontDir>\n\
+<m_sAllFontsPath>C:/eo/AllFonts.js</m_sAllFontsPath>\n\
+</TaskQueueDataConvert>"
+        );
+    }
+
+    #[test]
+    fn convert_params_escape_every_path_in_name_and_folder() {
+        let xml = convert_params_xml(
+            "/home/u/Q&A/R&D.docx",
+            "/tmp/a<b>/s<r>.docx",
+            65,
+            "/tmp/T&C",
+            "",
+        );
+        assert!(xml.contains("<m_sFileFrom>/home/u/Q&amp;A/R&amp;D.docx</m_sFileFrom>"));
+        assert!(xml.contains("<m_sFileTo>/tmp/a&lt;b&gt;/s&lt;r&gt;.docx</m_sFileTo>"));
+        assert!(xml.contains("<m_sTempDir>/tmp/T&amp;C</m_sTempDir>"));
+        assert!(!xml.contains("Q&A") && !xml.contains("a<b>") && !xml.contains("T&C"));
+    }
+
+    #[test]
+    fn convert_params_keep_the_text_options_as_markup() {
+        let extra =
+            "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n<m_nCsvDelimiter>2</m_nCsvDelimiter>\n";
+        let xml = convert_params_xml("/d/A&amp;B.csv", "/t/Editor.bin", 8192, "/t", extra);
+        assert!(xml.contains(extra));
+        assert!(xml.contains("<m_sFileFrom>/d/A&amp;amp;B.csv</m_sFileFrom>"));
+    }
+
+    #[test]
+    fn pdf_params_escape_every_path_in_name_and_folder() {
+        let xml = pdf_params_xml(
+            "/home/u/Q&A/R&D.docx",
+            "/home/u/Q&A/p<e>.pdf",
+            "/opt/R&D/fonts",
+            "/opt/R&D/AllFonts.js",
+        );
+        assert!(xml.contains("<m_sFileFrom>/home/u/Q&amp;A/R&amp;D.docx</m_sFileFrom>"));
+        assert!(xml.contains("<m_sFileTo>/home/u/Q&amp;A/p&lt;e&gt;.pdf</m_sFileTo>"));
+        assert!(xml.contains("<m_sFontDir>/opt/R&amp;D/fonts</m_sFontDir>"));
+        assert!(xml.contains("<m_sAllFontsPath>/opt/R&amp;D/AllFonts.js</m_sAllFontsPath>"));
+    }
+
+    #[test]
+    fn pdf_params_escape_an_entity_lookalike_once() {
+        let xml = pdf_params_xml("/d/A&amp;B.docx", "/d/A&amp;B.pdf", "/f", "/f/AllFonts.js");
+        assert!(xml.contains("<m_sFileFrom>/d/A&amp;amp;B.docx</m_sFileFrom>"));
+        assert!(xml.contains("<m_sFileTo>/d/A&amp;amp;B.pdf</m_sFileTo>"));
     }
 
     const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
