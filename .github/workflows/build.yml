@@ -134,8 +134,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
-          restore-keys: cargo-${{ runner.os }}-${{ matrix.target }}-
+          # A tag run never restores a cache written by an untagged run.
+          key: cargo-${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'ci' }}-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: cargo-${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'ci' }}-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Install npm dependencies
         run: npm ci --omit=dev
@@ -256,8 +257,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
-          restore-keys: cargo-${{ runner.os }}-${{ matrix.target }}-
+          # A tag run never restores a cache written by an untagged run.
+          key: cargo-${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'ci' }}-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: cargo-${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'ci' }}-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Install npm dependencies
         run: npm ci --omit=dev
@@ -634,8 +636,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
-          restore-keys: cargo-${{ runner.os }}-${{ matrix.target }}-
+          # A tag run never restores a cache written by an untagged run.
+          key: cargo-${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'ci' }}-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: cargo-${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'ci' }}-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Install npm dependencies
         run: npm ci --omit=dev

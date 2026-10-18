@@ -99,8 +99,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
-          restore-keys: cargo-${{ runner.os }}-${{ matrix.target }}-
+          key: cargo-dev-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: cargo-dev-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Install npm dependencies
         run: npm ci
