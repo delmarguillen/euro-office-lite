@@ -11,6 +11,7 @@ mod x2t_task;
 mod text_import;
 
 mod allfonts;
+mod compare;
 mod layout;
 mod manifest;
 mod normalize;
@@ -21,7 +22,7 @@ mod sha256;
 mod tsv;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const USAGE: &str = "\
 usage:
@@ -129,6 +130,24 @@ fn main() {
                 }
                 Err(run::Infra(message)) => {
                     eprintln!("corpus report: {}", message);
+                    2
+                }
+            }
+        }
+        "compare" => {
+            args.only_known(&["summary"]).unwrap_or_else(|e| usage_error(&e));
+            let [a, b] = args.positional.as_slice() else {
+                usage_error("compare takes two result folders");
+            };
+            let summary = args.one("summary").map(PathBuf::from);
+            match compare::compare(Path::new(a), Path::new(b), summary.as_deref()) {
+                Ok(0) => 0,
+                Ok(count) => {
+                    eprintln!("corpus compare: {} values differ or are missing", count);
+                    1
+                }
+                Err(run::Infra(message)) => {
+                    eprintln!("corpus compare: {}", message);
                     2
                 }
             }
