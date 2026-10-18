@@ -144,6 +144,9 @@ function _eoReadClipboardWithin(command, ms) {
   });
 }
 
+// Kept short: every paste waits on it, and a clipboard arboard cannot see only times out.
+var EO_CLIPBOARD_HTML_WAIT_MS = 850;
+
 // For the paste paths that never see a paste event (the Paste menu, Ctrl+V
 // with a non-Latin layout on Linux), checked before text and image as sdkjs's
 // own paste does: the clipboard has one owner, so with the editor's binary in
@@ -152,7 +155,7 @@ function _eoReadClipboardWithin(command, ms) {
 // does with an event's HTML. Returns the result to log, or null when the
 // clipboard holds no editor copy and the caller goes on as before.
 async function _eoPasteEditorCopyFirst(ref) {
-  var html = await _eoReadClipboardWithin('read_clipboard_html', 1200);
+  var html = await _eoReadClipboardWithin('read_clipboard_html', EO_CLIPBOARD_HTML_WAIT_MS);
   if (!_eoHtmlIsEditorCopy(html)) return null;
   // sdkjs hands its HTML paste the text flavor too ("keep text only" uses it).
   var text = await _eoReadClipboardWithin('read_clipboard_text', 1200);

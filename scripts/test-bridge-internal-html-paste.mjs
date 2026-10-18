@@ -32,7 +32,15 @@ const webText = '<p class="MsoNormal" style="margin:0">Hello</p>';
 let clip = {};
 let reads = {};
 function reader(name, key) {
-  return () => { reads[name] = (reads[name] || 0) + 1; return clip[key] === undefined ? null : clip[key]; };
+  return () => {
+    reads[name] = (reads[name] || 0) + 1;
+    const value = clip[key] === undefined ? null : clip[key];
+    // clip.htmlDelay: the HTML read answers only after that many ms.
+    if (key === 'html' && clip.htmlDelay) {
+      return new Promise((resolve) => setTimeout(() => resolve(value), clip.htmlDelay));
+    }
+    return value;
+  };
 }
 const invoke = {
   read_clipboard_text: reader('text', 'text'),
@@ -260,6 +268,25 @@ for (const platform of ['Linux x86_64', 'Win32', 'MacIntel']) {
     state(bridge).counter === 0 &&
     bridge.logs.some((line) => line.includes('internal html paste unavailable, falling back')),
     resultLine(bridge, '[CLIPBOARD] paste result='));
+
+  // The HTML read has a wait of its own, shorter than the text read's 1200 ms.
+  reset(bridge);
+  clip = { text: 'Hello', image: null, html: slideCopy, htmlDelay: 300 };
+  await sb.AscDesktopEditor.Paste();
+  check(results, 'HTML read answering in 300 ms: still result=internal-html',
+    resultLine(bridge, '[CLIPBOARD] paste result=') === 'internal-html' && state(bridge).starts.length === 1,
+    resultLine(bridge, '[CLIPBOARD] paste result='));
+
+  reset(bridge);
+  clip = { text: 'Hello', image: null, html: slideCopy, htmlDelay: 1000 };
+  const startedAt = Date.now();
+  await sb.AscDesktopEditor.Paste();
+  const took = Date.now() - startedAt;
+  check(results, 'HTML read answering after 850 ms: taken as none, result=text',
+    resultLine(bridge, '[CLIPBOARD] paste result=') === 'text' && state(bridge).starts.length === 0 &&
+    state(bridge).pasted === 1 && took < 1000,
+    `${resultLine(bridge, '[CLIPBOARD] paste result=')}, paste took ${took} ms`);
+  await sleep(200);
   bridge.stopTimers();
 }
 
