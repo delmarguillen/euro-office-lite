@@ -70,6 +70,7 @@ reported as `system-fonts` instead of comparable.
 | `quoted-delimiter.csv` | comparable | quoted fields holding `;` and doubled quotes |
 | `empty-lines.csv` | comparable | an empty line in the middle |
 | `utf8.txt`, `win1252-crlf.txt`, `utf16be.txt` | comparable | TXT encodings and line endings put back after a save |
+| `utf16le-crlf.txt` | comparable | TXT in UTF-16 LE with a BOM and CRLF, as Notepad saves "Unicode": opened from a UTF-8 copy and saved back to UTF-16 |
 | `@empty:empty.docx` | comparable | a 0-byte docx opens the blank template and saves to its own name |
 | `@empty:empty.csv` | comparable | x2t refuses an empty CSV: `expect` is `fail:open:88`, and only exit 88 on open counts as the expected failure |
 | `cjk.docx` | system-fonts | Chinese and Japanese |
@@ -90,6 +91,7 @@ utf8-comma-lf-final.csv      6e 61 6d 65 2c 63 69 74 79 2c 61 6d 6f 75 6e 74
 utf8-comma-nofinal.csv       6e 61 6d 65 2c 61 6d 6f 75 6e 74 0a 66 69 72 73
 win1252-semicolon.csv        41 f1 6f 3b 43 69 75 64 61 64 3b 49 6d 70 6f 72
 utf16be.txt                  fe ff 00 48 00 65 00 6c 00 6c 00 6f 00 0a 00 dc
+utf16le-crlf.txt             ff fe 4c 00 ed 00 6e 00 65 00 61 00 20 00 75 00
 utf8.txt                     46 69 72 73 74 20 6c 69 6e 65 0a 53 65 67 75 6e
 win1252-crlf.txt             4c ed 6e 65 61 20 75 6e 6f 0d 0a 43 61 66 e9 20
 ```

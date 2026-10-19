@@ -25,6 +25,7 @@ empty-lines.csv	comparable	open,save		plain		an empty line in the middle
 utf8.txt	comparable	open,save		plain		TXT in UTF-8 without BOM, LF
 win1252-crlf.txt	comparable	open,save		plain		TXT in windows-1252 with CRLF
 utf16be.txt	comparable	open,save		plain		TXT in UTF-16 BE
+utf16le-crlf.txt	comparable	open,save		plain		TXT in UTF-16 LE with CRLF, as Notepad saves Unicode
 @empty:empty.docx	comparable	open,save		plain		0-byte docx opens the blank template and saves to its own name
 @empty:empty.csv	comparable	open	fail:open:88	plain		x2t refuses an empty CSV (exit 88)
 cjk.docx	system-fonts	open,save,pdf	CJK system fonts sample	plain		Chinese and Japanese, drawn with whatever the runner has
