@@ -363,7 +363,14 @@ fn check_text_file(report: &mut Report, entry: &Entry, variant: &str, step: &str
     let same_format = file.extension() == original.extension();
     if step == "save" && same_format {
         if let Ok(original_bytes) = std::fs::read(original) {
-            report.push(doc, variant, step, "roundtrip.bytes", byte_diff(&original_bytes, &bytes));
+            let diff = byte_diff(&original_bytes, &bytes);
+            // A TXT has nothing a save may rewrite: the app puts its encoding,
+            // BOM and line breaks back, so any other byte is lost text.
+            let txt = file.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt"));
+            if txt && diff != "equal" {
+                report.failures.push(format!("{} {} {}: the TXT changed in an open and save ({})", doc, variant, step, diff));
+            }
+            report.push(doc, variant, step, "roundtrip.bytes", diff);
         }
     }
     report.push(doc, variant, step, "class", entry.class.clone());
@@ -509,6 +516,40 @@ mod tests {
         assert!(report.failures[0].contains("missing:Hello"));
         let values: Vec<&str> = report.table.rows.iter().map(|r| r[4].as_str()).collect();
         assert_eq!(values, vec!["ok", "missing:Hello"]);
+    }
+
+    fn text_entry(file: &str) -> Entry {
+        let text = format!("file\tclass\tsteps\texpect\tvariants\tsave_as\tnote\n{}\tcomparable\topen,save\t\t\t\t\n", file);
+        manifest::parse(&text).unwrap().remove(0)
+    }
+
+    #[test]
+    fn a_txt_that_does_not_come_back_byte_for_byte_is_a_hard_failure() {
+        let dir = std::env::temp_dir().join(format!("eo-report-roundtrip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let original_txt = write("original.txt", b"\xFE\xFF\x00H\x00\x0A");
+        let original_csv = write("original.csv", b"a;b\n\n");
+        let same_txt = write("same.txt", b"\xFE\xFF\x00H\x00\x0A");
+        let lost_txt = write("lost.txt", b"\xFE\xFF\x00\x0A");
+        let changed_csv = write("changed.csv", b"a;b\n;\n");
+        let mut report = Report { out: &dir, table: Table::new(&REPORT_COLUMNS), failures: Vec::new() };
+
+        check_text_file(&mut report, &text_entry("a.txt"), "plain", "save", &same_txt, &original_txt).unwrap();
+        assert!(report.failures.is_empty(), "{:?}", report.failures);
+        check_text_file(&mut report, &text_entry("a.txt"), "plain", "save", &lost_txt, &original_txt).unwrap();
+        assert_eq!(report.failures, vec!["a.txt plain save: the TXT changed in an open and save (diff:3)"]);
+        // CSV round trips only inform: x2t 9.4 still changes some of them.
+        check_text_file(&mut report, &text_entry("b.csv"), "plain", "save", &changed_csv, &original_csv).unwrap();
+        assert_eq!(report.failures.len(), 1, "{:?}", report.failures);
+        let roundtrips: Vec<&str> = report.table.rows.iter().filter(|r| r[3] == "roundtrip.bytes").map(|r| r[4].as_str()).collect();
+        assert_eq!(roundtrips, vec!["equal", "diff:3", "diff:4"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // summary.md goes into the run's Markdown summary: what it shows from the
