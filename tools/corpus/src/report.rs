@@ -1,7 +1,8 @@
 // `corpus report`: reads what `run` wrote and checks each output with
 // poppler-utils and unzip, writing report.tsv, the extracted text and
-// summary.md. A crash, a failed exit, an empty output or a PDF without its
-// expected text fails the report; every other finding is informative.
+// summary.md. A crash, a failed exit, an empty output, a PDF without its
+// expected text or a script PDF with the bundled fonts only fails the report;
+// every other finding is informative.
 
 use crate::manifest::{self, Entry};
 use crate::markdown::clean;
@@ -103,6 +104,8 @@ struct Report<'a> {
     out: &'a Path,
     table: Table,
     failures: Vec<String>,
+    // What the runner cannot test, which is not the document's failure.
+    infra: Vec<String>,
 }
 
 impl Report<'_> {
@@ -214,7 +217,8 @@ pub fn report(out: &Path, trusted_manifest: &Path) -> Result<Vec<String>, Infra>
     };
     let spoofed = env_value("fonts.check") != "ok";
     let scratch = out.join(".unpack");
-    let mut report = Report { out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new() };
+    let runner_families = runner_families(out);
+    let mut report = Report { out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
 
     for row in &runs.rows {
         let get = |name: &str| runs.get(row, name).to_string();
@@ -238,7 +242,7 @@ pub fn report(out: &Path, trusted_manifest: &Path) -> Result<Vec<String>, Infra>
         let ext = file.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
         let original = file.with_file_name(format!("original.{}", entry.extension()));
         let result = if ext == "pdf" {
-            check_pdf(&mut report, entry, &variant, &step, &file, spoofed)
+            check_pdf(&mut report, entry, &variant, &step, &file, spoofed, &runner_families)
         } else if PACKAGES.contains(&ext.as_str()) {
             check_package(&mut report, entry, &variant, &step, &file, &ext, &original, &scratch, spoofed)
         } else {
@@ -253,10 +257,31 @@ pub fn report(out: &Path, trusted_manifest: &Path) -> Result<Vec<String>, Infra>
     report.table.write(&out.join("report.tsv")).map_err(Infra)?;
     let summary = summary(&report.table, &entries, &env_value, &report.failures, out);
     std::fs::write(out.join("summary.md"), summary).map_err(|e| Infra(format!("summary.md: {}", e)))?;
+    if !report.infra.is_empty() {
+        return Err(Infra(report.infra.join("; ")));
+    }
     Ok(report.failures)
 }
 
-fn check_pdf(report: &mut Report, entry: &Entry, variant: &str, step: &str, file: &Path, spoofed: bool) -> Result<(), String> {
+// The font families of the runner's font cache, which run copies next to the
+// results.
+fn runner_families(out: &Path) -> Vec<String> {
+    std::fs::read_to_string(out.join("fonts").join("AllFonts.js"))
+        .ok()
+        .and_then(|text| allfonts::parse(&text).ok())
+        .map(|list| list.infos.into_iter().map(|info| info.name).collect())
+        .unwrap_or_default()
+}
+
+fn check_pdf(
+    report: &mut Report,
+    entry: &Entry,
+    variant: &str,
+    step: &str,
+    file: &Path,
+    spoofed: bool,
+    runner_families: &[String],
+) -> Result<(), String> {
     let doc = entry.doc.as_str();
     let info = tool_output("pdfinfo", &[&path_arg(file)])?;
     report.push(doc, variant, step, "pages", pdf::pages(&info).map(|p| p.to_string()).unwrap_or_default());
@@ -274,8 +299,64 @@ fn check_pdf(report: &mut Report, entry: &Entry, variant: &str, step: &str, file
         foreign.dedup();
         report.push(doc, variant, step, "fonts.allowed", if foreign.is_empty() { "ok".to_string() } else { foreign.join(", ") });
     }
+    script_font(report, entry, variant, step, &fonts, runner_families);
     report.push(doc, variant, step, "class", class_value(entry, &[], spoofed));
     Ok(())
+}
+
+// A script the bundled fonts cannot draw (Arabic, Hebrew) still leaves its
+// Latin phrase in the PDF, so the expected text alone misses a PDF drawn with
+// Liberation and Carlito only. pdftotext gives Arabic in visual order with
+// its ligatures, so the fonts embedded are checked instead of the text: one
+// of the declared families, embedded. Families compare by pdf::family.
+fn script_font(report: &mut Report, entry: &Entry, variant: &str, step: &str, fonts: &[pdf::Font], runner_families: &[String]) {
+    if entry.script_fonts.is_empty() {
+        return;
+    }
+    let doc = entry.doc.as_str();
+    let declared: Vec<String> = entry.script_fonts.iter().map(|f| pdf::family(f)).collect();
+    let on_runner = runner_families.iter().any(|f| declared.contains(&pdf::family(f)));
+    if !on_runner {
+        report.infra.push(format!(
+            "{} {} {}: the runner has none of the fonts for its script ({})",
+            doc,
+            variant,
+            step,
+            entry.script_fonts.join(", ")
+        ));
+        report.push(doc, variant, step, "fonts.script", "no-script-font-on-runner");
+        return;
+    }
+    let is_declared = |f: &&pdf::Font| declared.contains(&pdf::family(&f.name));
+    let names = |list: Vec<&pdf::Font>| list.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join(", ");
+    let value = if fonts.iter().filter(is_declared).any(|f| f.emb == "yes") {
+        "ok".to_string()
+    } else {
+        let declared_fonts: Vec<&pdf::Font> = fonts.iter().filter(is_declared).collect();
+        let others: Vec<&pdf::Font> = fonts.iter().filter(|f| !pdf::allowed(&f.name)).collect();
+        let value = if !declared_fonts.is_empty() {
+            format!("not-embedded:{}", names(declared_fonts))
+        } else if !others.is_empty() {
+            format!("other-font:{}", names(others))
+        } else {
+            "bundled-only".to_string()
+        };
+        let embedded: Vec<&pdf::Font> = fonts.iter().filter(|f| f.emb == "yes").collect();
+        let embedded = if embedded.is_empty() { "nothing".to_string() } else { names(embedded) };
+        // Naming both sides tells a runner with another valid font apart from
+        // a broken export: the first only needs that family in the manifest.
+        report.failures.push(format!(
+            "{} {} {}: PDF without an embedded font for its script ({}): embeds {}, expected one of {}",
+            doc,
+            variant,
+            step,
+            value,
+            embedded,
+            entry.script_fonts.join("|")
+        ));
+        value
+    };
+    report.push(doc, variant, step, "fonts.script", value);
 }
 
 // A PDF that misses any expected phrase fails the report: x2t can exit 0 and
@@ -387,6 +468,9 @@ fn cell(checks: &BTreeMap<(&str, &str), &str>, step: &str) -> String {
     }
     if checks.get(&(step, "expected")).is_some_and(|v| v.starts_with("missing:")) && step == "pdf" {
         return "FAIL text missing".to_string();
+    }
+    if checks.get(&(step, "fonts.script")).is_some_and(|v| *v != "ok" && *v != "no-script-font-on-runner") {
+        return "FAIL script font".to_string();
     }
     let differs = ["roundtrip.text", "roundtrip.bytes"]
         .iter()
@@ -508,7 +592,7 @@ mod tests {
     fn a_pdf_missing_its_expected_text_is_a_hard_failure() {
         let out = std::env::temp_dir();
         let e = entry("comparable");
-        let mut report = Report { out: &out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new() };
+        let mut report = Report { out: &out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
         pdf_expectation(&mut report, &e, "plain", "pdf", "Hello\nworld\n");
         assert!(report.failures.is_empty());
         pdf_expectation(&mut report, &e, "plain", "pdf", "\x0c\n");
@@ -516,6 +600,123 @@ mod tests {
         assert!(report.failures[0].contains("missing:Hello"));
         let values: Vec<&str> = report.table.rows.iter().map(|r| r[4].as_str()).collect();
         assert_eq!(values, vec!["ok", "missing:Hello"]);
+    }
+
+    fn font(name: &str) -> pdf::Font {
+        pdf::Font { name: name.into(), kind: "CID TrueType".into(), emb: "yes".into(), sub: "yes".into(), uni: "yes".into() }
+    }
+
+    fn font_emb(name: &str, emb: &str) -> pdf::Font {
+        pdf::Font { emb: emb.into(), ..font(name) }
+    }
+
+    // The fonts.script value, the failures and the infrastructure problems of
+    // one Arabic PDF with these fonts on a runner with these families.
+    fn script_check(fonts: &[pdf::Font], runner: &[&str]) -> (String, Vec<String>, Vec<String>) {
+        let out = std::env::temp_dir();
+        let text = "file	class	steps	expect	variants	save_as	note	script_fonts
+arabic-rtl.docx	system-fonts	open,pdf	Arabic				DejaVu Sans|Tahoma
+";
+        let e = manifest::parse(text).unwrap().remove(0);
+        let runner: Vec<String> = runner.iter().map(|s| s.to_string()).collect();
+        let mut report = Report { out: &out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
+        script_font(&mut report, &e, "plain", "pdf", fonts, &runner);
+        assert_eq!(report.table.rows.len(), 1);
+        assert_eq!(report.table.rows[0][3], "fonts.script");
+        (report.table.rows[0][4].clone(), report.failures, report.infra)
+    }
+
+    // The fonts the PDF of run 39278051145 embedded for arabic-rtl.docx and
+    // hebrew.docx, on the families each runner's font cache had.
+    #[test]
+    fn the_script_check_on_the_fonts_the_runners_embedded() {
+        let linux = ["Carlito", "DejaVu Sans", "Lato", "Liberation Serif"];
+        let (value, failures, infra) = script_check(&[font("Carlito"), font("Liberation Serif")], &linux);
+        assert_eq!(value, "bundled-only");
+        assert_eq!(
+            failures,
+            vec!["arabic-rtl.docx plain pdf: PDF without an embedded font for its script (bundled-only): embeds Carlito, Liberation Serif, expected one of DejaVu Sans|Tahoma"]
+        );
+        assert!(infra.is_empty());
+        assert_eq!(script_check(&[font("Liberation Serif")], &linux).0, "bundled-only");
+
+        let windows_mac = ["Arial", "Liberation Serif", "Tahoma", "Times New Roman"];
+        let (value, failures, infra) = script_check(&[font("Liberation Serif"), font("Tahoma")], &windows_mac);
+        assert_eq!((value.as_str(), failures.len(), infra.len()), ("ok", 0, 0));
+    }
+
+    #[test]
+    fn only_an_embedded_declared_family_passes_the_script_check() {
+        let runner = ["DejaVu Sans", "Liberation Serif", "Tahoma"];
+        // A subset of DejaVu Sans, as pdffonts names it, and Tahoma bold.
+        assert_eq!(script_check(&[font("BAAAAA+DejaVuSans"), font("Liberation Serif")], &runner).0, "ok");
+        assert_eq!(script_check(&[font("Tahoma,Bold")], &runner).0, "ok");
+        assert_eq!(script_check(&[font("DejaVuSans-Bold")], &runner).0, "ok");
+        assert_eq!(script_check(&[font("CAAAAA+DejaVu#20Sans,Bold")], &runner).0, "ok");
+
+        // A font unrelated to the script is not enough.
+        let (value, failures, _) = script_check(&[font("Arial"), font("Liberation Serif")], &runner);
+        assert_eq!(value, "other-font:Arial");
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].ends_with("embeds Arial, Liberation Serif, expected one of DejaVu Sans|Tahoma"), "{}", failures[0]);
+        // Nor a declared family that is only referenced, not embedded.
+        let (value, failures, _) = script_check(&[font_emb("DejaVu Sans", "no"), font("Arial")], &runner);
+        assert_eq!(value, "not-embedded:DejaVu Sans");
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].ends_with("embeds Arial, expected one of DejaVu Sans|Tahoma"), "{}", failures[0]);
+        let (_, failures, _) = script_check(&[font_emb("Tahoma", "no")], &runner);
+        assert!(failures[0].ends_with("embeds nothing, expected one of DejaVu Sans|Tahoma"), "{}", failures[0]);
+    }
+
+    // Families that share a first part stay apart: the manifest never
+    // declares one with a '-' or ',', so the cut style suffix cannot join them.
+    #[test]
+    fn a_family_sharing_the_first_part_does_not_pass_the_script_check() {
+        let out = std::env::temp_dir();
+        let text = "file\tclass\tsteps\texpect\tvariants\tsave_as\tnote\tscript_fonts\n\
+a.docx\tsystem-fonts\topen,pdf\tHi\t\t\t\tExampleArabic\n";
+        let e = manifest::parse(text).unwrap().remove(0);
+        let runner = vec!["ExampleArabic".to_string(), "ExampleLatin".to_string()];
+        let mut report = Report { out: &out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
+        script_font(&mut report, &e, "plain", "pdf", &[font("ABCDEF+ExampleLatin-Bold")], &runner);
+        assert_eq!(report.table.rows[0][4], "other-font:ABCDEF+ExampleLatin-Bold");
+        assert_eq!(report.failures.len(), 1, "{:?}", report.failures);
+    }
+
+    // A runner without any of the listed fonts cannot draw the script: that
+    // is the runner's problem, not the document's, whatever the PDF holds.
+    #[test]
+    fn a_runner_without_the_declared_families_is_infrastructure() {
+        let (value, failures, infra) = script_check(&[font("Liberation Serif")], &["Carlito", "Liberation Serif"]);
+        assert_eq!(value, "no-script-font-on-runner");
+        assert!(failures.is_empty());
+        assert_eq!(infra.len(), 1);
+        assert!(infra[0].contains("DejaVu Sans, Tahoma"), "{}", infra[0]);
+        assert_eq!(script_check(&[font("Arial")], &[]).0, "no-script-font-on-runner");
+    }
+
+    #[test]
+    fn documents_without_script_fonts_get_no_script_row() {
+        let out = std::env::temp_dir();
+        let mut report = Report { out: &out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
+        script_font(&mut report, &entry("system-fonts"), "plain", "pdf", &[font("Liberation Serif")], &["Tahoma".to_string()]);
+        assert!(report.table.rows.is_empty() && report.failures.is_empty() && report.infra.is_empty());
+    }
+
+    #[test]
+    fn the_runner_font_families_come_from_its_font_cache_copy() {
+        let out = std::env::temp_dir().join(format!("corpus-report-families-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        assert!(runner_families(&out).is_empty());
+        std::fs::create_dir_all(out.join("fonts")).unwrap();
+        std::fs::write(
+            out.join("fonts/AllFonts.js"),
+            "window[\"__fonts_files\"] = [];\nwindow[\"__fonts_infos\"] = [[\"DejaVu Sans\",0,0,-1,0,-1,0,-1,0],[\"Carlito\",0,0,-1,0,-1,0,-1,0]];\n",
+        )
+        .unwrap();
+        let families = runner_families(&out);
+        let _ = std::fs::remove_dir_all(&out);
+        assert_eq!(families, vec!["DejaVu Sans", "Carlito"]);
     }
 
     fn text_entry(file: &str) -> Entry {
@@ -538,7 +739,7 @@ mod tests {
         let same_txt = write("same.txt", b"\xFE\xFF\x00H\x00\x0A");
         let lost_txt = write("lost.txt", b"\xFE\xFF\x00\x0A");
         let changed_csv = write("changed.csv", b"a;b\n;\n");
-        let mut report = Report { out: &dir, table: Table::new(&REPORT_COLUMNS), failures: Vec::new() };
+        let mut report = Report { out: &dir, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
 
         check_text_file(&mut report, &text_entry("a.txt"), "plain", "save", &same_txt, &original_txt).unwrap();
         assert!(report.failures.is_empty(), "{:?}", report.failures);
@@ -772,5 +973,13 @@ mod tests {
         assert_eq!(cell(&checks, "save_as.xlsx"), "ok (auto-system-fonts)");
         assert_eq!(cell(&checks, "save_as.csv"), "FAIL exit");
         assert_eq!(cell(&checks, "nothing"), "");
+
+        let mut script = BTreeMap::new();
+        script.insert(("pdf", "status"), "ok");
+        script.insert(("pdf", "expected"), "ok");
+        script.insert(("pdf", "fonts.script"), "bundled-only");
+        assert_eq!(cell(&script, "pdf"), "FAIL script font");
+        script.insert(("pdf", "fonts.script"), "ok");
+        assert_eq!(cell(&script, "pdf"), "ok");
     }
 }

@@ -89,11 +89,41 @@ pub fn missing_phrases(text: &str, phrases: &[String]) -> Vec<String> {
 
 pub const ALLOWED_FAMILIES: [&str; 4] = ["LiberationSans", "LiberationSerif", "LiberationMono", "Carlito"];
 
+// A PDF name with its #xx escapes decoded: the file holds
+// "Liberation#20Serif", which pdffonts already prints as "Liberation Serif".
+pub fn decode_name(name: &str) -> String {
+    let bytes = name.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'#', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+// The family of a PDF font name, comparable across spellings: #xx decoded,
+// without the ABCDEF+ subset prefix, the style suffix (-BoldItalic, ",Bold")
+// or spaces, so "BAAAAA+DejaVuSans-Bold" and "DejaVu Sans" give DejaVuSans.
+pub fn family(name: &str) -> String {
+    let decoded = decode_name(name);
+    let name = strip_subset(&decoded);
+    name.split(['-', ',']).next().unwrap_or(name).replace(' ', "")
+}
+
 // A PDF font name such as LiberationSerif-BoldItalic belongs to an allowed
 // family when its part before the style suffix is one of them.
 pub fn allowed(name: &str) -> bool {
-    let family = name.split(['-', ',']).next().unwrap_or(name).replace(' ', "");
-    ALLOWED_FAMILIES.contains(&family.as_str())
+    ALLOWED_FAMILIES.contains(&family(name).as_str())
 }
 
 #[cfg(test)]
@@ -138,6 +168,24 @@ BAAAAA+LiberationSerif               TrueType          WinAnsi          yes yes 
         assert_eq!(missing_phrases(text, &phrases), vec!["absent text"]);
         // The hotfix/10 case: a PDF with no text at all misses everything.
         assert_eq!(missing_phrases("\x0c\n", &phrases).len(), 3);
+    }
+
+    #[test]
+    fn font_families_ignore_subset_escapes_and_styles() {
+        for name in [
+            "BAAAAA+Liberation#20Serif",
+            "Liberation Serif",
+            "LiberationSerif-BoldItalic",
+            "CAAAAA+Liberation#20Serif,Bold",
+            "LiberationSerif-Italic",
+        ] {
+            assert_eq!(family(name), "LiberationSerif", "{}", name);
+        }
+        assert_eq!(family("BAAAAA+DejaVu#20Sans-Bold"), "DejaVuSans");
+        assert_eq!(family("Tahoma,Bold"), "Tahoma");
+        assert_eq!(decode_name("A#20B#2"), "A B#2");
+        assert_eq!(decode_name("100#"), "100#");
+        assert!(allowed("BAAAAA+Liberation#20Serif"));
     }
 
     #[test]

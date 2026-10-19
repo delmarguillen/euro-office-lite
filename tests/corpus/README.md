@@ -8,7 +8,12 @@ format, save back to the original format, and export to PDF. The workflow
 `manifest.tsv` lists every document, its class, the steps to run, the text its
 PDF must contain (`expect`, phrases separated by `|`; or `fail:<step>:<exit
 code>` for a step that must fail with that code), the variants and the extra
-formats to save as.
+formats to save as. The optional last column, `script_fonts`, lists font
+families that draw the document's script (separated by `|`; letters, digits
+and spaces only): its PDF must then embed one of them (compared without the
+subset prefix, style suffix or spaces), or the report fails and names the
+fonts it found. A runner whose font cache has none of those families cannot
+test it, and the report exits as infrastructure instead.
 
 ## Origin and license
 
@@ -74,8 +79,8 @@ reported as `system-fonts` instead of comparable.
 | `@empty:empty.docx` | comparable | a 0-byte docx opens the blank template and saves to its own name |
 | `@empty:empty.csv` | comparable | x2t refuses an empty CSV: `expect` is `fail:open:88`, and only exit 88 on open counts as the expected failure |
 | `cjk.docx` | system-fonts | Chinese and Japanese |
-| `arabic-rtl.docx` | system-fonts | Arabic, right-to-left paragraph |
-| `hebrew.docx` | system-fonts | Hebrew, right-to-left paragraph |
+| `arabic-rtl.docx` | system-fonts | Arabic, right-to-left paragraph; its PDF must embed one of its `script_fonts` |
+| `hebrew.docx` | system-fonts | Hebrew, right-to-left paragraph; its PDF must embed one of its `script_fonts` |
 
 `@templates/...` rows read the template from the installer under test;
 `@empty:...` rows are 0-byte files created at run time.
