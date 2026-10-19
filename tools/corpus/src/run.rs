@@ -861,11 +861,32 @@ mod tests {
         assert_eq!(truncate(&long).chars().count(), 503);
     }
 
+    // An OS's install folders with nothing in them: a macOS root needs its
+    // single .app before the executable inside it is looked for.
+    fn empty_install(os: Os, root: &Path) {
+        let folders: &[&str] = match os {
+            Os::Linux => &["usr/bin", "usr/lib/Euro-Office-Lite/binaries"],
+            Os::Windows => &["binaries"],
+            Os::Macos => &["Euro-Office-Lite.app/Contents/MacOS", "Euro-Office-Lite.app/Contents/Resources/binaries"],
+        };
+        for folder in folders {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+        }
+    }
+
     #[test]
     fn an_install_without_x2t_is_an_infrastructure_failure() {
-        let root = std::env::temp_dir().join(format!("corpus-run-noinstall-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let base = std::env::temp_dir().join(format!("corpus-run-noinstall-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // Every OS's empty layout fails at the same point, whichever OS runs this.
+        for os in [Os::Linux, Os::Windows, Os::Macos] {
+            let root = base.join(format!("{:?}", os));
+            empty_install(os, &root);
+            let error = layout::expected_exe(os, &root).unwrap_err();
+            assert!(error.starts_with("executable not found"), "{:?}: {}", os, error);
+        }
+        let root = base.join("run");
+        empty_install(Os::current(), &root);
         let args = RunArgs {
             install_root: root.clone(),
             corpus: root.join("corpus"),
@@ -878,6 +899,6 @@ mod tests {
             Err(Infra(message)) => assert!(message.starts_with("executable not found"), "{}", message),
             Ok(()) => panic!("an empty root must not run"),
         }
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
