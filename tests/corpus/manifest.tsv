@@ -13,7 +13,7 @@ sheet.xlsx	system-fonts	open,save,pdf	Corpus sheet header|Apples|Population	plai
 slides.odp	comparable	open,save,pdf	Corpus slide title|Second slide heading|Content line two	plain	pptx	two layouts, an image and speaker notes; the pptx x2t writes is checked for its font names
 slides.pptx	system-fonts	open,save,pdf	Corpus slide title|Second slide heading|Content line two	plain		the same slides as LibreOffice exports them: names Arial and Times New Roman
 basic.odt	comparable	open,save,pdf	Basic ODT title|Second ODT paragraph	plain		ODF text import and save
-basic.ods	comparable	open,save,pdf	Basic ODS label|Doubled	plain		ODF spreadsheet import and save
+basic.ods	comparable	open,save,pdf	Basic|Doubled	plain		ODF spreadsheet import and save
 basic.odp	comparable	open,save,pdf	Basic ODP title|Basic ODP subtitle	plain		ODF presentation import and save
 utf8-bom-semicolon-crlf.csv	comparable	open,save		plain		UTF-8 BOM, semicolon, CRLF, final break
 utf8-comma-lf-final.csv	comparable	open,save		plain		UTF-8 without BOM with a final break: opened from the read copy

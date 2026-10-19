@@ -2,12 +2,14 @@
 // key by key. Two runs of the same build must come out the same; whatever
 // differs is a volatile value the normalization still misses.
 
+use crate::markdown::clean;
 use crate::run::Infra;
 use crate::tsv::Table;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-type Key = (String, String, String, String, String);
+// source (env, run or report), doc, variant, step, check.
+pub type Key = (String, String, String, String, String);
 
 // Where each run happens, not what it produced.
 const IGNORED_ENV: [&str; 6] = ["install_root", "exe", "resource_dir", "binaries_dir", "sidecar.path", "pdf_x2t.path"];
@@ -24,7 +26,7 @@ fn is_text_document(doc: &str) -> bool {
 }
 
 // The Editor.bin size of a CSV or TXT open, compared within 1%.
-fn is_text_open_size(key: &Key) -> bool {
+pub fn is_text_open_size(key: &Key) -> bool {
     let (source, doc, _, step, check) = key;
     step == "open"
         && is_text_document(doc)
@@ -144,10 +146,17 @@ pub fn compare(a: &Path, b: &Path, summary: Option<&Path>) -> Result<usize, Infr
             s.push_str("\n| Source | Doc | Variant | Step | Check | A | B | Verdict |\n|---|---|---|---|---|---|---|---|\n");
             for line in wrong.iter().take(200) {
                 let (src, d, v, st, c) = &line.key;
-                let cut = |x: &Option<String>| x.clone().unwrap_or_default().chars().take(80).collect::<String>().replace('|', "/");
+                let cut = |x: &Option<String>| clean(&x.clone().unwrap_or_default().chars().take(80).collect::<String>());
                 s.push_str(&format!(
                     "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
-                    src, d, v, st, c, cut(&line.a), cut(&line.b), line.verdict()
+                    clean(src),
+                    clean(d),
+                    clean(v),
+                    clean(st),
+                    clean(c),
+                    cut(&line.a),
+                    cut(&line.b),
+                    line.verdict()
                 ));
             }
         }
@@ -158,10 +167,10 @@ pub fn compare(a: &Path, b: &Path, summary: Option<&Path>) -> Result<usize, Infr
                 let flag = if line.verdict() == "same" { "" } else { "differs by more than 1%" };
                 s.push_str(&format!(
                     "| {} | {} | {} | {} | {} |\n",
-                    line.key.1,
-                    line.key.2,
-                    line.a.clone().unwrap_or_default(),
-                    line.b.clone().unwrap_or_default(),
+                    clean(&line.key.1),
+                    clean(&line.key.2),
+                    clean(&line.a.clone().unwrap_or_default()),
+                    clean(&line.b.clone().unwrap_or_default()),
                     flag
                 ));
             }
@@ -262,6 +271,30 @@ c.csv\tplain\topen\teditor.sha256\tbin1\n";
                 ("run/b.csv/save/sha256".to_string(), "diff"),
             ]
         );
+    }
+
+    // determinism.md goes into the run's Markdown summary, and its values
+    // come from the results.
+    #[test]
+    fn the_summary_keeps_values_from_the_results_plain() {
+        let root = std::env::temp_dir().join(format!("corpus-compare-md-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let payload = crate::tsv::escape("x\n## Owned\n[link](http://e.x) <b>");
+        for (run, version) in [("run1", "8.2"), ("run2", payload.as_str())] {
+            let dir = root.join(run);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("env.tsv"), format!("{}sidecar.version\t{}\n", ENV, version)).unwrap();
+            std::fs::write(dir.join("run.tsv"), RUN).unwrap();
+            std::fs::write(dir.join("report.tsv"), REPORT).unwrap();
+        }
+        let summary = root.join("determinism.md");
+        assert_eq!(compare(&root.join("run1"), &root.join("run2"), Some(&summary)).unwrap(), 1);
+        let text = std::fs::read_to_string(&summary).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        for bad in ["\n## Owned", "[link]", "](http", "<b>"] {
+            assert!(!text.contains(bad), "{:?} in:\n{}", bad, text);
+        }
+        assert!(text.contains("| env |  |  |  | sidecar.version | 8.2 | x?"), "{}", text);
     }
 
     #[test]

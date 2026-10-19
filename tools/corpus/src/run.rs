@@ -4,7 +4,7 @@
 use crate::layout::{self, Layout, Os};
 use crate::manifest::{self, Entry, Source};
 use crate::tsv::Table;
-use crate::{allfonts, sha256, text_import, x2t_task};
+use crate::{allfonts, arch, sha256, text_import, x2t_task};
 use std::path::{Path, PathBuf};
 
 pub struct RunArgs {
@@ -45,6 +45,7 @@ pub struct X2tInfo {
     pub size: u64,
     pub sha256: String,
     pub version: String,
+    pub arch: String,
 }
 
 fn x2t_info(path: &Path, binaries_dir: &Path) -> Result<X2tInfo, Infra> {
@@ -57,6 +58,7 @@ fn x2t_info(path: &Path, binaries_dir: &Path) -> Result<X2tInfo, Infra> {
         size,
         sha256,
         version: x2t_version(path, binaries_dir),
+        arch: arch::file_arch(path),
     })
 }
 
@@ -164,7 +166,7 @@ pub fn prepare(args: &RunArgs, log: &Log) -> Result<Prepared, Infra> {
     let path = |p: &Path| p.to_string_lossy().to_string();
     let mut env: Vec<(String, String)> = vec![
         ("os".into(), std::env::consts::OS.into()),
-        ("arch".into(), std::env::consts::ARCH.into()),
+        ("host.arch".into(), std::env::consts::ARCH.into()),
         ("install_root".into(), path(&args.install_root)),
         ("exe".into(), path(&layout.exe)),
         ("resource_dir".into(), path(&layout.resource_dir)),
@@ -175,6 +177,7 @@ pub fn prepare(args: &RunArgs, log: &Log) -> Result<Prepared, Infra> {
         env.push((format!("{}.size", name), info.size.to_string()));
         env.push((format!("{}.sha256", name), info.sha256.clone()));
         env.push((format!("{}.version", name), info.version.clone()));
+        env.push((format!("{}.arch", name), info.arch.clone()));
     }
     let same = if sidecar.sha256 == pdf_x2t.sha256 { "yes" } else { "no" };
     env.push(("x2t_same_file".into(), same.into()));
@@ -326,10 +329,19 @@ pub fn run_steps(entry: &Entry, mut execute: impl FnMut(&str) -> StepRow) -> Vec
     rows
 }
 
-// How an x2t run ended: exit code, signal, and whether it wrote anything.
-pub fn classify(success: bool, code: Option<i32>, signal: Option<i32>, output_size: u64) -> (String, String, String) {
-    let exit = code.map(|c| c.to_string()).unwrap_or_default();
-    let signal_text = signal.map(|s| s.to_string()).unwrap_or_default();
+// Windows has no signals: a process that crashes ends with an NTSTATUS
+// error code (0xC0000005 for an access violation) as its exit code. The
+// reserved bit must be clear, so -1 and other small negatives stay exits.
+pub fn windows_crash(code: i32) -> Option<String> {
+    let code = code as u32;
+    (code & 0xD000_0000 == 0xC000_0000).then(|| format!("0x{:08X}", code))
+}
+
+// How an x2t run ended: exit code, signal (or Windows crash code), and
+// whether it wrote anything. A crash keeps no exit code, as on Unix.
+pub fn classify(success: bool, code: Option<i32>, signal: Option<String>, output_size: u64) -> (String, String, String) {
+    let exit = if signal.is_some() { String::new() } else { code.map(|c| c.to_string()).unwrap_or_default() };
+    let signal_text = signal.clone().unwrap_or_default();
     let status = if signal.is_some() {
         "signal"
     } else if !success {
@@ -345,19 +357,27 @@ pub fn classify(success: bool, code: Option<i32>, signal: Option<i32>, output_si
 // convert_to_pdf reports how x2t ended only through its log lines and error
 // text, so the outcome is read back from them.
 pub fn classify_pdf(result: &Result<String, String>, lines: &[String], output_size: u64) -> (String, String, String) {
-    let signal = lines
-        .iter()
-        .find_map(|l| l.strip_prefix("x2t killed by signal "))
-        .and_then(|s| s.trim().parse::<i32>().ok());
-    let code = lines
+    classify_pdf_on(cfg!(windows), result, lines, output_size)
+}
+
+// -999 is convert_to_pdf's "no exit code", never a Windows crash code.
+fn classify_pdf_on(windows: bool, result: &Result<String, String>, lines: &[String], output_size: u64) -> (String, String, String) {
+    let logged = lines
         .iter()
         .find_map(|l| l.strip_prefix("failed exit="))
         .and_then(|s| s.split_whitespace().next())
         .and_then(|s| s.parse::<i32>().ok());
+    let code = logged.filter(|c| *c != -999);
+    let signal = lines
+        .iter()
+        .find_map(|l| l.strip_prefix("x2t killed by signal "))
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.parse::<i32>().is_ok())
+        .or_else(|| code.filter(|_| windows).and_then(windows_crash));
     match result {
         Ok(_) => classify(true, Some(0), None, output_size),
         Err(message) if message.starts_with("Failed to spawn x2t") => ("spawn".into(), String::new(), String::new()),
-        Err(_) if signal.is_some() || code.is_some() => classify(false, code.filter(|c| *c != -999), signal, output_size),
+        Err(_) if signal.is_some() || logged.is_some() => classify(false, code, signal, output_size),
         // Setup failed before x2t ran: font cache, editor files, work folder.
         Err(_) => ("error".into(), String::new(), String::new()),
     }
@@ -537,9 +557,11 @@ impl DocRun<'_> {
             }
         };
         #[cfg(unix)]
-        let signal = std::os::unix::process::ExitStatusExt::signal(&process.status);
-        #[cfg(not(unix))]
-        let signal: Option<i32> = None;
+        let signal = std::os::unix::process::ExitStatusExt::signal(&process.status).map(|s| s.to_string());
+        #[cfg(windows)]
+        let signal = process.status.code().and_then(windows_crash);
+        #[cfg(not(any(unix, windows)))]
+        let signal: Option<String> = None;
         let (status, exit, signal) = classify(process.status.success(), process.status.code(), signal, output_size);
         let message = if status == "ok" {
             String::new()
@@ -773,7 +795,47 @@ mod tests {
         assert_eq!(c(true, Some(0), None, 10), "ok");
         assert_eq!(c(true, Some(0), None, 0), "empty");
         assert_eq!(c(false, Some(88), None, 0), "exit");
-        assert_eq!(classify(false, None, Some(11), 0), ("signal".into(), String::new(), "11".into()));
+        assert_eq!(classify(false, None, Some("11".into()), 0), ("signal".into(), String::new(), "11".into()));
+    }
+
+    #[test]
+    fn a_windows_crash_code_is_a_crash_and_ordinary_codes_are_not() {
+        assert_eq!(windows_crash(-1073741819), Some("0xC0000005".into()));
+        assert_eq!(windows_crash(0xC000_0409_u32 as i32), Some("0xC0000409".into()));
+        assert_eq!(windows_crash(0xE06D_7363_u32 as i32), Some("0xE06D7363".into()));
+        for code in [0, 1, 88, -1, -999] {
+            assert_eq!(windows_crash(code), None, "{}", code);
+        }
+        let crash = windows_crash(-1073741819);
+        assert_eq!(classify(false, Some(-1073741819), crash, 0), ("signal".into(), String::new(), "0xC0000005".into()));
+        assert_eq!(classify(false, Some(88), windows_crash(88), 0), ("exit".into(), "88".into(), String::new()));
+    }
+
+    // The access violation convert_to_pdf logs as a negative exit code.
+    #[test]
+    fn a_pdf_crash_on_windows_is_read_as_a_crash() {
+        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let failed = Err("x2t conversion failed".to_string());
+        let crash = lines(&["failed exit=-1073741819 pdf_exists=false pdf_size=0"]);
+        assert_eq!(classify_pdf_on(true, &failed, &crash, 0), ("signal".into(), String::new(), "0xC0000005".into()));
+        assert_eq!(classify_pdf_on(false, &failed, &crash, 0), ("exit".into(), "-1073741819".into(), String::new()));
+        for (code, windows) in [("88", true), ("1", true), ("-1", true), ("88", false)] {
+            let line = lines(&[&format!("failed exit={} pdf_exists=false pdf_size=0", code)]);
+            assert_eq!(classify_pdf_on(windows, &failed, &line, 0), ("exit".into(), code.into(), String::new()));
+        }
+        let no_code = lines(&["failed exit=-999 pdf_exists=false pdf_size=0"]);
+        for windows in [true, false] {
+            assert_eq!(classify_pdf_on(windows, &failed, &no_code, 0), ("exit".into(), String::new(), String::new()));
+        }
+    }
+
+    // The expected failure is an exit code: it stays one on Windows.
+    #[test]
+    fn the_expected_exit_code_is_not_taken_for_a_crash() {
+        let e = entry("open", "", "fail:open:88");
+        let (status, exit, signal) = classify(false, Some(88), windows_crash(88), 0);
+        let rows = run_steps(&e, |_| StepRow { status: status.clone(), exit: exit.clone(), signal: signal.clone(), ..StepRow::default() });
+        assert_eq!(rows[0].status, "expected-fail");
     }
 
     #[test]
@@ -799,11 +861,32 @@ mod tests {
         assert_eq!(truncate(&long).chars().count(), 503);
     }
 
+    // An OS's install folders with nothing in them: a macOS root needs its
+    // single .app before the executable inside it is looked for.
+    fn empty_install(os: Os, root: &Path) {
+        let folders: &[&str] = match os {
+            Os::Linux => &["usr/bin", "usr/lib/Euro-Office-Lite/binaries"],
+            Os::Windows => &["binaries"],
+            Os::Macos => &["Euro-Office-Lite.app/Contents/MacOS", "Euro-Office-Lite.app/Contents/Resources/binaries"],
+        };
+        for folder in folders {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+        }
+    }
+
     #[test]
     fn an_install_without_x2t_is_an_infrastructure_failure() {
-        let root = std::env::temp_dir().join(format!("corpus-run-noinstall-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let base = std::env::temp_dir().join(format!("corpus-run-noinstall-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // Every OS's empty layout fails at the same point, whichever OS runs this.
+        for os in [Os::Linux, Os::Windows, Os::Macos] {
+            let root = base.join(format!("{:?}", os));
+            empty_install(os, &root);
+            let error = layout::expected_exe(os, &root).unwrap_err();
+            assert!(error.starts_with("executable not found"), "{:?}: {}", os, error);
+        }
+        let root = base.join("run");
+        empty_install(Os::current(), &root);
         let args = RunArgs {
             install_root: root.clone(),
             corpus: root.join("corpus"),
@@ -816,6 +899,6 @@ mod tests {
             Err(Infra(message)) => assert!(message.starts_with("executable not found"), "{}", message),
             Ok(()) => panic!("an empty root must not run"),
         }
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

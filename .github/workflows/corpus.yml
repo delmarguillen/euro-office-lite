@@ -1,83 +1,372 @@
-name: Conversion corpus (Linux x64)
+name: Conversion corpus
 
-# Converts tests/corpus with the x2t of a Build & Release (or Dev Build)
-# installer, through the same Rust code the app runs (src-tauri/src/x2t_task.rs
-# and text_import.rs), and reports per document and step. Informative: it fails
-# on crashes, non-zero exits, empty outputs and PDFs missing their expected
-# text, never on differences.
+# Converts tests/corpus with the x2t of each published installer, on a runner
+# that runs that x2t, through the app's own Rust code (src-tauri/src/x2t_task.rs
+# and text_import.rs), and lines the platforms up in one report. Informative:
+# it fails on crashes, non-zero exits, empty outputs, PDFs missing their
+# expected text, runs that disagree with themselves and missing platforms,
+# never on differences between platforms.
 
 on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Run id of the build to take the Linux installer from"
+        description: "Run id of the build to take the installers from"
         required: true
         type: string
-      artifact:
-        description: "Artifact holding the .deb: installer-... (Build & Release) or deb-... (Dev Build)"
+      source:
+        description: "release: a Build & Release run; dev: a Dev Build run (one OS per run)"
         required: false
-        default: installer-x86_64-unknown-linux-gnu
+        default: release
+        type: choice
+        options: [release, dev]
+      platforms:
+        description: "all, or a comma-separated list of win-x64,win-arm64,mac-x64,mac-arm64,linux-x64,linux-arm64"
+        required: false
+        default: all
         type: string
 
 permissions:
   contents: read
-  # Downloading an artifact from a different run needs the Actions API.
-  actions: read
 
 concurrency:
-  group: corpus-linux-${{ github.ref }}
+  group: corpus-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  corpus-linux-x64:
+  plan:
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 5
+    outputs:
+      run_id: ${{ steps.plan.outputs.run_id }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      expected: ${{ steps.plan.outputs.expected }}
+    steps:
+      # The inputs only pick rows of this fixed table; none reaches a runner
+      # label, an artifact name or a shell unchecked.
+      - name: Validate inputs and build the matrix
+        id: plan
+        env:
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          INPUT_SOURCE: ${{ inputs.source }}
+          INPUT_PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          set -euo pipefail
+          [[ "$INPUT_RUN_ID" =~ ^[0-9]{1,20}$ ]] || { echo "ERROR: run_id must be a number"; exit 1; }
+          [[ "$INPUT_SOURCE" =~ ^(release|dev)$ ]] || { echo "ERROR: source must be release or dev"; exit 1; }
+          ids='win-x64|win-arm64|mac-x64|mac-arm64|linux-x64|linux-arm64'
+          [[ "$INPUT_PLATFORMS" =~ ^(all|($ids)(,($ids))*)$ ]] || { echo "ERROR: bad platforms list"; exit 1; }
+          # Fixed labels, never -latest: an image that moves to another OS
+          # version changes the system fonts under the comparison.
+          # id  runner  target  timeout  dev-artifact-prefix
+          table='win-x64 windows-2025 x86_64-pc-windows-msvc 40 installer
+          win-arm64 windows-11-arm aarch64-pc-windows-msvc 60 installer
+          mac-x64 macos-15-intel x86_64-apple-darwin 60 dmg
+          mac-arm64 macos-15 aarch64-apple-darwin 45 dmg
+          linux-x64 ubuntu-22.04 x86_64-unknown-linux-gnu 30 deb
+          linux-arm64 ubuntu-22.04-arm aarch64-unknown-linux-gnu 30 deb'
+          matrix=$(echo "$table" | while read -r id runner target timeout dev; do
+            if [ "$INPUT_PLATFORMS" != all ] && ! [[ ",$INPUT_PLATFORMS," == *",$id,"* ]]; then continue; fi
+            prefix=installer; [ "$INPUT_SOURCE" = dev ] && prefix=$dev
+            jq -cn --arg id "$id" --arg runner "$runner" --arg artifact "$prefix-$target" --argjson timeout "$timeout" \
+              '{id:$id, runner:$runner, artifact:$artifact, timeout:$timeout}'
+          done | jq -cs '{include: .}')
+          echo "run_id=$INPUT_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "expected=$(echo "$matrix" | jq -r '[.include[].id] | join(",")')" >> "$GITHUB_OUTPUT"
+          echo "$matrix" | jq .
+
+  run:
+    needs: plan
+    name: run (${{ matrix.id }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    permissions:
+      contents: read
+      # Downloading an artifact from a different run needs the Actions API.
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PLATFORM_ID: ${{ matrix.id }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
-      # Both inputs reach a shell and an action input, so both are checked
-      # against a closed pattern first.
-      - name: Resolve build run and artifact
-        id: run
-        env:
-          INPUT_RUN_ID: ${{ inputs.run_id }}
-          INPUT_ARTIFACT: ${{ inputs.artifact }}
-        run: |
-          RUN_ID="$INPUT_RUN_ID"
-          ARTIFACT="${INPUT_ARTIFACT:-installer-x86_64-unknown-linux-gnu}"
-          if ! [[ "$RUN_ID" =~ ^[0-9]{1,20}$ ]]; then
-            echo "ERROR: run_id must be a number"; exit 1
-          fi
-          if ! [[ "$ARTIFACT" =~ ^(installer|deb)-x86_64-unknown-linux-gnu$ ]]; then
-            echo "ERROR: artifact must be installer-x86_64-unknown-linux-gnu or deb-x86_64-unknown-linux-gnu"; exit 1
-          fi
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
-
-      - name: Download Linux installer from the build run
+      - name: Download the installer from the build run
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: ${{ steps.run.outputs.artifact }}
+          name: ${{ matrix.artifact }}
           path: installer/
-          run-id: ${{ steps.run.outputs.run_id }}
+          run-id: ${{ needs.plan.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install report tools and remove the runner's Liberation fonts
+      # x2t scans the system fonts too, and one row per family wins: a system
+      # Liberation or Carlito would replace the bundled one in every PDF.
+      - name: Remove the runner's Liberation fonts (Linux)
+        if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/corpus-out"
-          sudo apt-get update
-          sudo apt-get install -y poppler-utils unzip
-          # x2t scans the system fonts too, and one row per family wins: a
-          # system Liberation would replace the bundled one in every PDF.
+          OUT="$RUNNER_TEMP/corpus-out"
+          mkdir -p "$OUT"
           dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' 'fonts-liberation*' 2>/dev/null \
-            | tee "$RUNNER_TEMP/corpus-out/runner-liberation-before.txt" || true
+            | tee "$OUT/runner-liberation-before.txt" || true
           PKGS=$(dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'fonts-liberation*' 2>/dev/null \
             | awk '$1 ~ /^ii/ {print $2}' || true)
           if [ -n "$PKGS" ]; then
-            sudo apt-get remove -y $PKGS 2>&1 | tee "$RUNNER_TEMP/corpus-out/apt-remove.log"
+            sudo apt-get remove -y $PKGS 2>&1 | tee "$OUT/apt-remove.log"
           fi
+
+      # /System is read-only, so a copy there stays and the run reports it as
+      # spoofed; the two writable folders get theirs moved aside.
+      - name: Move the runner's Liberation and Carlito fonts aside (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/corpus-out"
+          mkdir -p "$OUT" "$RUNNER_TEMP/removed-fonts"
+          for dir in /System/Library/Fonts /System/Library/Fonts/Supplemental /Library/Fonts "$HOME/Library/Fonts"; do
+            echo "## $dir"
+            ls "$dir" 2>/dev/null | grep -Ei '^(liberation|carlito)' || echo "(none)"
+          done > "$OUT/runner-fonts.txt"
+          for dir in /Library/Fonts "$HOME/Library/Fonts"; do
+            [ -d "$dir" ] || continue
+            find "$dir" -maxdepth 1 \( -iname 'liberation*' -o -iname 'carlito*' \) -print | while read -r font; do
+              echo "moved $font" | tee -a "$OUT/runner-fonts.txt"
+              sudo mv "$font" "$RUNNER_TEMP/removed-fonts/"
+            done
+          done
+          cat "$OUT/runner-fonts.txt"
+
+      # Nothing is removed from Windows: a copy here makes the run report the
+      # platform as spoofed.
+      - name: Record the runner's Liberation and Carlito fonts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'corpus-out'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $lines = foreach ($dir in @("$env:WINDIR\Fonts", "$env:LOCALAPPDATA\Microsoft\Windows\Fonts")) {
+            "## $dir"
+            $found = Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match '^(liberation|carlito)' } | ForEach-Object { $_.Name }
+            if ($found) { $found } else { '(none)' }
+          }
+          $lines | Out-File -Encoding utf8 (Join-Path $out 'runner-fonts.txt')
+          $lines
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      # The tests run here too: the Windows and macOS code paths of the app's
+      # x2t code only run on their own OS.
+      - name: Test and build the corpus binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path tools/corpus/Cargo.toml
+          cargo build --locked --release --manifest-path tools/corpus/Cargo.toml
+
+      - name: Record the installer (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/corpus-out"
+          mapfile -t found < <(find installer -name 'Euro-Office-Lite_*.deb')
+          [ "${#found[@]}" -eq 1 ] || { echo "ERROR: expected one Euro-Office-Lite_*.deb, found ${#found[@]}"; ls -laR installer; exit 1; }
+          DEB="${found[0]}"
+          {
+            echo "Installer: $(basename "$DEB")"
+            echo "Size: $(stat -c %s "$DEB")"
+            echo "SHA256: $(sha256sum "$DEB" | cut -d' ' -f1)"
+            dpkg-deb -f "$DEB" Package Version Architecture
+          } | tee "$OUT/package.txt"
+          realpath "$DEB" > "$RUNNER_TEMP/eol-source"
+          {
+            echo "Platform: $PLATFORM_ID"
+            echo "ImageOS: ${ImageOS:-}"
+            echo "ImageVersion: ${ImageVersion:-}"
+            echo "Kernel: $(uname -srm)"
+          } | tee "$OUT/platform.txt"
+
+      # Mounted read-only for the whole job; each run copies the .app out, so
+      # the DMG's Applications link never reaches the install root.
+      - name: Record and mount the installer (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/corpus-out"
+          count=$(find installer -name '*.dmg' | wc -l | tr -d ' ')
+          [ "$count" -eq 1 ] || { echo "ERROR: expected one .dmg, found $count"; ls -laR installer; exit 1; }
+          DMG=$(find installer -name '*.dmg')
+          {
+            echo "Installer: $(basename "$DMG")"
+            echo "Size: $(stat -f %z "$DMG")"
+            echo "SHA256: $(shasum -a 256 "$DMG" | cut -d' ' -f1)"
+          } | tee "$OUT/package.txt"
+          hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$RUNNER_TEMP/dmg" "$DMG"
+          count=$(find "$RUNNER_TEMP/dmg" -maxdepth 1 -name '*.app' -type d | wc -l | tr -d ' ')
+          [ "$count" -eq 1 ] || { echo "ERROR: expected one .app in the DMG, found $count"; ls -la "$RUNNER_TEMP/dmg"; exit 1; }
+          find "$RUNNER_TEMP/dmg" -maxdepth 1 -name '*.app' -type d > "$RUNNER_TEMP/eol-source"
+          {
+            echo "Platform: $PLATFORM_ID"
+            echo "ImageOS: ${ImageOS:-}"
+            echo "ImageVersion: ${ImageVersion:-}"
+            echo "Kernel: $(uname -srm)"
+            echo "macOS: $(sw_vers -productVersion)"
+            echo "Quarantine DMG: $( (xattr -p com.apple.quarantine "$DMG" 2>/dev/null || true) | wc -l | tr -d ' ')"
+          } | tee "$OUT/platform.txt"
+
+      - name: Record the installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'corpus-out'
+          $found = @(Get-ChildItem -Path installer -Recurse -File -Filter '*-setup.exe')
+          if ($found.Count -ne 1) { Get-ChildItem -Recurse installer; throw "expected one *-setup.exe, found $($found.Count)" }
+          $exe = $found[0].FullName
+          @(
+            "Installer: $($found[0].Name)"
+            "Size: $($found[0].Length)"
+            "SHA256: $((Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLowerInvariant())"
+          ) | Tee-Object -FilePath (Join-Path $out 'package.txt')
+          $sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue).Source
+          if (-not $sevenZip) { $sevenZip = 'C:\Program Files\7-Zip\7z.exe' }
+          & $sevenZip l -slt $exe | Out-File -Encoding utf8 (Join-Path $out 'nsis-listing.txt')
+          if ($LASTEXITCODE -ne 0) { throw "7z l exited $LASTEXITCODE" }
+          @($exe, $sevenZip) | Out-File -Encoding utf8 (Join-Path $env:RUNNER_TEMP 'eol-source')
+          $os = Get-CimInstance Win32_OperatingSystem
+          @(
+            "Platform: $env:PLATFORM_ID"
+            "ImageOS: $env:ImageOS"
+            "ImageVersion: $env:ImageVersion"
+            "Windows: $($os.Caption) $($os.Version) $($os.OSArchitecture)"
+            "Processor: $env:PROCESSOR_ARCHITECTURE"
+            "7-Zip: $sevenZip"
+          ) | Tee-Object -FilePath (Join-Path $out 'platform.txt')
+
+      # Both runs use one install path, extracted afresh before each: the font
+      # cache lists absolute paths, so two roots would make the runs differ,
+      # and the PDF export and DoctRenderer may write into the install. After
+      # each run, what it left in the tree is listed, and on macOS whether the
+      # copied .app is still validly signed.
+      - name: Run the corpus twice
+        if: runner.os != 'Windows'
+        run: |
+          set -uo pipefail
+          BIN=tools/corpus/target/release/corpus
+          OUT="$RUNNER_TEMP/corpus-out"
+          ROOT="$RUNNER_TEMP/eol-root"
+          MARKER="$RUNNER_TEMP/eol-marker"
+          SOURCE=$(cat "$RUNNER_TEMP/eol-source")
+          signature() {
+            if verify=$(codesign --verify --deep --strict "$ROOT"/*.app 2>&1); then echo ok; else echo "FAILED $(echo "$verify" | tr '\n' ' ')"; fi
+          }
+          for n in 1 2; do
+            rm -rf "$ROOT"
+            if [ "$RUNNER_OS" = macOS ]; then
+              mkdir -p "$ROOT" && ditto "$SOURCE" "$ROOT/$(basename "$SOURCE")"
+            else
+              dpkg-deb -x "$SOURCE" "$ROOT"
+            fi || { echo "ERROR: extraction for run $n failed"; exit 1; }
+            if [ "$RUNNER_OS" = macOS ]; then
+              # The quarantine is recorded, never removed: a notarized app with
+              # it is what a user runs.
+              {
+                echo "Quarantine run$n: $( (xattr -r -p com.apple.quarantine "$ROOT" 2>/dev/null || true) | wc -l | tr -d ' ')"
+                echo "Codesign run$n before: $(signature)"
+              } | tee -a "$OUT/platform.txt"
+            fi
+            touch "$MARKER"
+            code=0
+            "$BIN" run --install-root "$ROOT" --corpus tests/corpus \
+              --out "$OUT/run$n" --work "$RUNNER_TEMP/corpus-work$n" \
+              --label "git=$GITHUB_SHA" --label "platform=$PLATFORM_ID" || code=$?
+            find "$ROOT" -newer "$MARKER" -print > "$OUT/tree-changes-run$n.txt" || true
+            changed=$(wc -l < "$OUT/tree-changes-run$n.txt" | tr -d ' ')
+            {
+              echo "Changed in the install by run $n: $changed"
+              sed "s|^$ROOT/||; s|^|  |" "$OUT/tree-changes-run$n.txt" | head -n 40
+            } | tee -a "$OUT/platform.txt"
+            if [ "$RUNNER_OS" = macOS ]; then
+              echo "Codesign run$n after: $(signature)" | tee -a "$OUT/platform.txt"
+              if [ "$changed" -gt 0 ]; then
+                echo "::warning::x2t wrote $changed entries inside the copied .app in run $n (tree-changes-run$n.txt)"
+              fi
+            fi
+            [ "$code" -eq 0 ] || { echo "ERROR: corpus run $n exited $code"; exit "$code"; }
+          done
+
+      # 7-Zip lays out $INSTDIR at the root and adds the installer's own
+      # plugins under $PLUGINSDIR, which an install never keeps.
+      - name: Run the corpus twice (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = 'tools\corpus\target\release\corpus.exe'
+          $out = Join-Path $env:RUNNER_TEMP 'corpus-out'
+          $root = Join-Path $env:RUNNER_TEMP 'eol-root'
+          $exe, $sevenZip = @(Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'eol-source'))
+          foreach ($n in 1, 2) {
+            if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+            & $sevenZip x -y "-o$root" $exe | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "7z x exited $LASTEXITCODE for run $n" }
+            $plugins = Join-Path $root '$PLUGINSDIR'
+            if (Test-Path -LiteralPath $plugins) { Remove-Item -LiteralPath $plugins -Recurse -Force }
+            foreach ($need in 'euro-office-lite.exe', 'x2t.exe', 'binaries', 'editors') {
+              if (-not (Test-Path -LiteralPath (Join-Path $root $need))) { throw "$need missing from the extracted tree" }
+            }
+            $marker = (Get-Date).ToUniversalTime()
+            & $bin run --install-root $root --corpus tests/corpus `
+              --out (Join-Path $out "run$n") --work (Join-Path $env:RUNNER_TEMP "corpus-work$n") `
+              --label "git=$env:GITHUB_SHA" --label "platform=$env:PLATFORM_ID"
+            $code = $LASTEXITCODE
+            $changed = @(Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object { $_.LastWriteTimeUtc -gt $marker -or $_.CreationTimeUtc -gt $marker } |
+              ForEach-Object { $_.FullName.Substring($root.Length + 1) })
+            $changed | Out-File -Encoding utf8 (Join-Path $out "tree-changes-run$n.txt")
+            $lines = @("Changed in the install by run ${n}: $($changed.Count)") + @($changed | Select-Object -First 40 | ForEach-Object { "  $_" })
+            $lines | Tee-Object -FilePath (Join-Path $out 'platform.txt') -Append
+            if ($code -ne 0) { throw "corpus run $n exited $code" }
+          }
+
+      - name: Detach the installer (macOS)
+        if: always() && runner.os == 'macOS'
+        run: |
+          if [ -d "$RUNNER_TEMP/dmg" ]; then hdiutil detach "$RUNNER_TEMP/dmg" || true; fi
+
+      # Re-run all jobs, not only failed ones
+      - name: Upload corpus results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: corpus-run-${{ matrix.id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/corpus-out/
+          if-no-files-found: warn
+          retention-days: 7
+
+  report:
+    needs: [plan, run]
+    # Runs even when some platform failed: the others still get compared.
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install report tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils unzip
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
@@ -85,42 +374,89 @@ jobs:
       - name: Build the corpus binary
         run: cargo build --locked --release --manifest-path tools/corpus/Cargo.toml
 
-      - name: Extract the installer and run the corpus twice
-        run: |
-          set -euo pipefail
-          DEB=$(find installer -maxdepth 2 -name 'Euro-Office-Lite_*.deb' -print -quit)
-          [ -n "$DEB" ] || { echo "ERROR: no Euro-Office-Lite_*.deb in the artifact"; ls -laR installer; exit 1; }
-          OUT="$RUNNER_TEMP/corpus-out"
-          dpkg-deb -f "$DEB" Package Version Architecture | tee "$OUT/package.txt"
-          ROOT="$RUNNER_TEMP/eol-root"
-          dpkg-deb -x "$DEB" "$ROOT"
-          BIN=tools/corpus/target/release/corpus
-          for n in 1 2; do
-            "$BIN" run --install-root "$ROOT" --corpus tests/corpus \
-              --out "$OUT/run$n" --work "$RUNNER_TEMP/corpus-work$n" --label "git=$GITHUB_SHA"
-          done
+      # A platform whose job left no artifact is reported as missing by the
+      # next step, so an empty download must not stop the report.
+      - name: Download the results of every platform
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: corpus-run-*-${{ github.run_attempt }}
+          path: results/
 
-      # Two identical runs must agree: a difference is a volatile value the
-      # normalization misses, and the job fails on it like on a hard failure.
-      - name: Report and compare
+      # One poppler for every platform's outputs. Two identical runs must
+      # agree: a difference is a volatile value the normalization misses, and
+      # fails the job like a hard failure or a missing platform does.
+      - name: Report, compare and line up the platforms
+        env:
+          EXPECTED: ${{ needs.plan.outputs.expected }}
         run: |
           set -uo pipefail
-          OUT="$RUNNER_TEMP/corpus-out"
+          [[ "$EXPECTED" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] || { echo "ERROR: bad platform list from plan"; exit 1; }
           BIN=tools/corpus/target/release/corpus
           status=0
-          "$BIN" report --out "$OUT/run1" || status=$?
-          "$BIN" report --out "$OUT/run2" || true
-          same=0
-          "$BIN" compare "$OUT/run1" "$OUT/run2" --summary "$OUT/determinism.md" || same=$?
-          cat "$OUT/run1/summary.md" "$OUT/determinism.md" >> "$GITHUB_STEP_SUMMARY" || true
-          [ "$status" -ne 0 ] || status=$same
+          platforms=()
+          table="| Platform | Hard failures | Determinism |\n|---|---|---|\n"
+          extra=""
+          describe() { case "$1" in 0) echo "$2";; 1) echo "$3";; *) echo "infrastructure (exit $1)";; esac; }
+          for id in ${EXPECTED//,/ }; do
+            dir="results/corpus-run-$id-$GITHUB_RUN_ATTEMPT"
+            if [ ! -d "$dir/run1" ]; then
+              table+="| $id | no results | |\n"
+              status=1
+              continue
+            fi
+            # Whatever report and compare write is removed first: a file under
+            # one of these names that came in the artifact must never pass for
+            # this job's, in compare, in the matrix or in the summary.
+            for n in 1 2; do
+              rm -rf "$dir/run$n/report.tsv" "$dir/run$n/summary.md" "$dir/run$n/text" "$dir/run$n/.unpack"
+            done
+            rm -f "$dir/compare.tsv" "$dir/determinism.md"
+            r1=0; "$BIN" report --out "$dir/run1" --manifest tests/corpus/manifest.tsv || r1=$?
+            r2=0; "$BIN" report --out "$dir/run2" --manifest tests/corpus/manifest.tsv || r2=$?
+            # Results that report refused (exit 2) are compared with nothing
+            # and stay out of the matrix, which lists the platform as having none.
+            if [ "$r1" -gt 1 ] || [ "$r2" -gt 1 ]; then
+              table+="| $id | infrastructure (report exit $r1 and $r2) | not compared |\n"
+              status=1
+              continue
+            fi
+            same=0; "$BIN" compare "$dir/run1" "$dir/run2" --summary "$dir/determinism.md" || same=$?
+            table+="| $id | $(describe "$r1" none "see $id summary") | $(describe "$same" same differs) |\n"
+            [ "$r1" -eq 0 ] || { status=1; extra+="$dir/run1/summary.md "; }
+            [ "$same" -eq 0 ] || { status=1; extra+="$dir/determinism.md "; }
+            platforms+=(--platform "$id=$dir/run1")
+          done
+          matrix=0
+          "$BIN" matrix "${platforms[@]}" --expect "$EXPECTED" --out matrix || matrix=$?
+          [ "$matrix" -eq 0 ] || status=1
+          {
+            echo "## Conversion corpus"
+            echo
+            printf '%b' "$table"
+            echo
+            cat matrix/matrix.md 2>/dev/null
+            echo
+            cat matrix/environment.md 2>/dev/null
+            for file in $extra; do
+              echo
+              echo "### $file"
+              echo
+              cat "$file" 2>/dev/null || echo "(not written)"
+            done
+          } > summary.md
+          # The step summary takes at most 1 MiB.
+          head -c 1000000 summary.md >> "$GITHUB_STEP_SUMMARY"
           exit $status
 
-      - name: Upload corpus results
+      - name: Upload the report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: corpus-linux-x64-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/corpus-out/
+          name: corpus-report-${{ github.run_attempt }}
+          path: |
+            results/
+            matrix/
+            summary.md
           if-no-files-found: warn
           retention-days: 7
