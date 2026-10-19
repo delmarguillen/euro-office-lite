@@ -237,6 +237,107 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // What 7-Zip extracts from the published NSIS installer, x64 and arm64
+    // alike: $INSTDIR at the root, plus the installer's own $PLUGINSDIR.
+    const NSIS_FILES: [&str; 36] = [
+        "euro-office-lite.exe",
+        "x2t.exe",
+        "binaries/AllFonts.js",
+        "binaries/DjVuFile.dll",
+        "binaries/DoctRenderer.config",
+        "binaries/DocxRenderer.dll",
+        "binaries/EpubFile.dll",
+        "binaries/Fb2File.dll",
+        "binaries/HWPFile.dll",
+        "binaries/HtmlFile2.dll",
+        "binaries/IWorkFile.dll",
+        "binaries/OFDFile.dll",
+        "binaries/PdfFile.dll",
+        "binaries/StarMathConverter.dll",
+        "binaries/UnicodeConverter.dll",
+        "binaries/XpsFile.dll",
+        "binaries/doctrenderer.dll",
+        "binaries/graphics.dll",
+        "binaries/icudt74.dll",
+        "binaries/icudtl.dat",
+        "binaries/icudtl_extra.dat",
+        "binaries/icuuc74.dll",
+        "binaries/kernel.dll",
+        "binaries/kernel_network.dll",
+        "binaries/native_shim.js",
+        "binaries/ooxmlsignature.dll",
+        "binaries/package.config",
+        "binaries/sdk-all-min.js",
+        "binaries/sdk-all.js",
+        "binaries/sdk-word-bundle.js",
+        "binaries/xregexp-all-min.js",
+        "editors/sdkjs/common/AllFonts.js",
+        "editors/web-apps/vendor/xregexp/xregexp-all-min.js",
+        "templates/blank.docx",
+        "templates/blank.pptx",
+        "templates/blank.xlsx",
+    ];
+    const NSIS_PLUGINS: [&str; 7] = [
+        "LangDLL.dll",
+        "NSISdl.dll",
+        "StartMenu.dll",
+        "System.dll",
+        "modern-wizard.bmp",
+        "nsDialogs.dll",
+        "nsis_tauri_utils.dll",
+    ];
+
+    fn nsis_tree(root: &Path, with_plugins: bool) {
+        for file in NSIS_FILES {
+            touch(&root.join(file));
+        }
+        // The 16 bundled faces, loose in binaries/ and again in two folders.
+        for family in ["Carlito", "LiberationMono", "LiberationSans", "LiberationSerif"] {
+            for style in ["Regular", "Bold", "Italic", "BoldItalic"] {
+                for dir in ["binaries", "binaries/fonts", "binaries/core-fonts"] {
+                    touch(&root.join(dir).join(format!("{}-{}.ttf", family, style)));
+                }
+            }
+        }
+        for editor in ["word", "cell", "slide"] {
+            for bundle in ["sdk-all.js", "sdk-all-min.js"] {
+                touch(&root.join("editors/sdkjs").join(editor).join(bundle));
+            }
+        }
+        for file in ["Native/jquery_native.js", "Native/native.js", "libfont/engine/fonts_native.js"] {
+            touch(&root.join("editors/sdkjs/common").join(file));
+        }
+        if with_plugins {
+            for file in NSIS_PLUGINS {
+                touch(&root.join("$PLUGINSDIR").join(file));
+            }
+        }
+    }
+
+    // binaries/ has no x2t, so the PDF export finds the sidecar itself one
+    // folder up, as in the installed app; leftover installer plugins change
+    // nothing.
+    #[test]
+    fn the_tree_nsis_extracts_resolves_like_an_install() {
+        for with_plugins in [false, true] {
+            let root = scratch(if with_plugins { "nsis-plugins" } else { "nsis-real" });
+            nsis_tree(&root, with_plugins);
+
+            let exe = expected_exe(Os::Windows, &root).unwrap();
+            assert_eq!(exe, root.join("euro-office-lite.exe"));
+            let layout = layout_from_exe(Os::Windows, &exe).unwrap();
+            let dir = std::fs::canonicalize(&root).unwrap();
+            assert_eq!(layout.exe_dir_plain, root);
+            assert_eq!(layout.binaries_dir, dir.join("binaries"));
+            assert_eq!(layout.sidecar, dir.join("x2t.exe"));
+            if cfg!(windows) {
+                let pdf_x2t = crate::x2t_task::find_x2t(&layout.binaries_dir, Some(&layout.exe_dir_plain)).unwrap();
+                assert_eq!(std::fs::canonicalize(pdf_x2t).unwrap(), std::fs::canonicalize(&layout.sidecar).unwrap());
+            }
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
     #[test]
     fn missing_pieces_give_a_clear_error() {
         let root = scratch("missing");
