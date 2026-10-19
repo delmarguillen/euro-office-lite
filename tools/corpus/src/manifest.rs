@@ -161,6 +161,11 @@ fn validate(entry: &Entry) -> Result<(), String> {
     if let Some(variant) = entry.variants.iter().find(|v| !VARIANTS.contains(&v.as_str())) {
         return Err(format!("{}: unknown variant {}", doc, variant));
     }
+    // An extension alone: it becomes part of step and file names.
+    let plain = |ext: &str| !ext.is_empty() && ext.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    if let Some(ext) = entry.save_as.iter().find(|ext| !plain(ext)) {
+        return Err(format!("{}: save_as {:?} is not a lowercase extension", doc, ext));
+    }
     if let Some(ext) = entry
         .save_as
         .iter()
@@ -291,6 +296,17 @@ mod tests {
         assert_eq!(entries[2].expect, vec!["One", "Two"]);
         assert_eq!(entries[2].variants, vec!["special-name", "special-temp"]);
         assert_eq!(entries[2].save_as, vec!["odt", "csv"]);
+    }
+
+    // save_as becomes part of a step name and of file names: only the
+    // extension itself, never a path that ends in one.
+    #[test]
+    fn save_as_holds_plain_extensions_only() {
+        for save_as in ["x/../../escaped.docx", "../docx", "a\\b.docx", "c:docx", "DOCX", ".docx"] {
+            let row = format!("a.docx\tcomparable\topen\t\t\t{}\t", save_as);
+            assert!(parse(&format!("{}{}\n", HEADER, row)).is_err(), "{}", save_as);
+        }
+        assert!(parse(&format!("{}a.docx\tcomparable\topen\t\t\todt,csv\t\n", HEADER)).is_ok());
     }
 
     #[test]

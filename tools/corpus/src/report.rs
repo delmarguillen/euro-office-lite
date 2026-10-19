@@ -4,6 +4,7 @@
 // expected text fails the report; every other finding is informative.
 
 use crate::manifest::{self, Entry};
+use crate::markdown::clean;
 use crate::run::Infra;
 use crate::tsv::Table;
 use crate::{allfonts, arch, normalize, pdf, sha256};
@@ -130,18 +131,84 @@ fn class_value(entry: &Entry, foreign: &[String], spoofed: bool) -> String {
     }
 }
 
-pub fn report(out: &Path) -> Result<Vec<String>, Infra> {
+// An output as `run` records it: a relative path with forward slashes and
+// plain names only, so joining it to the results folder stays inside it.
+pub fn relative_output(output: &str) -> Result<(), String> {
+    let plain = |part: &str| !part.is_empty() && part != "." && part != ".." && !part.contains(['\\', ':']);
+    if output.split('/').all(plain) {
+        Ok(())
+    } else {
+        Err(format!("output {:?} is not a plain path inside the results folder", output))
+    }
+}
+
+// The results may come from another job's artifact, so every row is checked
+// against what `run` writes before any of its values reaches a path.
+fn check_rows(runs: &Table, entries: &[Entry]) -> Result<(), Infra> {
+    for row in &runs.rows {
+        let (doc, variant, step) = (runs.get(row, "doc"), runs.get(row, "variant"), runs.get(row, "step"));
+        let Some(entry) = entries.iter().find(|e| e.doc == doc) else {
+            return Err(Infra(format!("{} is in run.tsv but not in the manifest", doc)));
+        };
+        // The id names the document's folders under text/ and files/.
+        if relative_output(&entry.id()).is_err() {
+            return Err(Infra(format!("{}: the document id is not a plain folder name", doc)));
+        }
+        if !entry.variants.iter().any(|v| v == variant) {
+            return Err(Infra(format!("{}: run.tsv names variant {:?}, which run never writes", doc, variant)));
+        }
+        // The step names a file under text/: one plain name, never a path.
+        if step.contains('/') || relative_output(step).is_err() || !crate::run::plan(entry).iter().any(|s| s == step) {
+            return Err(Infra(format!("{}: run.tsv names step {:?}, which run never writes", doc, step)));
+        }
+        let output = runs.get(row, "output");
+        if !output.is_empty() {
+            relative_output(output).map_err(|e| Infra(format!("{} {} {}: {}", doc, variant, step, e)))?;
+        }
+    }
+    Ok(())
+}
+
+fn remove(path: &Path, how: impl Fn(&Path) -> std::io::Result<()>) -> Result<(), Infra> {
+    match how(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Infra(format!("cannot remove {}: {}", path.display(), e))),
+        _ => Ok(()),
+    }
+}
+
+// The results carry their own copy of the manifest; only the trusted one
+// (the checkout's) is parsed, and the copy must match it byte for byte.
+fn trusted_entries(out: &Path, trusted_manifest: &Path) -> Result<Vec<Entry>, Infra> {
+    let read = |path: &Path| std::fs::read(path).map_err(|e| Infra(format!("cannot read manifest {}: {}", path.display(), e)));
+    let trusted = read(trusted_manifest)?;
+    if read(&out.join("manifest.tsv"))? != trusted {
+        return Err(Infra(format!(
+            "the manifest in {} differs from the trusted manifest {}",
+            out.display(),
+            trusted_manifest.display()
+        )));
+    }
+    manifest::parse(&String::from_utf8_lossy(&trusted)).map_err(|e| Infra(format!("trusted manifest: {}", e)))
+}
+
+pub fn report(out: &Path, trusted_manifest: &Path) -> Result<Vec<String>, Infra> {
+    // Whatever these names held came with the results, not from this report:
+    // gone first, so a refused report leaves nothing to be read as its own.
+    for file in ["report.tsv", "summary.md"] {
+        remove(&out.join(file), |p| std::fs::remove_file(p))?;
+    }
+    for dir in ["text", ".unpack"] {
+        remove(&out.join(dir), |p| std::fs::remove_dir_all(p))?;
+    }
+    let runs = Table::read(&out.join("run.tsv")).map_err(Infra)?;
+    let env = Table::read(&out.join("env.tsv")).map_err(Infra)?;
+    let entries = trusted_entries(out, trusted_manifest)?;
+    check_rows(&runs, &entries)?;
     for tool in TOOLS {
         if Command::new(tool).arg("-v").output().is_err() {
             return Err(Infra(format!("{} is not installed (poppler-utils and unzip are needed)", tool)));
         }
     }
-    let runs = Table::read(&out.join("run.tsv")).map_err(Infra)?;
-    let env = Table::read(&out.join("env.tsv")).map_err(Infra)?;
-    let entries = manifest::parse(
-        &std::fs::read_to_string(out.join("manifest.tsv")).map_err(|e| Infra(format!("manifest.tsv: {}", e)))?,
-    )
-    .map_err(Infra)?;
     let env_value = |key: &str| {
         env.rows.iter().find(|r| r.first().map(String::as_str) == Some(key)).and_then(|r| r.get(1)).cloned().unwrap_or_default()
     };
@@ -330,33 +397,36 @@ pub fn architecture_line(env: &dyn Fn(&str) -> String) -> String {
     let emulated = arch::emulated(&sidecar, &host) || arch::emulated(&pdf_x2t, &host);
     format!(
         "- Architecture: host {}, sidecar x2t {}, PDF x2t {}{}\n",
-        host,
-        sidecar,
-        pdf_x2t,
+        clean(&host),
+        clean(&sidecar),
+        clean(&pdf_x2t),
         if emulated { " (emulated)" } else { "" }
     )
 }
 
+// What summary.md shows from env.tsv, package.txt, run.tsv and x2t's own
+// messages goes through clean(): the file ends up in the run's summary.
 fn summary(table: &Table, entries: &[Entry], env: &dyn Fn(&str) -> String, failures: &[String], out: &Path) -> String {
     let mut s = String::from("## Conversion corpus\n\n");
     let package = std::fs::read_to_string(out.join("..").join("package.txt")).unwrap_or_default();
     if !package.trim().is_empty() {
-        s.push_str(&format!("- Package: {}\n", package.split_whitespace().collect::<Vec<_>>().join(" ")));
+        s.push_str(&format!("- Package: {}\n", clean(&package.split_whitespace().collect::<Vec<_>>().join(" "))));
     }
-    s.push_str(&format!("- Sidecar x2t: {} ({})\n", env("sidecar.version"), env("sidecar.path")));
-    s.push_str(&format!("- PDF x2t: {} ({}), same file: {}\n", env("pdf_x2t.version"), env("pdf_x2t.path"), env("x2t_same_file")));
+    let shown = |key: &str| clean(&env(key));
+    s.push_str(&format!("- Sidecar x2t: {} ({})\n", shown("sidecar.version"), shown("sidecar.path")));
+    s.push_str(&format!("- PDF x2t: {} ({}), same file: {}\n", shown("pdf_x2t.version"), shown("pdf_x2t.path"), shown("x2t_same_file")));
     s.push_str(&architecture_line(env));
     s.push_str(&format!(
         "- Font cache: {} fonts, {} bundled, {} system; Liberation and Carlito: {}\n",
-        env("fonts.total"),
-        env("fonts.bundled"),
-        env("fonts.system"),
-        env("fonts.check")
+        shown("fonts.total"),
+        shown("fonts.bundled"),
+        shown("fonts.system"),
+        shown("fonts.check")
     ));
     s.push_str("- Editor.bin comes from x2t, not from the editor: save and export here never go through sdkjs.\n");
     s.push_str(&format!("- Hard failures: {}\n\n", failures.len()));
     for failure in failures {
-        s.push_str(&format!("  - {}\n", failure.replace('\n', " ")));
+        s.push_str(&format!("  - {}\n", clean(failure)));
     }
     if !failures.is_empty() {
         s.push('\n');
@@ -375,16 +445,17 @@ fn summary(table: &Table, entries: &[Entry], env: &dyn Fn(&str) -> String, failu
         let save_as: Vec<String> = entry
             .save_as
             .iter()
-            .map(|ext| format!("{} {}", ext, cell(checks, &format!("save_as.{}", ext))))
+            .map(|ext| format!("{} {}", ext, clean(&cell(checks, &format!("save_as.{}", ext)))))
             .collect();
+        // The document, variant and class are the trusted manifest's own.
         s.push_str(&format!(
             "| `{}` | {} | {} | {} | {} | {} | {} |\n",
             entry.doc,
             variant,
             entry.class,
-            cell(checks, "open"),
-            cell(checks, "save"),
-            cell(checks, "pdf"),
+            clean(&cell(checks, "open")),
+            clean(&cell(checks, "save")),
+            clean(&cell(checks, "pdf")),
             save_as.join(", ")
         ));
     }
@@ -440,6 +511,27 @@ mod tests {
         assert_eq!(values, vec!["ok", "missing:Hello"]);
     }
 
+    // summary.md goes into the run's Markdown summary: what it shows from the
+    // results (env.tsv, package.txt, x2t's messages, statuses) stays plain.
+    #[test]
+    fn the_summary_keeps_values_from_the_results_plain() {
+        let payload = "x\n## Owned\n[link](http://e.x) <b>";
+        let root = std::env::temp_dir().join(format!("corpus-report-md-{}", std::process::id()));
+        let out = root.join("run1");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(root.join("package.txt"), payload).unwrap();
+        let mut table = Table::new(&REPORT_COLUMNS);
+        table.push(vec!["sheet.ods".into(), "plain".into(), "open".into(), "status".into(), payload.into()]);
+        let env = |_: &str| payload.to_string();
+        let failures = vec![format!("sheet.ods plain open: exit {}", payload)];
+        let text = summary(&table, &[entry("comparable")], &env, &failures, &out);
+        let _ = std::fs::remove_dir_all(&root);
+        for bad in ["\n## Owned", "[link]", "](http", "<b>"] {
+            assert!(!text.contains(bad), "{:?} in:\n{}", bad, text);
+        }
+        assert!(text.starts_with("## Conversion corpus\n"), "{}", text);
+    }
+
     #[test]
     fn the_summary_says_when_x2t_runs_emulated() {
         let env_of = |pairs: &'static [(&'static str, &'static str)]| {
@@ -449,6 +541,155 @@ mod tests {
         assert_eq!(architecture_line(&win_arm), "- Architecture: host aarch64, sidecar x2t x86_64, PDF x2t x86_64 (emulated)\n");
         let native = env_of(&[("host.arch", "aarch64"), ("sidecar.arch", "aarch64"), ("pdf_x2t.arch", "aarch64")]);
         assert!(!architecture_line(&native).contains("emulated"));
+    }
+
+    const MANIFEST: &str =
+        "file\tclass\tsteps\texpect\tvariants\tsave_as\tnote\nsheet.ods\tcomparable\topen,save,pdf\tHello\t\txlsx\t\n";
+
+    // The trusted manifest kept next to a results folder by these tests.
+    fn trusted(out: &Path) -> std::path::PathBuf {
+        out.parent().unwrap().join("trusted-manifest.tsv")
+    }
+
+    // A results folder whose run.tsv holds one given row for sheet.ods.
+    fn results_with_row(name: &str, variant: &str, step: &str, output: &str) -> std::path::PathBuf {
+        results_with(name, MANIFEST, variant, step, output)
+    }
+
+    // The same, with `manifest` as the copy that travels in the results.
+    fn results_with(name: &str, manifest: &str, variant: &str, step: &str, output: &str) -> std::path::PathBuf {
+        let out = std::env::temp_dir().join(format!("corpus-report-{}-{}", name, std::process::id())).join("run1");
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(trusted(&out), MANIFEST).unwrap();
+        std::fs::write(out.join("manifest.tsv"), manifest).unwrap();
+        std::fs::write(out.join("env.tsv"), "key\tvalue\nfonts.check\tok\n").unwrap();
+        std::fs::write(
+            out.join("run.tsv"),
+            format!(
+                "{}\nsheet.ods\t{}\t{}\tok\t0\t\t5\tabc\t{}\t1\t\n",
+                crate::run::RUN_COLUMNS.join("\t"),
+                variant,
+                step,
+                output
+            ),
+        )
+        .unwrap();
+        out
+    }
+
+    fn report_error(out: &Path) -> String {
+        let result = report(out, &trusted(out));
+        let _ = std::fs::remove_dir_all(out.parent().unwrap());
+        match result {
+            Err(Infra(message)) => message,
+            Ok(failures) => panic!("accepted, with failures {:?}", failures),
+        }
+    }
+
+    // The results come from another job's artifact: a row must not make the
+    // report read or write outside its folder.
+    #[test]
+    fn an_output_outside_the_results_folder_is_refused() {
+        for (n, output) in [
+            "../escape.pdf",
+            "files/../../escape.pdf",
+            "/etc/passwd",
+            "\\\\server\\share\\x.pdf",
+            "C:/Windows/x.pdf",
+            "files//x.pdf",
+            "files/./x.pdf",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let out = results_with_row(&format!("out{}", n), "plain", "pdf", output);
+            let message = report_error(&out);
+            assert!(message.contains("output"), "{}: {}", output, message);
+        }
+    }
+
+    #[test]
+    fn a_variant_or_step_run_never_writes_is_refused() {
+        for (n, (variant, step)) in [
+            ("../../x", "pdf"),
+            ("other", "pdf"),
+            ("plain", "../../x"),
+            ("plain", "save_as.docx"),
+            ("plain", "print"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let out = results_with_row(&format!("row{}", n), variant, step, "");
+            let message = report_error(&out);
+            assert!(message.contains("variant") || message.contains("step"), "{} {}: {}", variant, step, message);
+        }
+    }
+
+    #[test]
+    fn outputs_run_writes_are_accepted() {
+        for output in ["files/sheet.ods/plain/export.pdf", "files/sheet.ods/special-name/save_as.xlsx"] {
+            assert_eq!(relative_output(output), Ok(()), "{}", output);
+        }
+        let out = results_with_row("valid", "plain", "save_as.xlsx", "files/sheet.ods/plain/save_as.xlsx");
+        let runs = Table::read(&out.join("run.tsv")).unwrap();
+        let entries = manifest::parse(&std::fs::read_to_string(out.join("manifest.tsv")).unwrap()).unwrap();
+        let _ = std::fs::remove_dir_all(out.parent().unwrap());
+        assert!(check_rows(&runs, &entries).is_ok());
+    }
+
+    // Results refused by report must not keep the report.tsv, summary.md
+    // and text/ they arrived with, which compare and the summary would read.
+    #[test]
+    fn a_refused_report_leaves_none_of_its_outputs_behind() {
+        let out = results_with("stale", &MANIFEST.replace("Hello", "Hullo"), "plain", "open", "");
+        std::fs::write(out.join("report.tsv"), "doc\tvariant\tstep\tcheck\tvalue\nforged\tplain\topen\tstatus\tok\n").unwrap();
+        std::fs::write(out.join("summary.md"), "## forged\n").unwrap();
+        std::fs::create_dir_all(out.join("text/forged")).unwrap();
+        let result = report(&out, &trusted(&out));
+        let left: Vec<bool> = ["report.tsv", "summary.md", "text"].iter().map(|name| out.join(name).exists()).collect();
+        let _ = std::fs::remove_dir_all(out.parent().unwrap());
+        assert!(result.is_err());
+        assert_eq!(left, vec![false, false, false]);
+    }
+
+    // save_as reaches the step name, which names files under text/.
+    #[test]
+    fn a_step_that_is_not_one_plain_name_is_refused() {
+        let out = results_with_row("step", "plain", "save_as.x/../../escaped.docx", "");
+        let runs = Table::read(&out.join("run.tsv")).unwrap();
+        let _ = std::fs::remove_dir_all(out.parent().unwrap());
+        let mut entries = manifest::parse(MANIFEST).unwrap();
+        entries[0].save_as = vec!["x/../../escaped.docx".to_string()];
+        match check_rows(&runs, &entries) {
+            Err(Infra(message)) => assert!(message.contains("step"), "{}", message),
+            Ok(()) => panic!("a step with a path was accepted"),
+        }
+    }
+
+    // The manifest in the results came with them; only the checkout's own
+    // decides which documents, steps and names are valid.
+    #[test]
+    fn a_results_manifest_that_differs_from_the_trusted_one_is_refused() {
+        let hostile = MANIFEST.replace("\txlsx\t", "\tx/../../escaped.docx\t");
+        let changed = MANIFEST.replace("Hello", "Hullo");
+        let crlf = MANIFEST.replace('\n', "\r\n");
+        for (n, (manifest, step)) in [
+            (hostile.as_str(), "save_as.x/../../escaped.docx"),
+            (changed.as_str(), "open"),
+            (crlf.as_str(), "open"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let out = results_with(&format!("manifest{}", n), manifest, "plain", step, "");
+            let message = report_error(&out);
+            assert!(message.contains("manifest"), "{}: {}", n, message);
+        }
+        let out = results_with("manifest-gone", MANIFEST, "plain", "open", "");
+        std::fs::remove_file(trusted(&out)).unwrap();
+        assert!(report_error(&out).contains("manifest"));
     }
 
     #[test]

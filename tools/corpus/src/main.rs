@@ -15,6 +15,8 @@ mod arch;
 mod compare;
 mod layout;
 mod manifest;
+mod markdown;
+mod matrix;
 mod normalize;
 mod pdf;
 mod report;
@@ -28,8 +30,9 @@ use std::path::{Path, PathBuf};
 const USAGE: &str = "\
 usage:
   corpus run --install-root <dir> --corpus <dir> --out <dir> [--work <dir>] [--only <doc>] [--label <k=v>]...
-  corpus report --out <dir>
-  corpus compare <out_a> <out_b> [--summary <file>]";
+  corpus report --out <dir> --manifest <trusted manifest.tsv>
+  corpus compare <out_a> <out_b> [--summary <file>]
+  corpus matrix --platform <id>=<run dir>... [--expect <id,id,...>] --out <dir>";
 
 // Positional arguments and --flag value pairs; --label may repeat.
 struct Args {
@@ -96,6 +99,35 @@ fn run_args(args: &Args) -> Result<run::RunArgs, String> {
     })
 }
 
+fn matrix_args(args: &Args) -> Result<matrix::MatrixArgs, String> {
+    args.only_known(&["platform", "expect", "out"])?;
+    if !args.positional.is_empty() {
+        return Err("matrix takes no positional arguments".to_string());
+    }
+    let mut platforms: Vec<(String, PathBuf)> = Vec::new();
+    for value in args.flags.get("platform").into_iter().flatten() {
+        let (id, dir) = value
+            .split_once('=')
+            .filter(|(id, dir)| matrix::valid_id(id) && !dir.is_empty())
+            .ok_or_else(|| format!("--platform {} is not <id>=<dir> with a lowercase id", value))?;
+        if platforms.iter().any(|(p, _)| p == id) {
+            return Err(format!("--platform {} is given twice", id));
+        }
+        platforms.push((id.to_string(), PathBuf::from(dir)));
+    }
+    let expect: Vec<String> = match args.one("expect") {
+        Some(list) => list.split(',').map(str::to_string).collect(),
+        None => Vec::new(),
+    };
+    if let Some(bad) = expect.iter().find(|id| !matrix::valid_id(id)) {
+        return Err(format!("--expect holds a bad platform id: {:?}", bad));
+    }
+    if platforms.is_empty() && expect.is_empty() {
+        return Err("matrix needs --platform or --expect".to_string());
+    }
+    Ok(matrix::MatrixArgs { platforms, expect, out: args.required("out")? })
+}
+
 fn usage_error(message: &str) -> ! {
     eprintln!("corpus: {}\n{}", message, USAGE);
     std::process::exit(2);
@@ -119,9 +151,10 @@ fn main() {
             }
         }
         "report" => {
-            args.only_known(&["out"]).unwrap_or_else(|e| usage_error(&e));
+            args.only_known(&["out", "manifest"]).unwrap_or_else(|e| usage_error(&e));
             let out = args.required("out").unwrap_or_else(|e| usage_error(&e));
-            match report::report(&out) {
+            let manifest = args.required("manifest").unwrap_or_else(|e| usage_error(&e));
+            match report::report(&out, &manifest) {
                 Ok(failures) if failures.is_empty() => 0,
                 Ok(failures) => {
                     for failure in &failures {
@@ -149,6 +182,20 @@ fn main() {
                 }
                 Err(run::Infra(message)) => {
                     eprintln!("corpus compare: {}", message);
+                    2
+                }
+            }
+        }
+        "matrix" => {
+            let matrix_args = matrix_args(&args).unwrap_or_else(|e| usage_error(&e));
+            match matrix::matrix(&matrix_args) {
+                Ok(0) => 0,
+                Ok(count) => {
+                    eprintln!("corpus matrix: {} expected platforms have no results", count);
+                    1
+                }
+                Err(run::Infra(message)) => {
+                    eprintln!("corpus matrix: {}", message);
                     2
                 }
             }
@@ -183,5 +230,28 @@ mod tests {
         let args = Args::parse(&strings(&["--out", "o", "--bogus", "1"])).unwrap();
         assert!(run_args(&args).is_err());
         assert!(Args::parse(&strings(&["--out"])).is_err());
+    }
+
+    #[test]
+    fn matrix_options_are_checked() {
+        let parse = |a: &[&str]| matrix_args(&Args::parse(&strings(a)).unwrap());
+        let ok = parse(&["--platform", "win-x64=r/win/run1", "--platform", "mac-arm64=r/mac/run1", "--expect", "win-x64,mac-arm64", "--out", "m"]).unwrap();
+        assert_eq!(ok.platforms, vec![("win-x64".to_string(), PathBuf::from("r/win/run1")), ("mac-arm64".to_string(), PathBuf::from("r/mac/run1"))]);
+        assert_eq!(ok.expect, vec!["win-x64", "mac-arm64"]);
+        for bad in [
+            &["--platform", "win-x64", "--out", "m"][..],
+            &["--platform", "=dir", "--out", "m"],
+            &["--platform", "Win=dir", "--out", "m"],
+            &["--platform", "a/b=dir", "--out", "m"],
+            &["--platform", "a=", "--out", "m"],
+            &["--platform", "a=x", "--platform", "a=y", "--out", "m"],
+            &["--platform", "a=x", "--expect", "a,,b", "--out", "m"],
+            &["--platform", "a=x"],
+            &["--out", "m"],
+            &["--platform", "a=x", "--out", "m", "extra"],
+            &["--platform", "a=x", "--out", "m", "--bogus", "1"],
+        ] {
+            assert!(parse(bad).is_err(), "{:?}", bad);
+        }
     }
 }
