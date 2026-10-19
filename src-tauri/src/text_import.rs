@@ -481,25 +481,99 @@ pub fn copy_without_final_break(source: &Path, copy: &Path, cut: u64) -> std::io
     file.set_len(len.saturating_sub(cut))
 }
 
-// Copy of a CSV for x2t to read, in `temp_dir`, when the original needs one.
-// Takes the folder instead of the app state so the corpus can open files the
-// same way.
+// The text of a UTF-16 file, refusing what is not valid UTF-16: replacing it
+// would open, and then save, something other than what the file holds.
+fn decode_utf16_strict(bytes: &[u8], encoding: u32) -> std::io::Result<String> {
+    let invalid = |detail: String| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("not valid UTF-16 text: {}", detail),
+        )
+    };
+    if bytes.len() % 2 != 0 {
+        return Err(invalid(format!("odd length of {} bytes", bytes.len())));
+    }
+    let mut text = String::with_capacity(bytes.len());
+    let mut unit = 0;
+    for decoded in char::decode_utf16(code_units(encoding, bytes)) {
+        match decoded {
+            Ok(c) => {
+                text.push(c);
+                unit += c.len_utf16();
+            }
+            Err(e) => {
+                return Err(invalid(format!(
+                    "unpaired surrogate {:04X} at code unit {}",
+                    e.unpaired_surrogate(),
+                    unit
+                )))
+            }
+        }
+    }
+    Ok(text)
+}
+
+// The UTF-8 copy x2t reads a UTF-16 TXT from. x2t 9.4 loses the text of a
+// UTF-16 TXT with a BOM whatever encoding it is given (its TXT reader looks
+// the BOM's converter up by a code page number that fails), while UTF-8 reads
+// right with x2t 8.2 and 9.4. Saving still goes back to UTF-16 in rebuild_txt.
+fn write_utf8_copy(source: &Path, copy: &Path, encoding: u32) -> std::io::Result<()> {
+    let bytes = std::fs::read(source)?;
+    let bom = if encoding == ENCODING_UTF16_LE { UTF16_LE_BOM } else { UTF16_BE_BOM };
+    let text = decode_utf16_strict(bytes.strip_prefix(bom).unwrap_or(&bytes), encoding)?;
+    // x2t drops a leading EF BB BF as a BOM, so a text that starts with U+FEFF
+    // gets a BOM of its own in front. So does an empty one: x2t refuses an
+    // empty TXT (exit 88) but opens a lone BOM as an empty document.
+    let mut utf8 = Vec::with_capacity(text.len() + UTF8_BOM.len());
+    if text.is_empty() || text.starts_with('\u{FEFF}') {
+        utf8.extend_from_slice(UTF8_BOM);
+    }
+    utf8.extend_from_slice(text.as_bytes());
+    std::fs::write(copy, utf8)
+}
+
+// A copy of the original for x2t to read, and the options to read it with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadCopy {
+    pub path: std::path::PathBuf,
+    pub options: TextOptions,
+}
+
+// Copy of a CSV or TXT for x2t to read, in `temp_dir`, when the original needs
+// one. Takes the folder instead of the app state so the corpus can open files
+// the same way.
 pub fn prepare_read_copy(
     source: &Path,
     temp_dir: &Path,
     kind: Option<TextKind>,
     options: Option<TextOptions>,
-) -> std::io::Result<Option<std::path::PathBuf>> {
+) -> std::io::Result<Option<ReadCopy>> {
     let (Some(kind), Some(options)) = (kind, options) else {
         return Ok(None);
     };
+    if kind == TextKind::Txt
+        && (options.encoding == ENCODING_UTF16_LE || options.encoding == ENCODING_UTF16_BE)
+    {
+        let copy = temp_dir.join("eo-read-copy.txt");
+        write_utf8_copy(source, &copy, options.encoding)?;
+        return Ok(Some(ReadCopy {
+            path: copy,
+            options: TextOptions {
+                encoding: ENCODING_UTF8,
+                ..options
+            },
+        }));
+    }
     let cut = read_copy_cut(source, kind, options)?;
     if cut == 0 {
         return Ok(None);
     }
     let copy = temp_dir.join("eo-read-copy.csv");
     copy_without_final_break(source, &copy, cut)?;
-    Ok(Some(copy))
+    Ok(Some(ReadCopy {
+        path: copy,
+        options,
+    }))
 }
 
 #[cfg(test)]
@@ -1088,10 +1162,14 @@ mod tests {
         (dir, temp)
     }
 
-    fn prepared(source: &Path, temp: &Path) -> Option<std::path::PathBuf> {
+    fn try_prepared(source: &Path, temp: &Path) -> std::io::Result<Option<ReadCopy>> {
         let kind = TextKind::for_path(source);
         let options = kind.map(|kind| detect_file(source, kind).unwrap());
-        prepare_read_copy(source, temp, kind, options).unwrap()
+        prepare_read_copy(source, temp, kind, options)
+    }
+
+    fn prepared(source: &Path, temp: &Path) -> Option<ReadCopy> {
+        try_prepared(source, temp).unwrap()
     }
 
     #[test]
@@ -1100,9 +1178,10 @@ mod tests {
         let source = dir.join("data.csv");
         std::fs::write(&source, b"a,b\nc,d\n").unwrap();
 
-        let copy = prepared(&source, &temp);
+        let copy = prepared(&source, &temp).unwrap();
 
-        assert_eq!(copy, Some(temp.join("eo-read-copy.csv")));
+        assert_eq!(copy.path, temp.join("eo-read-copy.csv"));
+        assert_eq!(copy.options, detect_file(&source, TextKind::Csv).unwrap());
         assert_eq!(std::fs::read(temp.join("eo-read-copy.csv")).unwrap(), b"a,b\nc,d");
         assert_eq!(std::fs::read(&source).unwrap(), b"a,b\nc,d\n");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1122,6 +1201,132 @@ mod tests {
             std::fs::write(&source, bytes).unwrap();
             assert_eq!(prepared(&source, &temp), None, "{}", name);
         }
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "nothing written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_utf16_txt_is_read_from_a_utf8_copy() {
+        let (dir, temp) = read_copy_dirs("utf16");
+        let text = "Hello\nÜber alles\n";
+        for (name, bytes) in [("le.txt", utf16le_with_bom(text)), ("be.txt", utf16be_with_bom(text))] {
+            let source = dir.join(name);
+            std::fs::write(&source, &bytes).unwrap();
+            let copy = prepared(&source, &temp).expect(name);
+            assert_eq!(copy.path, temp.join("eo-read-copy.txt"));
+            assert_eq!(std::fs::read(&copy.path).unwrap(), text.as_bytes(), "{}", name);
+            assert_eq!(std::fs::read(&source).unwrap(), bytes, "the original is left alone");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn x2t_reads_the_copy_as_utf8_and_the_save_still_goes_back_to_utf16() {
+        let (dir, temp) = read_copy_dirs("utf16-options");
+        let original = utf16le_with_bom("Línea uno\r\nÜber alles €\r\n");
+        let source = dir.join("notepad.txt");
+        std::fs::write(&source, &original).unwrap();
+        let options = detect_file(&source, TextKind::Txt).unwrap();
+
+        let copy = prepared(&source, &temp).unwrap();
+
+        assert_eq!(options.encoding, ENCODING_UTF16_LE, "the save keeps the original's");
+        assert_eq!(copy.options, TextOptions { encoding: ENCODING_UTF8, ..options });
+        assert_eq!(copy.options.xml_elements(), "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n");
+        // What x2t 9.4 (CRLF, no final break) and 8.2 (one more break) write
+        // back is turned into the original bytes.
+        for written in ["\u{FEFF}Línea uno\r\nÜber alles €", "\u{FEFF}Línea uno\r\nÜber alles €\r\n\r\n"] {
+            assert_eq!(rebuild_txt(written.as_bytes(), options).0, original);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_utf8_copy_keeps_line_endings_and_characters_outside_the_bmp() {
+        let (dir, temp) = read_copy_dirs("utf16-wide");
+        let text = "a\r\nж 中 😀\rb\n\n";
+        let source = dir.join("wide.txt");
+        std::fs::write(&source, utf16be_with_bom(text)).unwrap();
+
+        let copy = prepared(&source, &temp).unwrap();
+
+        assert_eq!(std::fs::read(&copy.path).unwrap(), text.as_bytes());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_utf16_txt_is_read_from_a_lone_utf8_bom() {
+        let (dir, temp) = read_copy_dirs("utf16-empty");
+        let source = dir.join("empty.txt");
+        std::fs::write(&source, UTF16_LE_BOM).unwrap();
+
+        let copy = prepared(&source, &temp).unwrap();
+
+        assert_eq!(std::fs::read(&copy.path).unwrap(), UTF8_BOM);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // What x2t reads from a UTF-8 copy: everything after one leading BOM.
+    fn x2t_reads(copy: &[u8]) -> String {
+        String::from_utf8(copy.strip_prefix(UTF8_BOM).unwrap_or(copy).to_vec()).unwrap()
+    }
+
+    #[test]
+    fn a_leading_u_feff_survives_the_copy_and_the_save() {
+        let (dir, temp) = read_copy_dirs("utf16-feff");
+        let cases: [(&str, &str); 3] = [
+            ("bom only", ""),
+            ("bom and U+FEFF", "\u{FEFF}"),
+            ("bom, U+FEFF and text", "\u{FEFF}Hi\nthere\n"),
+        ];
+        for (case, text) in cases {
+            for original in [utf16le_with_bom(text), utf16be_with_bom(text)] {
+                let source = dir.join("feff.txt");
+                std::fs::write(&source, &original).unwrap();
+                let options = detect_file(&source, TextKind::Txt).unwrap();
+                let copy = prepared(&source, &temp).unwrap();
+                let read = x2t_reads(&std::fs::read(&copy.path).unwrap());
+                assert_eq!(read, text, "{}: x2t reads the text", case);
+                // x2t 9.4 writes CRLF without the final break, 8.2 adds one.
+                let body = read.trim_end_matches('\n').replace('\n', "\r\n");
+                for written in [format!("\u{FEFF}{}", body), format!("\u{FEFF}{}\r\n\r\n", body)] {
+                    assert_eq!(rebuild_txt(written.as_bytes(), options).0, original, "{}", case);
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invalid_utf16_fails_the_open_instead_of_being_replaced() {
+        let (dir, temp) = read_copy_dirs("utf16-invalid");
+        let mut odd = utf16le_with_bom("ab");
+        odd.push(b'c');
+        // A high surrogate followed by "a" instead of its low half.
+        let mut lone = utf16le_with_bom("x");
+        lone.extend_from_slice(&[0x00, 0xD8, 0x61, 0x00]);
+        let cases: [(&str, Vec<u8>, &str); 2] = [
+            ("odd.txt", odd, "odd length of 5 bytes"),
+            ("lone.txt", lone, "unpaired surrogate D800 at code unit 1"),
+        ];
+        for (name, bytes, detail) in cases {
+            let source = dir.join(name);
+            std::fs::write(&source, &bytes).unwrap();
+            let error = try_prepared(&source, &temp).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{}", name);
+            assert_eq!(error.to_string(), format!("not valid UTF-16 text: {}", detail));
+        }
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_utf16_csv_is_still_read_from_the_original() {
+        let (dir, temp) = read_copy_dirs("utf16-csv");
+        let source = dir.join("data.csv");
+        std::fs::write(&source, utf16le_with_bom("a\tb\r\n1\t2\r\n")).unwrap();
+
+        assert_eq!(prepared(&source, &temp), None);
         assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "nothing written");
         let _ = std::fs::remove_dir_all(&dir);
     }

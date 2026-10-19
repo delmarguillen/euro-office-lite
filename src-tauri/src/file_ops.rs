@@ -316,9 +316,10 @@ async fn open_file_inner(
         ),
     );
 
-    // x2t's UTF-8 CSV reader adds an empty row after a final line break, so it
-    // reads a copy without that break. current_file and the recent list keep
-    // the original path; only the conversion sees the copy.
+    // x2t's UTF-8 CSV reader adds an empty row after a final line break, and it
+    // loses the text of a UTF-16 TXT, so those are read from a copy that avoids
+    // both. current_file and the recent list keep the original path, and saving
+    // keeps the original's options; only the conversion sees the copy.
     let read_copy = match crate::text_import::prepare_read_copy(
         Path::new(&source),
         &state.temp_dir,
@@ -336,8 +337,9 @@ async fn open_file_inner(
     };
     let convert_from = read_copy
         .as_ref()
-        .map(|copy| copy.to_string_lossy().to_string())
+        .map(|copy| copy.path.to_string_lossy().to_string())
         .unwrap_or_else(|| source.clone());
+    let convert_options = read_copy.as_ref().map(|copy| copy.options).or(text_options);
 
     let converted = super::converter::convert_file(
         &app,
@@ -347,11 +349,11 @@ async fn open_file_inner(
         format_to,
         &state.temp_dir.to_string_lossy(),
         &crate::temp_layout::fontdata_dir(&state.temp_root),
-        text_options,
+        convert_options,
     )
     .await;
     if let Some(copy) = &read_copy {
-        let _ = std::fs::remove_file(copy);
+        let _ = std::fs::remove_file(&copy.path);
     }
     converted.map_err(|error| {
         log_event(

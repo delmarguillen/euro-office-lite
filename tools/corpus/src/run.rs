@@ -606,14 +606,14 @@ impl DocRun<'_> {
         };
         let editor_bin = paths.temp_dir.join("Editor.bin");
         let result = self.convert(
-            read_copy.as_deref().unwrap_or(&source),
+            read_copy.as_ref().map_or(source.as_path(), |copy| copy.path.as_path()),
             &editor_bin,
             8192,
             &paths.temp_dir,
-            options,
+            read_copy.as_ref().map(|copy| copy.options).or(options),
         );
         if let Some(copy) = &read_copy {
-            let _ = std::fs::remove_file(copy);
+            let _ = std::fs::remove_file(&copy.path);
         }
         *text_options = options;
         self.outcome(result, &editor_bin)
