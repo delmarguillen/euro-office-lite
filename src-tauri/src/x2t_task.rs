@@ -587,12 +587,26 @@ fn setup_linux_workdir(
         }
     }
 
+    // A real folder, not a link to the installed one: the PDF export looks for
+    // font_selection.bin in m_sFontDir, and without it falls back to the bundled
+    // fonts only, so Arabic or Hebrew text loses its glyphs.
     let work_fonts = work_binaries.join("fonts");
-    symlink_path(fonts_dir, &work_fonts)?;
+    create_dir(&work_fonts)?;
+    let font_entries = std::fs::read_dir(fonts_dir)
+        .map_err(|e| path_error("Failed to read fonts directory", fonts_dir, e))?;
+    for entry in font_entries {
+        let entry = entry.map_err(|e| path_error("Failed to read fonts entry", fonts_dir, e))?;
+        // The cache's copy goes in below; a link here would make that copy
+        // write through it into the read-only install.
+        if entry.path().is_file() && entry.file_name() != "font_selection.bin" {
+            symlink_path(&entry.path(), &work_fonts.join(entry.file_name()))?;
+        }
+    }
 
     let fontsel_src = fontdata_dir.join("font_selection.bin");
     if is_nonempty_file(&fontsel_src) {
         copy_file(&fontsel_src, &work_binaries.join("font_selection.bin"))?;
+        copy_file(&fontsel_src, &work_fonts.join("font_selection.bin"))?;
     }
 
     let work_allfonts = work_binaries.join("AllFonts.js");
@@ -1410,6 +1424,9 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         touch(&binaries.join("notes.txt"));
         let editors = root.join("app/editors");
         let fonts = binaries.join("fonts");
+        touch(&fonts.join("DejaVuSans.ttf"));
+        // Only files are linked; a folder under fonts/ is left out, as on macOS.
+        std::fs::create_dir_all(fonts.join("extra")).unwrap();
         let temp = root.join("temp/1-1");
 
         let run = setup_linux_workdir(
@@ -1439,7 +1456,17 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
             assert_eq!(link(work_binaries.join(name)), Some(binaries.join(name)), "{}", name);
         }
         assert!(!work_binaries.join("notes.txt").exists());
-        assert_eq!(link(work_binaries.join("fonts")), Some(fonts.clone()));
+        // fonts/ is a real folder with one link per bundled font and the cache's
+        // font_selection.bin, which x2t reads from m_sFontDir for the PDF.
+        let work_fonts = work_binaries.join("fonts");
+        let fonts_meta = std::fs::symlink_metadata(&work_fonts).unwrap();
+        assert!(fonts_meta.is_dir() && !fonts_meta.file_type().is_symlink());
+        for name in ["LiberationSerif-Regular.ttf", "DejaVuSans.ttf"] {
+            assert_eq!(link(work_fonts.join(name)), Some(fonts.join(name)), "{}", name);
+        }
+        assert!(!work_fonts.join("extra").exists());
+        assert_eq!(std::fs::read(work_fonts.join("font_selection.bin")).unwrap(), b"selection");
+        assert_eq!(link(work_fonts.join("font_selection.bin")), None);
         for relative in DOCTRENDERER_EDITOR_RESOURCES {
             assert_eq!(
                 link(work.join("editors").join(relative)),
@@ -1457,6 +1484,34 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
             DOCTRENDERER_CONFIG_PARENT.as_bytes()
         );
         assert!(work.join("dictionaries").is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // An install that ships its own font_selection.bin: the work folder gets
+    // the cache's, and the installed one is never written.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_work_fonts_take_the_cache_selection_over_the_installed_one() {
+        let (root, binaries, fontdata) = installed_app("linux-fontsel");
+        let fonts = binaries.join("fonts");
+        std::fs::write(fonts.join("font_selection.bin"), b"installed").unwrap();
+        let temp = root.join("temp/1-1");
+
+        setup_linux_workdir(
+            &binaries,
+            &binaries.join("x2t"),
+            &fonts,
+            &fontdata,
+            &root.join("app/editors"),
+            &fontdata.join("AllFonts.js"),
+            &temp,
+        )
+        .unwrap();
+
+        let work_fonts = temp.join("x2t-workdir/binaries/fonts");
+        assert_eq!(std::fs::read_link(work_fonts.join("font_selection.bin")).ok(), None);
+        assert_eq!(std::fs::read(work_fonts.join("font_selection.bin")).unwrap(), b"selection");
+        assert_eq!(std::fs::read(fonts.join("font_selection.bin")).unwrap(), b"installed");
         let _ = std::fs::remove_dir_all(&root);
     }
 
