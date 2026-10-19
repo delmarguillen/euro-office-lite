@@ -11,6 +11,7 @@ mod x2t_task;
 mod text_import;
 
 mod allfonts;
+mod arch;
 mod compare;
 mod layout;
 mod manifest;

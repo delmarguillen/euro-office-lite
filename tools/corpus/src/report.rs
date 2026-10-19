@@ -6,7 +6,7 @@
 use crate::manifest::{self, Entry};
 use crate::run::Infra;
 use crate::tsv::Table;
-use crate::{allfonts, normalize, pdf, sha256};
+use crate::{allfonts, arch, normalize, pdf, sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
@@ -324,6 +324,19 @@ fn cell(checks: &BTreeMap<(&str, &str), &str>, step: &str) -> String {
     text
 }
 
+pub fn architecture_line(env: &dyn Fn(&str) -> String) -> String {
+    let host = env("host.arch");
+    let (sidecar, pdf_x2t) = (env("sidecar.arch"), env("pdf_x2t.arch"));
+    let emulated = arch::emulated(&sidecar, &host) || arch::emulated(&pdf_x2t, &host);
+    format!(
+        "- Architecture: host {}, sidecar x2t {}, PDF x2t {}{}\n",
+        host,
+        sidecar,
+        pdf_x2t,
+        if emulated { " (emulated)" } else { "" }
+    )
+}
+
 fn summary(table: &Table, entries: &[Entry], env: &dyn Fn(&str) -> String, failures: &[String], out: &Path) -> String {
     let mut s = String::from("## Conversion corpus\n\n");
     let package = std::fs::read_to_string(out.join("..").join("package.txt")).unwrap_or_default();
@@ -332,6 +345,7 @@ fn summary(table: &Table, entries: &[Entry], env: &dyn Fn(&str) -> String, failu
     }
     s.push_str(&format!("- Sidecar x2t: {} ({})\n", env("sidecar.version"), env("sidecar.path")));
     s.push_str(&format!("- PDF x2t: {} ({}), same file: {}\n", env("pdf_x2t.version"), env("pdf_x2t.path"), env("x2t_same_file")));
+    s.push_str(&architecture_line(env));
     s.push_str(&format!(
         "- Font cache: {} fonts, {} bundled, {} system; Liberation and Carlito: {}\n",
         env("fonts.total"),
@@ -424,6 +438,17 @@ mod tests {
         assert!(report.failures[0].contains("missing:Hello"));
         let values: Vec<&str> = report.table.rows.iter().map(|r| r[4].as_str()).collect();
         assert_eq!(values, vec!["ok", "missing:Hello"]);
+    }
+
+    #[test]
+    fn the_summary_says_when_x2t_runs_emulated() {
+        let env_of = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string()).unwrap_or_default()
+        };
+        let win_arm = env_of(&[("host.arch", "aarch64"), ("sidecar.arch", "x86_64"), ("pdf_x2t.arch", "x86_64")]);
+        assert_eq!(architecture_line(&win_arm), "- Architecture: host aarch64, sidecar x2t x86_64, PDF x2t x86_64 (emulated)\n");
+        let native = env_of(&[("host.arch", "aarch64"), ("sidecar.arch", "aarch64"), ("pdf_x2t.arch", "aarch64")]);
+        assert!(!architecture_line(&native).contains("emulated"));
     }
 
     #[test]

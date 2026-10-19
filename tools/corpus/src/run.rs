@@ -4,7 +4,7 @@
 use crate::layout::{self, Layout, Os};
 use crate::manifest::{self, Entry, Source};
 use crate::tsv::Table;
-use crate::{allfonts, sha256, text_import, x2t_task};
+use crate::{allfonts, arch, sha256, text_import, x2t_task};
 use std::path::{Path, PathBuf};
 
 pub struct RunArgs {
@@ -45,6 +45,7 @@ pub struct X2tInfo {
     pub size: u64,
     pub sha256: String,
     pub version: String,
+    pub arch: String,
 }
 
 fn x2t_info(path: &Path, binaries_dir: &Path) -> Result<X2tInfo, Infra> {
@@ -57,6 +58,7 @@ fn x2t_info(path: &Path, binaries_dir: &Path) -> Result<X2tInfo, Infra> {
         size,
         sha256,
         version: x2t_version(path, binaries_dir),
+        arch: arch::file_arch(path),
     })
 }
 
@@ -164,7 +166,7 @@ pub fn prepare(args: &RunArgs, log: &Log) -> Result<Prepared, Infra> {
     let path = |p: &Path| p.to_string_lossy().to_string();
     let mut env: Vec<(String, String)> = vec![
         ("os".into(), std::env::consts::OS.into()),
-        ("arch".into(), std::env::consts::ARCH.into()),
+        ("host.arch".into(), std::env::consts::ARCH.into()),
         ("install_root".into(), path(&args.install_root)),
         ("exe".into(), path(&layout.exe)),
         ("resource_dir".into(), path(&layout.resource_dir)),
@@ -175,6 +177,7 @@ pub fn prepare(args: &RunArgs, log: &Log) -> Result<Prepared, Infra> {
         env.push((format!("{}.size", name), info.size.to_string()));
         env.push((format!("{}.sha256", name), info.sha256.clone()));
         env.push((format!("{}.version", name), info.version.clone()));
+        env.push((format!("{}.arch", name), info.arch.clone()));
     }
     let same = if sidecar.sha256 == pdf_x2t.sha256 { "yes" } else { "no" };
     env.push(("x2t_same_file".into(), same.into()));
