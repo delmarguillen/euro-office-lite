@@ -1,4 +1,4 @@
-file	class	steps	expect	variants	save_as	note
+file	class	steps	expect	variants	save_as	note	script_fonts
 @templates/blank.docx	comparable	open,save,pdf		plain		installer template: default font of the word editor, what a 0-byte docx opens
 @templates/blank.xlsx	comparable	open,save,pdf		plain		installer template: default font of the cell editor
 @templates/blank.pptx	comparable	open,save,pdf		plain		installer template: default font of the slide editor
@@ -29,5 +29,5 @@ utf16le-crlf.txt	comparable	open,save		plain		TXT in UTF-16 LE with CRLF, as Not
 @empty:empty.docx	comparable	open,save		plain		0-byte docx opens the blank template and saves to its own name
 @empty:empty.csv	comparable	open	fail:open:88	plain		x2t refuses an empty CSV (exit 88)
 cjk.docx	system-fonts	open,save,pdf	CJK system fonts sample	plain		Chinese and Japanese, drawn with whatever the runner has
-arabic-rtl.docx	system-fonts	open,save,pdf	Arabic system fonts sample	plain		Arabic right-to-left paragraph
-hebrew.docx	system-fonts	open,save,pdf	Hebrew system fonts sample	plain		Hebrew right-to-left paragraph
+arabic-rtl.docx	system-fonts	open,save,pdf	Arabic system fonts sample	plain		Arabic right-to-left paragraph; the PDF must embed one of the script_fonts	DejaVu Sans|Tahoma
+hebrew.docx	system-fonts	open,save,pdf	Hebrew system fonts sample	plain		Hebrew right-to-left paragraph; the PDF must embed one of the script_fonts	DejaVu Sans|Tahoma

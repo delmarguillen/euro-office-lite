@@ -37,6 +37,10 @@ pub struct Entry {
     pub expect_fail: Option<ExpectedFailure>,
     pub variants: Vec<String>,
     pub save_as: Vec<String>,
+    // Families that draw this document's script, from the optional
+    // script_fonts column: its PDF must then embed one of them whenever the
+    // runner has one.
+    pub script_fonts: Vec<String>,
 }
 
 impl Entry {
@@ -130,6 +134,13 @@ pub fn parse(text: &str) -> Result<Vec<Entry>, String> {
             expect_fail,
             variants,
             save_as: list(table.get(row, "save_as")),
+            script_fonts: table
+                .get(row, "script_fonts")
+                .split('|')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
             doc,
         };
         validate(&entry)?;
@@ -183,6 +194,18 @@ fn validate(entry: &Entry) -> Result<(), String> {
     let installed = matches!(entry.source, Source::Installed(_));
     if entry.class == "comparable" && entry.has_step("pdf") && entry.expect.is_empty() && !installed {
         return Err(format!("{}: a comparable PDF needs expected text", doc));
+    }
+    // A comparable document uses the bundled fonts only, so asking it for
+    // another one contradicts its class.
+    if !entry.script_fonts.is_empty() && (entry.class != "system-fonts" || !entry.has_step("pdf")) {
+        return Err(format!("{}: script_fonts needs a system-fonts document with a pdf step", doc));
+    }
+    // Fonts compare by the part before a '-' or ',' style suffix, so a family
+    // holding either (or anything but letters, digits and spaces) could match
+    // a different family that shares its first part.
+    let plain_family = |f: &str| f.chars().all(|c| c.is_alphanumeric() || c == ' ');
+    if let Some(family) = entry.script_fonts.iter().find(|f| !plain_family(f)) {
+        return Err(format!("{}: script_fonts family {:?} may hold only letters, digits and spaces", doc, family));
     }
     Ok(())
 }
@@ -329,5 +352,41 @@ mod tests {
         }
         assert!(parse("a.docx\tsystem-fonts\topen,pdf\t\t\t\t\n").is_err(), "needs a header");
         assert!(parse(&format!("{}a.docx\tsystem-fonts\topen,pdf\t\t\t\t\n", HEADER)).is_ok());
+    }
+
+    // The column is optional: a manifest without it, or a row that leaves it
+    // out, asks for no script font.
+    #[test]
+    fn script_fonts_are_read_and_only_allowed_on_system_font_pdfs() {
+        let header = "file\tclass\tsteps\texpect\tvariants\tsave_as\tnote\tscript_fonts\n";
+        let text = format!(
+            "{}a.docx\tsystem-fonts\topen,pdf\tHi\t\t\tn\tDejaVu Sans| Tahoma\nb.docx\tsystem-fonts\topen,pdf\tHi\t\t\tn\n",
+            header
+        );
+        let entries = parse(&text).unwrap();
+        assert_eq!(entries[0].script_fonts, vec!["DejaVu Sans", "Tahoma"]);
+        assert!(entries[1].script_fonts.is_empty());
+        assert!(parse(&format!("{}a.docx\tsystem-fonts\topen,pdf\t\t\t\t\n", HEADER)).unwrap()[0].script_fonts.is_empty());
+        for row in [
+            "a.docx\tcomparable\topen,pdf\tHi\t\t\t\tTahoma",
+            "a.docx\tsystem-fonts\topen,save\t\t\t\t\tTahoma",
+            "a.docx\tsystem-fonts\topen,pdf\t\t\t\t\tExample-Arabic",
+            "a.docx\tsystem-fonts\topen,pdf\t\t\t\t\tTahoma|Example,Bold",
+            "a.docx\tsystem-fonts\topen,pdf\t\t\t\t\tExample_Arabic",
+            "a.docx\tsystem-fonts\topen,pdf\t\t\t\t\tExample+Arabic",
+        ] {
+            assert!(parse(&format!("{}{}\n", header, row)).is_err(), "{}", row);
+        }
+    }
+
+    // The two right-to-left documents are the ones the PDF export lost on
+    // Linux while their phrase in Latin still came out.
+    #[test]
+    fn the_real_manifest_asks_the_rtl_documents_for_a_script_font() {
+        let entries = read(&repo().join("tests/corpus")).unwrap();
+        for doc in ["arabic-rtl.docx", "hebrew.docx"] {
+            let entry = entries.iter().find(|e| e.doc == doc).unwrap();
+            assert!(entry.script_fonts.contains(&"DejaVu Sans".to_string()), "{}", doc);
+        }
     }
 }
