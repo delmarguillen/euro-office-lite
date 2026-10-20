@@ -1,0 +1,27 @@
+doc	variant	step	check	platforms	kind	reason	issue
+*	*	save*	part:word/fontTable.xml	all	env	x2t fills w:panose1 from the runner's own copy of each font, or leaves it out
+basic.ods	plain	open	editor.sha256	all	env	the default column width comes from the metrics of the runner's default font
+basic.ods	plain	open	sha256	all	env	the default column width comes from the metrics of the runner's default font
+basic.ods	plain	save	part:content.xml	all	env	the default column width comes from the metrics of the runner's default font
+basic.ods	plain	pdf	text.sha256	all	env	the column width decides how much of a clipped cell the PDF text holds
+sheet.ods	plain	open	editor.sha256	all	env	the default column width comes from the metrics of the runner's default font
+sheet.ods	plain	open	sha256	all	env	the default column width comes from the metrics of the runner's default font
+sheet.ods	plain	save	part:content.xml	all	env	the default column width comes from the metrics of the runner's default font
+sheet.ods	plain	pdf	text.sha256	all	env	the column width decides where the sheet's columns break across the PDF
+@templates/blank.xlsx	plain	open	editor.sha256	linux-x64	env	the default column width comes from the metrics of the runner's default font
+@templates/blank.xlsx	plain	open	sha256	linux-x64	env	the default column width comes from the metrics of the runner's default font
+@templates/blank.pptx	plain	pdf	fonts	win-x64,win-arm64	env	the template's theme asks for Calibri, which Windows has; elsewhere x2t substitutes Carlito
+@templates/blank.pptx	plain	pdf	fonts.allowed	win-x64,win-arm64	env	the template's theme asks for Calibri, which Windows has; elsewhere x2t substitutes Carlito
+basic.odp	plain	pdf	fonts	all	env	x2t gives a text style Arial: Windows and macOS have it, Linux substitutes Liberation Sans
+basic.odp	plain	pdf	fonts.allowed	all	env	x2t gives a text style Arial: Windows and macOS have it, Linux substitutes Liberation Sans
+basic.odt	plain	save	part:styles.xml	all	env	the default list style's num-format differs per OS on a document without lists; still to be checked in the app
+*	*	save*	part:ppt/handoutMasters/*	8.2	x2t	x2t 8.2 writes no handout master
+*	*	save*	part:ppt/theme/theme0.xml	8.2	x2t	x2t 8.2 writes no handout master theme
+empty-lines.csv	plain	save	bytes.sha256	9.4	x2t	x2t 9.4 writes an empty CSV line as a row of delimiters
+empty-lines.csv	plain	save	roundtrip.bytes	9.4	x2t	x2t 9.4 writes an empty CSV line as a row of delimiters
+empty-lines.csv	plain	save	sha256	9.4	x2t	x2t 9.4 writes an empty CSV line as a row of delimiters
+empty-lines.csv	plain	save	size	9.4	x2t	x2t 9.4 writes an empty CSV line as a row of delimiters
+utf8-bom-semicolon-crlf.csv	plain	save	bytes.sha256	9.4	x2t	x2t 9.4 adds an empty row after a final line break	Euro-Office/core#160
+utf8-bom-semicolon-crlf.csv	plain	save	roundtrip.bytes	9.4	x2t	x2t 9.4 adds an empty row after a final line break	Euro-Office/core#160
+utf8-bom-semicolon-crlf.csv	plain	save	sha256	9.4	x2t	x2t 9.4 adds an empty row after a final line break	Euro-Office/core#160
+utf8-bom-semicolon-crlf.csv	plain	save	size	9.4	x2t	x2t 9.4 adds an empty row after a final line break	Euro-Office/core#160

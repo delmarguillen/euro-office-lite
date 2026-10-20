@@ -70,7 +70,8 @@ pub fn values(env: &Table, run: &Table, report: &Table) -> BTreeMap<Key, String>
     for row in &report.rows {
         let check = report.get(row, "check");
         // What x2t writes as the application is recorded, not compared (#41).
-        if check.starts_with("app.") {
+        // What report settled against known.tsv is read on its own (flaky).
+        if check.starts_with("app.") || check == FLAKY || check == KNOWN_BUG {
             continue;
         }
         if check == "editor.sha256" && is_text_document(report.get(row, "doc")) {
@@ -109,14 +110,39 @@ pub fn lines(a: &BTreeMap<Key, String>, b: &BTreeMap<Key, String>) -> Vec<Line> 
         .collect()
 }
 
-fn load(out: &Path) -> Result<BTreeMap<Key, String>, Infra> {
-    let read = |name: &str| Table::read(&out.join(name)).map_err(Infra);
-    Ok(values(&read("env.tsv")?, &read("run.tsv")?, &read("report.tsv")?))
+// Rows report writes when it settles a failure against known.tsv.
+pub const FLAKY: &str = "flaky";
+pub const KNOWN_BUG: &str = "known-bug";
+
+// The steps report let pass as flaky, with what happened, by (doc, variant,
+// step).
+pub fn flaky_steps(report: &Table) -> BTreeMap<(String, String, String), String> {
+    report
+        .rows
+        .iter()
+        .filter(|row| report.get(row, "check") == FLAKY)
+        .map(|row| {
+            let at = |c: &str| report.get(row, c).to_string();
+            ((at("doc"), at("variant"), at("step")), at("value"))
+        })
+        .collect()
 }
 
-// Returns how many keys differ or are missing on one side.
+type Flaky = BTreeMap<(String, String, String), String>;
+
+fn load(out: &Path) -> Result<(BTreeMap<Key, String>, Flaky), Infra> {
+    let read = |name: &str| Table::read(&out.join(name)).map_err(Infra);
+    let report = read("report.tsv")?;
+    Ok((values(&read("env.tsv")?, &read("run.tsv")?, &report), flaky_steps(&report)))
+}
+
+// Returns how many keys differ or are missing on one side. A step that
+// either run's report let pass as flaky is named, not counted.
 pub fn compare(a: &Path, b: &Path, summary: Option<&Path>) -> Result<usize, Infra> {
-    let lines = lines(&load(a)?, &load(b)?);
+    let ((values_a, mut flaky), (values_b, flaky_b)) = (load(a)?, load(b)?);
+    flaky.extend(flaky_b);
+    let is_flaky = |key: &Key| flaky.contains_key(&(key.1.clone(), key.2.clone(), key.3.clone()));
+    let lines = lines(&values_a, &values_b);
     let mut table = Table::new(&["source", "doc", "variant", "step", "check", "a", "b", "verdict"]);
     for line in &lines {
         let (s, d, v, st, c) = &line.key;
@@ -133,7 +159,7 @@ pub fn compare(a: &Path, b: &Path, summary: Option<&Path>) -> Result<usize, Infr
     }
     let folder = a.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     table.write(&folder.join("compare.tsv")).map_err(Infra)?;
-    let wrong: Vec<&Line> = lines.iter().filter(|l| l.verdict() != "same").collect();
+    let wrong: Vec<&Line> = lines.iter().filter(|l| l.verdict() != "same" && !is_flaky(&l.key)).collect();
     if let Some(path) = summary {
         let mut s = format!(
             "## Determinism: {} against {}\n\n{} values compared, {} differ or are missing.\n",
@@ -142,6 +168,12 @@ pub fn compare(a: &Path, b: &Path, summary: Option<&Path>) -> Result<usize, Infr
             lines.len(),
             wrong.len()
         );
+        if !flaky.is_empty() {
+            s.push_str("\nFlaky in one run, declared in known.tsv (not counted):\n\n");
+            for ((doc, variant, step), what) in &flaky {
+                s.push_str(&format!("- {} {} {}: {}\n", clean(doc), clean(variant), clean(step), clean(what)));
+            }
+        }
         if !wrong.is_empty() {
             s.push_str("\n| Source | Doc | Variant | Step | Check | A | B | Verdict |\n|---|---|---|---|---|---|---|---|\n");
             for line in wrong.iter().take(200) {
@@ -271,6 +303,34 @@ c.csv\tplain\topen\teditor.sha256\tbin1\n";
                 ("run/b.csv/save/sha256".to_string(), "diff"),
             ]
         );
+    }
+
+    // A step report let pass as flaky (a crash in one run only, declared in
+    // known.tsv) does not count as a difference between the runs, and is
+    // named in the summary; every other difference still counts.
+    #[test]
+    fn a_flaky_step_is_not_a_difference_but_is_named() {
+        let root = std::env::temp_dir().join(format!("corpus-compare-flaky-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let crashed = RUN.replace("b.csv\tplain\tsave\tok\t0\t\t5\tcsv1\tfiles/b.csv/plain/save.csv", "b.csv\tplain\tsave\tsignal\t\t6\t\t\t");
+        let flaky_row = "b.csv\tplain\tsave\tflaky\tsignal 6 on linux-arm64 in run1 (run2: ok)\n";
+        for (run, run_tsv, report) in [("run1", crashed.clone(), format!("{}{}", REPORT, flaky_row)), ("run2", RUN.to_string(), REPORT.to_string())] {
+            let dir = root.join(run);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("env.tsv"), ENV).unwrap();
+            std::fs::write(dir.join("run.tsv"), run_tsv).unwrap();
+            std::fs::write(dir.join("report.tsv"), report).unwrap();
+        }
+        let summary = root.join("determinism.md");
+        assert_eq!(compare(&root.join("run1"), &root.join("run2"), Some(&summary)).unwrap(), 0);
+        let text = std::fs::read_to_string(&summary).unwrap();
+        assert!(text.contains("Flaky in one run, declared in known.tsv"), "{}", text);
+        assert!(text.contains("signal 6 on linux-arm64 in run1"), "{}", text);
+
+        // Without the report's flaky row the same crash is a difference.
+        std::fs::write(root.join("run1/report.tsv"), REPORT).unwrap();
+        assert!(compare(&root.join("run1"), &root.join("run2"), None).unwrap() > 0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // determinism.md goes into the run's Markdown summary, and its values

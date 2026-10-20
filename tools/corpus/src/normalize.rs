@@ -189,6 +189,30 @@ pub fn remove_attributes(xml: &str, drop: impl Fn(&str) -> bool) -> String {
     out
 }
 
+// The order of the Default and Override entries carries no meaning in a
+// package, and x2t writes them in a different order on each OS: they are
+// put back in sorted order before the closing tag.
+fn sort_content_types(xml: &str) -> String {
+    let mut entries = Vec::new();
+    let mut out = String::with_capacity(xml.len());
+    for token in tokens(xml) {
+        match token {
+            Token::Tag { raw, name, kind: Kind::Empty } if name == "Default" || name == "Override" => entries.push(raw),
+            Token::Tag { raw, name: "Types", kind: Kind::End } => {
+                entries.sort_unstable();
+                entries.iter().for_each(|entry| out.push_str(entry));
+                entries.clear();
+                out.push_str(raw);
+            }
+            Token::Text(text) => out.push_str(text),
+            Token::Tag { raw, .. } => out.push_str(raw),
+        }
+    }
+    // Entries without a closing tag stay where the tokens left them.
+    entries.iter().for_each(|entry| out.push_str(entry));
+    out
+}
+
 // A package part with what changes on every save removed. Parts not listed
 // here are compared as they are.
 pub fn normalize_part(part: &str, xml: &str) -> String {
@@ -203,6 +227,7 @@ pub fn normalize_part(part: &str, xml: &str) -> String {
             xml,
             &["meta:creation-date", "dc:date", "meta:editing-duration", "meta:editing-cycles", "meta:generator"],
         ),
+        "[Content_Types].xml" => sort_content_types(xml),
         _ if part.starts_with("word/") && part.ends_with(".xml") => {
             let xml = if part == "word/settings.xml" {
                 remove_elements(xml, &["w:rsids"])
@@ -513,6 +538,52 @@ mod tests {
         let xml = "<office:meta><meta:generator>X</meta:generator><dc:title>T</dc:title><meta:creation-date>2026</meta:creation-date><dc:date>2026</dc:date><meta:editing-duration>PT1S</meta:editing-duration><meta:editing-cycles>2</meta:editing-cycles><meta:keyword>k</meta:keyword></office:meta>";
         assert_eq!(normalize_part("meta.xml", xml), "<office:meta><dc:title>T</dc:title><meta:keyword>k</meta:keyword></office:meta>");
         assert_eq!(element_text(xml, "meta:generator"), Some("X".into()));
+    }
+
+    // The [Content_Types].xml of the same saved docx from four platforms of
+    // one run: the same entries in the order each build of x2t writes them.
+    #[test]
+    fn content_types_compare_their_entries_in_any_order() {
+        let entry = |name: &str| -> String {
+            let (kind, attr, value, ty) = match name {
+                "bin" => ("Default", "Extension", "bin", "application/vnd.openxmlformats-officedocument.oleObject"),
+                "jpeg" => ("Default", "Extension", "jpeg", "image/jpeg"),
+                "rels" => ("Default", "Extension", "rels", "application/vnd.openxmlformats-package.relationships+xml"),
+                "xml" => ("Default", "Extension", "xml", "application/xml"),
+                "png" => ("Default", "Extension", "png", "image/png"),
+                "wmf" => ("Default", "Extension", "wmf", "image/x-wmf"),
+                "document" => ("Override", "PartName", "/word/document.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"),
+                "styles" => ("Override", "PartName", "/word/styles.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"),
+                "theme" => ("Override", "PartName", "/word/theme/theme1.xml", "application/vnd.openxmlformats-officedocument.theme+xml"),
+                "fontTable" => ("Override", "PartName", "/word/fontTable.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"),
+                "webSettings" => ("Override", "PartName", "/word/webSettings.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.webSettings+xml"),
+                "settings" => ("Override", "PartName", "/word/settings.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"),
+                "app" => ("Override", "PartName", "/docProps/app.xml", "application/vnd.openxmlformats-officedocument.extended-properties+xml"),
+                "core" => ("Override", "PartName", "/docProps/core.xml", "application/vnd.openxmlformats-package.core-properties+xml"),
+                other => panic!("{}", other),
+            };
+            format!("<{}  {}=\"{}\" ContentType=\"{}\"/>", kind, attr, value, ty)
+        };
+        let part = |order: &str| -> String {
+            let entries: String = order.split(' ').map(entry).collect();
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">{}</Types>",
+                entries
+            )
+        };
+        let orders = [
+            "bin jpeg rels xml png wmf document styles theme fontTable webSettings settings app core",
+            "xml wmf bin rels jpeg png app theme fontTable document styles core settings webSettings",
+            "wmf png xml jpeg rels bin app theme core webSettings settings styles fontTable document",
+            "wmf png jpeg xml rels bin core app theme fontTable webSettings styles settings document",
+        ];
+        let normalized: Vec<String> = orders.iter().map(|o| normalize_part("[Content_Types].xml", &part(o))).collect();
+        assert!(normalized.iter().all(|n| *n == normalized[0]), "{:#?}", normalized);
+        // Another entry, or another content type, is still a difference.
+        let fewer = normalize_part("[Content_Types].xml", &part("bin jpeg rels xml png wmf document styles theme fontTable webSettings settings app"));
+        assert_ne!(fewer, normalized[0]);
+        let retyped = part(orders[0]).replace("image/png", "image/x-png");
+        assert_ne!(normalize_part("[Content_Types].xml", &retyped), normalized[0]);
     }
 
     #[test]

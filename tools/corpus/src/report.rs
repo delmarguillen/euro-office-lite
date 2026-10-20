@@ -4,12 +4,13 @@
 // expected text or a script PDF with the bundled fonts only fails the report;
 // every other finding is informative.
 
+use crate::known::{Kind, KnownEntry};
 use crate::manifest::{self, Entry};
 use crate::markdown::clean;
 use crate::run::Infra;
 use crate::tsv::Table;
-use crate::{allfonts, arch, normalize, pdf, sha256};
-use std::collections::BTreeMap;
+use crate::{allfonts, arch, compare, normalize, pdf, sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -104,13 +105,24 @@ struct Report<'a> {
     out: &'a Path,
     table: Table,
     failures: Vec<String>,
+    // The (doc, variant, step, check) of each failure, in the same order.
+    failure_keys: Vec<FailKey>,
     // What the runner cannot test, which is not the document's failure.
     infra: Vec<String>,
 }
 
 impl Report<'_> {
+    fn new(out: &Path) -> Report<'_> {
+        Report { out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), failure_keys: Vec::new(), infra: Vec::new() }
+    }
+
     fn push(&mut self, doc: &str, variant: &str, step: &str, check: &str, value: impl Into<String>) {
         self.table.push(vec![doc.into(), variant.into(), step.into(), check.into(), value.into()]);
+    }
+
+    fn fail(&mut self, doc: &str, variant: &str, step: &str, check: &str, message: String) {
+        self.failures.push(message);
+        self.failure_keys.push((doc.into(), variant.into(), step.into(), check.into()));
     }
 
     fn write_text(&self, entry: &Entry, variant: &str, step: &str, text: &str) -> Result<(), String> {
@@ -194,7 +206,19 @@ fn trusted_entries(out: &Path, trusted_manifest: &Path) -> Result<Vec<Entry>, In
     manifest::parse(&String::from_utf8_lossy(&trusted)).map_err(|e| Infra(format!("trusted manifest: {}", e)))
 }
 
-pub fn report(out: &Path, trusted_manifest: &Path) -> Result<Vec<String>, Infra> {
+// What report needs from outside the results to settle a failure.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Options<'a> {
+    // known.tsv: flaky crashes and bugs named on purpose.
+    pub known: &'a [KnownEntry],
+    // The platform id the workflow ran these results on.
+    pub platform: Option<&'a str>,
+    // The other run of the same build, to tell a crash in one run from one
+    // in both.
+    pub other: Option<&'a Path>,
+}
+
+pub fn report(out: &Path, trusted_manifest: &Path, options: &Options) -> Result<Vec<String>, Infra> {
     // Whatever these names held came with the results, not from this report:
     // gone first, so a refused report leaves nothing to be read as its own.
     for file in ["report.tsv", "summary.md"] {
@@ -207,6 +231,10 @@ pub fn report(out: &Path, trusted_manifest: &Path) -> Result<Vec<String>, Infra>
     let env = Table::read(&out.join("env.tsv")).map_err(Infra)?;
     let entries = trusted_entries(out, trusted_manifest)?;
     check_rows(&runs, &entries)?;
+    let other = match options.other {
+        Some(dir) => Table::read(&dir.join("run.tsv")).map_err(Infra)?,
+        None => Table::new(&crate::run::RUN_COLUMNS),
+    };
     for tool in TOOLS {
         if Command::new(tool).arg("-v").output().is_err() {
             return Err(Infra(format!("{} is not installed (poppler-utils and unzip are needed)", tool)));
@@ -218,7 +246,7 @@ pub fn report(out: &Path, trusted_manifest: &Path) -> Result<Vec<String>, Infra>
     let spoofed = env_value("fonts.check") != "ok";
     let scratch = out.join(".unpack");
     let runner_families = runner_families(out);
-    let mut report = Report { out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
+    let mut report = Report::new(out);
 
     for row in &runs.rows {
         let get = |name: &str| runs.get(row, name).to_string();
@@ -228,7 +256,7 @@ pub fn report(out: &Path, trusted_manifest: &Path) -> Result<Vec<String>, Infra>
         };
         report.push(&doc, &variant, &step, "status", status.clone());
         if status != "ok" && status != "expected-fail" {
-            report.failures.push(format!("{} {} {}: {} {}", doc, variant, step, status, get("message")));
+            report.fail(&doc, &variant, &step, "status", format!("{} {} {}: {} {}", doc, variant, step, status, get("message")));
         }
         if step == "open" && status == "ok" {
             report.push(&doc, &variant, &step, "editor.size", get("size"));
@@ -250,17 +278,148 @@ pub fn report(out: &Path, trusted_manifest: &Path) -> Result<Vec<String>, Infra>
         };
         if let Err(message) = result {
             report.push(&doc, &variant, &step, "report.error", message.clone());
-            report.failures.push(format!("{} {} {}: cannot read the output: {}", doc, variant, step, message));
+            report.fail(&doc, &variant, &step, "report.error", format!("{} {} {}: cannot read the output: {}", doc, variant, step, message));
         }
     }
     let _ = std::fs::remove_dir_all(&scratch);
+    let scope = Scope {
+        known: options.known,
+        platform: options.platform.unwrap_or(""),
+        family: crate::matrix::family(&env_value("pdf_x2t.version")),
+        run: out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+    };
+    let failures: Vec<(FailKey, String)> = report.failure_keys.drain(..).zip(report.failures.drain(..)).collect();
+    let (kept, settled) = settle_run(&runs, &other, &failures, &scope);
+    let notes: Vec<String> = settled.iter().map(|r| format!("{} {} {}: {}: {}", r[0], r[1], r[2], r[3], r[4])).collect();
+    for row in settled {
+        report.table.push(row.to_vec());
+    }
     report.table.write(&out.join("report.tsv")).map_err(Infra)?;
-    let summary = summary(&report.table, &entries, &env_value, &report.failures, out);
+    let summary = summary(&report.table, &entries, &env_value, &kept, &notes, out);
     std::fs::write(out.join("summary.md"), summary).map_err(|e| Infra(format!("summary.md: {}", e)))?;
     if !report.infra.is_empty() {
         return Err(Infra(report.infra.join("; ")));
     }
-    Ok(report.failures)
+    Ok(kept)
+}
+
+// Who the known entries apply to in this report.
+#[derive(Clone, Debug, Default)]
+pub struct Scope<'a> {
+    pub known: &'a [KnownEntry],
+    // The platform id the workflow ran these results on, and its x2t family.
+    pub platform: &'a str,
+    pub family: String,
+    // This results folder's name (run1, run2), to say where a crash was.
+    pub run: String,
+}
+
+type StepKey = (String, String, String);
+
+fn step_key(table: &Table, row: &[String]) -> StepKey {
+    (table.get(row, "doc").to_string(), table.get(row, "variant").to_string(), table.get(row, "step").to_string())
+}
+
+// The steps of this run that crashed and may pass as flaky, with what
+// happened. A crash passes only if known.tsv declares it as flaky for this
+// document, variant, step and platform, and the other run of the same build
+// ran that step to its end (ok or expected-fail): a crash in both runs is a
+// hard failure, and so is any crash nobody declared or one the other run
+// cannot vouch for (skipped, exit, empty). The steps a flaky open skipped go
+// with it.
+pub fn flaky(runs: &Table, other: &Table, scope: &Scope) -> BTreeMap<StepKey, String> {
+    let other_status: BTreeMap<StepKey, String> =
+        other.rows.iter().map(|row| (step_key(other, row), other.get(row, "status").to_string())).collect();
+    let mut out = BTreeMap::new();
+    for row in runs.rows.iter().filter(|row| runs.get(row, "status") == "signal") {
+        let step = step_key(runs, row);
+        let declared = scope.known.iter().any(|e| {
+            e.kind == Kind::Flaky && e.matches(&step.0, &step.1, &step.2, "status") && e.covers(scope.platform, &scope.family)
+        });
+        let Some(other) = other_status.get(&step).filter(|s| *s == "ok" || *s == "expected-fail") else { continue };
+        if declared {
+            let what = format!("signal {} on {} in {} (the other run: {})", runs.get(row, "signal"), scope.platform, scope.run, other);
+            out.insert(step, what);
+        }
+    }
+    let flaky_opens: Vec<(String, String)> = out.keys().filter(|k| k.2 == "open").map(|k| (k.0.clone(), k.1.clone())).collect();
+    for row in runs.rows.iter().filter(|row| runs.get(row, "status") == "skipped") {
+        let step = step_key(runs, row);
+        if flaky_opens.contains(&(step.0.clone(), step.1.clone())) {
+            out.insert(step, "skipped after the flaky open".to_string());
+        }
+    }
+    out
+}
+
+// (doc, variant, step, check) of one hard failure.
+pub type FailKey = (String, String, String, String);
+
+// The steps that crashed in this run and in the other run of the same build.
+pub fn crashed_in_both(runs: &Table, other: &Table) -> BTreeSet<StepKey> {
+    let crashed = |table: &Table| -> BTreeSet<StepKey> {
+        table.rows.iter().filter(|row| table.get(row, "status") == "signal").map(|row| step_key(table, row)).collect()
+    };
+    crashed(runs).intersection(&crashed(other)).cloned().collect()
+}
+
+// What report settles for one run: its flaky steps against the other run,
+// then every failure against them, the crashes of both runs and known.tsv.
+pub fn settle_run(runs: &Table, other: &Table, failures: &[(FailKey, String)], scope: &Scope) -> (Vec<String>, Vec<[String; 5]>) {
+    settle(failures, &flaky(runs, other, scope), &crashed_in_both(runs, other), scope)
+}
+
+// Splits the hard failures into the ones that stay and the report rows that
+// record the others: the crash of a flaky step (or the skip a flaky open
+// caused), or a failure a bug entry names exactly (document and check, no
+// wildcard) for this platform. Nothing else leaves: a crash in both runs, a
+// check the partial output of a flaky crash fails, a script PDF without its
+// font, a lost TXT or a crash nobody declared stays a failure whatever env,
+// x2t or flaky entry matches it.
+pub fn settle(
+    failures: &[(FailKey, String)],
+    flaky: &BTreeMap<StepKey, String>,
+    crashed_in_both: &BTreeSet<StepKey>,
+    scope: &Scope,
+) -> (Vec<String>, Vec<[String; 5]>) {
+    let mut kept = Vec::new();
+    let mut rows: Vec<[String; 5]> = Vec::new();
+    for ((doc, variant, step, check), message) in failures {
+        let at = (doc.clone(), variant.clone(), step.clone());
+        if check == "status" && crashed_in_both.contains(&at) {
+            kept.push(message.clone());
+            continue;
+        }
+        if let Some(what) = flaky.get(&at).filter(|_| check == "status") {
+            let row = [doc.clone(), variant.clone(), step.clone(), compare::FLAKY.to_string(), what.clone()];
+            if !rows.contains(&row) {
+                rows.push(row);
+            }
+            continue;
+        }
+        let bug = scope.known.iter().find(|e| {
+            e.covers_failure(doc, check) && e.matches(doc, variant, step, check) && e.covers(scope.platform, &scope.family)
+        });
+        match bug {
+            Some(entry) => rows.push([
+                doc.clone(),
+                variant.clone(),
+                step.clone(),
+                compare::KNOWN_BUG.to_string(),
+                format!("{}: {}", entry.describe(), message),
+            ]),
+            None => kept.push(message.clone()),
+        }
+    }
+    // Flaky steps whose crash left no failure of their own (none today) are
+    // still recorded, so compare and matrix see every one.
+    for ((doc, variant, step), what) in flaky {
+        let row = [doc.clone(), variant.clone(), step.clone(), compare::FLAKY.to_string(), what.clone()];
+        if !rows.contains(&row) {
+            rows.push(row);
+        }
+    }
+    (kept, rows)
 }
 
 // The font families of the runner's font cache, which run copies next to the
@@ -345,7 +504,7 @@ fn script_font(report: &mut Report, entry: &Entry, variant: &str, step: &str, fo
         let embedded = if embedded.is_empty() { "nothing".to_string() } else { names(embedded) };
         // Naming both sides tells a runner with another valid font apart from
         // a broken export: the first only needs that family in the manifest.
-        report.failures.push(format!(
+        let message = format!(
             "{} {} {}: PDF without an embedded font for its script ({}): embeds {}, expected one of {}",
             doc,
             variant,
@@ -353,7 +512,8 @@ fn script_font(report: &mut Report, entry: &Entry, variant: &str, step: &str, fo
             value,
             embedded,
             entry.script_fonts.join("|")
-        ));
+        );
+        report.fail(doc, variant, step, "fonts.script", message);
         value
     };
     report.push(doc, variant, step, "fonts.script", value);
@@ -371,7 +531,7 @@ fn pdf_expectation(report: &mut Report, entry: &Entry, variant: &str, step: &str
         report.push(doc, variant, step, "expected", "ok");
     } else {
         let value = format!("missing:{}", missing.join("|"));
-        report.failures.push(format!("{} {} {}: PDF without its text ({})", doc, variant, step, value));
+        report.fail(doc, variant, step, "expected", format!("{} {} {}: PDF without its text ({})", doc, variant, step, value));
         report.push(doc, variant, step, "expected", value);
     }
 }
@@ -449,7 +609,8 @@ fn check_text_file(report: &mut Report, entry: &Entry, variant: &str, step: &str
             // BOM and line breaks back, so any other byte is lost text.
             let txt = file.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt"));
             if txt && diff != "equal" {
-                report.failures.push(format!("{} {} {}: the TXT changed in an open and save ({})", doc, variant, step, diff));
+                let message = format!("{} {} {}: the TXT changed in an open and save ({})", doc, variant, step, diff);
+                report.fail(doc, variant, step, "roundtrip.bytes", message);
             }
             report.push(doc, variant, step, "roundtrip.bytes", diff);
         }
@@ -461,6 +622,12 @@ fn check_text_file(report: &mut Report, entry: &Entry, variant: &str, step: &str
 // The cell of one step in the summary table.
 fn cell(checks: &BTreeMap<(&str, &str), &str>, step: &str) -> String {
     let Some(status) = checks.get(&(step, "status")) else { return String::new() };
+    if checks.contains_key(&(step, compare::FLAKY)) {
+        return "flaky".to_string();
+    }
+    if checks.contains_key(&(step, compare::KNOWN_BUG)) {
+        return "known bug".to_string();
+    }
     match *status {
         "ok" => {}
         "expected-fail" => return "expected fail".to_string(),
@@ -497,7 +664,7 @@ pub fn architecture_line(env: &dyn Fn(&str) -> String) -> String {
 
 // What summary.md shows from env.tsv, package.txt, run.tsv and x2t's own
 // messages goes through clean(): the file ends up in the run's summary.
-fn summary(table: &Table, entries: &[Entry], env: &dyn Fn(&str) -> String, failures: &[String], out: &Path) -> String {
+fn summary(table: &Table, entries: &[Entry], env: &dyn Fn(&str) -> String, failures: &[String], notes: &[String], out: &Path) -> String {
     let mut s = String::from("## Conversion corpus\n\n");
     let package = std::fs::read_to_string(out.join("..").join("package.txt")).unwrap_or_default();
     if !package.trim().is_empty() {
@@ -520,6 +687,15 @@ fn summary(table: &Table, entries: &[Entry], env: &dyn Fn(&str) -> String, failu
         s.push_str(&format!("  - {}\n", clean(failure)));
     }
     if !failures.is_empty() {
+        s.push('\n');
+    }
+    // Failures known.tsv settles: a flaky crash in one run, a bug named on
+    // purpose. They do not fail the report, and they are always shown.
+    if !notes.is_empty() {
+        s.push_str(&format!("- Settled by known.tsv: {}\n\n", notes.len()));
+        for note in notes {
+            s.push_str(&format!("  - {}\n", clean(note)));
+        }
         s.push('\n');
     }
     s.push_str("| Document | Variant | Class | Open | Save | PDF | Save as |\n|---|---|---|---|---|---|---|\n");
@@ -592,7 +768,7 @@ mod tests {
     fn a_pdf_missing_its_expected_text_is_a_hard_failure() {
         let out = std::env::temp_dir();
         let e = entry("comparable");
-        let mut report = Report { out: &out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
+        let mut report = Report::new(&out);
         pdf_expectation(&mut report, &e, "plain", "pdf", "Hello\nworld\n");
         assert!(report.failures.is_empty());
         pdf_expectation(&mut report, &e, "plain", "pdf", "\x0c\n");
@@ -619,7 +795,7 @@ arabic-rtl.docx	system-fonts	open,pdf	Arabic				DejaVu Sans|Tahoma
 ";
         let e = manifest::parse(text).unwrap().remove(0);
         let runner: Vec<String> = runner.iter().map(|s| s.to_string()).collect();
-        let mut report = Report { out: &out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
+        let mut report = Report::new(&out);
         script_font(&mut report, &e, "plain", "pdf", fonts, &runner);
         assert_eq!(report.table.rows.len(), 1);
         assert_eq!(report.table.rows[0][3], "fonts.script");
@@ -677,7 +853,7 @@ arabic-rtl.docx	system-fonts	open,pdf	Arabic				DejaVu Sans|Tahoma
 a.docx\tsystem-fonts\topen,pdf\tHi\t\t\t\tExampleArabic\n";
         let e = manifest::parse(text).unwrap().remove(0);
         let runner = vec!["ExampleArabic".to_string(), "ExampleLatin".to_string()];
-        let mut report = Report { out: &out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
+        let mut report = Report::new(&out);
         script_font(&mut report, &e, "plain", "pdf", &[font("ABCDEF+ExampleLatin-Bold")], &runner);
         assert_eq!(report.table.rows[0][4], "other-font:ABCDEF+ExampleLatin-Bold");
         assert_eq!(report.failures.len(), 1, "{:?}", report.failures);
@@ -698,7 +874,7 @@ a.docx\tsystem-fonts\topen,pdf\tHi\t\t\t\tExampleArabic\n";
     #[test]
     fn documents_without_script_fonts_get_no_script_row() {
         let out = std::env::temp_dir();
-        let mut report = Report { out: &out, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
+        let mut report = Report::new(&out);
         script_font(&mut report, &entry("system-fonts"), "plain", "pdf", &[font("Liberation Serif")], &["Tahoma".to_string()]);
         assert!(report.table.rows.is_empty() && report.failures.is_empty() && report.infra.is_empty());
     }
@@ -717,6 +893,208 @@ a.docx\tsystem-fonts\topen,pdf\tHi\t\t\t\tExampleArabic\n";
         let families = runner_families(&out);
         let _ = std::fs::remove_dir_all(&out);
         assert_eq!(families, vec!["DejaVu Sans", "Carlito"]);
+    }
+
+    fn run_table(rows: &[(&str, &str, &str, &str, &str)]) -> Table {
+        let mut table = Table::new(&crate::run::RUN_COLUMNS);
+        for (doc, variant, step, status, signal) in rows {
+            let mut cells = vec![String::new(); crate::run::RUN_COLUMNS.len()];
+            cells[0] = doc.to_string();
+            cells[1] = variant.to_string();
+            cells[2] = step.to_string();
+            cells[3] = status.to_string();
+            cells[5] = signal.to_string();
+            table.push(cells);
+        }
+        table
+    }
+
+    fn known_entries(rows: &str) -> Vec<KnownEntry> {
+        crate::known::parse(&format!("{}\n{}", crate::known::COLUMNS.join("\t"), rows)).unwrap()
+    }
+
+    fn scope(known: &[KnownEntry]) -> Scope<'_> {
+        Scope { known, platform: "linux-arm64", family: "9.4".into(), run: "run1".into() }
+    }
+
+    const ARABIC_FLAKY: &str = "arabic-rtl.docx\tplain\tpdf\t*\tlinux-arm64\tflaky\tcrash being measured\t\n";
+
+    // The three cases of the rule: a declared crash in one run passes as
+    // flaky; the same crash undeclared, or declared but in both runs, fails.
+    #[test]
+    fn a_crash_is_flaky_only_when_declared_and_in_one_run() {
+        let crashed = run_table(&[("arabic-rtl.docx", "plain", "open", "ok", ""), ("arabic-rtl.docx", "plain", "pdf", "signal", "6")]);
+        let fine = run_table(&[("arabic-rtl.docx", "plain", "open", "ok", ""), ("arabic-rtl.docx", "plain", "pdf", "ok", "")]);
+        let declared = known_entries(ARABIC_FLAKY);
+        let key = ("arabic-rtl.docx".to_string(), "plain".to_string(), "pdf".to_string());
+
+        let flaky_steps = flaky(&crashed, &fine, &scope(&declared));
+        assert_eq!(flaky_steps.get(&key).map(String::as_str), Some("signal 6 on linux-arm64 in run1 (the other run: ok)"));
+        assert_eq!(flaky_steps.len(), 1);
+
+        assert!(flaky(&crashed, &fine, &scope(&[])).is_empty(), "undeclared");
+        assert!(flaky(&crashed, &crashed, &scope(&declared)).is_empty(), "in both runs");
+    }
+
+    #[test]
+    fn a_flaky_entry_is_bound_to_its_document_step_and_platform() {
+        let crashed = run_table(&[("arabic-rtl.docx", "plain", "pdf", "signal", "11")]);
+        let fine = run_table(&[("arabic-rtl.docx", "plain", "pdf", "ok", "")]);
+        let declared = known_entries(ARABIC_FLAKY);
+        let elsewhere = Scope { platform: "linux-x64", family: "8.2".into(), ..scope(&declared) };
+        assert!(flaky(&crashed, &fine, &elsewhere).is_empty(), "another platform");
+        let other_step = known_entries("arabic-rtl.docx\tplain\tsave\t*\tlinux-arm64\tflaky\tr\t\n");
+        assert!(flaky(&crashed, &fine, &scope(&other_step)).is_empty(), "another step");
+        let not_flaky = known_entries("arabic-rtl.docx\tplain\tpdf\tstatus\tlinux-arm64\tbug\tr\t#9\n");
+        assert!(flaky(&crashed, &fine, &scope(&not_flaky)).is_empty(), "a bug entry is not a flaky one");
+        // Only a crash: an exit code in one run is never flaky.
+        let exited = run_table(&[("arabic-rtl.docx", "plain", "pdf", "exit", "")]);
+        assert!(flaky(&exited, &fine, &scope(&declared)).is_empty(), "an exit");
+        // The other run must have run the step.
+        assert!(flaky(&crashed, &run_table(&[]), &scope(&declared)).is_empty(), "no other run");
+        let family = known_entries("arabic-rtl.docx\tplain\tpdf\t*\t9.4\tflaky\tr\t\n");
+        assert_eq!(flaky(&crashed, &fine, &scope(&family)).len(), 1, "by family");
+    }
+
+    // A crashed open skips the rest of the document in that run: those
+    // skipped steps are part of the same flaky crash.
+    #[test]
+    fn the_steps_a_flaky_open_skipped_are_flaky_too() {
+        let crashed = run_table(&[
+            ("arabic-rtl.docx", "plain", "open", "signal", "6"),
+            ("arabic-rtl.docx", "plain", "save", "skipped", ""),
+            ("arabic-rtl.docx", "plain", "pdf", "skipped", ""),
+            ("hebrew.docx", "plain", "save", "skipped", ""),
+        ]);
+        let fine = run_table(&[("arabic-rtl.docx", "plain", "open", "ok", "")]);
+        let declared = known_entries("arabic-rtl.docx\tplain\topen\t*\tall\tflaky\tr\t\n");
+        let steps: Vec<String> = flaky(&crashed, &fine, &scope(&declared)).keys().map(|k| format!("{} {}", k.0, k.2)).collect();
+        assert_eq!(steps, vec!["arabic-rtl.docx open", "arabic-rtl.docx pdf", "arabic-rtl.docx save"]);
+    }
+
+    fn failure(doc: &str, step: &str, check: &str, message: &str) -> (FailKey, String) {
+        ((doc.into(), "plain".into(), step.into(), check.into()), message.into())
+    }
+
+    // A script PDF without its font is a hard failure that no env, x2t or
+    // flaky entry, nor a wildcard bug entry, takes away; only a bug entry that
+    // names the document and fonts.script does, and the report says so.
+    #[test]
+    fn a_script_font_failure_leaves_only_for_a_bug_entry_that_names_it() {
+        let failures = [failure("arabic-rtl.docx", "pdf", "fonts.script", "arabic-rtl.docx plain pdf: PDF without an embedded font")];
+        for broad in [
+            "arabic-rtl.docx\tplain\tpdf\tfonts.script\tall\tenv\tr\t\n",
+            "arabic-rtl.docx\tplain\tpdf\tfonts.script\tall\tx2t\tr\t\n",
+            "arabic-rtl.docx\tplain\tpdf\t*\tall\tflaky\tr\t\n",
+            "arabic-rtl.docx\t*\t*\tfonts*\tall\tbug\tr\t#7\n",
+            "*\tplain\tpdf\tfonts.script\tall\tbug\tr\t#7\n",
+            "arabic-rtl.docx\tplain\tpdf\tfonts.script\tlinux-x64\tbug\tr\t#7\n",
+        ] {
+            let known = known_entries(broad);
+            let (kept, rows) = settle(&failures, &BTreeMap::new(), &BTreeSet::new(), &scope(&known));
+            assert_eq!((kept.len(), rows.len()), (1, 0), "{}", broad);
+        }
+        let known = known_entries("arabic-rtl.docx\tplain\tpdf\tfonts.script\tlinux-arm64\tbug\tDejaVu missing on the image\t#7\n");
+        let (kept, rows) = settle(&failures, &BTreeMap::new(), &BTreeSet::new(), &scope(&known));
+        assert!(kept.is_empty());
+        assert_eq!(rows[0][3], "known-bug");
+        assert!(rows[0][4].starts_with("known.tsv line 2 (bug, #7): DejaVu missing on the image: arabic-rtl.docx plain pdf"), "{}", rows[0][4]);
+    }
+
+    // The failures of a flaky step leave, recorded once; any other stays.
+    #[test]
+    fn the_failures_of_a_flaky_step_leave_and_the_rest_stay() {
+        let failures = [
+            failure("arabic-rtl.docx", "pdf", "status", "arabic-rtl.docx plain pdf: signal"),
+            failure("hebrew.docx", "pdf", "status", "hebrew.docx plain pdf: signal"),
+        ];
+        let mut flaky_steps = BTreeMap::new();
+        flaky_steps.insert(("arabic-rtl.docx".to_string(), "plain".to_string(), "pdf".to_string()), "signal 6 on linux-arm64 in run1 (the other run: ok)".to_string());
+        let (kept, rows) = settle(&failures, &flaky_steps, &BTreeSet::new(), &scope(&[]));
+        assert_eq!(kept, vec!["hebrew.docx plain pdf: signal"]);
+        assert_eq!(rows, vec![[
+            "arabic-rtl.docx".to_string(), "plain".into(), "pdf".into(), "flaky".into(), "signal 6 on linux-arm64 in run1 (the other run: ok)".into()
+        ]]);
+    }
+
+    // The other run vouches for a crash only if it ran that step to its end:
+    // here neither run made the PDF, so the crash of run1 stays a failure.
+    #[test]
+    fn a_crash_is_flaky_only_if_the_other_run_finished_the_step() {
+        let run1 = run_table(&[("arabic-rtl.docx", "plain", "open", "ok", ""), ("arabic-rtl.docx", "plain", "pdf", "signal", "6")]);
+        let run2 = run_table(&[("arabic-rtl.docx", "plain", "open", "signal", "11"), ("arabic-rtl.docx", "plain", "pdf", "skipped", "")]);
+        let declared = known_entries(
+            "arabic-rtl.docx\tplain\topen\t*\tlinux-arm64\tflaky\tr\t\narabic-rtl.docx\tplain\tpdf\t*\tlinux-arm64\tflaky\tr\t\n",
+        );
+        assert!(flaky(&run1, &run2, &scope(&declared)).is_empty(), "the other run skipped the PDF");
+        let failures = [failure("arabic-rtl.docx", "pdf", "status", "arabic-rtl.docx plain pdf: signal")];
+        let (kept, rows) = settle_run(&run1, &run2, &failures, &scope(&declared));
+        assert_eq!((kept.len(), rows.len()), (1, 0));
+        // run2's crashed open is vouched for by run1's open, and takes its
+        // skipped PDF with it.
+        assert_eq!(flaky(&run2, &run1, &Scope { run: "run2".into(), ..scope(&declared) }).len(), 2);
+        for other in ["exit", "empty", "skipped", "unexpected-ok"] {
+            let other_run = run_table(&[("arabic-rtl.docx", "plain", "open", "ok", ""), ("arabic-rtl.docx", "plain", "pdf", other, "")]);
+            assert!(flaky(&run1, &other_run, &scope(&declared)).is_empty(), "{}", other);
+        }
+        let expected_fail = run_table(&[("arabic-rtl.docx", "plain", "pdf", "expected-fail", "")]);
+        assert_eq!(flaky(&run1, &expected_fail, &scope(&declared)).len(), 1);
+    }
+
+    // A flaky entry lets the crash pass, not what the crashed step's partial
+    // output fails: those checks stay failures unless a bug entry names them.
+    #[test]
+    fn a_flaky_crash_does_not_take_away_what_its_partial_output_fails() {
+        let run1 = run_table(&[("arabic-rtl.docx", "plain", "pdf", "signal", "6"), ("notes.txt", "plain", "save", "signal", "11")]);
+        let run2 = run_table(&[("arabic-rtl.docx", "plain", "pdf", "ok", ""), ("notes.txt", "plain", "save", "ok", "")]);
+        let flaky_rows = "arabic-rtl.docx\tplain\tpdf\t*\tlinux-arm64\tflaky\tr\t\nnotes.txt\tplain\tsave\t*\tlinux-arm64\tflaky\tr\t\n";
+        let failures = [
+            failure("arabic-rtl.docx", "pdf", "status", "arabic-rtl.docx plain pdf: signal"),
+            failure("arabic-rtl.docx", "pdf", "fonts.script", "arabic-rtl.docx plain pdf: PDF without an embedded font"),
+            failure("arabic-rtl.docx", "pdf", "expected", "arabic-rtl.docx plain pdf: PDF without its text"),
+            failure("notes.txt", "save", "status", "notes.txt plain save: signal"),
+            failure("notes.txt", "save", "roundtrip.bytes", "notes.txt plain save: the TXT changed"),
+        ];
+        let (kept, rows) = settle_run(&run1, &run2, &failures, &scope(&known_entries(flaky_rows)));
+        assert_eq!(
+            kept,
+            vec![
+                "arabic-rtl.docx plain pdf: PDF without an embedded font",
+                "arabic-rtl.docx plain pdf: PDF without its text",
+                "notes.txt plain save: the TXT changed"
+            ]
+        );
+        let flaky_steps: Vec<(&str, &str)> = rows.iter().map(|r| (r[0].as_str(), r[3].as_str())).collect();
+        assert_eq!(flaky_steps, vec![("arabic-rtl.docx", "flaky"), ("notes.txt", "flaky")]);
+
+        // A bug entry that names the document and the check still covers it.
+        let with_bug = format!("{}arabic-rtl.docx\tplain\tpdf\tfonts.script\tlinux-arm64\tbug\tr\t#7\n", flaky_rows);
+        let (kept, rows) = settle_run(&run1, &run2, &failures, &scope(&known_entries(&with_bug)));
+        assert_eq!(kept, vec!["arabic-rtl.docx plain pdf: PDF without its text", "notes.txt plain save: the TXT changed"]);
+        assert!(rows.iter().any(|r| r[0] == "arabic-rtl.docx" && r[3] == "known-bug"), "{:?}", rows);
+    }
+
+    // A crash in both runs fails even with an exact bug entry for its status;
+    // a bug entry still covers a crash in one run, or an exit in both.
+    #[test]
+    fn a_crash_in_both_runs_fails_whatever_known_tsv_says() {
+        let crashed = run_table(&[("arabic-rtl.docx", "plain", "pdf", "signal", "6")]);
+        let failures = [failure("arabic-rtl.docx", "pdf", "status", "arabic-rtl.docx plain pdf: signal")];
+        let bug = "arabic-rtl.docx\tplain\tpdf\tstatus\tlinux-arm64\tbug\tcrash being fixed\t#9\n";
+        let both = known_entries(&format!("{}{}", bug, ARABIC_FLAKY));
+        let (kept, rows) = settle_run(&crashed, &crashed, &failures, &scope(&both));
+        assert_eq!((kept, rows.len()), (vec!["arabic-rtl.docx plain pdf: signal".to_string()], 0));
+
+        let bug_only = known_entries(bug);
+        let fine = run_table(&[("arabic-rtl.docx", "plain", "pdf", "ok", "")]);
+        let (kept, rows) = settle_run(&crashed, &fine, &failures, &scope(&bug_only));
+        assert!(kept.is_empty());
+        assert_eq!(rows[0][3], "known-bug");
+        let exited = run_table(&[("arabic-rtl.docx", "plain", "pdf", "exit", "")]);
+        let exit_failure = [failure("arabic-rtl.docx", "pdf", "status", "arabic-rtl.docx plain pdf: exit 1")];
+        let (kept, rows) = settle_run(&exited, &exited, &exit_failure, &scope(&bug_only));
+        assert!(kept.is_empty());
+        assert_eq!(rows[0][3], "known-bug");
     }
 
     fn text_entry(file: &str) -> Entry {
@@ -739,7 +1117,7 @@ a.docx\tsystem-fonts\topen,pdf\tHi\t\t\t\tExampleArabic\n";
         let same_txt = write("same.txt", b"\xFE\xFF\x00H\x00\x0A");
         let lost_txt = write("lost.txt", b"\xFE\xFF\x00\x0A");
         let changed_csv = write("changed.csv", b"a;b\n;\n");
-        let mut report = Report { out: &dir, table: Table::new(&REPORT_COLUMNS), failures: Vec::new(), infra: Vec::new() };
+        let mut report = Report::new(&dir);
 
         check_text_file(&mut report, &text_entry("a.txt"), "plain", "save", &same_txt, &original_txt).unwrap();
         assert!(report.failures.is_empty(), "{:?}", report.failures);
@@ -766,7 +1144,7 @@ a.docx\tsystem-fonts\topen,pdf\tHi\t\t\t\tExampleArabic\n";
         table.push(vec!["sheet.ods".into(), "plain".into(), "open".into(), "status".into(), payload.into()]);
         let env = |_: &str| payload.to_string();
         let failures = vec![format!("sheet.ods plain open: exit {}", payload)];
-        let text = summary(&table, &[entry("comparable")], &env, &failures, &out);
+        let text = summary(&table, &[entry("comparable")], &env, &failures, &[], &out);
         let _ = std::fs::remove_dir_all(&root);
         for bad in ["\n## Owned", "[link]", "](http", "<b>"] {
             assert!(!text.contains(bad), "{:?} in:\n{}", bad, text);
@@ -821,7 +1199,7 @@ a.docx\tsystem-fonts\topen,pdf\tHi\t\t\t\tExampleArabic\n";
     }
 
     fn report_error(out: &Path) -> String {
-        let result = report(out, &trusted(out));
+        let result = report(out, &trusted(out), &Options::default());
         let _ = std::fs::remove_dir_all(out.parent().unwrap());
         match result {
             Err(Infra(message)) => message,
@@ -889,7 +1267,7 @@ a.docx\tsystem-fonts\topen,pdf\tHi\t\t\t\tExampleArabic\n";
         std::fs::write(out.join("report.tsv"), "doc\tvariant\tstep\tcheck\tvalue\nforged\tplain\topen\tstatus\tok\n").unwrap();
         std::fs::write(out.join("summary.md"), "## forged\n").unwrap();
         std::fs::create_dir_all(out.join("text/forged")).unwrap();
-        let result = report(&out, &trusted(&out));
+        let result = report(&out, &trusted(&out), &Options::default());
         let left: Vec<bool> = ["report.tsv", "summary.md", "text"].iter().map(|name| out.join(name).exists()).collect();
         let _ = std::fs::remove_dir_all(out.parent().unwrap());
         assert!(result.is_err());
@@ -981,5 +1359,14 @@ a.docx\tsystem-fonts\topen,pdf\tHi\t\t\t\tExampleArabic\n";
         assert_eq!(cell(&script, "pdf"), "FAIL script font");
         script.insert(("pdf", "fonts.script"), "ok");
         assert_eq!(cell(&script, "pdf"), "ok");
+
+        // A step known.tsv settled says so instead of FAIL.
+        let mut settled = BTreeMap::new();
+        settled.insert(("pdf", "status"), "signal");
+        settled.insert(("pdf", "flaky"), "signal 6 on linux-arm64 in run1 (the other run: ok)");
+        assert_eq!(cell(&settled, "pdf"), "flaky");
+        settled.remove(&("pdf", "flaky"));
+        settled.insert(("pdf", "known-bug"), "known.tsv line 2 (bug, #7): r: x");
+        assert_eq!(cell(&settled, "pdf"), "known bug");
     }
 }
