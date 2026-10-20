@@ -100,6 +100,17 @@ flatpak update org.eurooffice.Lite
 
 Or download the `.flatpak` bundle from the release assets.
 
+**Title bar on Wayland.** On Wayland the app draws its own GTK title bar. If your compositor adds a second one (for example KDE Plasma set to server-side decorations), or you use a tiling compositor, start the app with one of these options. `--system-title-bar` leaves the title bar to the compositor, so a compositor that draws its own bar shows only that one. `--no-title-bar` removes the title bar completely. It is meant for tiling compositors: the window has no minimize button, and you move it with the compositor's shortcuts. The environment variable `EURO_OFFICE_LITE_TITLE_BAR` does the same (`system` or `none`); an option on the command line wins over it. The options do nothing on X11, Windows or macOS.
+
+```bash
+# Flatpak, once:
+flatpak run org.eurooffice.Lite --system-title-bar
+# Flatpak, every launch:
+flatpak override --user --env=EURO_OFFICE_LITE_TITLE_BAR=system org.eurooffice.Lite
+```
+
+With the `.deb`, copy the desktop file to `~/.local/share/applications/` and change its `Exec` line to `Exec=euro-office-lite --system-title-bar %F`.
+
 ## Adding more spellcheck languages
 
 The spell checker works with any language from the [Euro-Office dictionaries repository](https://github.com/Euro-Office/dictionaries). Each language there is a folder named after its locale, holding the two files hunspell needs. A language the repository names `xx_YY` goes in as `xx_YY/xx_YY.aff` and `xx_YY/xx_YY.dic`, inside your dictionaries folder:
