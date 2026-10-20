@@ -453,11 +453,10 @@ jobs:
           [ "$matrix" -eq 0 ] || status=1
           # Every platform must keep its committed baseline; the candidates
           # this run writes go into the artifact, to be reviewed and committed.
-          # Until the first baselines are committed a missing one passes.
           base=0
           if [ "${#platforms[@]}" -gt 0 ]; then
             "$BIN" baseline "${platforms[@]}" --baseline tests/corpus/baseline --known tests/corpus/known.tsv \
-              --missing ok --out baseline || base=$?
+              --out baseline || base=$?
           fi
           [ "$base" -eq 0 ] || status=1
           {

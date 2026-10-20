@@ -408,4 +408,18 @@ s.docx\tplain\tpdf\ttext.sha256\ts1\ns.docx\tplain\tpdf\tclass\tsystem-fonts\n{}
         assert_eq!(baseline(&args(&root, platforms, true)).unwrap(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    // The committed baselines the workflow checks: one per platform of its
+    // table, each one readable.
+    #[test]
+    fn the_committed_baselines_are_readable() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/baseline");
+        for id in crate::known::PLATFORM_IDS {
+            let table = Table::read(&dir.join(format!("{}.tsv", id))).unwrap();
+            assert_eq!(table.header, COLUMNS, "{}", id);
+            let values = from_table(&table).unwrap();
+            assert!(!values.is_empty(), "{}", id);
+            assert_eq!(values.len(), table.rows.len(), "{}: a key twice", id);
+        }
+    }
 }
