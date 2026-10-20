@@ -201,7 +201,7 @@ pub fn is_hard_failure(key: &Key, value: &str) -> bool {
 
 // How x2t ended is compared everywhere; everything else leaves the comparison
 // when it depends on the fonts of the machine.
-fn exclusion(platform: &Loaded, key: &Key) -> Option<&'static str> {
+pub fn exclusion(platform: &Loaded, key: &Key) -> Option<&'static str> {
     let (_, doc, variant, step, check) = key;
     if ["status", "exit", "signal"].contains(&check.as_str()) {
         return None;

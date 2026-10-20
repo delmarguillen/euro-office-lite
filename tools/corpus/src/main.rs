@@ -12,6 +12,7 @@ mod text_import;
 
 mod allfonts;
 mod arch;
+mod baseline;
 mod compare;
 mod known;
 mod layout;
@@ -33,7 +34,8 @@ usage:
   corpus run --install-root <dir> --corpus <dir> --out <dir> [--work <dir>] [--only <doc>] [--label <k=v>]...
   corpus report --out <dir> --manifest <trusted manifest.tsv> [--known <known.tsv> --platform <id> --other <other run dir>]
   corpus compare <out_a> <out_b> [--summary <file>]
-  corpus matrix --platform <id>=<run dir>... [--expect <id,id,...>] [--known <known.tsv>] --out <dir>";
+  corpus matrix --platform <id>=<run dir>... [--expect <id,id,...>] [--known <known.tsv>] --out <dir>
+  corpus baseline --platform <id>=<run1 dir>... --baseline <dir> [--known <known.tsv>] [--missing ok|fail] --out <dir>";
 
 // Positional arguments and --flag value pairs; --label may repeat.
 struct Args {
@@ -100,6 +102,39 @@ fn run_args(args: &Args) -> Result<run::RunArgs, String> {
     })
 }
 
+fn platform_dirs(args: &Args) -> Result<Vec<(String, PathBuf)>, String> {
+    let mut platforms: Vec<(String, PathBuf)> = Vec::new();
+    for value in args.flags.get("platform").into_iter().flatten() {
+        let (id, dir) = value
+            .split_once('=')
+            .filter(|(id, dir)| matrix::valid_id(id) && !dir.is_empty())
+            .ok_or_else(|| format!("--platform {} is not <id>=<dir> with a lowercase id", value))?;
+        if platforms.iter().any(|(p, _)| p == id) {
+            return Err(format!("--platform {} is given twice", id));
+        }
+        platforms.push((id.to_string(), PathBuf::from(dir)));
+    }
+    Ok(platforms)
+}
+
+fn baseline_args(args: &Args) -> Result<baseline::BaselineArgs, String> {
+    args.only_known(&["platform", "baseline", "out", "known", "missing"])?;
+    if !args.positional.is_empty() {
+        return Err("baseline takes no positional arguments".to_string());
+    }
+    let platforms = platform_dirs(args)?;
+    if platforms.is_empty() {
+        return Err("baseline needs --platform".to_string());
+    }
+    let missing_ok = match args.one("missing").unwrap_or("fail") {
+        "ok" => true,
+        "fail" => false,
+        other => return Err(format!("--missing {:?} is not ok or fail", other)),
+    };
+    let known = args.one("known").map(|path| known::read(Path::new(path))).transpose()?.unwrap_or_default();
+    Ok(baseline::BaselineArgs { platforms, baseline: args.required("baseline")?, out: args.required("out")?, known, missing_ok })
+}
+
 type ReportArgs =(PathBuf, PathBuf, Vec<known::KnownEntry>, Option<String>, Option<PathBuf>);
 
 // --known needs --platform and --other: report settles a crash in one run
@@ -123,17 +158,7 @@ fn matrix_args(args: &Args) -> Result<matrix::MatrixArgs, String> {
     if !args.positional.is_empty() {
         return Err("matrix takes no positional arguments".to_string());
     }
-    let mut platforms: Vec<(String, PathBuf)> = Vec::new();
-    for value in args.flags.get("platform").into_iter().flatten() {
-        let (id, dir) = value
-            .split_once('=')
-            .filter(|(id, dir)| matrix::valid_id(id) && !dir.is_empty())
-            .ok_or_else(|| format!("--platform {} is not <id>=<dir> with a lowercase id", value))?;
-        if platforms.iter().any(|(p, _)| p == id) {
-            return Err(format!("--platform {} is given twice", id));
-        }
-        platforms.push((id.to_string(), PathBuf::from(dir)));
-    }
+    let platforms = platform_dirs(args)?;
     let expect: Vec<String> = match args.one("expect") {
         Some(list) => list.split(',').map(str::to_string).collect(),
         None => Vec::new(),
@@ -226,6 +251,20 @@ fn main() {
                 }
             }
         }
+        "baseline" => {
+            let baseline_args = baseline_args(&args).unwrap_or_else(|e| usage_error(&e));
+            match baseline::baseline(&baseline_args) {
+                Ok(0) => 0,
+                Ok(count) => {
+                    eprintln!("corpus baseline: {} platforms do not match their baseline (see baseline-diff.md)", count);
+                    1
+                }
+                Err(run::Infra(message)) => {
+                    eprintln!("corpus baseline: {}", message);
+                    2
+                }
+            }
+        }
         "-h" | "--help" => {
             println!("{}", USAGE);
             0
@@ -256,6 +295,24 @@ mod tests {
         let args = Args::parse(&strings(&["--out", "o", "--bogus", "1"])).unwrap();
         assert!(run_args(&args).is_err());
         assert!(Args::parse(&strings(&["--out"])).is_err());
+    }
+
+    #[test]
+    fn baseline_options_are_checked() {
+        let parse = |a: &[&str]| baseline_args(&Args::parse(&strings(a)).unwrap());
+        let ok = parse(&["--platform", "win-x64=r/w/run1", "--baseline", "b", "--out", "o", "--missing", "ok"]).unwrap();
+        assert!(ok.missing_ok);
+        assert_eq!(ok.platforms, vec![("win-x64".to_string(), PathBuf::from("r/w/run1"))]);
+        assert!(!parse(&["--platform", "a=x", "--baseline", "b", "--out", "o"]).unwrap().missing_ok);
+        for bad in [
+            &["--baseline", "b", "--out", "o"][..],
+            &["--platform", "a=x", "--out", "o"],
+            &["--platform", "a=x", "--baseline", "b", "--out", "o", "--missing", "yes"],
+            &["--platform", "a=x", "--baseline", "b", "--out", "o", "--known", "no/such.tsv"],
+            &["--platform", "a=x", "--platform", "a=y", "--baseline", "b", "--out", "o"],
+        ] {
+            assert!(parse(bad).is_err(), "{:?}", bad);
+        }
     }
 
     #[test]
