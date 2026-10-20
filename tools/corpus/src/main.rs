@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 const USAGE: &str = "\
 usage:
   corpus run --install-root <dir> --corpus <dir> --out <dir> [--work <dir>] [--only <doc>] [--label <k=v>]...
-  corpus report --out <dir> --manifest <trusted manifest.tsv>
+  corpus report --out <dir> --manifest <trusted manifest.tsv> [--known <known.tsv> --platform <id> --other <other run dir>]
   corpus compare <out_a> <out_b> [--summary <file>]
   corpus matrix --platform <id>=<run dir>... [--expect <id,id,...>] [--known <known.tsv>] --out <dir>";
 
@@ -100,6 +100,24 @@ fn run_args(args: &Args) -> Result<run::RunArgs, String> {
     })
 }
 
+type ReportArgs =(PathBuf, PathBuf, Vec<known::KnownEntry>, Option<String>, Option<PathBuf>);
+
+// --known needs --platform and --other: report settles a crash in one run
+// against the other run and the platform's entries.
+fn report_args(args: &Args) -> Result<ReportArgs, String> {
+    args.only_known(&["out", "manifest", "known", "platform", "other"])?;
+    if args.one("known").is_some() && (args.one("platform").is_none() || args.one("other").is_none()) {
+        return Err("--known needs --platform and --other".to_string());
+    }
+    let known = args.one("known").map(|path| known::read(Path::new(path))).transpose()?.unwrap_or_default();
+    let platform = args.one("platform").map(str::to_string);
+    if let Some(id) = platform.as_deref().filter(|id| !matrix::valid_id(id)) {
+        return Err(format!("--platform {:?} is not a lowercase platform id", id));
+    }
+    let other = args.one("other").map(PathBuf::from);
+    Ok((args.required("out")?, args.required("manifest")?, known, platform, other))
+}
+
 fn matrix_args(args: &Args) -> Result<matrix::MatrixArgs, String> {
     args.only_known(&["platform", "expect", "out", "known"])?;
     if !args.positional.is_empty() {
@@ -155,10 +173,9 @@ fn main() {
             }
         }
         "report" => {
-            args.only_known(&["out", "manifest"]).unwrap_or_else(|e| usage_error(&e));
-            let out = args.required("out").unwrap_or_else(|e| usage_error(&e));
-            let manifest = args.required("manifest").unwrap_or_else(|e| usage_error(&e));
-            match report::report(&out, &manifest) {
+            let (out, manifest, known, platform, other) = report_args(&args).unwrap_or_else(|e| usage_error(&e));
+            let options = report::Options { known: &known, platform: platform.as_deref(), other: other.as_deref() };
+            match report::report(&out, &manifest, &options) {
                 Ok(failures) if failures.is_empty() => 0,
                 Ok(failures) => {
                     for failure in &failures {
@@ -239,6 +256,48 @@ mod tests {
         let args = Args::parse(&strings(&["--out", "o", "--bogus", "1"])).unwrap();
         assert!(run_args(&args).is_err());
         assert!(Args::parse(&strings(&["--out"])).is_err());
+    }
+
+    #[test]
+    fn report_options_are_checked() {
+        let parse = |a: &[&str]| report_args(&Args::parse(&strings(a)).unwrap());
+        let (out, manifest, known, platform, other) =
+            parse(&["--out", "r/run1", "--manifest", "m.tsv", "--platform", "linux-arm64", "--other", "r/run2"]).unwrap();
+        assert_eq!((out, manifest), (PathBuf::from("r/run1"), PathBuf::from("m.tsv")));
+        assert!(known.is_empty());
+        assert_eq!((platform.as_deref(), other), (Some("linux-arm64"), Some(PathBuf::from("r/run2"))));
+        for bad in [
+            &["--out", "o", "--manifest", "m", "--platform", "Linux"][..],
+            &["--out", "o", "--manifest", "m", "--known", "no/such/known.tsv"],
+            &["--out", "o", "--manifest", "m", "--bogus", "1"],
+            &["--out", "o"],
+        ] {
+            assert!(parse(bad).is_err(), "{:?}", bad);
+        }
+    }
+
+    // Without the platform and the other run, known.tsv could settle nothing
+    // on purpose: --known alone is a usage error.
+    #[test]
+    fn report_known_needs_the_platform_and_the_other_run() {
+        let dir = std::env::temp_dir().join(format!("corpus-main-known-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("known.tsv");
+        std::fs::write(&path, format!("{}\n", known::COLUMNS.join("\t"))).unwrap();
+        let known = path.to_string_lossy().to_string();
+        let parse = |a: &[&str]| report_args(&Args::parse(&strings(a)).unwrap());
+        let base = ["--out", "r/run1", "--manifest", "m.tsv", "--known", known.as_str()];
+        let results: Vec<bool> = [
+            &[][..],
+            &["--platform", "linux-arm64"],
+            &["--other", "r/run2"],
+            &["--platform", "linux-arm64", "--other", "r/run2"],
+        ]
+        .iter()
+        .map(|extra| parse(&[&base[..], extra].concat()).is_ok())
+        .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(results, vec![false, false, false, true]);
     }
 
     #[test]

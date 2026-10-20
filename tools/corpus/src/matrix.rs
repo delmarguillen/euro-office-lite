@@ -73,6 +73,8 @@ pub struct Loaded {
     pub package: BTreeMap<String, String>,
     pub platform_text: String,
     pub font_names: BTreeSet<String>,
+    // The steps report let pass as flaky, with what happened.
+    pub flaky: BTreeMap<(String, String, String), String>,
 }
 
 pub enum Column {
@@ -132,6 +134,7 @@ pub fn load(id: &str, dir: &Path) -> Result<Loaded, String> {
         dir: dir.to_path_buf(),
         family: family(env.get("pdf_x2t.version").map(String::as_str).unwrap_or("")),
         values: compare::values(&env_table, &run, &report),
+        flaky: compare::flaky_steps(&report),
         env,
         report,
         classes,
@@ -221,7 +224,10 @@ fn exclusion(platform: &Loaded, key: &Key) -> Option<&'static str> {
 
 pub fn cell(column: &Column, key: &Key) -> Cell {
     let Column::Loaded(platform) = column else { return Cell::Infra };
-    let (_, doc, variant, _, _) = key;
+    let (_, doc, variant, step, _) = key;
+    if platform.flaky.contains_key(&(doc.clone(), variant.clone(), step.clone())) {
+        return Cell::Excluded(FLAKY, platform.values.get(key).cloned().unwrap_or_default());
+    }
     match platform.values.get(key) {
         Some(value) => match exclusion(platform, key) {
             Some(reason) => Cell::Excluded(reason, value.clone()),
@@ -241,10 +247,11 @@ fn all_equal(key: &Key, values: &[&str]) -> bool {
     values.iter().enumerate().all(|(i, a)| values[i + 1..].iter().all(|b| equal(key, a, b)))
 }
 
-// A failure counts in every cell except one a bug entry covers on purpose.
-// A cell a known entry took out was not failing (an absent value included).
+// A failure counts in every cell except one a bug entry covers on purpose or
+// one report let pass as flaky. A cell a known entry took out was not failing
+// (an absent value included).
 fn fails(key: &Key, cell: &Cell) -> bool {
-    !matches!(cell, Cell::Excluded(KNOWN_BUG | KNOWN, _)) && cell.value().is_some_and(|v| is_hard_failure(key, v))
+    !matches!(cell, Cell::Excluded(KNOWN_BUG | KNOWN | FLAKY, _)) && cell.value().is_some_and(|v| is_hard_failure(key, v))
 }
 
 // One verdict per key, from the cells of every platform and their families.
@@ -345,7 +352,8 @@ pub struct Row {
 }
 
 const KNOWN: &str = "known";
-const KNOWN_BUG: &str = "known-bug";
+const KNOWN_BUG: &str = compare::KNOWN_BUG;
+const FLAKY: &str = compare::FLAKY;
 
 // Takes the cells of the platforms a known entry covers out of the
 // comparison. A failing cell leaves only for a bug entry that names its
@@ -764,6 +772,8 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
         with_save: bool,
         // A fonts.script row for s.docx's PDF when not empty.
         script: &'static str,
+        // A flaky row for a.docx's PDF when not empty, as report writes it.
+        flaky: &'static str,
     }
 
     impl Default for Fake {
@@ -779,6 +789,7 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
                 save_class: "comparable",
                 with_save: true,
                 script: "",
+                flaky: "",
             }
         }
     }
@@ -813,6 +824,9 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
         report.push_str(&format!("s.docx\tplain\tpdf\ttext.sha256\t{}\ns.docx\tplain\tpdf\tclass\tsystem-fonts\n", fake.s_text));
         if !fake.script.is_empty() {
             report.push_str(&format!("s.docx\tplain\tpdf\tfonts.script\t{}\n", fake.script));
+        }
+        if !fake.flaky.is_empty() {
+            report.push_str(&format!("a.docx\tplain\tpdf\tflaky\t{}\n", fake.flaky));
         }
         std::fs::write(dir.join("env.tsv"), env).unwrap();
         std::fs::write(dir.join("run.tsv"), run).unwrap();
@@ -1129,6 +1143,33 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
         assert!(note.contains("#9"), "{}", note);
         assert_eq!(verdict_and_note(&tsv, "report", "s.docx", "pdf", "fonts.script").0, "known-bug");
         assert!(md.contains("| known-bug | 2 |"), "{}", md);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // A step report let pass as flaky leaves the comparison on its platform:
+    // its crash neither fails the row nor makes the others' values missing.
+    #[test]
+    fn a_flaky_step_leaves_the_comparison_on_its_platform() {
+        let root = scratch("flaky");
+        let crashed = Fake { pdf_status: "signal", flaky: "signal 6 on win-arm64 in run1 (run2: ok)", ..Fake::default() };
+        let (outcome, tsv, _, _) = run_matrix_known(
+            &root,
+            vec![("win-x64", Fake::default()), ("win-arm64", crashed), ("linux-arm64", Fake::default())],
+            &[],
+            Some(""),
+        );
+        let (verdict, note) = verdict_and_note(&tsv, "run", "a.docx", "pdf", "status");
+        assert_eq!(verdict, "same");
+        assert!(note.contains("n/c:flaky on win-arm64"), "{}", note);
+        assert_eq!(outcome, Outcome::default());
+        // The same crash without report's flaky row fails the row.
+        let (_, tsv, _, _) = run_matrix_known(
+            &root,
+            vec![("win-x64", Fake::default()), ("win-arm64", Fake { pdf_status: "signal", ..Fake::default() }), ("linux-arm64", Fake::default())],
+            &[],
+            Some(""),
+        );
+        assert_eq!(verdict_and_note(&tsv, "run", "a.docx", "pdf", "status").0, "FAIL");
         let _ = std::fs::remove_dir_all(&root);
     }
 
