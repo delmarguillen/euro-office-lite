@@ -59,6 +59,68 @@ fn start_instance(root: &std::path::Path) -> temp_layout::Instance {
     temp_layout::unlocked_instance(root, now_ms(), pid)
 }
 
+// Measurement-only switch for the title bar on Linux: "default" (tao's GTK
+// header bar), "nogtkheader" (drop it, GTK decides CSD or SSD) or "none"
+// (undecorated). Any other value, or none at all, changes nothing.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum TitlebarSpike {
+    Default,
+    NoGtkHeader,
+    Undecorated,
+}
+
+#[cfg(target_os = "linux")]
+fn titlebar_spike_mode() -> TitlebarSpike {
+    match std::env::var("EOL_TITLEBAR_SPIKE").as_deref() {
+        Ok("nogtkheader") => TitlebarSpike::NoGtkHeader,
+        Ok("none") => TitlebarSpike::Undecorated,
+        _ => TitlebarSpike::Default,
+    }
+}
+
+// The window was built hidden (see main), so GTK has not realized it yet and
+// negotiates the decorations with the mode already in place when it is shown.
+// Straight on the GTK window, which is what tao's set_decorations and show end
+// up calling, so the order is fixed and the window is shown before setup goes on.
+#[cfg(target_os = "linux")]
+fn apply_titlebar_spike(app: &tauri::App, mode: TitlebarSpike) {
+    use gtk::prelude::*;
+    if mode == TitlebarSpike::Default {
+        log_startup("titlebar spike mode=Default");
+        return;
+    }
+    let Some(window) = app.get_webview_window("main") else {
+        log_startup("ERROR: titlebar spike: no main window");
+        return;
+    };
+    let gtk_window = match window.gtk_window() {
+        Ok(gtk_window) => gtk_window,
+        Err(e) => {
+            log_startup(&format!("ERROR: titlebar spike: no GTK window: {e}"));
+            // Never leave the hidden window hidden.
+            let _ = window.show();
+            return;
+        }
+    };
+    let mut note = "";
+    match mode {
+        // tao only adds a header bar on Wayland: on X11 there is nothing to drop.
+        TitlebarSpike::NoGtkHeader if gtk_window.titlebar().is_none() => {
+            note = " (no GTK header bar to remove)";
+        }
+        TitlebarSpike::NoGtkHeader => gtk_window.set_titlebar(None::<&gtk::Widget>),
+        TitlebarSpike::Undecorated => gtk_window.set_decorated(false),
+        TitlebarSpike::Default => {}
+    }
+    let realized_before_show = gtk_window.is_realized();
+    gtk_window.show_all();
+    log_startup(&format!(
+        "titlebar spike mode={:?}{} realized_before_show={}",
+        mode, note, realized_before_show
+    ));
+}
+
 // x2t runs with a different working directory, so a relative launch argument
 // must be anchored to ours. A plain join, not canonicalize: that would resolve
 // symlinks and, on Windows, add the \\?\ prefix to the path kept in recents.
@@ -85,7 +147,22 @@ fn main() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
-    let context = tauri::generate_context!();
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut context = tauri::generate_context!();
+
+    // GTK picks client- or server-side decorations when it realizes the window,
+    // and tao realizes a visible window while building it, before setup runs.
+    #[cfg(target_os = "linux")]
+    let titlebar_spike = titlebar_spike_mode();
+    #[cfg(target_os = "linux")]
+    if titlebar_spike != TitlebarSpike::Default {
+        for window in context.config_mut().app.windows.iter_mut() {
+            if window.label == "main" {
+                window.visible = false;
+            }
+        }
+    }
+
     // The user-facing version comes from tauri.conf.json; Cargo's crate version stays independent.
     let app_version = context.package_info().version.clone();
 
@@ -524,6 +601,10 @@ fn main() {
             }
         })
         .setup(move |app| {
+            // First, so a hidden window is shown as early as the default one.
+            #[cfg(target_os = "linux")]
+            apply_titlebar_spike(app, titlebar_spike);
+
             let resource_dir = app.path().resource_dir().unwrap_or_default();
             let binaries_dir = resource_dir.join("binaries");
 
