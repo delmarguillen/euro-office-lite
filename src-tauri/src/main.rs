@@ -5,6 +5,7 @@ mod clipboard;
 mod converter;
 mod dictionaries;
 mod file_ops;
+mod launch_args;
 mod note_separator;
 mod recent;
 mod recovery;
@@ -228,13 +229,15 @@ fn main() {
         ));
     }
 
+    let launch = launch_args::parse_launch_args(std::env::args().skip(1));
+
     let file_to_open: Option<String> = {
-        let args: Vec<String> = std::env::args().collect();
         // An empty base leaves a relative path untouched, which is what we can do
         // when the working directory is unreadable.
         let cwd = std::env::current_dir().unwrap_or_default();
-        let path = args
-            .get(1)
+        let path = launch
+            .document
+            .as_deref()
             .and_then(|arg| absolute_arg_path(arg, &cwd))
             .and_then(|path| path.into_os_string().into_string().ok());
         if let Some(ref path) = path {
