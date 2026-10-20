@@ -1,7 +1,8 @@
 name: Extract x2t Linux binaries (one-shot)
 
-# Builds x2t-binaries-linux-<arch>.zip from the ONLYOFFICE Desktop Editors
-# .deb and publishes it to the 'dependencies' release that get-x2t-ci.sh reads.
+# Builds x2t-binaries-linux-<arch>[-<x2t build>].zip from the ONLYOFFICE
+# Desktop Editors .deb and publishes it to the 'dependencies' release that
+# get-x2t-ci.sh reads.
 # The upload runs in its own job behind the 'dependencies' environment.
 
 on:
@@ -22,6 +23,10 @@ on:
         description: 'Expected sha256 of onlyoffice-desktopeditors_<arch>.deb'
         type: string
         required: true
+      x2t_version:
+        description: 'x2t build in the package (e.g. 9.4.0.129): checked against x2t and added to the zip name; empty keeps the plain name'
+        type: string
+        default: ''
       replace_existing:
         description: 'Overwrite the zip if it already exists in the dependencies release'
         type: boolean
@@ -42,6 +47,7 @@ jobs:
       ARCH: ${{ inputs.arch }}
       VERSION: ${{ inputs.onlyoffice_version }}
       DEB_SHA256: ${{ inputs.deb_sha256 }}
+      X2T_VERSION: ${{ inputs.x2t_version }}
     steps:
       - name: Validate inputs
         run: |
@@ -55,6 +61,10 @@ jobs:
           fi
           if ! [[ "$DEB_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
             echo "ERROR: deb_sha256 must be 64 lowercase hex characters"
+            exit 1
+          fi
+          if [ -n "$X2T_VERSION" ] && ! [[ "$X2T_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: x2t_version must be empty or look like 1.2.3.4"
             exit 1
           fi
           # The runner has to match the package so ldd and the conversion test are real.
@@ -164,14 +174,60 @@ jobs:
             exit 1
           fi
 
+      # x2t prints its build when run without arguments (and exits non-zero).
+      # The glibc and libstdc++ symbol versions it and its libraries need set
+      # the oldest distribution the package can run on.
+      - name: Report x2t version and symbol versions
+        run: |
+          STAGING="$RUNNER_TEMP/x2t-staging"
+          VERSION_OUT=$(cd "$STAGING" && LD_LIBRARY_PATH="$STAGING" ./x2t < /dev/null 2>&1 || true)
+          VERSION_LINE=$(printf '%s\n' "$VERSION_OUT" | tr -d '\r' | grep -m1 "Version:" | sed 's/[[:space:]]*$//' || true)
+          echo "x2t: ${VERSION_LINE:-<no version line>}"
+          if [ -n "$X2T_VERSION" ]; then
+            case "$VERSION_LINE" in
+              *"Version: $X2T_VERSION") ;;
+              *) echo "ERROR: x2t does not report version $X2T_VERSION"; exit 1 ;;
+            esac
+          fi
+          command -v objdump > /dev/null || { echo "ERROR: objdump not found"; exit 1; }
+          # A file objdump cannot read fails the step instead of counting as one
+          # without symbol versions; a readable file without any is fine.
+          max_version() {
+            local dump
+            if ! dump=$(objdump -T "$1" 2>&1); then
+              echo "ERROR: objdump cannot read $1" >&2
+              printf '%s\n' "$dump" | head -5 >&2
+              return 1
+            fi
+            printf '%s\n' "$dump" | { grep -oE "$2_[0-9]+(\.[0-9]+)*" || true; } | sort -uV | tail -1
+          }
+          ALL_GLIBC=""
+          ALL_GLIBCXX=""
+          for f in "$STAGING/x2t" "$STAGING"/*.so "$STAGING"/*.so.*; do
+            [ -f "$f" ] || continue
+            G=$(max_version "$f" GLIBC) || exit 1
+            X=$(max_version "$f" GLIBCXX) || exit 1
+            echo "  $(basename "$f"): ${G:--} ${X:--}"
+            ALL_GLIBC=$(printf '%s\n%s\n' "$ALL_GLIBC" "$G" | grep . | sort -uV | tail -1 || true)
+            ALL_GLIBCXX=$(printf '%s\n%s\n' "$ALL_GLIBCXX" "$X" | grep . | sort -uV | tail -1 || true)
+          done
+          echo "Highest needed: ${ALL_GLIBC:-none} ${ALL_GLIBCXX:-none}"
+          {
+            echo "x2t_version_line=$VERSION_LINE"
+            echo "glibc_max=${ALL_GLIBC:-none}"
+            echo "glibcxx_max=${ALL_GLIBCXX:-none}"
+          } > "$RUNNER_TEMP/x2t-facts.txt"
+
       - name: Create zip
         id: zip
         run: |
           if [ "$ARCH" = "amd64" ]; then
-            ZIP_NAME="x2t-binaries-linux-x64.zip"
+            ZIP_BASE="x2t-binaries-linux-x64"
           else
-            ZIP_NAME="x2t-binaries-linux-arm64.zip"
+            ZIP_BASE="x2t-binaries-linux-arm64"
           fi
+          # A versioned name leaves the zip that builds pin today untouched.
+          ZIP_NAME="$ZIP_BASE${X2T_VERSION:+-$X2T_VERSION}.zip"
           mkdir -p "$RUNNER_TEMP/dist"
           ZIP="$RUNNER_TEMP/dist/$ZIP_NAME"
           (cd "$RUNNER_TEMP/x2t-staging" && zip -qr "$ZIP" .)
@@ -196,6 +252,8 @@ jobs:
             echo "| onlyoffice-desktopeditors_${ARCH}.deb | \`$DEB_SHA256\` |"
             echo "| $ZIP_NAME | \`$ZIP_SHA256\` |"
             echo "| x2t | \`$X2T_SHA256\` |"
+            echo ""
+            sed 's/^/- /' "$RUNNER_TEMP/x2t-facts.txt"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Runs the zip as shipped, from a fresh unpack, so the test cannot leave
@@ -271,7 +329,7 @@ jobs:
 
       - name: Verify zip checksum
         run: |
-          if ! [[ "$ZIP_NAME" =~ ^x2t-binaries-linux-(x64|arm64)\.zip$ ]]; then
+          if ! [[ "$ZIP_NAME" =~ ^x2t-binaries-linux-(x64|arm64)(-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)?\.zip$ ]]; then
             echo "ERROR: unexpected zip name from extract job"
             exit 1
           fi
