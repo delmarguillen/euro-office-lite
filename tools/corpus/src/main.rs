@@ -13,6 +13,7 @@ mod text_import;
 mod allfonts;
 mod arch;
 mod compare;
+mod known;
 mod layout;
 mod manifest;
 mod markdown;
@@ -32,7 +33,7 @@ usage:
   corpus run --install-root <dir> --corpus <dir> --out <dir> [--work <dir>] [--only <doc>] [--label <k=v>]...
   corpus report --out <dir> --manifest <trusted manifest.tsv>
   corpus compare <out_a> <out_b> [--summary <file>]
-  corpus matrix --platform <id>=<run dir>... [--expect <id,id,...>] --out <dir>";
+  corpus matrix --platform <id>=<run dir>... [--expect <id,id,...>] [--known <known.tsv>] --out <dir>";
 
 // Positional arguments and --flag value pairs; --label may repeat.
 struct Args {
@@ -100,7 +101,7 @@ fn run_args(args: &Args) -> Result<run::RunArgs, String> {
 }
 
 fn matrix_args(args: &Args) -> Result<matrix::MatrixArgs, String> {
-    args.only_known(&["platform", "expect", "out"])?;
+    args.only_known(&["platform", "expect", "out", "known"])?;
     if !args.positional.is_empty() {
         return Err("matrix takes no positional arguments".to_string());
     }
@@ -125,7 +126,10 @@ fn matrix_args(args: &Args) -> Result<matrix::MatrixArgs, String> {
     if platforms.is_empty() && expect.is_empty() {
         return Err("matrix needs --platform or --expect".to_string());
     }
-    Ok(matrix::MatrixArgs { platforms, expect, out: args.required("out")? })
+    // A known.tsv that cannot be read or is malformed is the run's problem,
+    // not a usage error, but it stops the command the same way (exit 2).
+    let known = args.one("known").map(|path| known::read(Path::new(path))).transpose()?;
+    Ok(matrix::MatrixArgs { platforms, expect, out: args.required("out")?, known })
 }
 
 fn usage_error(message: &str) -> ! {
@@ -189,9 +193,14 @@ fn main() {
         "matrix" => {
             let matrix_args = matrix_args(&args).unwrap_or_else(|e| usage_error(&e));
             match matrix::matrix(&matrix_args) {
-                Ok(0) => 0,
-                Ok(count) => {
-                    eprintln!("corpus matrix: {} expected platforms have no results", count);
+                Ok(outcome) if outcome == matrix::Outcome::default() => 0,
+                Ok(outcome) => {
+                    if outcome.infra > 0 {
+                        eprintln!("corpus matrix: {} expected platforms have no results", outcome.infra);
+                    }
+                    if outcome.unexplained > 0 {
+                        eprintln!("corpus matrix: {} rows differ within a family, miss a value or fail, with no known entry", outcome.unexplained);
+                    }
                     1
                 }
                 Err(run::Infra(message)) => {
@@ -250,6 +259,7 @@ mod tests {
             &["--out", "m"],
             &["--platform", "a=x", "--out", "m", "extra"],
             &["--platform", "a=x", "--out", "m", "--bogus", "1"],
+            &["--platform", "a=x", "--out", "m", "--known", "no/such/known.tsv"],
         ] {
             assert!(parse(bad).is_err(), "{:?}", bad);
         }

@@ -1,9 +1,11 @@
 // `corpus matrix`: lines up the results of several platforms, one row per
 // value and one column per platform, grouped by the x2t family each platform
-// ships. Informative: a difference between platforms never fails it; only a
-// platform that was expected and left no results does.
+// ships. A platform that was expected and left no results fails it; with
+// known.tsv, so does a difference inside one family, a value missing on one
+// platform or a failure, that no entry explains. 8.2 against 9.4 never does.
 
 use crate::compare::{self, Key};
+use crate::known::{Kind, KnownEntry};
 use crate::manifest::{self, Entry};
 use crate::markdown::clean;
 use crate::pdf;
@@ -17,6 +19,16 @@ pub struct MatrixArgs {
     pub platforms: Vec<(String, PathBuf)>,
     pub expect: Vec<String>,
     pub out: PathBuf,
+    // known.tsv when given: then an unexplained difference fails too.
+    pub known: Option<Vec<KnownEntry>>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Outcome {
+    // Expected platforms that left no usable results.
+    pub infra: usize,
+    // diff-in-family, missing and FAIL rows that no known entry explains.
+    pub unexplained: usize,
 }
 
 // Platform ids go into file names and table headers.
@@ -175,9 +187,13 @@ impl Cell {
 
 // The hard failures of `corpus report`, seen row by row.
 pub fn is_hard_failure(key: &Key, value: &str) -> bool {
-    let (_, _, _, step, check) = key;
+    let (_, doc, _, step, check) = key;
+    let txt = doc.to_lowercase().ends_with(".txt");
     (check == "status" && value != "ok" && value != "expected-fail")
         || (step == "pdf" && check == "expected" && value.starts_with("missing:"))
+        || (check == "fonts.script" && value != "ok")
+        || check == "report.error"
+        || (txt && step == "save" && check == "roundtrip.bytes" && value != "equal")
 }
 
 // How x2t ended is compared everywhere; everything else leaves the comparison
@@ -225,9 +241,15 @@ fn all_equal(key: &Key, values: &[&str]) -> bool {
     values.iter().enumerate().all(|(i, a)| values[i + 1..].iter().all(|b| equal(key, a, b)))
 }
 
+// A failure counts in every cell except one a bug entry covers on purpose.
+// A cell a known entry took out was not failing (an absent value included).
+fn fails(key: &Key, cell: &Cell) -> bool {
+    !matches!(cell, Cell::Excluded(KNOWN_BUG | KNOWN, _)) && cell.value().is_some_and(|v| is_hard_failure(key, v))
+}
+
 // One verdict per key, from the cells of every platform and their families.
 pub fn verdict(key: &Key, cells: &[(&str, Cell)]) -> &'static str {
-    if cells.iter().any(|(_, c)| c.value().is_some_and(|v| is_hard_failure(key, v))) {
+    if cells.iter().any(|(_, c)| fails(key, c)) {
         return "FAIL";
     }
     if cells.iter().any(|(_, c)| *c == Cell::Absent) {
@@ -265,10 +287,7 @@ fn note(key: &Key, columns: &[&Column], cells: &[(&str, Cell)], verdict: &str) -
     };
     let mut parts = Vec::new();
     match verdict {
-        "FAIL" => parts.push(format!(
-            "fails on {}",
-            ids(&|c| c.value().is_some_and(|v| is_hard_failure(key, v))).join(",")
-        )),
+        "FAIL" => parts.push(format!("fails on {}", ids(&|c| fails(key, c)).join(","))),
         "missing" => parts.push(format!("missing on {}", ids(&|c| *c == Cell::Absent).join(","))),
         "diff-in-family" => {
             let mut families: BTreeSet<&str> = BTreeSet::new();
@@ -325,7 +344,43 @@ pub struct Row {
     pub note: String,
 }
 
-pub fn rows(columns: &[Column]) -> Vec<Row> {
+const KNOWN: &str = "known";
+const KNOWN_BUG: &str = "known-bug";
+
+// Takes the cells of the platforms a known entry covers out of the
+// comparison. A failing cell leaves only for a bug entry that names its
+// document and check. Returns the entries that took out a cell.
+fn apply_known<'k>(key: &Key, columns: &[Column], cells: &mut [(&str, Cell)], known: &'k [KnownEntry]) -> Vec<&'k KnownEntry> {
+    let (_, doc, variant, step, check) = key;
+    let mut used: Vec<&KnownEntry> = Vec::new();
+    for (column, (family, cell)) in columns.iter().zip(cells.iter_mut()) {
+        let value = match cell {
+            Cell::Value(v) | Cell::Excluded(_, v) => v.clone(),
+            Cell::Absent => String::new(),
+            Cell::NotRun | Cell::Infra => continue,
+        };
+        let failing = fails(key, cell);
+        let entry = known.iter().find(|e| {
+            e.kind != Kind::Flaky
+                && e.matches(doc, variant, step, check)
+                && e.covers(column.id(), family)
+                && (!failing || e.covers_failure(doc, check))
+        });
+        if let Some(entry) = entry {
+            *cell = Cell::Excluded(if failing { KNOWN_BUG } else { KNOWN }, value);
+            if !used.contains(&entry) {
+                used.push(entry);
+            }
+        } else if failing {
+            // An unexplained failure keeps the row failing as it was.
+            return Vec::new();
+        }
+    }
+    used
+}
+
+// Rows and the known entries that explained at least one of them.
+pub fn rows(columns: &[Column], known: &[KnownEntry]) -> (Vec<Row>, BTreeSet<usize>) {
     let mut keys: BTreeSet<(String, String, String, String, String)> = BTreeSet::new();
     for column in columns {
         if let Column::Loaded(l) = column {
@@ -338,18 +393,46 @@ pub fn rows(columns: &[Column]) -> Vec<Row> {
         }
     }
     let refs: Vec<&Column> = columns.iter().collect();
-    keys.into_iter()
+    let mut used_lines = BTreeSet::new();
+    let rows = keys
+        .into_iter()
         .map(|(doc, variant, step, source, check)| {
             let key = (source, doc, variant, step, check);
             let cells: Vec<(&str, Cell)> = columns.iter().map(|c| (c.family(), cell(c, &key))).collect();
-            let verdict = verdict(&key, &cells);
-            let note = note(&key, &refs, &cells, verdict);
+            let plain = verdict(&key, &cells);
+            let mut known_cells = cells.clone();
+            let used = if plain == "same" || plain == "n/c" { Vec::new() } else { apply_known(&key, columns, &mut known_cells, known) };
+            let after = verdict(&key, &known_cells);
+            // An entry explains a row only when, without the cells it covers,
+            // nothing is left that differs, fails or is missing.
+            let explained = !used.is_empty() && ["same", "same-in-family", "n/c"].contains(&after);
+            let (cells, verdict) = if explained {
+                let bug = known_cells.iter().any(|(_, c)| matches!(c, Cell::Excluded(KNOWN_BUG, _)));
+                used_lines.extend(used.iter().map(|e| e.line));
+                (known_cells, if bug { KNOWN_BUG } else { KNOWN })
+            } else {
+                (cells, plain)
+            };
+            let mut note = note(&key, &refs, &cells, verdict);
+            if explained {
+                for entry in &used {
+                    note.push_str(&format!("{}{}", if note.is_empty() { "" } else { "; " }, entry.describe()));
+                }
+            }
             Row { cells: cells.into_iter().map(|(_, c)| c).collect(), key, verdict, note }
         })
-        .collect()
+        .collect();
+    (rows, used_lines)
 }
 
-pub const VERDICTS: [&str; 6] = ["FAIL", "missing", "diff-in-family", "same-in-family", "n/c", "same"];
+pub const VERDICTS: [&str; 8] = ["FAIL", "missing", "diff-in-family", "known-bug", "known", "same-in-family", "n/c", "same"];
+
+// What fails the corpus once known.tsv is given: a difference inside one x2t
+// family, a value one platform lacks or a failure, with no entry that
+// explains it. A FAIL row can hide a missing value that an entry left over.
+pub fn is_unexplained(verdict: &str) -> bool {
+    verdict == "diff-in-family" || verdict == "missing" || verdict == "FAIL"
+}
 
 fn short(value: &str) -> String {
     let hex = value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit());
@@ -376,13 +459,24 @@ fn columns_line(columns: &[Column]) -> String {
 
 const MD_ROWS: usize = 300;
 
-pub fn markdown(columns: &[Column], rows: &[Row]) -> String {
+pub fn markdown(columns: &[Column], rows: &[Row], unused: &[&KnownEntry]) -> String {
     let mut s = String::from("## Platforms side by side\n\n");
     s.push_str(&format!("Columns by x2t family: {}\n\n", columns_line(columns)));
     s.push_str("| Verdict | Rows |\n|---|---|\n");
     for verdict in VERDICTS {
         let count = rows.iter().filter(|r| r.verdict == verdict).count();
         s.push_str(&format!("| {} | {} |\n", verdict, count));
+    }
+    // Entries that explain nothing any more (after an x2t update, say) are
+    // listed to be removed; they never fail the corpus.
+    if !unused.is_empty() {
+        s.push_str("\nKnown entries that explained no row in this run:\n\n");
+        // known.tsv comes from the checkout, not from the results: its
+        // patterns are shown as written, inside a code span.
+        for entry in unused {
+            let pattern = format!("{} {} {} {}", entry.doc, entry.variant, entry.step, entry.check).replace('`', "");
+            s.push_str(&format!("- line {}: `{}`: {}\n", entry.line, pattern, clean(&entry.reason)));
+        }
     }
     let shown: Vec<&Row> = rows.iter().filter(|r| r.verdict != "same").collect();
     if shown.is_empty() {
@@ -611,8 +705,7 @@ pub fn environment(columns: &[Column]) -> String {
     s
 }
 
-// Returns how many expected platforms left no usable results.
-pub fn matrix(args: &MatrixArgs) -> Result<usize, Infra> {
+pub fn matrix(args: &MatrixArgs) -> Result<Outcome, Infra> {
     let mut ids: Vec<String> = args.expect.clone();
     for (id, _) in &args.platforms {
         if !ids.contains(id) {
@@ -632,16 +725,21 @@ pub fn matrix(args: &MatrixArgs) -> Result<usize, Infra> {
         columns.push(column);
     }
     let columns = order(columns);
-    let rows = rows(&columns);
+    let known = args.known.as_deref().unwrap_or_default();
+    let (rows, used) = rows(&columns, known);
+    let unused: Vec<&KnownEntry> = known.iter().filter(|e| e.kind != Kind::Flaky && !used.contains(&e.line)).collect();
     std::fs::create_dir_all(&args.out).map_err(|e| Infra(format!("cannot create {}: {}", args.out.display(), e)))?;
     table(&columns, &rows).write(&args.out.join("matrix.tsv")).map_err(Infra)?;
     let write = |name: &str, text: String| {
         let path = args.out.join(name);
         std::fs::write(&path, text).map_err(|e| Infra(format!("cannot write {}: {}", path.display(), e)))
     };
-    write("matrix.md", markdown(&columns, &rows))?;
+    write("matrix.md", markdown(&columns, &rows, &unused))?;
     write("environment.md", environment(&columns))?;
-    Ok(columns.iter().filter(|c| matches!(c, Column::Infra { .. })).count())
+    Ok(Outcome {
+        infra: columns.iter().filter(|c| matches!(c, Column::Infra { .. })).count(),
+        unexplained: if args.known.is_some() { rows.iter().filter(|r| is_unexplained(r.verdict)).count() } else { 0 },
+    })
 }
 
 #[cfg(test)]
@@ -664,6 +762,8 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
         s_text: &'static str,
         save_class: &'static str,
         with_save: bool,
+        // A fonts.script row for s.docx's PDF when not empty.
+        script: &'static str,
     }
 
     impl Default for Fake {
@@ -678,6 +778,7 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
                 s_text: "s1",
                 save_class: "comparable",
                 with_save: true,
+                script: "",
             }
         }
     }
@@ -710,6 +811,9 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
             if fake.check == "ok" { "comparable" } else { "spoofed" }
         ));
         report.push_str(&format!("s.docx\tplain\tpdf\ttext.sha256\t{}\ns.docx\tplain\tpdf\tclass\tsystem-fonts\n", fake.s_text));
+        if !fake.script.is_empty() {
+            report.push_str(&format!("s.docx\tplain\tpdf\tfonts.script\t{}\n", fake.script));
+        }
         std::fs::write(dir.join("env.tsv"), env).unwrap();
         std::fs::write(dir.join("run.tsv"), run).unwrap();
         std::fs::write(dir.join("report.tsv"), report).unwrap();
@@ -734,17 +838,24 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
     const V82: &str = "OOX/binary file converter. Version: 8.2.0.147";
 
     fn run_matrix(root: &Path, fakes: Vec<(&str, Fake)>, expect: &[&str]) -> (usize, Table, String, String) {
+        let (outcome, tsv, md, env) = run_matrix_known(root, fakes, expect, None);
+        (outcome.infra, tsv, md, env)
+    }
+
+    fn run_matrix_known(root: &Path, fakes: Vec<(&str, Fake)>, expect: &[&str], known: Option<&str>) -> (Outcome, Table, String, String) {
         let platforms = fakes.into_iter().map(|(id, fake)| (id.to_string(), write(root, id, fake))).collect();
+        let known = known.map(|rows| crate::known::parse(&format!("{}{}", crate::known::COLUMNS.join("\t") + "\n", rows)).unwrap());
         let args = MatrixArgs {
             platforms,
             expect: expect.iter().map(|s| s.to_string()).collect(),
             out: root.join("matrix"),
+            known,
         };
-        let missing = matrix(&args).unwrap();
+        let outcome = matrix(&args).unwrap();
         let tsv = Table::read(&root.join("matrix/matrix.tsv")).unwrap();
         let md = std::fs::read_to_string(root.join("matrix/matrix.md")).unwrap();
         let env = std::fs::read_to_string(root.join("matrix/environment.md")).unwrap();
-        (missing, tsv, md, env)
+        (outcome, tsv, md, env)
     }
 
     fn verdict_of(tsv: &Table, source: &str, doc: &str, step: &str, check: &str) -> String {
@@ -860,8 +971,8 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
         // A folder without the run's tables counts the same.
         let broken = root.join("broken/run1");
         std::fs::create_dir_all(&broken).unwrap();
-        let args = MatrixArgs { platforms: vec![("broken".into(), broken)], expect: Vec::new(), out: root.join("m2") };
-        assert_eq!(matrix(&args).unwrap(), 1);
+        let args = MatrixArgs { platforms: vec![("broken".into(), broken)], expect: Vec::new(), out: root.join("m2"), known: None };
+        assert_eq!(matrix(&args).unwrap().infra, 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -890,6 +1001,7 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
             platforms: vec![("win-x64".into(), dir), ("linux-x64".into(), other)],
             expect: Vec::new(),
             out: root.join("matrix"),
+            known: None,
         };
         matrix(&args).unwrap();
         for name in ["matrix.md", "environment.md"] {
@@ -918,7 +1030,7 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
             std::fs::write(dir.join("env.tsv"), format!("{}host.arch\t{}\nsidecar.arch\t{}\npdf_x2t.arch\t{}\n", env, host, x2t, x2t)).unwrap();
             platforms.push((id.to_string(), dir));
         }
-        matrix(&MatrixArgs { platforms, expect: Vec::new(), out: root.join("matrix") }).unwrap();
+        matrix(&MatrixArgs { platforms, expect: Vec::new(), out: root.join("matrix"), known: None }).unwrap();
         let env = std::fs::read_to_string(root.join("matrix/environment.md")).unwrap();
         let _ = std::fs::remove_dir_all(&root);
         let row = env.lines().find(|l| l.starts_with("| Architecture")).unwrap();
@@ -927,6 +1039,146 @@ s.docx\tsystem-fonts\topen,pdf\t\t\t\t\n";
             "| Architecture (host / sidecar / PDF x2t) | x86_64 / universal:x86_64,aarch64 / universal:x86_64,aarch64 \
              | aarch64 / universal:x86_64,aarch64 / universal:x86_64,aarch64 | aarch64 / x86_64 / x86_64 (emulated) |"
         );
+    }
+
+    fn verdict_and_note(tsv: &Table, source: &str, doc: &str, step: &str, check: &str) -> (String, String) {
+        let row = tsv
+            .rows
+            .iter()
+            .find(|r| tsv.get(r, "source") == source && tsv.get(r, "doc") == doc && tsv.get(r, "step") == step && tsv.get(r, "check") == check)
+            .unwrap_or_else(|| panic!("no row {} {} {} {}", source, doc, step, check));
+        (tsv.get(row, "verdict").to_string(), tsv.get(row, "note").to_string())
+    }
+
+    fn nine_four(pdf_text: &'static str) -> Fake {
+        Fake { pdf_text, ..Fake::default() }
+    }
+
+    // An entry for the two Windows platforms explains a difference they share,
+    // never one a third platform shows.
+    #[test]
+    fn a_known_entry_explains_only_the_platforms_it_names() {
+        let platforms = || vec![("win-x64", nine_four("t2")), ("win-arm64", nine_four("t2")), ("linux-arm64", nine_four("t1"))];
+        let root = scratch("known-two");
+        let windows = "a.docx\tplain\tpdf\ttext.sha256\twin-x64,win-arm64\tenv\tWindows lays the page out\t\n";
+        let (outcome, tsv, md, _) = run_matrix_known(&root, platforms(), &[], Some(windows));
+        let (verdict, note) = verdict_and_note(&tsv, "report", "a.docx", "pdf", "text.sha256");
+        assert_eq!(verdict, "known");
+        assert!(note.contains("known.tsv line 2 (env): Windows lays the page out"), "{}", note);
+        assert_eq!(outcome, Outcome::default());
+        assert!(md.contains("| known | 1 |"), "{}", md);
+
+        let one = "a.docx\tplain\tpdf\ttext.sha256\twin-x64\tenv\tonly one\t\n";
+        let (outcome, tsv, _, _) = run_matrix_known(&root, platforms(), &[], Some(one));
+        assert_eq!(verdict_and_note(&tsv, "report", "a.docx", "pdf", "text.sha256").0, "diff-in-family");
+        assert_eq!(outcome, Outcome { infra: 0, unexplained: 1 });
+
+        // Without known.tsv the difference is reported, not failed.
+        let (outcome, _, _, _) = run_matrix_known(&root, platforms(), &[], None);
+        assert_eq!(outcome, Outcome::default());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // A family entry applies to the platforms that show that family in the run.
+    #[test]
+    fn a_family_entry_follows_the_x2t_each_platform_runs() {
+        let root = scratch("known-family");
+        let entry = "a.docx\tplain\tsave\t*\t8.2\tx2t\t8.2 does not write it\t\n";
+        let no_save = |version| Fake { version, with_save: false, ..Fake::default() };
+        let (outcome, tsv, _, _) =
+            run_matrix_known(&root, vec![("win-x64", Fake::default()), ("mac-x64", no_save(V82)), ("linux-x64", no_save(V82))], &[], Some(entry));
+        assert_eq!(verdict_and_note(&tsv, "report", "a.docx", "save", "text.sha256").0, "known");
+        // An absent status stays out of the failures once an entry explains it.
+        assert_eq!(verdict_and_note(&tsv, "run", "a.docx", "save", "status").0, "known");
+        assert_eq!(outcome, Outcome::default());
+
+        // The same gap on a 9.4 platform is not what the entry explains.
+        let nine_four_no_save = Fake { with_save: false, ..Fake::default() };
+        let (outcome, tsv, _, _) =
+            run_matrix_known(&root, vec![("win-x64", Fake::default()), ("mac-x64", no_save(V82)), ("linux-arm64", nine_four_no_save)], &[], Some(entry));
+        assert_eq!(verdict_and_note(&tsv, "report", "a.docx", "save", "text.sha256").0, "missing");
+        assert!(outcome.unexplained > 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // A crash or a script PDF without its font is never explained by an env
+    // or x2t entry, nor by a bug entry with a wildcard: only by a bug entry
+    // that names the document and the check.
+    #[test]
+    fn a_failure_needs_a_bug_entry_that_names_it() {
+        let root = scratch("known-fail");
+        let platforms = || {
+            vec![
+                ("win-x64", Fake { pdf_status: "signal", script: "bundled-only", ..Fake::default() }),
+                ("win-arm64", Fake { script: "ok", ..Fake::default() }),
+                ("linux-arm64", Fake { script: "ok", ..Fake::default() }),
+            ]
+        };
+        for broad in [
+            "a.docx\tplain\tpdf\t*\tall\tenv\tany difference\t\ns.docx\tplain\tpdf\t*\tall\tx2t\tany difference\t\n",
+            "a.docx\tplain\tpdf\tstat*\twin-x64\tbug\ttoo wide\t#9\ns.docx\t*\tpdf\tfonts.script\twin-x64\tenv\tnot a bug entry\t\n",
+        ] {
+            let (_, tsv, _, _) = run_matrix_known(&root, platforms(), &[], Some(broad));
+            assert_eq!(verdict_and_note(&tsv, "run", "a.docx", "pdf", "status").0, "FAIL", "{}", broad);
+            assert_eq!(verdict_and_note(&tsv, "report", "s.docx", "pdf", "fonts.script").0, "FAIL", "{}", broad);
+        }
+        let named = "a.docx\tplain\tpdf\tstatus\twin-x64\tbug\tcrash being fixed\t#9\ns.docx\tplain\tpdf\tfonts.script\twin-x64\tbug\tWindows font being fixed\t#10\n";
+        let (_, tsv, md, _) = run_matrix_known(&root, platforms(), &[], Some(named));
+        let (verdict, note) = verdict_and_note(&tsv, "run", "a.docx", "pdf", "status");
+        assert_eq!(verdict, "known-bug");
+        assert!(note.contains("#9"), "{}", note);
+        assert_eq!(verdict_and_note(&tsv, "report", "s.docx", "pdf", "fonts.script").0, "known-bug");
+        assert!(md.contains("| known-bug | 2 |"), "{}", md);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // A bug entry for one platform's failure leaves another platform's absent
+    // value unexplained: the row stays FAIL and fails the corpus.
+    #[test]
+    fn a_fail_row_left_with_a_missing_value_is_unexplained() {
+        let root = scratch("known-fail-missing");
+        let mut platforms = Vec::new();
+        for (id, expected) in [("win-x64", "missing:Hello"), ("win-arm64", "ok"), ("linux-arm64", "ok")] {
+            platforms.push((id.to_string(), write(&root, id, Fake { pdf_expected: expected, ..Fake::default() })));
+        }
+        // linux-arm64 has no expected row for the PDF.
+        let report = platforms[2].1.join("report.tsv");
+        let text = std::fs::read_to_string(&report).unwrap();
+        std::fs::write(&report, text.replace("a.docx\tplain\tpdf\texpected\tok\n", "")).unwrap();
+        let bug = "a.docx\tplain\tpdf\texpected\twin-x64\tbug\ttext being fixed\t#9\n";
+        let known = crate::known::parse(&format!("{}\n{}", crate::known::COLUMNS.join("\t"), bug)).unwrap();
+        let args = MatrixArgs { platforms, expect: Vec::new(), out: root.join("matrix"), known: Some(known) };
+        let outcome = matrix(&args).unwrap();
+        let tsv = Table::read(&root.join("matrix/matrix.tsv")).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(verdict_of(&tsv, "report", "a.docx", "pdf", "expected"), "FAIL");
+        assert_eq!(outcome, Outcome { infra: 0, unexplained: 1 });
+    }
+
+    #[test]
+    fn entries_that_explain_nothing_are_listed_and_do_not_fail() {
+        let root = scratch("known-unused");
+        let gone = "gone.docx\t*\t*\t*\tall\tenv\tfixed since\t\n";
+        let (outcome, _, md, _) = run_matrix_known(&root, vec![("win-x64", Fake::default()), ("linux-arm64", Fake::default())], &[], Some(gone));
+        assert_eq!(outcome, Outcome::default());
+        assert!(md.contains("Known entries that explained no row in this run:\n\n- line 2: `gone.docx * * *`: fixed since"), "{}", md);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // What report fails on fails the row too, whatever class excludes it.
+    #[test]
+    fn the_script_font_report_errors_and_txt_round_trips_are_hard_failures() {
+        let key = |doc: &str, step: &str, check: &str| -> Key { ("report".into(), doc.into(), "plain".into(), step.into(), check.into()) };
+        let v = |s: &str| Cell::Value(s.into());
+        let script = key("arabic-rtl.docx", "pdf", "fonts.script");
+        assert_eq!(verdict(&script, &[("9.4", v("ok")), ("8.2", v("ok"))]), "same");
+        assert_eq!(verdict(&script, &[("9.4", v("ok")), ("8.2", Cell::Excluded("system-fonts", "bundled-only".into()))]), "FAIL");
+        assert_eq!(verdict(&script, &[("9.4", v("other-font:Arial")), ("9.4", v("other-font:Arial"))]), "FAIL");
+        let txt = key("utf16be.txt", "save", "roundtrip.bytes");
+        assert_eq!(verdict(&txt, &[("9.4", v("diff:3")), ("8.2", v("equal"))]), "FAIL");
+        let csv = key("empty-lines.csv", "save", "roundtrip.bytes");
+        assert_eq!(verdict(&csv, &[("9.4", v("diff:8")), ("8.2", v("equal"))]), "same-in-family");
+        assert_eq!(verdict(&key("a.docx", "save", "report.error"), &[("9.4", v("unzip failed")), ("8.2", v("unzip failed"))]), "FAIL");
     }
 
     #[test]
