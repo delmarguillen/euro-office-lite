@@ -2706,6 +2706,9 @@ window.AscDesktopEditor = {
   },
 
   SetDocumentName: (name) => {
+    // sdkjs calls this with LocalFileGetSourcePath(), which is empty here;
+    // an empty name must not overwrite the title set on open and Save As.
+    if (typeof name !== 'string' || !name.trim()) return;
     invoke('set_window_title', { name }).catch(function(){});
   },
 
