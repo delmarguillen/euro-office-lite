@@ -14,6 +14,7 @@ mod text_import;
 mod x2t_task;
 
 use file_ops::AppState;
+use launch_args::TitleBar;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
@@ -60,45 +61,50 @@ fn start_instance(root: &std::path::Path) -> temp_layout::Instance {
     temp_layout::unlocked_instance(root, now_ms(), pid)
 }
 
-// Measurement-only switch for the title bar on Linux: "default" (tao's GTK
-// header bar), "nogtkheader" (drop it, GTK decides CSD or SSD) or "none"
-// (undecorated). Any other value, or none at all, changes nothing.
+// tao adds its GTK header bar only when GDK's backend is Wayland, so that is
+// the only place the title bar options mean anything. GDK picks the backend in
+// gtk_init: running it here, before tauri does, gives the answer tao will get
+// (its own gtk::init then returns at once) while the window does not exist yet.
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum TitlebarSpike {
-    Default,
-    NoGtkHeader,
-    Undecorated,
-}
-
-#[cfg(target_os = "linux")]
-fn titlebar_spike_mode() -> TitlebarSpike {
-    match std::env::var("EOL_TITLEBAR_SPIKE").as_deref() {
-        Ok("nogtkheader") => TitlebarSpike::NoGtkHeader,
-        Ok("none") => TitlebarSpike::Undecorated,
-        _ => TitlebarSpike::Default,
+fn wayland_title_bar(requested: TitleBar) -> TitleBar {
+    use gtk::prelude::*;
+    if requested == TitleBar::Default {
+        return requested;
     }
+    if let Err(e) = gtk::init() {
+        log_startup(&format!(
+            "WARNING: title bar option ignored, GTK did not start: {e}"
+        ));
+        return TitleBar::Default;
+    }
+    let wayland = gtk::gdk::Display::default()
+        .map(|display| display.backend().is_wayland())
+        .unwrap_or(false);
+    if !wayland {
+        log_startup("title bar option ignored: it only applies on Wayland");
+        return TitleBar::Default;
+    }
+    requested
 }
 
-// The window was built hidden (see main), so GTK has not realized it yet and
+// main was built hidden (see main), so GTK has not realized it yet and
 // negotiates the decorations with the mode already in place when it is shown.
 // Straight on the GTK window, which is what tao's set_decorations and show end
 // up calling, so the order is fixed and the window is shown before setup goes on.
 #[cfg(target_os = "linux")]
-fn apply_titlebar_spike(app: &tauri::App, mode: TitlebarSpike) {
+fn apply_title_bar(app: &tauri::App, mode: TitleBar) {
     use gtk::prelude::*;
-    if mode == TitlebarSpike::Default {
-        log_startup("titlebar spike mode=Default");
+    if mode == TitleBar::Default {
         return;
     }
     let Some(window) = app.get_webview_window("main") else {
-        log_startup("ERROR: titlebar spike: no main window");
+        log_startup("ERROR: title bar: no main window");
         return;
     };
     let gtk_window = match window.gtk_window() {
         Ok(gtk_window) => gtk_window,
         Err(e) => {
-            log_startup(&format!("ERROR: titlebar spike: no GTK window: {e}"));
+            log_startup(&format!("ERROR: title bar: no GTK window: {e}"));
             // Never leave the hidden window hidden.
             let _ = window.show();
             return;
@@ -106,18 +112,17 @@ fn apply_titlebar_spike(app: &tauri::App, mode: TitlebarSpike) {
     };
     let mut note = "";
     match mode {
-        // tao only adds a header bar on Wayland: on X11 there is nothing to drop.
-        TitlebarSpike::NoGtkHeader if gtk_window.titlebar().is_none() => {
+        TitleBar::System if gtk_window.titlebar().is_none() => {
             note = " (no GTK header bar to remove)";
         }
-        TitlebarSpike::NoGtkHeader => gtk_window.set_titlebar(None::<&gtk::Widget>),
-        TitlebarSpike::Undecorated => gtk_window.set_decorated(false),
-        TitlebarSpike::Default => {}
+        TitleBar::System => gtk_window.set_titlebar(None::<&gtk::Widget>),
+        TitleBar::Undecorated => gtk_window.set_decorated(false),
+        TitleBar::Default => {}
     }
     let realized_before_show = gtk_window.is_realized();
     gtk_window.show_all();
     log_startup(&format!(
-        "titlebar spike mode={:?}{} realized_before_show={}",
+        "title bar mode={:?}{} realized_before_show={}",
         mode, note, realized_before_show
     ));
 }
@@ -150,20 +155,6 @@ fn main() {
 
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut context = tauri::generate_context!();
-
-    // GTK picks client- or server-side decorations when it realizes the window,
-    // and tao realizes a visible window while building it, before setup runs.
-    #[cfg(target_os = "linux")]
-    let titlebar_spike = titlebar_spike_mode();
-    #[cfg(target_os = "linux")]
-    if titlebar_spike != TitlebarSpike::Default {
-        for window in context.config_mut().app.windows.iter_mut() {
-            if window.label == "main" {
-                window.visible = false;
-            }
-        }
-    }
-
     // The user-facing version comes from tauri.conf.json; Cargo's crate version stays independent.
     let app_version = context.package_info().version.clone();
 
@@ -230,6 +221,30 @@ fn main() {
     }
 
     let launch = launch_args::parse_launch_args(std::env::args().skip(1));
+    let (title_bar, notes) = launch_args::resolve_title_bar(
+        &launch,
+        std::env::var(launch_args::TITLE_BAR_ENV).ok().as_deref(),
+    );
+    for note in &notes {
+        log_startup(note);
+    }
+    // GTK picks client- or server-side decorations when it realizes the window,
+    // and tao realizes a visible window while building it, before setup runs:
+    // build it hidden and let setup apply the mode and show it.
+    #[cfg(target_os = "linux")]
+    let title_bar = wayland_title_bar(title_bar);
+    #[cfg(target_os = "linux")]
+    if title_bar != TitleBar::Default {
+        for window in context.config_mut().app.windows.iter_mut() {
+            if window.label == "main" {
+                window.visible = false;
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    if title_bar != TitleBar::Default {
+        log_startup("title bar option ignored: it only applies on Linux Wayland");
+    }
 
     let file_to_open: Option<String> = {
         // An empty base leaves a relative path untouched, which is what we can do
@@ -606,7 +621,7 @@ fn main() {
         .setup(move |app| {
             // First, so a hidden window is shown as early as the default one.
             #[cfg(target_os = "linux")]
-            apply_titlebar_spike(app, titlebar_spike);
+            apply_title_bar(app, title_bar);
 
             let resource_dir = app.path().resource_dir().unwrap_or_default();
             let binaries_dir = resource_dir.join("binaries");
