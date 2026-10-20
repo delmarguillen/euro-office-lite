@@ -101,6 +101,45 @@ utf8.txt                     46 69 72 73 74 20 6c 69 6e 65 0a 53 65 67 75 6e
 win1252-crlf.txt             4c ed 6e 65 61 20 75 6e 6f 0d 0a 43 61 66 e9 20
 ```
 
+## Known differences and baselines
+
+The workflow fails on hard failures (a crash, a failed exit, an empty output, a
+PDF without its expected text or its script font, a TXT that does not come back
+byte for byte), on two runs of the same build that disagree, and on two more
+things:
+
+- `known.tsv` lists, with a reason, where platforms may differ: document,
+  variant, step and check (exact, `*`, or a prefix ending in `*`), on `all`
+  platforms, one x2t family (`8.2`, `9.4`, as each platform shows it in that
+  run) or platform ids. `kind` is `env` (depends on the runner: its fonts, its
+  OS), `x2t` (comes from the x2t version), `bug` (a real fault, with its issue)
+  or `flaky` (see below). A difference inside one x2t family, or a value one
+  platform lacks, with no entry that explains it fails the run. Only a `bug`
+  entry that names the document and the check exactly covers a hard failure.
+  Entries that explain nothing in a run are listed in the report to be
+  removed.
+- `baseline/<platform>.tsv` holds the values each platform must keep: the x2t
+  under test and every result drawn with the bundled fonts (for outputs drawn
+  with the runner's fonts, or under an `env` entry, only how x2t ended). A
+  value added, removed or changed on any platform fails the run. Each run
+  writes the candidates and `baseline-diff.md` into its report artifact;
+  updating a baseline is copying the reviewed candidate here in a commit.
+
+A crash (`signal`) in only one of the two runs passes as `flaky` only if
+`known.tsv` declares that document and step as `flaky` for that platform with a
+reason; the report, the determinism check and `baseline-diff.md` then name it
+with the run, the platform and the signal. Any other crash fails, and a crash in
+both runs always fails. A flaky crash whose partial output fails its checks
+still fails; only an exact bug entry covers those checks.
+
+## Limits
+
+`pdftotext` reads glyphs that a cell's clip hides: x2t 8.2 leaves the hidden
+glyphs of a clipped cell in the PDF and 9.4 drops them. The corpus does not
+check that the expected text is visible, so the expected text of a spreadsheet
+must fit in its cell on every platform (`basic.ods` expects `Basic`, not its
+whole A1 label).
+
 ## Running it
 
 `report` extracts the PDF text and fonts with poppler-utils (`pdftotext`,

@@ -247,7 +247,7 @@ mod tests {
         let entries = read(&corpus).unwrap();
         for file in std::fs::read_dir(&corpus).unwrap().flatten() {
             let name = file.file_name().to_string_lossy().to_string();
-            if file.path().is_dir() || name == "manifest.tsv" || name == "README.md" {
+            if file.path().is_dir() || ["manifest.tsv", "known.tsv", "README.md"].contains(&name.as_str()) {
                 continue;
             }
             assert!(

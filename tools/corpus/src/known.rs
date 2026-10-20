@@ -251,6 +251,34 @@ mod tests {
         assert!(!env.covers_failure("a.docx", "fonts.script"));
     }
 
+    // The list the workflow reads: valid, and every entry names a document of
+    // the manifest (or a pattern).
+    #[test]
+    fn the_real_known_list_is_valid() {
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
+        let entries = read(&corpus.join("known.tsv")).unwrap();
+        let manifest = crate::manifest::read(&corpus).unwrap();
+        for entry in &entries {
+            let named = is_pattern(&entry.doc) || manifest.iter().any(|m| m.doc == entry.doc);
+            assert!(named, "known.tsv line {}: {} is not in the manifest", entry.line, entry.doc);
+        }
+    }
+
+    // The blank workbook's open differs on 8.2 only: on 9.4 its values stay
+    // compared and pinned in the baseline.
+    #[test]
+    fn the_blank_workbook_open_is_known_on_8_2_only() {
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
+        let entries = read(&corpus.join("known.tsv")).unwrap();
+        for check in ["editor.sha256", "sha256"] {
+            let covering = |id: &str, family: &str| {
+                entries.iter().any(|e| e.matches("@templates/blank.xlsx", "plain", "open", check) && e.covers(id, family))
+            };
+            assert!(covering("linux-x64", "8.2") && covering("mac-arm64", "8.2"), "{}", check);
+            assert!(!covering("win-x64", "9.4") && !covering("linux-arm64", "9.4"), "{}", check);
+        }
+    }
+
     #[test]
     fn the_platform_ids_are_the_workflows() {
         let workflow = std::fs::read_to_string(

@@ -2,10 +2,12 @@ name: Conversion corpus
 
 # Converts tests/corpus with the x2t of each published installer, on a runner
 # that runs that x2t, through the app's own Rust code (src-tauri/src/x2t_task.rs
-# and text_import.rs), and lines the platforms up in one report. Informative:
-# it fails on crashes, non-zero exits, empty outputs, PDFs missing their
-# expected text, runs that disagree with themselves and missing platforms,
-# never on differences between platforms.
+# and text_import.rs), and lines the platforms up in one report. It fails on
+# crashes, non-zero exits, empty outputs, PDFs missing their expected text or
+# script font, runs that disagree with themselves, missing platforms, a
+# difference inside one x2t family that tests/corpus/known.tsv does not
+# explain, and any change against a platform's tests/corpus/baseline/.
+# 8.2 against 9.4 alone never fails it.
 
 on:
   workflow_dispatch:
@@ -412,8 +414,11 @@ jobs:
               rm -rf "$dir/run$n/report.tsv" "$dir/run$n/summary.md" "$dir/run$n/text" "$dir/run$n/.unpack"
             done
             rm -f "$dir/compare.tsv" "$dir/determinism.md"
-            r1=0; "$BIN" report --out "$dir/run1" --manifest tests/corpus/manifest.tsv || r1=$?
-            r2=0; "$BIN" report --out "$dir/run2" --manifest tests/corpus/manifest.tsv || r2=$?
+            # Each report reads the other run of the same build: a crash in one
+            # run passes as flaky only if known.tsv declares it for this platform.
+            known=(--known tests/corpus/known.tsv --platform "$id")
+            r1=0; "$BIN" report --out "$dir/run1" --manifest tests/corpus/manifest.tsv "${known[@]}" --other "$dir/run2" || r1=$?
+            r2=0; "$BIN" report --out "$dir/run2" --manifest tests/corpus/manifest.tsv "${known[@]}" --other "$dir/run1" || r2=$?
             # Results that report refused (exit 2) are compared with nothing
             # and stay out of the matrix, which lists the platform as having none.
             if [ "$r1" -gt 1 ] || [ "$r2" -gt 1 ]; then
@@ -423,19 +428,46 @@ jobs:
             fi
             same=0; "$BIN" compare "$dir/run1" "$dir/run2" --summary "$dir/determinism.md" || same=$?
             table+="| $id | $(describe "$r1" none "see $id summary") | $(describe "$same" same differs) |\n"
+            # A hard failure of either run fails the job: compare, the matrix
+            # and the baseline leave out a step that is flaky in run1, so they
+            # would not see run2 fail it.
             [ "$r1" -eq 0 ] || { status=1; extra+="$dir/run1/summary.md "; }
+            [ "$r2" -eq 0 ] || { status=1; extra+="$dir/run2/summary.md "; }
             [ "$same" -eq 0 ] || { status=1; extra+="$dir/determinism.md "; }
+            # What known.tsv settled (a flaky crash, a bug named on purpose)
+            # never fails the job, and is always shown. A run that failed has
+            # its summary in already.
+            for n in 1 2; do
+              code=$r1
+              [ "$n" -eq 1 ] || code=$r2
+              if [ "$code" -eq 0 ] && grep -q '^- Settled by known.tsv' "$dir/run$n/summary.md" 2>/dev/null; then
+                extra+="$dir/run$n/summary.md "
+              fi
+            done
             platforms+=(--platform "$id=$dir/run1")
           done
+          # With known.tsv, a difference inside one x2t family or a value one
+          # platform lacks, with no entry that explains it, fails the job.
           matrix=0
-          "$BIN" matrix "${platforms[@]}" --expect "$EXPECTED" --out matrix || matrix=$?
+          "$BIN" matrix "${platforms[@]}" --expect "$EXPECTED" --known tests/corpus/known.tsv --out matrix || matrix=$?
           [ "$matrix" -eq 0 ] || status=1
+          # Every platform must keep its committed baseline; the candidates
+          # this run writes go into the artifact, to be reviewed and committed.
+          # Until the first baselines are committed a missing one passes.
+          base=0
+          if [ "${#platforms[@]}" -gt 0 ]; then
+            "$BIN" baseline "${platforms[@]}" --baseline tests/corpus/baseline --known tests/corpus/known.tsv \
+              --missing ok --out baseline || base=$?
+          fi
+          [ "$base" -eq 0 ] || status=1
           {
             echo "## Conversion corpus"
             echo
             printf '%b' "$table"
             echo
             cat matrix/matrix.md 2>/dev/null
+            echo
+            cat baseline/baseline-diff.md 2>/dev/null
             echo
             cat matrix/environment.md 2>/dev/null
             for file in $extra; do
@@ -457,6 +489,7 @@ jobs:
           path: |
             results/
             matrix/
+            baseline/
             summary.md
           if-no-files-found: warn
           retention-days: 7
