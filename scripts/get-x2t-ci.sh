@@ -19,7 +19,7 @@ log() {
 # this working on the bash 3.2 that macOS ships.
 expected_sha256() {
     case "$1" in
-        x2t-binaries-linux-x64.zip)   echo "0bfe09d38022bd985fc9640dde71bfb9a7dc6f1b81a5781a3e7848aee755f161" ;;
+        x2t-binaries-linux-x64-9.4.0.129.zip) echo "6b7de53b626b61f5af5137fb9fa6d7b6c314075c7d4530fd8367f3db336a79d0" ;;
         x2t-binaries-linux-arm64.zip) echo "4abf69447ba6be774881aaf85e04205b1e99801cef231b3c14aea0c3f24efef7" ;;
         x2t-binaries-macos-arm64.zip) echo "98f96186b15941a3e3d37ca6e6447fda6a4a55c507151fdda363d00b5db4c3e0" ;;
         x2t-binaries-macos-x64.zip)   echo "4d548e676ba55226a49f65a70f2ad15df2b0716102cd68ed62ddcef148896db6" ;;
@@ -63,7 +63,7 @@ elif [ "$OS" = "Linux" ]; then
         ZIP_NAME="x2t-binaries-linux-arm64.zip"
         TRIPLE="aarch64-unknown-linux-gnu"
     else
-        ZIP_NAME="x2t-binaries-linux-x64.zip"
+        ZIP_NAME="x2t-binaries-linux-x64-9.4.0.129.zip"
         TRIPLE="x86_64-unknown-linux-gnu"
     fi
     CHECK_PATTERN="x2t-*-linux-gnu"
