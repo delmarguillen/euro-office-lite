@@ -264,19 +264,20 @@ mod tests {
         }
     }
 
-    // The blank workbook's open differs on linux-x64 only (its runner's default
-    // font): everywhere else its values stay compared and pinned.
+    // The blank workbook's open gives the same values on every platform, so no
+    // entry may hide them: they stay compared and pinned everywhere.
     #[test]
-    fn the_blank_workbook_open_is_known_on_linux_x64_only() {
+    fn the_blank_workbook_open_is_known_nowhere() {
         let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
         let entries = read(&corpus.join("known.tsv")).unwrap();
         for check in ["editor.sha256", "sha256"] {
-            let covering = |id: &str, family: &str| {
-                entries.iter().any(|e| e.matches("@templates/blank.xlsx", "plain", "open", check) && e.covers(id, family))
-            };
-            assert!(covering("linux-x64", "8.2"), "{}", check);
-            for (id, family) in [("mac-x64", "8.2"), ("mac-arm64", "8.2"), ("win-x64", "9.4"), ("win-arm64", "9.4"), ("linux-arm64", "9.4")] {
-                assert!(!covering(id, family), "{} {}", check, id);
+            for id in PLATFORM_IDS {
+                for family in ["8.2", "9.4"] {
+                    let covered = entries
+                        .iter()
+                        .any(|e| e.matches("@templates/blank.xlsx", "plain", "open", check) && e.covers(id, family));
+                    assert!(!covered, "{} {} {}", check, id, family);
+                }
             }
         }
     }
