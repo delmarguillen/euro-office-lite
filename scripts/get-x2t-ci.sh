@@ -21,8 +21,8 @@ expected_sha256() {
     case "$1" in
         x2t-binaries-linux-x64-9.4.0.129.zip) echo "6b7de53b626b61f5af5137fb9fa6d7b6c314075c7d4530fd8367f3db336a79d0" ;;
         x2t-binaries-linux-arm64.zip) echo "4abf69447ba6be774881aaf85e04205b1e99801cef231b3c14aea0c3f24efef7" ;;
-        x2t-binaries-macos-arm64.zip) echo "98f96186b15941a3e3d37ca6e6447fda6a4a55c507151fdda363d00b5db4c3e0" ;;
-        x2t-binaries-macos-x64.zip)   echo "4d548e676ba55226a49f65a70f2ad15df2b0716102cd68ed62ddcef148896db6" ;;
+        x2t-binaries-macos-arm64-9.4.0.129.zip) echo "ed9a6e1ee9f5155bfde2238f93eeba12d477005c7f7e61f9a858f667a11f3db5" ;;
+        x2t-binaries-macos-x64-9.4.0.129.zip) echo "911bc13abec66cf9aec7e996fec14d289b53009ecaa8261020f5f50450001c6f" ;;
         *) return 1 ;;
     esac
 }
@@ -44,11 +44,11 @@ log "Target dir: $TARGET_DIR"
 if [ "$OS" = "Darwin" ]; then
     case "$TARGET_TRIPLE" in
         x86_64-apple-darwin)
-            ZIP_NAME="x2t-binaries-macos-x64.zip"
+            ZIP_NAME="x2t-binaries-macos-x64-9.4.0.129.zip"
             TRIPLE="x86_64-apple-darwin"
             ;;
         aarch64-apple-darwin|"")
-            ZIP_NAME="x2t-binaries-macos-arm64.zip"
+            ZIP_NAME="x2t-binaries-macos-arm64-9.4.0.129.zip"
             TRIPLE="aarch64-apple-darwin"
             ;;
         *)
@@ -118,6 +118,25 @@ mkdir -p "$TARGET_DIR"
 log "Extracting to $TARGET_DIR..."
 unzip -o "$TEMP_ZIP" -d "$TARGET_DIR"
 rm -f "$TEMP_ZIP"
+
+# x2t 9.x on macOS loads versioned frameworks; codesign rejects a framework
+# whose Versions/Current came out of the zip as a copy instead of a link.
+if [ "$OS" = "Darwin" ]; then
+    FW_COUNT=0
+    for fw in "$TARGET_DIR"/*.framework; do
+        [ -d "$fw" ] || continue
+        if [ ! -L "$fw/Versions/Current" ]; then
+            log "ERROR: $(basename "$fw")/Versions/Current is not a symbolic link"
+            exit 1
+        fi
+        FW_COUNT=$((FW_COUNT + 1))
+    done
+    if [ "$FW_COUNT" -eq 0 ]; then
+        log "ERROR: no *.framework in $ZIP_NAME"
+        exit 1
+    fi
+    log "Frameworks with a linked Versions/Current: $FW_COUNT"
+fi
 
 SIDECAR="$TARGET_DIR/x2t-$TRIPLE"
 

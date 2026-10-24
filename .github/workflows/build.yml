@@ -288,16 +288,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # x2t already carries @executable_path/../Frameworks, which serves the
+      # sidecar in Contents/MacOS; the copy in Contents/Resources/binaries
+      # needs Contents/Frameworks two folders up. Adding a path it has fails.
       - name: Fix x2t binary (rpath + ad-hoc re-sign)
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
+          set -euo pipefail
           echo "::group::Patch x2t rpath and re-sign"
-          X2T="src-tauri/binaries/x2t-${{ matrix.target }}"
-          if [ -f "$X2T" ]; then
-            install_name_tool -add_rpath "@executable_path/../Resources/binaries" "$X2T" 2>/dev/null || true
-            codesign --force --sign - "$X2T"
-            echo "Updated rpaths:"
-            otool -l "$X2T" | grep -A2 LC_RPATH
-          fi
+          X2T="src-tauri/binaries/x2t-$TARGET"
+          RPATH="@executable_path/../../Frameworks"
+          RPATHS=$(otool -l "$X2T" | awk '/cmd LC_RPATH$/ { getline; getline; print $2 }' | paste -sd ' ' -)
+          case " $RPATHS " in
+            *" $RPATH "*) echo "x2t already has $RPATH" ;;
+            *) install_name_tool -add_rpath "$RPATH" "$X2T" ;;
+          esac
+          codesign --force --sign - "$X2T"
+          echo "Updated rpaths:"
+          otool -l "$X2T" | grep -A2 LC_RPATH
           echo "::endgroup::"
 
       - name: Copy x2t to binaries for DoctRenderer PDF path
@@ -306,11 +315,12 @@ jobs:
           echo "x2t resource copy created ($(wc -c < src-tauri/binaries/x2t) bytes)"
 
       - name: Prepare DoctRenderer resources
-        # The macOS x2t is 8.2, so its sdkjs comes from the fork's 8.2 tag,
-        # checked against the commit that tag points to today.
+        # The macOS x2t (both targets) is 9.4.0.129, so the sdkjs tag has to
+        # match it; that tag exists only upstream, not in this fork.
         env:
-          DOCTRENDERER_SDKJS_TAG: v8.2.0.147
-          DOCTRENDERER_SDKJS_COMMIT: cfbea04cffefe72e1797ba4ed488771124d6e252
+          DOCTRENDERER_SDKJS_TAG: v9.4.0.129
+          DOCTRENDERER_SDKJS_REMOTE: https://github.com/ONLYOFFICE/sdkjs.git
+          DOCTRENDERER_SDKJS_COMMIT: 75b53d504bfd81bfa35d59bb57dd9e56f7c9235d
         run: |
           set -o pipefail
           echo "::group::Copy fonts to binaries"
@@ -331,12 +341,23 @@ jobs:
           DOCTRENDERER_SDKJS="$DOCTRENDERER_STAGING" bash scripts/prepare-doctrenderer.sh
           echo "::endgroup::"
 
+      # Resources copy file by file and would flatten the framework links, so
+      # x2t's frameworks go to Contents/Frameworks through bundle.macOS.frameworks.
       - name: Build Tauri app
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          set -o pipefail
+          set -euo pipefail
+          FRAMEWORKS=$(find "$GITHUB_WORKSPACE/src-tauri/binaries" -mindepth 1 -maxdepth 1 -name '*.framework' -type d | LC_ALL=C sort | jq -R . | jq -cs .)
+          if [ "$(echo "$FRAMEWORKS" | jq length)" -eq 0 ]; then
+            echo "::error::no x2t frameworks in src-tauri/binaries"
+            exit 1
+          fi
+          echo "Frameworks: $FRAMEWORKS"
+          CONFIG=$(jq -cn --argjson frameworks "$FRAMEWORKS" '{"bundle":{"targets":["app","dmg"],"icon":["icons/icon.icns","icons/icon.png","icons/128x128.png","icons/32x32.png"],"resources":["binaries/*.config","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/cell/*","editors/sdkjs/slide/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"],"macOS":{"frameworks":$frameworks}}}')
           npx tauri build \
-            --target ${{ matrix.target }} \
-            --config '{"bundle":{"targets":["app","dmg"],"icon":["icons/icon.icns","icons/icon.png","icons/128x128.png","icons/32x32.png"],"resources":["binaries/*.dylib","binaries/*.config","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/cell/*","editors/sdkjs/slide/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
+            --target "$TARGET" \
+            --config "$CONFIG" \
             2>&1 | tee /tmp/tauri-build.log
 
       - name: Sign and notarize macOS app
@@ -352,14 +373,15 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TARGET: ${{ matrix.target }}
         run: |
           if [ -z "$APPLE_CERTIFICATE" ]; then
             echo "No Apple certificate configured, skipping code signing"
             exit 0
           fi
 
-          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Euro-Office-Lite.app"
-          DMG_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          APP="src-tauri/target/$TARGET/release/bundle/macos/Euro-Office-Lite.app"
+          DMG_DIR="src-tauri/target/$TARGET/release/bundle/dmg"
 
           submit_for_notarization() {
             local artifact="$1" label="$2" log_file="$3" max_attempts="$4"
@@ -442,7 +464,7 @@ jobs:
           echo "Certificate imported"
           echo "::endgroup::"
 
-          # --- Sign all Mach-O binaries in the .app bundle ---
+          # --- Sign inside out: loose Mach-O files, each framework, the .app ---
           echo "::group::Sign binaries"
           SIGNED_COUNT=0
           while IFS= read -r -d '' f; do
@@ -451,11 +473,25 @@ jobs:
               SIGNED_COUNT=$((SIGNED_COUNT + 1))
               echo "  Signed: ${f#$APP/}"
             fi
-          done < <(find "$APP/Contents" -type f -print0 2>/dev/null)
+          done < <(find "$APP/Contents" -type f -not -path '*.framework/*' -print0 2>/dev/null)
+
+          # A framework is signed as a bundle, which seals Versions/Current;
+          # signing its binary as a loose file would leave the bundle unsealed.
+          FRAMEWORK_COUNT=0
+          while IFS= read -r -d '' fw; do
+            codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$fw"
+            FRAMEWORK_COUNT=$((FRAMEWORK_COUNT + 1))
+            echo "  Signed: ${fw#$APP/}"
+          done < <(find "$APP/Contents/Frameworks" -mindepth 1 -maxdepth 1 -name '*.framework' -type d -print0 2>/dev/null)
+          if [ "$FRAMEWORK_COUNT" -eq 0 ]; then
+            echo "::error::no frameworks in $APP/Contents/Frameworks"
+            exit 1
+          fi
+          SIGNED_COUNT=$((SIGNED_COUNT + FRAMEWORK_COUNT))
 
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --options runtime --timestamp "$APP"
           SIGNED_COUNT=$((SIGNED_COUNT + 1))
-          echo "Signed $SIGNED_COUNT items total (nested binaries + .app bundle)"
+          echo "Signed $SIGNED_COUNT items total ($FRAMEWORK_COUNT frameworks, nested binaries + .app bundle)"
           echo "::endgroup::"
 
           # --- Verify signature before notarization ---
@@ -470,7 +506,7 @@ jobs:
           submit_for_notarization \
             "$RUNNER_TEMP/app-notarize.zip" \
             macOS-app \
-            "$RUNNER_TEMP/notary-app-${{ matrix.target }}.log" \
+            "$RUNNER_TEMP/notary-app-$TARGET.log" \
             1
           rm "$RUNNER_TEMP/app-notarize.zip"
           echo "::endgroup::"
@@ -490,7 +526,7 @@ jobs:
           ln -s /Applications "$DMG_STAGING/Applications"
 
           VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: "\(.*\)".*/\1/')
-          ARCH=$(echo "${{ matrix.target }}" | cut -d'-' -f1)
+          ARCH=$(echo "$TARGET" | cut -d'-' -f1)
           DMG_PATH="$DMG_DIR/Euro-Office-Lite_${VERSION}_${ARCH}.dmg"
 
           hdiutil create -volname "Euro-Office Lite" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
@@ -499,7 +535,7 @@ jobs:
           submit_for_notarization \
             "$DMG_PATH" \
             macOS-DMG \
-            "$RUNNER_TEMP/notary-dmg-${{ matrix.target }}.log" \
+            "$RUNNER_TEMP/notary-dmg-$TARGET.log" \
             2
 
           xcrun stapler staple "$DMG_PATH"
