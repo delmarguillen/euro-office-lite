@@ -175,6 +175,21 @@ fn symlink_path(source: &std::path::Path, destination: &std::path::Path) -> Resu
     })
 }
 
+// The folder that holds x2t's *.framework bundles: Contents/Frameworks of a
+// .app, or binaries/ itself when the frameworks sit next to x2t, as
+// get-x2t-ci.sh leaves them. None for an x2t that links plain dylibs.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn x2t_frameworks_dir(binaries_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let bundled = binaries_dir.parent()?.parent()?.join("Frameworks");
+    if bundled.is_dir() {
+        return Some(bundled);
+    }
+    let has_framework = std::fs::read_dir(binaries_dir).ok()?.flatten().any(|entry| {
+        entry.path().is_dir() && entry.file_name().to_string_lossy().ends_with(".framework")
+    });
+    has_framework.then(|| binaries_dir.to_path_buf())
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn reset_work_dir(work_dir: &std::path::Path) -> Result<(), String> {
     if work_dir.exists() {
@@ -659,6 +674,12 @@ fn setup_macos_workdir(
     let work_x2t = work_binaries.join("x2t");
     copy_file(x2t_exe, &work_x2t)?;
 
+    // x2t finds its frameworks through @executable_path/../Frameworks, which
+    // for this copy is work_dir/Frameworks; a link keeps them in place.
+    if let Some(frameworks) = x2t_frameworks_dir(binaries_dir) {
+        symlink_path(&frameworks, &work_dir.join("Frameworks"))?;
+    }
+
     let entries = std::fs::read_dir(binaries_dir)
         .map_err(|e| path_error("Failed to read macOS binaries directory", binaries_dir, e))?;
     for entry in entries {
@@ -1115,6 +1136,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // .app: Contents/Frameworks, even with a framework left next to x2t.
+    #[test]
+    fn an_app_keeps_x2t_frameworks_in_contents_frameworks() {
+        let root = scratch_dir("fw-app");
+        let contents = root.join("Euro-Office-Lite.app/Contents");
+        let binaries = contents.join("Resources/binaries");
+        touch(&binaries.join(x2t_name()));
+        touch(&binaries.join("graphics.framework/Versions/A/graphics"));
+        touch(&contents.join("Frameworks/kernel.framework/Versions/A/kernel"));
+
+        assert_eq!(
+            x2t_frameworks_dir(&binaries),
+            Some(contents.join("Frameworks"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Dev and CI trees: get-x2t-ci.sh unzips the frameworks next to x2t.
+    #[test]
+    fn frameworks_next_to_x2t_are_used_outside_an_app() {
+        let root = scratch_dir("fw-dev");
+        let binaries = root.join("src-tauri/binaries");
+        touch(&binaries.join(x2t_name()));
+        touch(&binaries.join("DoctRenderer.config"));
+        touch(&binaries.join("kernel.framework/Versions/A/kernel"));
+
+        assert_eq!(x2t_frameworks_dir(&binaries), Some(binaries.clone()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // An x2t with plain dylibs (8.2) has no frameworks; a file that only
+    // looks like one does not count.
+    #[test]
+    fn an_x2t_without_frameworks_gets_no_frameworks_dir() {
+        let root = scratch_dir("fw-none");
+        let contents = root.join("Euro-Office-Lite.app/Contents");
+        let binaries = contents.join("Resources/binaries");
+        touch(&binaries.join(x2t_name()));
+        touch(&binaries.join("libkernel.dylib"));
+        touch(&binaries.join("notes.framework"));
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+
+        assert_eq!(x2t_frameworks_dir(&binaries), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     // NSIS: binaries/ holds no x2t, so the one in the install folder is used,
     // the same file the sidecar runs.
     #[test]
@@ -1410,6 +1477,70 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         .unwrap();
 
         assert!(!editors.join("sdkjs/common/AllFonts.js").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // A .app with or without Contents/Frameworks, its font cache and the
+    // instance temp folder the work dir goes in.
+    #[cfg(target_os = "macos")]
+    fn macos_app(name: &str, with_frameworks: bool) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = scratch_dir(name);
+        let contents = root.join("Euro-Office-Lite.app/Contents");
+        let resources = contents.join("Resources");
+        touch(&resources.join("binaries/x2t"));
+        touch(&resources.join("binaries/fonts/LiberationSerif-Regular.ttf"));
+        for relative in DOCTRENDERER_EDITOR_RESOURCES {
+            touch(&resources.join("editors").join(relative));
+        }
+        if with_frameworks {
+            touch(&contents.join("Frameworks/kernel.framework/Versions/A/kernel"));
+        }
+        touch(&root.join("temp/fontdata/AllFonts.js"));
+        (root, contents)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_work_dir(root: &std::path::Path, contents: &std::path::Path) -> std::path::PathBuf {
+        let binaries = contents.join("Resources/binaries");
+        let fontdata = root.join("temp/fontdata");
+        setup_macos_workdir(
+            &binaries,
+            &binaries.join("x2t"),
+            &binaries.join("fonts"),
+            &fontdata,
+            &contents.join("Resources/editors"),
+            &fontdata.join("AllFonts.js"),
+            &root.join("temp"),
+        )
+        .unwrap();
+        root.join("temp/x2t-workdir")
+    }
+
+    // The work copy of x2t is work_dir/binaries/x2t, so its
+    // @executable_path/../Frameworks is work_dir/Frameworks.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_work_dir_links_the_app_frameworks() {
+        let (root, contents) = macos_app("mac-fw-link", true);
+
+        let work_dir = macos_work_dir(&root, &contents);
+
+        assert_eq!(
+            std::fs::read_link(work_dir.join("Frameworks")).unwrap(),
+            contents.join("Frameworks")
+        );
+        assert!(work_dir.join("Frameworks/kernel.framework").is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_work_dir_has_no_frameworks_link_without_frameworks() {
+        let (root, contents) = macos_app("mac-fw-none", false);
+
+        let work_dir = macos_work_dir(&root, &contents);
+
+        assert!(std::fs::symlink_metadata(work_dir.join("Frameworks")).is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 
