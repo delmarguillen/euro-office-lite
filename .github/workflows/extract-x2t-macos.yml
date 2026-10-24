@@ -1,7 +1,8 @@
 name: Extract x2t macOS binaries (one-shot)
 
-# Builds x2t-binaries-macos-<arch>.zip from the ONLYOFFICE Desktop Editors
-# DMG and publishes it to the 'dependencies' release that get-x2t-ci.sh reads.
+# Builds x2t-binaries-macos-<arch>[-<x2t build>].zip from the ONLYOFFICE
+# Desktop Editors DMG and publishes it to the 'dependencies' release that
+# get-x2t-ci.sh reads.
 # The upload runs in its own job behind the 'dependencies' environment.
 
 on:
@@ -22,6 +23,10 @@ on:
         description: 'Expected sha256 of the ONLYOFFICE DMG for that arch'
         type: string
         required: true
+      x2t_version:
+        description: 'x2t build in the DMG (e.g. 9.4.0.129): checked against x2t and added to the zip name; empty keeps the plain name'
+        type: string
+        default: ''
       replace_existing:
         description: 'Overwrite the zip if it already exists in the dependencies release'
         type: boolean
@@ -32,7 +37,9 @@ permissions:
 
 jobs:
   extract:
-    runs-on: macos-latest
+    # Fixed labels, one per architecture, so the checks below run the
+    # extracted binaries natively; -latest moves to a new macOS on its own.
+    runs-on: ${{ inputs.arch == 'x86_64' && 'macos-15-intel' || 'macos-15' }}
     permissions:
       contents: read
     outputs:
@@ -42,6 +49,7 @@ jobs:
       ARCH: ${{ inputs.arch }}
       VERSION: ${{ inputs.onlyoffice_version }}
       DMG_SHA256: ${{ inputs.dmg_sha256 }}
+      X2T_VERSION: ${{ inputs.x2t_version }}
     steps:
       - name: Validate inputs
         run: |
@@ -55,6 +63,21 @@ jobs:
           fi
           if ! [[ "$DMG_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
             echo "ERROR: dmg_sha256 must be 64 lowercase hex characters"
+            exit 1
+          fi
+          if [ -n "$X2T_VERSION" ] && ! [[ "$X2T_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: x2t_version must be empty or look like 1.2.3.4"
+            exit 1
+          fi
+          # The runner has to match the DMG so the minos, signing and conversion
+          # checks are real. uname -m also says x86_64 under Rosetta.
+          case "$ARCH:$(uname -m)" in
+            arm64:arm64|x86_64:x86_64) ;;
+            *) echo "ERROR: $ARCH requested but the runner is $(uname -m)"; exit 1 ;;
+          esac
+          TRANSLATED=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
+          if [ "$TRANSLATED" != "0" ]; then
+            echo "ERROR: the shell runs under Rosetta, not natively on $ARCH"
             exit 1
           fi
 
@@ -180,6 +203,16 @@ jobs:
             cp "$X2T_DIR/DoctRenderer.config" "$STAGING/"
           fi
 
+          # x2t 9.x links its libraries as @rpath/<X>.framework/Versions/A/<X>.
+          # They go next to x2t as in converter/; ditto keeps their symbolic
+          # links, permissions and _CodeSignature as shipped.
+          FW_COUNT=0
+          while IFS= read -r -d '' fw; do
+            ditto --noextattr --noqtn "$fw" "$STAGING/$(basename "$fw")"
+            FW_COUNT=$((FW_COUNT + 1))
+          done < <(find "$X2T_DIR" -maxdepth 1 -type d -name "*.framework" -print0)
+          echo "Frameworks copied: $FW_COUNT"
+
           # Copy core-fonts directory if it exists alongside x2t
           CONVERTER_DIR=$(dirname "$X2T_DIR")
           if [ -d "$CONVERTER_DIR/core-fonts" ]; then
@@ -215,17 +248,215 @@ jobs:
           done < <(find /tmp/x2t-staging -type f -print0)
           exit $FAIL
 
+      # A framework is only valid with its Versions/Current and top-level
+      # links in place; codesign --strict rejects it otherwise.
+      - name: Verify framework layout
+        run: |
+          STAGING="/tmp/x2t-staging"
+          FAIL=0
+          COUNT=0
+          for fw in "$STAGING"/*.framework; do
+            [ -d "$fw" ] || continue
+            COUNT=$((COUNT + 1))
+            X=$(basename "$fw" .framework)
+            BIN="$fw/Versions/A/$X"
+            if [ ! -L "$fw/Versions/Current" ]; then
+              echo "::error::$X.framework: Versions/Current is not a symbolic link"
+              FAIL=1
+            fi
+            if [ ! -L "$fw/$X" ] || [ "$(readlink "$fw/$X")" != "Versions/Current/$X" ]; then
+              echo "::error::$X.framework: $X is not a link to Versions/Current/$X"
+              FAIL=1
+            fi
+            if [ -L "$BIN" ] || [ ! -f "$BIN" ] || ! file -b "$BIN" | grep -q "Mach-O"; then
+              echo "::error::$X.framework: Versions/A/$X is not a Mach-O file"
+              FAIL=1
+              continue
+            fi
+            ARCHS=$(lipo -archs "$BIN" 2>/dev/null || true)
+            case " $ARCHS " in
+              *" $ARCH "*) ;;
+              *) echo "::error::$X.framework: Versions/A/$X is '$ARCHS', not $ARCH"; FAIL=1 ;;
+            esac
+            echo "  $X.framework: Current -> $(readlink "$fw/Versions/Current"), archs: $ARCHS"
+          done
+          MACHO=0
+          while IFS= read -r -d '' f; do
+            if file -b "$f" | grep -q "Mach-O"; then
+              MACHO=$((MACHO + 1))
+            fi
+          done < <(find "$STAGING" -type f -print0)
+          echo "Frameworks: $COUNT; Mach-O files under the deployment target check: $MACHO"
+          exit $FAIL
+
+      # Every library a Mach-O file loads has to be in the staging or in the
+      # OS. @rpath is checked against the staging root, where the app keeps
+      # them; the run from the zip below proves the real LC_RPATH search.
+      - name: Report rpaths and check library closure
+        run: |
+          STAGING="/tmp/x2t-staging"
+          STAGING_REAL=$(readlink -f "$STAGING")
+          FACTS="$RUNNER_TEMP/x2t-facts.txt"
+          FAIL=0
+          WEAK_ALL=""
+          resolves() {
+            local dep="$1" bin="$2" cand real
+            case "$dep" in
+              /usr/lib/*|/System/*) return 0 ;;
+              @rpath/*) cand="$STAGING/${dep#@rpath/}" ;;
+              @executable_path/*) cand="$STAGING/${dep#@executable_path/}" ;;
+              @loader_path/*) cand="$(dirname "$bin")/${dep#@loader_path/}" ;;
+              *) return 1 ;;
+            esac
+            [ -e "$cand" ] || return 1
+            real=$(readlink -f "$cand") || return 1
+            case "$real" in
+              "$STAGING_REAL"/*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q "Mach-O" || continue
+            REL="${f#"$STAGING"/}"
+            ARCHS=$(lipo -archs "$f" 2>/dev/null || true)
+            case " $ARCHS " in
+              *" $ARCH "*) ;;
+              *) echo "::error::$REL is '$ARCHS', not $ARCH"; FAIL=1; continue ;;
+            esac
+            LOADS=$(otool -arch "$ARCH" -l "$f")
+            RPATHS=$(printf '%s\n' "$LOADS" | awk '/cmd LC_RPATH$/ { getline; getline; print $2 }' | paste -sd ' ' -)
+            WEAK=$(printf '%s\n' "$LOADS" | awk '/cmd LC_LOAD_WEAK_DYLIB$/ { getline; getline; print $2 }' | paste -sd ' ' -)
+            echo "$REL"
+            echo "  LC_RPATH: ${RPATHS:-none}"
+            echo "  weak: ${WEAK:-none}"
+            if [ -n "$WEAK" ]; then
+              WEAK_ALL="$WEAK_ALL $REL"
+            fi
+            # A library lists its own install name first.
+            SKIP=0
+            if file -b "$f" | grep -q "shared library"; then
+              SKIP=1
+            fi
+            while IFS= read -r dep; do
+              [ -n "$dep" ] || continue
+              if [ "$SKIP" = "1" ]; then
+                SKIP=0
+                continue
+              fi
+              if ! resolves "$dep" "$f"; then
+                echo "::error::$REL loads $dep, which does not resolve inside the staging"
+                FAIL=1
+              fi
+            done < <(otool -arch "$ARCH" -L "$f" | tail -n +2 | sed -E 's/^[[:space:]]+//; s/ \(compatibility version.*$//')
+          done < <(find "$STAGING" -type f -print0)
+
+          DR=$(find "$STAGING" -type f \( -name doctrenderer -o -name libdoctrenderer.dylib \) | head -1)
+          if [ -n "$DR" ]; then
+            DR_SIZE=$(stat -f %z "$DR")
+            if otool -arch "$ARCH" -L "$DR" | grep -q "JavaScriptCore.framework"; then DR_JSC=yes; else DR_JSC=no; fi
+          fi
+          echo "doctrenderer: ${DR:-<not found>} ${DR_SIZE:-?} bytes, links JavaScriptCore: ${DR_JSC:-?}"
+          echo "Files with weak libraries:${WEAK_ALL:- none}"
+          {
+            echo "x2t LC_RPATH: $(otool -arch "$ARCH" -l "$STAGING/x2t" | awk '/cmd LC_RPATH$/ { getline; getline; print $2 }' | paste -sd ' ' -)"
+            echo "doctrenderer: ${DR_SIZE:-?} bytes, links JavaScriptCore: ${DR_JSC:-?}"
+            echo "weak libraries in:${WEAK_ALL:- none}"
+          } > "$FACTS"
+          exit $FAIL
+
+      # Re-signs a throwaway copy the way the release does (ad hoc here,
+      # inside out, no --deep) to prove the shipped signatures can be replaced.
+      # The staging itself stays as extracted.
+      - name: Check re-signing on a copy
+        run: |
+          STAGING="/tmp/x2t-staging"
+          SIGN_DIR="$RUNNER_TEMP/x2t-sign-check"
+          tree_listing() {
+            (cd "$1" && find . -print | LC_ALL=C sort | while IFS= read -r p; do
+              if [ -L "$p" ]; then
+                echo "L $p -> $(readlink "$p")"
+              elif [ -f "$p" ]; then
+                echo "F $p $(shasum -a 256 < "$p" | cut -d' ' -f1)"
+              else
+                echo "D $p"
+              fi
+            done)
+          }
+          tree_listing "$STAGING" > "$RUNNER_TEMP/x2t-staging-listing.txt"
+
+          echo "::group::Signatures as shipped"
+          for f in "$STAGING"/x2t "$STAGING"/*.dylib "$STAGING"/*.framework; do
+            [ -e "$f" ] || continue
+            echo "--- ${f#"$STAGING"/}"
+            codesign -dvv "$f" 2>&1 | grep -E '^(Identifier|Format|Authority|TeamIdentifier|CodeDirectory)' || echo "  (no signature)"
+          done
+          echo "::endgroup::"
+
+          rm -rf "$SIGN_DIR"
+          ditto --noextattr --noqtn "$STAGING" "$SIGN_DIR"
+          FAIL=0
+          sign() {
+            if ! codesign --force --sign - --options runtime "$1"; then
+              echo "::error::cannot re-sign ${1#"$SIGN_DIR"/}"
+              FAIL=1
+            fi
+          }
+          # Nested code first: any Mach-O in a framework besides its main binary.
+          while IFS= read -r -d '' f; do
+            REL="${f#"$SIGN_DIR"/}"
+            X="${REL%%.framework/*}"
+            if [ "$REL" = "$X.framework/Versions/A/$X" ]; then
+              continue
+            fi
+            if file -b "$f" | grep -q "Mach-O"; then
+              sign "$f"
+            fi
+          done < <(find "$SIGN_DIR" -path "*.framework/*" -type f -print0)
+          for fw in "$SIGN_DIR"/*.framework; do
+            if [ -d "$fw" ]; then
+              sign "$fw"
+            fi
+          done
+          ROOT_MACHO=()
+          for f in "$SIGN_DIR"/*; do
+            if [ -f "$f" ] && [ ! -L "$f" ] && [ "$f" != "$SIGN_DIR/x2t" ] && file -b "$f" | grep -q "Mach-O"; then
+              ROOT_MACHO+=("$f")
+              sign "$f"
+            fi
+          done
+          sign "$SIGN_DIR/x2t"
+
+          for f in "$SIGN_DIR"/*.framework "${ROOT_MACHO[@]}" "$SIGN_DIR/x2t"; do
+            [ -e "$f" ] || continue
+            if codesign --verify --strict --verbose=2 "$f"; then
+              echo "  verified: ${f#"$SIGN_DIR"/}"
+            else
+              echo "::error::codesign --verify --strict failed for ${f#"$SIGN_DIR"/}"
+              FAIL=1
+            fi
+          done
+          rm -rf "$SIGN_DIR"
+
+          if ! tree_listing "$STAGING" | cmp -s - "$RUNNER_TEMP/x2t-staging-listing.txt"; then
+            echo "::error::the staging changed during the signing check"
+            FAIL=1
+          fi
+          exit $FAIL
+
       - name: Create zip
         id: zip
         run: |
           if [ "$ARCH" = "arm64" ]; then
-            ZIP_NAME="x2t-binaries-macos-arm64.zip"
+            ZIP_BASE="x2t-binaries-macos-arm64"
           else
-            ZIP_NAME="x2t-binaries-macos-x64.zip"
+            ZIP_BASE="x2t-binaries-macos-x64"
           fi
+          # A versioned name leaves the zip that builds pin today untouched.
+          ZIP_NAME="$ZIP_BASE${X2T_VERSION:+-$X2T_VERSION}.zip"
 
           cd /tmp/x2t-staging
-          zip -r "/tmp/${ZIP_NAME}" .
+          # -y stores the framework links as links.
+          zip -qry "/tmp/${ZIP_NAME}" .
           echo "::group::Zip info"
           ls -lh "/tmp/${ZIP_NAME}"
           unzip -l "/tmp/${ZIP_NAME}"
@@ -244,7 +475,92 @@ jobs:
             echo "| --- | --- |"
             echo "| ONLYOFFICE DMG | \`$DMG_SHA256\` |"
             echo "| $ZIP_NAME | \`$ZIP_SHA256\` |"
+            echo ""
+            sed 's/^/- /' "$RUNNER_TEMP/x2t-facts.txt"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Runs the zip as shipped, from a fresh unpack and with no DYLD_*
+      # variable: the hardened runtime ignores them in the app, so x2t has to
+      # find its frameworks through its own LC_RPATH.
+      - name: Test x2t from the zip (docx to odt)
+        env:
+          ZIP_NAME: ${{ steps.zip.outputs.zip_name }}
+        run: |
+          TEST_DIR="$RUNNER_TEMP/x2t-test"
+          RUN_DIR="$TEST_DIR/binaries"
+          rm -rf "$TEST_DIR"
+          mkdir -p "$RUN_DIR" "$TEST_DIR/tmp"
+          # Same unzip as scripts/get-x2t-ci.sh.
+          unzip -q -o "/tmp/$ZIP_NAME" -d "$RUN_DIR"
+
+          tree_listing() {
+            (cd "$1" && find . -print | LC_ALL=C sort | while IFS= read -r p; do
+              if [ -L "$p" ]; then
+                echo "L $p -> $(readlink "$p")"
+              elif [ -f "$p" ]; then
+                echo "F $p $(shasum -a 256 < "$p" | cut -d' ' -f1)"
+              else
+                echo "D $p"
+              fi
+            done)
+          }
+          if ! tree_listing "$RUN_DIR" | diff "$RUNNER_TEMP/x2t-staging-listing.txt" -; then
+            echo "ERROR: the unzipped tree differs from the staging (files, contents or links)"
+            exit 1
+          fi
+          for fw in "$RUN_DIR"/*.framework; do
+            [ -d "$fw" ] || continue
+            if [ ! -L "$fw/Versions/Current" ]; then
+              echo "ERROR: $(basename "$fw")/Versions/Current is not a link after unzip"
+              exit 1
+            fi
+          done
+          echo "Symbolic links after unzip: $(find "$RUN_DIR" -type l | wc -l | tr -d ' ')"
+
+          echo "DYLD_* in the runner environment: $(env | grep -c '^DYLD_' || true)"
+          RUN_ENV=(env -i PATH=/usr/bin:/bin HOME="$HOME" TMPDIR="$TEST_DIR/tmp")
+
+          # x2t prints its build when run without arguments (and exits non-zero).
+          VERSION_OUT=$(cd "$RUN_DIR" && "${RUN_ENV[@]}" ./x2t < /dev/null 2>&1 || true)
+          VERSION_LINE=$(printf '%s\n' "$VERSION_OUT" | tr -d '\r' | grep -m1 "Version:" | sed 's/[[:space:]]*$//' || true)
+          echo "x2t: ${VERSION_LINE:-<no version line>}"
+          if [ -z "$VERSION_LINE" ]; then
+            printf '%s\n' "$VERSION_OUT" | head -20
+          fi
+          if [ -n "$X2T_VERSION" ]; then
+            case "$VERSION_LINE" in
+              *"Version: $X2T_VERSION") ;;
+              *) echo "ERROR: x2t does not report version $X2T_VERSION"; exit 1 ;;
+            esac
+          fi
+
+          OUTPUT="$TEST_DIR/blank.odt"
+          PARAMS="$TEST_DIR/params.xml"
+          # Same parameter file the app passes to x2t; 67 is the ODT format code.
+          cat > "$PARAMS" <<PARAMS
+          <?xml version="1.0" encoding="utf-8"?>
+          <TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+          <m_sFileFrom>$GITHUB_WORKSPACE/src-tauri/templates/blank.docx</m_sFileFrom>
+          <m_sFileTo>$OUTPUT</m_sFileTo>
+          <m_nFormatTo>67</m_nFormatTo>
+          <m_sTempDir>$TEST_DIR/tmp</m_sTempDir>
+          </TaskQueueDataConvert>
+          PARAMS
+
+          set +e
+          (cd "$RUN_DIR" && "${RUN_ENV[@]}" ./x2t "$PARAMS")
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "ERROR: x2t exited with code $STATUS"
+            exit 1
+          fi
+          if [ ! -s "$OUTPUT" ]; then
+            echo "ERROR: x2t exited 0 but produced no output"
+            exit 1
+          fi
+          echo "Conversion OK: $(wc -c < "$OUTPUT" | tr -d ' ') bytes"
+          echo "- x2t from the zip: ${VERSION_LINE:-<no version line>}, docx to odt OK" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload zip as artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -279,7 +595,7 @@ jobs:
 
       - name: Verify zip checksum
         run: |
-          if ! [[ "$ZIP_NAME" =~ ^x2t-binaries-macos-(arm64|x64)\.zip$ ]]; then
+          if ! [[ "$ZIP_NAME" =~ ^x2t-binaries-macos-(arm64|x64)(-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)?\.zip$ ]]; then
             echo "ERROR: unexpected zip name from extract job"
             exit 1
           fi
