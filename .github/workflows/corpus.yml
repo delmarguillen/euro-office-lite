@@ -6,7 +6,8 @@ name: Conversion corpus
 # crashes, non-zero exits, empty outputs, PDFs missing their expected text or
 # script font, runs that disagree with themselves, missing platforms, a
 # difference inside one x2t family that tests/corpus/known.tsv does not
-# explain, and any change against a platform's tests/corpus/baseline/.
+# explain, any change against a platform's tests/corpus/baseline/, and
+# anything x2t writes inside the macOS .app.
 # 8.2 against 9.4 alone never fails it.
 
 on:
@@ -267,6 +268,9 @@ jobs:
           signature() {
             if verify=$(codesign --verify --deep --strict "$ROOT"/*.app 2>&1); then echo ok; else echo "FAILED $(echo "$verify" | tr '\n' ' ')"; fi
           }
+          # A signed .app must stay as shipped: anything x2t writes inside it
+          # fails the job on macOS, after both runs have been recorded.
+          app_written=0
           for n in 1 2; do
             rm -rf "$ROOT"
             if [ "$RUNNER_OS" = macOS ]; then
@@ -296,11 +300,13 @@ jobs:
             if [ "$RUNNER_OS" = macOS ]; then
               echo "Codesign run$n after: $(signature)" | tee -a "$OUT/platform.txt"
               if [ "$changed" -gt 0 ]; then
-                echo "::warning::x2t wrote $changed entries inside the copied .app in run $n (tree-changes-run$n.txt)"
+                echo "::error::x2t wrote $changed entries inside the copied .app in run $n (tree-changes-run$n.txt)"
+                app_written=1
               fi
             fi
             [ "$code" -eq 0 ] || { echo "ERROR: corpus run $n exited $code"; exit "$code"; }
           done
+          [ "$app_written" -eq 0 ] || { echo "ERROR: x2t wrote inside the macOS app"; exit 1; }
 
       # 7-Zip lays out $INSTDIR at the root and adds the installer's own
       # plugins under $PLUGINSDIR, which an install never keeps.
