@@ -1,0 +1,15 @@
+Origin: https://github.com/ONLYOFFICE/web-apps/commit/4bb7a73f652a83f6424fc77caa957f3a07ae108a
+
+diff --git a/apps/spreadsheeteditor/main/app/view/FormulaWizard.js b/apps/spreadsheeteditor/main/app/view/FormulaWizard.js
+index 45ea59222f3..c537bb049f4 100644
+--- a/apps/spreadsheeteditor/main/app/view/FormulaWizard.js
++++ b/apps/spreadsheeteditor/main/app/view/FormulaWizard.js
+@@ -398,7 +398,7 @@ define([
+             var res = me.api.asc_insertArgumentsInFormula(me.getArgumentsValue(), index, arg.argType, this.funcprops ? this.funcprops.origin : undefined, !!endInsert),
+                 argres = res ? res.asc_getArgumentsResult() : undefined;
+             argres = argres ? argres[index] : undefined;
+-            arg.lblValue.html('= '+ (argres!==null && argres !==undefined ? argres : '<span style="opacity: 0.6; font-weight: bold;">' + arg.argTypeName + '</span>' ));
++            arg.lblValue.html('= '+ (argres!==null && argres !==undefined ? Common.Utils.String.htmlEncode(argres) : '<span style="opacity: 0.6; font-weight: bold;">' + arg.argTypeName + '</span>' ));
+ 
+             var result = res ? res.asc_getFunctionResult() : undefined;
+             me.lblFunctionResult.html('= ' + ((result!==undefined && result!==null)? result : ''));

@@ -1,0 +1,15 @@
+Origin: https://github.com/ONLYOFFICE/web-apps/commit/61a71b3659a1a35a641fc9ffe3c7c0df8b3e6878
+
+diff --git a/apps/documenteditor/main/app/controller/DocumentHolderExt.js b/apps/documenteditor/main/app/controller/DocumentHolderExt.js
+index 6b983dfc88..5770e99381 100644
+--- a/apps/documenteditor/main/app/controller/DocumentHolderExt.js
++++ b/apps/documenteditor/main/app/controller/DocumentHolderExt.js
+@@ -524,7 +524,7 @@ define([], function () {
+                     setTimeout(function() {
+                         Common.UI.warning({
+                             maxwidth: 500,
+-                            msg: Common.Utils.String.format(me.documentHolder.txtWarnUrl, url),
++                            msg: Common.Utils.String.format(me.documentHolder.txtWarnUrl, Common.Utils.String.htmlEncode(url)),
+                             buttons: ['no', 'yes'],
+                             primary: 'no',
+                             callback: function(btn) {

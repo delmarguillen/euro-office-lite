@@ -1,0 +1,24 @@
+Origin: https://github.com/ONLYOFFICE/web-apps/commit/caf566bf37180d9d947a5d773f651b5b26609feb
+
+diff --git a/apps/common/main/lib/controller/ReviewChanges.js b/apps/common/main/lib/controller/ReviewChanges.js
+index 9e74c30e10..c174b9b24a 100644
+--- a/apps/common/main/lib/controller/ReviewChanges.js
++++ b/apps/common/main/lib/controller/ReviewChanges.js
+@@ -426,7 +426,7 @@ define([
+                         if (value.Get_Shd() !== undefined)
+                             proptext += (me.textShd + cmm);
+                         if (value.Get_FontFamily() !== undefined)
+-                            proptext += (value.Get_FontFamily() + cmm);
++                            proptext += (Common.Utils.String.htmlEncode(value.Get_FontFamily()) + cmm);
+                         if (value.Get_FontSize() !== undefined)
+                             proptext += (value.Get_FontSize() + cmm);
+                         if (value.Get_Spacing() !== undefined)
+@@ -497,7 +497,7 @@ define([
+                             proptext += (me.textNum + cmm);
+                         if (value.Get_PStyle() !== undefined) {
+                             var style = me.api.asc_GetStyleNameById(value.Get_PStyle());
+-                            if (!_.isEmpty(style)) proptext += (style + cmm);
++                            if (!_.isEmpty(style)) proptext += (Common.Utils.String.htmlEncode(style) + cmm);
+                         }
+ 
+                         if (!_.isEmpty(proptext)) {
