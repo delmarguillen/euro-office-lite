@@ -13,13 +13,3 @@ sheet.ods	plain	pdf	text.sha256	all	env	the column width decides where the sheet
 basic.odp	plain	pdf	fonts	all	env	x2t gives a text style Arial: Windows and macOS have it, Linux substitutes Liberation Sans
 basic.odp	plain	pdf	fonts.allowed	all	env	x2t gives a text style Arial: Windows and macOS have it, Linux substitutes Liberation Sans
 basic.odt	plain	save	part:styles.xml	all	env	the default list style's num-format differs per OS on a document without lists; still to be checked in the app
-*	*	save*	part:ppt/handoutMasters/*	8.2	x2t	x2t 8.2 writes no handout master
-*	*	save*	part:ppt/theme/theme0.xml	8.2	x2t	x2t 8.2 writes no handout master theme
-empty-lines.csv	plain	save	bytes.sha256	9.4	x2t	x2t 9.4 writes an empty CSV line as a row of delimiters
-empty-lines.csv	plain	save	roundtrip.bytes	9.4	x2t	x2t 9.4 writes an empty CSV line as a row of delimiters
-empty-lines.csv	plain	save	sha256	9.4	x2t	x2t 9.4 writes an empty CSV line as a row of delimiters
-empty-lines.csv	plain	save	size	9.4	x2t	x2t 9.4 writes an empty CSV line as a row of delimiters
-utf8-bom-semicolon-crlf.csv	plain	save	bytes.sha256	9.4	x2t	x2t 9.4 adds an empty row after a final line break	Euro-Office/core#160
-utf8-bom-semicolon-crlf.csv	plain	save	roundtrip.bytes	9.4	x2t	x2t 9.4 adds an empty row after a final line break	Euro-Office/core#160
-utf8-bom-semicolon-crlf.csv	plain	save	sha256	9.4	x2t	x2t 9.4 adds an empty row after a final line break	Euro-Office/core#160
-utf8-bom-semicolon-crlf.csv	plain	save	size	9.4	x2t	x2t 9.4 adds an empty row after a final line break	Euro-Office/core#160
