@@ -2,17 +2,17 @@ $ErrorActionPreference = "Stop"
 
 $targetDir = Join-Path $PSScriptRoot "..\src-tauri\binaries"
 $repo = $env:GITHUB_REPOSITORY
-$zipName = "x2t-binaries.zip"
+$zipName = "x2t-binaries-windows-x64-9.4.0.129.zip"
 $tempZip = Join-Path $env:TEMP $zipName
 
-if (Test-Path (Join-Path $targetDir "x2t-x86_64-pc-windows-msvc.exe")) {
+if (Test-Path (Join-Path $targetDir "x2t.exe")) {
     Write-Host "x2t already present, skipping download"
     exit 0
 }
 
-# sha256 of x2t-binaries.zip in the 'dependencies' release. A replaced asset
-# must fail the build until its new digest is pinned here.
-$expectedSha256 = '8d27e54dfa39cb60672753969fb5b76833f274a3aa9140e0e6cbbae1b67f64b9'
+# sha256 of the zip in the 'dependencies' release. A replaced asset must fail
+# the build until its new digest is pinned here.
+$expectedSha256 = '072dd361b7a9fbaa7c1da197c4fbfce3d6a52b63610ac70fb0cb21ec66f9d10c'
 
 # Retry only the download (transient API/network errors); a checksum
 # mismatch below is never retried.
@@ -43,16 +43,14 @@ if (-not (Test-Path $targetDir)) {
 Write-Host "Extracting to $targetDir..."
 Expand-Archive -Path $tempZip -DestinationPath $targetDir -Force
 
-if (-not (Test-Path (Join-Path $targetDir "x2t-x86_64-pc-windows-msvc.exe"))) {
-    $x2t = Join-Path $targetDir "x2t.exe"
-    if (Test-Path $x2t) {
-        Rename-Item $x2t "x2t-x86_64-pc-windows-msvc.exe" -Force
-        Write-Host "Renamed x2t.exe -> x2t-x86_64-pc-windows-msvc.exe"
-    } else {
-        Write-Error "x2t binary not found after extraction"
-        exit 1
-    }
+$x2t = Join-Path $targetDir "x2t.exe"
+if (-not (Test-Path $x2t)) {
+    Write-Error "x2t binary not found after extraction"
+    exit 1
 }
+# The installer ships binaries\x2t.exe. The build workflows still rename this
+# target-named copy for the arm64 installer, and nothing else uses it.
+Copy-Item $x2t (Join-Path $targetDir "x2t-x86_64-pc-windows-msvc.exe") -Force
 
 $count = (Get-ChildItem $targetDir -Recurse -File).Count
 Write-Host "x2t binaries ready: $count files in $targetDir"

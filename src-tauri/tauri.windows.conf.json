@@ -1,0 +1,42 @@
+{
+  "bundle": {
+    "externalBin": [],
+    "resources": {
+      "binaries/x2t.exe": "binaries/x2t.exe",
+      "binaries/msvcp140.dll": "binaries/msvcp140.dll",
+      "binaries/vcruntime140.dll": "binaries/vcruntime140.dll",
+      "binaries/vcruntime140_1.dll": "binaries/vcruntime140_1.dll",
+      "binaries/DjVuFile.dll": "binaries/DjVuFile.dll",
+      "binaries/doctrenderer.dll": "binaries/doctrenderer.dll",
+      "binaries/DocxRenderer.dll": "binaries/DocxRenderer.dll",
+      "binaries/EpubFile.dll": "binaries/EpubFile.dll",
+      "binaries/Fb2File.dll": "binaries/Fb2File.dll",
+      "binaries/graphics.dll": "binaries/graphics.dll",
+      "binaries/HtmlFile2.dll": "binaries/HtmlFile2.dll",
+      "binaries/HWPFile.dll": "binaries/HWPFile.dll",
+      "binaries/icudt74.dll": "binaries/icudt74.dll",
+      "binaries/icuuc74.dll": "binaries/icuuc74.dll",
+      "binaries/IWorkFile.dll": "binaries/IWorkFile.dll",
+      "binaries/kernel.dll": "binaries/kernel.dll",
+      "binaries/kernel_network.dll": "binaries/kernel_network.dll",
+      "binaries/OFDFile.dll": "binaries/OFDFile.dll",
+      "binaries/ooxmlsignature.dll": "binaries/ooxmlsignature.dll",
+      "binaries/PdfFile.dll": "binaries/PdfFile.dll",
+      "binaries/StarMathConverter.dll": "binaries/StarMathConverter.dll",
+      "binaries/UnicodeConverter.dll": "binaries/UnicodeConverter.dll",
+      "binaries/XpsFile.dll": "binaries/XpsFile.dll",
+      "binaries/icudtl.dat": "binaries/icudtl.dat",
+      "binaries/icudtl_extra.dat": "binaries/icudtl_extra.dat",
+      "binaries/AllFonts.js": "binaries/AllFonts.js",
+      "binaries/fonts/*": "binaries/fonts/",
+      "templates/*": "templates/",
+      "editors/sdkjs/word/*": "editors/sdkjs/word/",
+      "editors/sdkjs/cell/*": "editors/sdkjs/cell/",
+      "editors/sdkjs/slide/*": "editors/sdkjs/slide/",
+      "editors/sdkjs/common/Native/*": "editors/sdkjs/common/Native/",
+      "editors/sdkjs/common/AllFonts.js": "editors/sdkjs/common/AllFonts.js",
+      "editors/sdkjs/common/libfont/engine/*": "editors/sdkjs/common/libfont/engine/",
+      "editors/web-apps/vendor/xregexp/*": "editors/web-apps/vendor/xregexp/"
+    }
+  }
+}

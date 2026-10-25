@@ -34,6 +34,9 @@ const ENV_PINNED: [&str; 10] = [
     "fonts.bundled",
     "fonts.check",
 ];
+// macOS builds sign x2t with a timestamp, so its hash changes on every build
+// even when the ONLYOFFICE binary is the same; its version still pins it.
+const ENV_RESIGNED: [&str; 2] = ["sidecar.sha256", "pdf_x2t.sha256"];
 const OUTCOME: [&str; 3] = ["status", "exit", "signal"];
 
 type StepKey = (String, String, String);
@@ -44,7 +47,8 @@ pub fn pinned(platform: &Loaded, known: &[KnownEntry]) -> BTreeMap<Key, String> 
     for (key, value) in &platform.values {
         let (source, doc, variant, step, check) = key;
         if source == "env" {
-            if ENV_PINNED.contains(&check.as_str()) {
+            let resigned = platform.id.starts_with("mac-") && ENV_RESIGNED.contains(&check.as_str());
+            if ENV_PINNED.contains(&check.as_str()) && !resigned {
                 out.insert(key.clone(), value.clone());
             }
             continue;
@@ -310,6 +314,42 @@ s.docx\tplain\tpdf\ttext.sha256\ts1\ns.docx\tplain\tpdf\tclass\tsystem-fonts\n{}
         assert!(checks(&pinned(&platform, &x2t_entry)).contains(&"report a.docx pdf text.sha256".to_string()));
         let elsewhere = known("a.docx\tplain\tpdf\ttext.sha256\tlinux-x64\tenv\tnot this platform\t\n");
         assert!(checks(&pinned(&platform, &elsewhere)).contains(&"report a.docx pdf text.sha256".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // The same run as a mac and as a Windows platform: only the mac one
+    // leaves out the re-signed x2t hashes, and both keep the versions.
+    fn run_with_sidecar(root: &Path, id: &str) -> Loaded {
+        let dir = write_run(root, id, "t1", "1600", "");
+        let env = std::fs::read_to_string(dir.join("env.tsv")).unwrap();
+        std::fs::write(
+            dir.join("env.tsv"),
+            format!("{}sidecar.version\tVersion: 9.4.0.129\nsidecar.sha256\t5a1e\nx2t_same_file\tyes\n", env),
+        )
+        .unwrap();
+        matrix::load(id, &dir).unwrap()
+    }
+
+    #[test]
+    fn a_mac_baseline_leaves_out_the_re_signed_x2t_hashes() {
+        let root = scratch("mac-resigned");
+        let values = checks(&pinned(&run_with_sidecar(&root, "mac-x64"), &[]));
+        for kept in ["env   sidecar.version", "env   pdf_x2t.version", "env   x2t_same_file"] {
+            assert!(values.contains(&kept.to_string()), "{} {:?}", kept, values);
+        }
+        for gone in ["env   sidecar.sha256", "env   pdf_x2t.sha256"] {
+            assert!(!values.contains(&gone.to_string()), "{} {:?}", gone, values);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_windows_baseline_still_pins_the_x2t_hashes() {
+        let root = scratch("win-hashes");
+        let values = checks(&pinned(&run_with_sidecar(&root, "win-x64"), &[]));
+        for kept in ["env   sidecar.sha256", "env   pdf_x2t.sha256", "env   sidecar.version"] {
+            assert!(values.contains(&kept.to_string()), "{} {:?}", kept, values);
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

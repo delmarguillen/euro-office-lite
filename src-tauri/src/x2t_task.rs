@@ -35,30 +35,13 @@ pub fn is_x2t_binary(name: &str) -> bool {
     }
 }
 
-// The x2t the PDF export and the font scan run: the first match in binaries/,
-// then its parent, then Contents/MacOS, then `exe_dir` (the folder of the
-// app's executable). On Linux and macOS binaries/ holds its own copy of x2t,
-// so these two never run the sidecar that the other conversions use.
+// The x2t the PDF export and the font scan run, and on Windows every other
+// conversion too: the first match in x2t_search_dirs.
 pub fn find_x2t(
     binaries_dir: &std::path::Path,
     exe_dir: Option<&std::path::Path>,
 ) -> Result<std::path::PathBuf, String> {
-    let mut search_dirs = vec![
-        binaries_dir.to_path_buf(),
-        binaries_dir.parent().unwrap_or(binaries_dir).to_path_buf(),
-    ];
-    if let Some(resources) = binaries_dir.parent() {
-        if let Some(contents) = resources.parent() {
-            let macos_dir = contents.join("MacOS");
-            if macos_dir.exists() {
-                search_dirs.push(macos_dir);
-            }
-        }
-    }
-    if let Some(exe_dir) = exe_dir {
-        search_dirs.push(exe_dir.to_path_buf());
-    }
-    for dir in &search_dirs {
+    for dir in &x2t_search_dirs(binaries_dir, exe_dir) {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -69,6 +52,37 @@ pub fn find_x2t(
         }
     }
     Err("x2t executable not found".to_string())
+}
+
+// Windows: binaries\ only. x2t ships there with its libraries and the Visual
+// C++ runtime, and the loader looks in the executable's own folder before
+// System32, so an older runtime installed system-wide never wins.
+// Elsewhere: binaries/, then its parent, then Contents/MacOS, then `exe_dir`
+// (the folder of the app's executable). On Linux and macOS binaries/ holds its
+// own copy of x2t, so the PDF export and the font scan never run the sidecar
+// that the other conversions use.
+fn x2t_search_dirs(
+    binaries_dir: &std::path::Path,
+    exe_dir: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    if cfg!(target_os = "windows") {
+        return vec![binaries_dir.to_path_buf()];
+    }
+    let mut dirs = vec![
+        binaries_dir.to_path_buf(),
+        binaries_dir.parent().unwrap_or(binaries_dir).to_path_buf(),
+    ];
+    let macos_dir = binaries_dir
+        .parent()
+        .and_then(|resources| resources.parent())
+        .map(|contents| contents.join("MacOS"));
+    if let Some(macos_dir) = macos_dir.filter(|dir| dir.exists()) {
+        dirs.push(macos_dir);
+    }
+    if let Some(exe_dir) = exe_dir {
+        dirs.push(exe_dir.to_path_buf());
+    }
+    dirs
 }
 
 /// Where to write the params file x2t is invoked with. Every path inside the
@@ -175,6 +189,21 @@ fn symlink_path(source: &std::path::Path, destination: &std::path::Path) -> Resu
     })
 }
 
+// The folder that holds x2t's *.framework bundles: Contents/Frameworks of a
+// .app, or binaries/ itself when the frameworks sit next to x2t, as
+// get-x2t-ci.sh leaves them. None for an x2t that links plain dylibs.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn x2t_frameworks_dir(binaries_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let bundled = binaries_dir.parent()?.parent()?.join("Frameworks");
+    if bundled.is_dir() {
+        return Some(bundled);
+    }
+    let has_framework = std::fs::read_dir(binaries_dir).ok()?.flatten().any(|entry| {
+        entry.path().is_dir() && entry.file_name().to_string_lossy().ends_with(".framework")
+    });
+    has_framework.then(|| binaries_dir.to_path_buf())
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn reset_work_dir(work_dir: &std::path::Path) -> Result<(), String> {
     if work_dir.exists() {
@@ -205,30 +234,6 @@ const DOCTRENDERER_CONFIG_PARENT: &str = r#"<Settings>
 <file>../editors/sdkjs/cell/sdk-all-min.js</file>
 <file>../editors/sdkjs/common/libfont/engine/fonts_native.js</file>
 <file>../editors/sdkjs/cell/sdk-all.js</file>
-</XlstSdk>
-</Settings>"#;
-
-const DOCTRENDERER_CONFIG_CURRENT: &str = r#"<Settings>
-<file>./editors/sdkjs/common/Native/native.js</file>
-<file>./editors/sdkjs/common/Native/jquery_native.js</file>
-<allfonts>./editors/sdkjs/common/AllFonts.js</allfonts>
-<file>./editors/web-apps/vendor/xregexp/xregexp-all-min.js</file>
-<sdkjs>./editors/sdkjs</sdkjs>
-<dictionaries>./dictionaries</dictionaries>
-<DoctSdk>
-<file>./editors/sdkjs/word/sdk-all-min.js</file>
-<file>./editors/sdkjs/common/libfont/engine/fonts_native.js</file>
-<file>./editors/sdkjs/word/sdk-all.js</file>
-</DoctSdk>
-<PpttSdk>
-<file>./editors/sdkjs/slide/sdk-all-min.js</file>
-<file>./editors/sdkjs/common/libfont/engine/fonts_native.js</file>
-<file>./editors/sdkjs/slide/sdk-all.js</file>
-</PpttSdk>
-<XlstSdk>
-<file>./editors/sdkjs/cell/sdk-all-min.js</file>
-<file>./editors/sdkjs/common/libfont/engine/fonts_native.js</file>
-<file>./editors/sdkjs/cell/sdk-all.js</file>
 </XlstSdk>
 </Settings>"#;
 
@@ -491,7 +496,8 @@ pub fn convert_to_pdf(
 }
 
 /// Windows: run x2t directly from binaries_dir (writable, all DLLs present).
-/// Write DoctRenderer.config and AllFonts.js (server) in place.
+/// Write DoctRenderer.config and AllFonts.js (server) in place. DoctRenderer
+/// reads its config from x2t's own folder, which is binaries_dir.
 #[cfg(target_os = "windows")]
 fn setup_windows_direct(
     binaries_dir: &std::path::Path,
@@ -509,7 +515,6 @@ fn setup_windows_direct(
     ),
     String,
 > {
-    let app_root = binaries_dir.parent().unwrap_or(binaries_dir);
     let bin_allfonts = binaries_dir.join("AllFonts.js");
     copy_file(allfonts_js, &bin_allfonts)?;
 
@@ -525,8 +530,8 @@ fn setup_windows_direct(
     }
 
     write_file(
-        &app_root.join("DoctRenderer.config"),
-        DOCTRENDERER_CONFIG_CURRENT,
+        &binaries_dir.join("DoctRenderer.config"),
+        DOCTRENDERER_CONFIG_PARENT,
     )?;
 
     Ok((
@@ -658,6 +663,12 @@ fn setup_macos_workdir(
 
     let work_x2t = work_binaries.join("x2t");
     copy_file(x2t_exe, &work_x2t)?;
+
+    // x2t finds its frameworks through @executable_path/../Frameworks, which
+    // for this copy is work_dir/Frameworks; a link keeps them in place.
+    if let Some(frameworks) = x2t_frameworks_dir(binaries_dir) {
+        symlink_path(&frameworks, &work_dir.join("Frameworks"))?;
+    }
 
     let entries = std::fs::read_dir(binaries_dir)
         .map_err(|e| path_error("Failed to read macOS binaries directory", binaries_dir, e))?;
@@ -1115,22 +1126,90 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // NSIS: binaries/ holds no x2t, so the one in the install folder is used,
-    // the same file the sidecar runs.
+    // .app: Contents/Frameworks, even with a framework left next to x2t.
     #[test]
-    fn windows_layout_finds_the_one_in_the_install_folder() {
-        let root = scratch_dir("nsis");
-        let binaries = root.join("binaries");
-        touch(&binaries.join("kernel.dll"));
-        touch(&binaries.join("x2t.dll"));
-        touch(&binaries.join("x2t.pdb"));
-        touch(&root.join(x2t_name()));
-        touch(&root.join("euro-office-lite.exe"));
+    fn an_app_keeps_x2t_frameworks_in_contents_frameworks() {
+        let root = scratch_dir("fw-app");
+        let contents = root.join("Euro-Office-Lite.app/Contents");
+        let binaries = contents.join("Resources/binaries");
+        touch(&binaries.join(x2t_name()));
+        touch(&binaries.join("graphics.framework/Versions/A/graphics"));
+        touch(&contents.join("Frameworks/kernel.framework/Versions/A/kernel"));
 
-        assert_eq!(find_x2t(&binaries, Some(&root)), Ok(root.join(x2t_name())));
+        assert_eq!(
+            x2t_frameworks_dir(&binaries),
+            Some(contents.join("Frameworks"))
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // Dev and CI trees: get-x2t-ci.sh unzips the frameworks next to x2t.
+    #[test]
+    fn frameworks_next_to_x2t_are_used_outside_an_app() {
+        let root = scratch_dir("fw-dev");
+        let binaries = root.join("src-tauri/binaries");
+        touch(&binaries.join(x2t_name()));
+        touch(&binaries.join("DoctRenderer.config"));
+        touch(&binaries.join("kernel.framework/Versions/A/kernel"));
+
+        assert_eq!(x2t_frameworks_dir(&binaries), Some(binaries.clone()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // An x2t with plain dylibs (8.2) has no frameworks; a file that only
+    // looks like one does not count.
+    #[test]
+    fn an_x2t_without_frameworks_gets_no_frameworks_dir() {
+        let root = scratch_dir("fw-none");
+        let contents = root.join("Euro-Office-Lite.app/Contents");
+        let binaries = contents.join("Resources/binaries");
+        touch(&binaries.join(x2t_name()));
+        touch(&binaries.join("libkernel.dylib"));
+        touch(&binaries.join("notes.framework"));
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+
+        assert_eq!(x2t_frameworks_dir(&binaries), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // NSIS: x2t sits in binaries\ with its libraries and the Visual C++
+    // runtime; the install folder holds only the app.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_layout_finds_the_one_in_binaries() {
+        let root = scratch_dir("nsis");
+        let binaries = root.join("binaries");
+        touch(&binaries.join("kernel.dll"));
+        touch(&binaries.join("msvcp140.dll"));
+        touch(&binaries.join("x2t.dll"));
+        touch(&binaries.join("x2t.pdb"));
+        touch(&binaries.join("x2t.exe"));
+        touch(&root.join("euro-office-lite.exe"));
+
+        assert_eq!(find_x2t(&binaries, Some(&root)), Ok(binaries.join("x2t.exe")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // An x2t in the install folder (the sidecar of earlier installers) would
+    // load an older Visual C++ runtime from System32 before the one in
+    // binaries\, so Windows never runs it, even when it is the only one.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_never_runs_an_x2t_in_the_install_folder() {
+        let root = scratch_dir("nsis-root-x2t");
+        let binaries = root.join("binaries");
+        touch(&binaries.join("kernel.dll"));
+        touch(&root.join("x2t.exe"));
+        touch(&root.join("euro-office-lite.exe"));
+
+        assert_eq!(
+            find_x2t(&binaries, Some(&root)),
+            Err("x2t executable not found".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn the_search_order_is_binaries_parent_macos_then_exe_dir() {
         let root = scratch_dir("order");
@@ -1386,9 +1465,10 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert_eq!(read(binaries.join("font_selection.bin")), b"selection");
         assert_eq!(read(fonts.join("font_selection.bin")), b"selection");
         assert_eq!(
-            read(app.join("DoctRenderer.config")),
-            DOCTRENDERER_CONFIG_CURRENT.as_bytes()
+            read(binaries.join("DoctRenderer.config")),
+            DOCTRENDERER_CONFIG_PARENT.as_bytes()
         );
+        assert!(!app.join("DoctRenderer.config").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1410,6 +1490,70 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         .unwrap();
 
         assert!(!editors.join("sdkjs/common/AllFonts.js").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // A .app with or without Contents/Frameworks, its font cache and the
+    // instance temp folder the work dir goes in.
+    #[cfg(target_os = "macos")]
+    fn macos_app(name: &str, with_frameworks: bool) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = scratch_dir(name);
+        let contents = root.join("Euro-Office-Lite.app/Contents");
+        let resources = contents.join("Resources");
+        touch(&resources.join("binaries/x2t"));
+        touch(&resources.join("binaries/fonts/LiberationSerif-Regular.ttf"));
+        for relative in DOCTRENDERER_EDITOR_RESOURCES {
+            touch(&resources.join("editors").join(relative));
+        }
+        if with_frameworks {
+            touch(&contents.join("Frameworks/kernel.framework/Versions/A/kernel"));
+        }
+        touch(&root.join("temp/fontdata/AllFonts.js"));
+        (root, contents)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_work_dir(root: &std::path::Path, contents: &std::path::Path) -> std::path::PathBuf {
+        let binaries = contents.join("Resources/binaries");
+        let fontdata = root.join("temp/fontdata");
+        setup_macos_workdir(
+            &binaries,
+            &binaries.join("x2t"),
+            &binaries.join("fonts"),
+            &fontdata,
+            &contents.join("Resources/editors"),
+            &fontdata.join("AllFonts.js"),
+            &root.join("temp"),
+        )
+        .unwrap();
+        root.join("temp/x2t-workdir")
+    }
+
+    // The work copy of x2t is work_dir/binaries/x2t, so its
+    // @executable_path/../Frameworks is work_dir/Frameworks.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_work_dir_links_the_app_frameworks() {
+        let (root, contents) = macos_app("mac-fw-link", true);
+
+        let work_dir = macos_work_dir(&root, &contents);
+
+        assert_eq!(
+            std::fs::read_link(work_dir.join("Frameworks")).unwrap(),
+            contents.join("Frameworks")
+        );
+        assert!(work_dir.join("Frameworks/kernel.framework").is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_work_dir_has_no_frameworks_link_without_frameworks() {
+        let (root, contents) = macos_app("mac-fw-none", false);
+
+        let work_dir = macos_work_dir(&root, &contents);
+
+        assert!(std::fs::symlink_metadata(work_dir.join("Frameworks")).is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 

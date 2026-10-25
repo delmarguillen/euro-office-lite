@@ -68,14 +68,11 @@ pub async fn convert_file(
     );
     write_file(&params_path, &xml)?;
 
-    let sidecar = app
-        .shell()
-        .sidecar("x2t")
-        .map_err(|e| e.to_string())?
+    let command = x2t_command(app, &binaries_dir)?
         .current_dir(&binaries_dir)
         .args([params_path.to_string_lossy().as_ref()])
         .envs(x2t_task::convert_env(&binaries_dir));
-    let result = sidecar.output().await.map_err(|e| e.to_string())?;
+    let result = command.output().await.map_err(|e| e.to_string())?;
 
     let _ = std::fs::remove_file(&params_path);
 
@@ -89,6 +86,26 @@ pub async fn convert_file(
             code, stderr
         ))
     }
+}
+
+// Windows runs the same x2t as the PDF export, the one in binaries\ (see
+// x2t_task::find_x2t); Linux and macOS keep the sidecar.
+#[cfg(target_os = "windows")]
+fn x2t_command(
+    app: &AppHandle,
+    binaries_dir: &std::path::Path,
+) -> Result<tauri_plugin_shell::process::Command, String> {
+    let binaries_dir = x2t_task::strip_extended_prefix(binaries_dir);
+    let x2t = x2t_task::find_x2t(&binaries_dir, None)?;
+    Ok(app.shell().command(x2t))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn x2t_command(
+    app: &AppHandle,
+    _binaries_dir: &std::path::Path,
+) -> Result<tauri_plugin_shell::process::Command, String> {
+    app.shell().sidecar("x2t").map_err(|e| e.to_string())
 }
 
 fn log_pdf(msg: &str) {

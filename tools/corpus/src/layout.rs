@@ -97,7 +97,12 @@ pub fn layout_from_exe(os: Os, exe: &Path) -> Result<Layout, String> {
     if !binaries_dir.is_dir() {
         return Err(format!("binaries folder not found: {}", binaries_dir.display()));
     }
-    let sidecar = exe_dir.join(format!("x2t{}", os.exe_suffix()));
+    // The x2t every conversion runs: the sidecar next to the executable,
+    // except on Windows, where the app runs the one in binaries\.
+    let sidecar = match os {
+        Os::Windows => binaries_dir.join("x2t.exe"),
+        _ => exe_dir.join("x2t"),
+    };
     if !sidecar.is_file() {
         return Err(format!("x2t sidecar not found: {}", sidecar.display()));
     }
@@ -224,8 +229,7 @@ mod tests {
     fn a_windows_install_keeps_its_resources_next_to_the_exe() {
         let root = scratch("nsis");
         touch(&root.join("euro-office-lite.exe"));
-        touch(&root.join("x2t.exe"));
-        std::fs::create_dir_all(root.join("binaries")).unwrap();
+        touch(&root.join("binaries/x2t.exe"));
 
         let exe = expected_exe(Os::Windows, &root).unwrap();
         let layout = layout_from_exe(Os::Windows, &exe).unwrap();
@@ -233,18 +237,35 @@ mod tests {
         let dir = std::fs::canonicalize(&root).unwrap();
         assert_eq!(layout.resource_dir, dir);
         assert_eq!(layout.binaries_dir, dir.join("binaries"));
-        assert_eq!(layout.sidecar, dir.join("x2t.exe"));
+        assert_eq!(layout.sidecar, dir.join("binaries/x2t.exe"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // An install from before x2t moved into binaries\ has the sidecar next to
+    // the executable only; the app no longer runs that one.
+    #[test]
+    fn a_windows_install_with_x2t_next_to_the_exe_is_refused() {
+        let root = scratch("nsis-old");
+        touch(&root.join("euro-office-lite.exe"));
+        touch(&root.join("x2t.exe"));
+        std::fs::create_dir_all(root.join("binaries")).unwrap();
+
+        let exe = expected_exe(Os::Windows, &root).unwrap();
+        let error = layout_from_exe(Os::Windows, &exe).unwrap_err();
+        assert!(error.starts_with("x2t sidecar not found"), "{}", error);
         let _ = std::fs::remove_dir_all(&root);
     }
 
     // What 7-Zip extracts from the published NSIS installer, x64 and arm64
     // alike: $INSTDIR at the root, plus the installer's own $PLUGINSDIR.
-    const NSIS_FILES: [&str; 36] = [
+    const NSIS_FILES: [&str; 32] = [
         "euro-office-lite.exe",
-        "x2t.exe",
+        "binaries/x2t.exe",
+        "binaries/msvcp140.dll",
+        "binaries/vcruntime140.dll",
+        "binaries/vcruntime140_1.dll",
         "binaries/AllFonts.js",
         "binaries/DjVuFile.dll",
-        "binaries/DoctRenderer.config",
         "binaries/DocxRenderer.dll",
         "binaries/EpubFile.dll",
         "binaries/Fb2File.dll",
@@ -264,13 +285,7 @@ mod tests {
         "binaries/icuuc74.dll",
         "binaries/kernel.dll",
         "binaries/kernel_network.dll",
-        "binaries/native_shim.js",
         "binaries/ooxmlsignature.dll",
-        "binaries/package.config",
-        "binaries/sdk-all-min.js",
-        "binaries/sdk-all.js",
-        "binaries/sdk-word-bundle.js",
-        "binaries/xregexp-all-min.js",
         "editors/sdkjs/common/AllFonts.js",
         "editors/web-apps/vendor/xregexp/xregexp-all-min.js",
         "templates/blank.docx",
@@ -291,12 +306,10 @@ mod tests {
         for file in NSIS_FILES {
             touch(&root.join(file));
         }
-        // The 16 bundled faces, loose in binaries/ and again in two folders.
+        // The 16 bundled faces.
         for family in ["Carlito", "LiberationMono", "LiberationSans", "LiberationSerif"] {
             for style in ["Regular", "Bold", "Italic", "BoldItalic"] {
-                for dir in ["binaries", "binaries/fonts", "binaries/core-fonts"] {
-                    touch(&root.join(dir).join(format!("{}-{}.ttf", family, style)));
-                }
+                touch(&root.join("binaries/fonts").join(format!("{}-{}.ttf", family, style)));
             }
         }
         for editor in ["word", "cell", "slide"] {
@@ -314,8 +327,8 @@ mod tests {
         }
     }
 
-    // binaries/ has no x2t, so the PDF export finds the sidecar itself one
-    // folder up, as in the installed app; leftover installer plugins change
+    // x2t and the Visual C++ runtime sit in binaries\, and every conversion,
+    // the PDF export included, runs that x2t; leftover installer plugins change
     // nothing.
     #[test]
     fn the_tree_nsis_extracts_resolves_like_an_install() {
@@ -329,7 +342,7 @@ mod tests {
             let dir = std::fs::canonicalize(&root).unwrap();
             assert_eq!(layout.exe_dir_plain, root);
             assert_eq!(layout.binaries_dir, dir.join("binaries"));
-            assert_eq!(layout.sidecar, dir.join("x2t.exe"));
+            assert_eq!(layout.sidecar, dir.join("binaries/x2t.exe"));
             if cfg!(windows) {
                 let pdf_x2t = crate::x2t_task::find_x2t(&layout.binaries_dir, Some(&layout.exe_dir_plain)).unwrap();
                 assert_eq!(std::fs::canonicalize(pdf_x2t).unwrap(), std::fs::canonicalize(&layout.sidecar).unwrap());
