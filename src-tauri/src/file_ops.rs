@@ -710,37 +710,6 @@ pub async fn create_new(
 }
 
 #[tauri::command]
-pub fn write_download_temp(
-    state: State<'_, AppState>,
-    data: String,
-    url: String,
-) -> Result<String, String> {
-    let download_dir = state.temp_dir.join("downloads");
-    let _ = std::fs::create_dir_all(&download_dir);
-
-    let file_name = url
-        .rsplit('/')
-        .next()
-        .unwrap_or("download")
-        .split('?')
-        .next()
-        .unwrap_or("download");
-    let safe_name = file_name
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
-        .collect::<String>();
-    let dest = download_dir.join(if safe_name.is_empty() {
-        "download".to_string()
-    } else {
-        safe_name
-    });
-
-    let bytes = STANDARD.decode(&data).map_err(|e| e.to_string())?;
-    std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
-    Ok(dest.to_string_lossy().to_string())
-}
-
-#[tauri::command]
 pub async fn convert_for_insert(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
