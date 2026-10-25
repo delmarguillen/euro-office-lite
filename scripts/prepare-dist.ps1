@@ -14,6 +14,8 @@ $src     = Join-Path $ProjectRoot 'src'
 $dist    = Join-Path $ProjectRoot 'src-dist'
 $logDir  = Join-Path $env:TEMP 'euro-office-lite'
 $logFile = Join-Path $logDir 'prepare-dist.log'
+$applyPatches = Join-Path $ProjectRoot 'scripts\apply-patches.mjs'
+$patchRecord  = Join-Path $logDir 'applied-patches.json'
 
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
 
@@ -106,6 +108,12 @@ Copy-SingleFile "$src\editor-patches.js"    "$dist\editor-patches.js"    "editor
 # --- Fonts ---
 Copy-Tree "$src\fonts" "$dist\fonts" @() "src/fonts"
 
+# The patches in patches/ are in the submodule trees only while their files
+# are copied; the trap takes them back out when a copy fails.
+& node $applyPatches apply --record $patchRecord
+if ($LASTEXITCODE -ne 0) { throw 'apply-patches.mjs apply failed' }
+trap { & node $applyPatches revert --record $patchRecord; break }
+
 # --- web-apps editors (main/ without help/) ---
 $editors = @('documenteditor', 'spreadsheeteditor', 'presentationeditor')
 foreach ($ed in $editors) {
@@ -156,6 +164,9 @@ $excludedWebApps = @('pdfeditor', 'visioeditor', 'build', '.docker', '.github', 
 foreach ($d in $excludedWebApps) {
     Log ("EXCL: {0,-55} (not needed at runtime)" -f "web-apps/$d")
 }
+
+& node $applyPatches revert --record $patchRecord
+if ($LASTEXITCODE -ne 0) { throw 'apply-patches.mjs revert failed' }
 
 # --- Summary ---
 $sw.Stop()
