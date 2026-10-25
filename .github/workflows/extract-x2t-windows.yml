@@ -59,7 +59,10 @@ jobs:
         UnicodeConverter.dll XpsFile.dll
         icudtl.dat icudtl_extra.dat
       # The Visual C++ runtime x2t and its libraries import. Windows does not
-      # include it, and it never goes into the zip.
+      # include it, and vc_redist needs an administrator while the app installs
+      # per user, so the zip carries these DLLs next to x2t's own; Microsoft
+      # allows deploying them app-local. They come from the runner's Visual
+      # Studio, signed by Microsoft.
       VC_RUNTIME_FILES: msvcp140.dll vcruntime140.dll vcruntime140_1.dll
       # Windows Server Core ltsc2025, pinned by the digest of its manifest list.
       SERVERCORE_IMAGE: mcr.microsoft.com/windows/servercore@sha256:1d3cd3d02eb8496f47d00636b62d41904b63d0dc52ab5cfa4aa61292d3b9a26e # ltsc2025
@@ -212,9 +215,46 @@ jobs:
           Write-Host "Actual sha256:   $actual"
           if ($actual -ne $env:ONLYOFFICE_ZIP_SHA256) { throw 'zip sha256 mismatch' }
 
+      # The runtime that goes into the zip comes from the runner's Visual
+      # Studio, and only after its Microsoft signature checks out.
+      - name: Find the Visual C++ runtime on the runner
+        id: vcruntime
+        run: |
+          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $found = @(& $vswhere -latest -products * -find 'VC\Redist\MSVC\*\x64\Microsoft.VC143.CRT\msvcp140.dll')
+          if ($found.Count -eq 0) { throw 'Visual Studio has no x64 Microsoft.VC143.CRT' }
+
+          # The newest MSVC redist folder: ...\MSVC\<version>\x64\Microsoft.VC143.CRT.
+          # A folder not named as a version (such as v143) sorts first.
+          function Get-RedistVersion([string] $Dll) {
+            $versionDir = Split-Path (Split-Path (Split-Path $Dll))
+            $parsed = $null
+            if (-not [version]::TryParse((Split-Path $versionDir -Leaf), [ref] $parsed)) { return [version] '0.0' }
+            return $parsed
+          }
+          $newest = $found | Sort-Object { Get-RedistVersion $_ } | Select-Object -Last 1
+          $crtDir = Split-Path $newest
+          Write-Host "Visual C++ runtime folder: $crtDir"
+
+          foreach ($name in $env:VC_RUNTIME_FILES -split '\s+') {
+            $path = Join-Path $crtDir $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "$name is missing from $crtDir" }
+            $version = (Get-Item -LiteralPath $path).VersionInfo.FileVersion
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            $signer = $signature.SignerCertificate.Subject
+            Write-Host "$name FileVersion $version, signature $($signature.Status), signer $signer"
+            if ($signature.Status -ne 'Valid') { throw "$name does not carry a valid signature" }
+            if ($signer -notlike '*O=Microsoft Corporation*') { throw "$name is not signed by Microsoft" }
+            if (-not $version.StartsWith('14.')) { throw "$name is version $version, not 14.x" }
+          }
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "dir=$crtDir"
+
       - name: Extract x2t and its libraries
+        env:
+          VC_RUNTIME_DIR: ${{ steps.vcruntime.outputs.dir }}
         run: |
           $names = $env:X2T_FILES -split '\s+'
+          $runtime = $env:VC_RUNTIME_FILES -split '\s+'
           $zip = Join-Path $env:RUNNER_TEMP 'onlyoffice.zip'
           $extracted = Join-Path $env:RUNNER_TEMP 'onlyoffice-extracted'
           $staging = Join-Path $env:RUNNER_TEMP 'x2t-staging'
@@ -245,20 +285,22 @@ jobs:
             throw "converter/$($file.Name) is not in X2T_FILES"
           }
 
+          foreach ($name in $runtime) {
+            Copy-Item -LiteralPath (Join-Path $env:VC_RUNTIME_DIR $name) -Destination $staging
+          }
+
           Write-Host "::group::Staging"
           Get-ChildItem -LiteralPath $staging | Format-Table Name, Length
           Write-Host "::endgroup::"
-          Write-Host "Files staged: $((Get-ChildItem -LiteralPath $staging -File).Count) of $($names.Count)"
+          $expected = $names.Count + $runtime.Count
+          Write-Host "Files staged: $((Get-ChildItem -LiteralPath $staging -File).Count) of $expected"
 
       # Every library a staged file imports has to be staged too, be an API set
-      # (mapped by the loader to Windows' own DLLs) or be in System32. The
-      # Visual C++ runtime only resolves through the runner's System32, so it
-      # is reported apart: a clean Windows does not have it.
+      # (mapped by the loader to Windows' own DLLs) or be in System32.
       - name: Check machine type and library closure
         run: |
           $staging = Join-Path $env:RUNNER_TEMP 'x2t-staging'
-          $staged = $env:X2T_FILES -split '\s+'
-          $vcRuntime = $env:VC_RUNTIME_FILES -split '\s+'
+          $staged = ($env:X2T_FILES -split '\s+') + ($env:VC_RUNTIME_FILES -split '\s+')
           $system32 = Join-Path $env:SystemRoot 'System32'
           $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
           $dumpbin = & $vswhere -latest -products * -find 'VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
@@ -302,13 +344,11 @@ jobs:
             if ($Name -in $staged) { return 'staged' }
             if ($Name -like 'api-ms-win-*') { return 'api-set' }
             if (-not (Test-Path -LiteralPath (Join-Path $system32 $Name))) { return 'missing' }
-            if ($Name -in $vcRuntime) { return 'vc-runtime' }
             return 'system'
           }
 
           $fail = $false
           $fromSystem32 = @{}
-          $vcUsed = @{}
           foreach ($file in Get-ChildItem -LiteralPath $staging -File) {
             if ($file.Extension -notin '.exe', '.dll') { continue }
             $headers = Get-PeHeaders $file.FullName
@@ -323,17 +363,15 @@ jobs:
                 Write-Host "::error::$($file.Name) imports $import, which is neither staged nor in System32"
                 $fail = $true
               }
-              if ($where -in 'system', 'vc-runtime') { $fromSystem32[$import.ToLowerInvariant()] = $true }
-              if ($where -eq 'vc-runtime') { $vcUsed[$import.ToLowerInvariant()] = $true }
+              if ($where -eq 'system') { $fromSystem32[$import.ToLowerInvariant()] = $true }
             }
           }
           if ($fail) { exit 1 }
 
-          $vcList = ($vcUsed.Keys | Sort-Object) -join ', '
-          Write-Host "Resolved only through the runner's System32 (Visual C++ runtime): $vcList"
+          $systemList = ($fromSystem32.Keys | Sort-Object) -join ', '
+          Write-Host "Imported from System32: $systemList"
           # The container test checks which of these the clean image lacks.
           $fromSystem32.Keys | Sort-Object | Set-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'system-imports.txt')
-          Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'x2t-facts.txt') -Value "Visual C++ runtime imported, not in the zip: $vcList"
 
       - name: Report x2t version
         run: |
@@ -355,8 +393,7 @@ jobs:
       - name: Create zip
         id: zip
         run: |
-          $names = $env:X2T_FILES -split '\s+'
-          $vcRuntime = $env:VC_RUNTIME_FILES -split '\s+'
+          $names = ($env:X2T_FILES -split '\s+') + ($env:VC_RUNTIME_FILES -split '\s+')
           $staging = Join-Path $env:RUNNER_TEMP 'x2t-staging'
           $base = 'x2t-binaries-windows-x64'
           # A versioned name leaves the zip that builds pin today untouched.
@@ -367,14 +404,13 @@ jobs:
           $zip = Join-Path $dist $zipName
           Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zip
 
-          # What the zip holds, read back: exactly X2T_FILES, never the runtime.
+          # What the zip holds, read back: exactly x2t's files and the runtime.
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
           $entries = @($archive.Entries | ForEach-Object { $_.FullName })
           $archive.Dispose()
           foreach ($entry in $entries) {
-            if ($entry -in $vcRuntime) { throw "the zip holds $entry" }
-            if ($entry -notin $names) { throw "the zip holds $entry, which is not in X2T_FILES" }
+            if ($entry -notin $names) { throw "the zip holds $entry, which is not in X2T_FILES or VC_RUNTIME_FILES" }
           }
           if ($entries.Count -ne $names.Count) { throw "the zip holds $($entries.Count) files, not $($names.Count)" }
 
@@ -383,8 +419,11 @@ jobs:
           $entries | Sort-Object
           Write-Host "::endgroup::"
 
-          $zipSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
-          $x2tSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $staging 'x2t.exe')).Hash.ToLowerInvariant()
+          function Get-Sha256([string] $Path) {
+            return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+          }
+          $zipSha256 = Get-Sha256 $zip
+          $x2tSha256 = Get-Sha256 (Join-Path $staging 'x2t.exe')
           Write-Host "$zipName sha256: $zipSha256"
           Write-Host "x2t.exe sha256: $x2tSha256"
           Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "zip_name=$zipName"
@@ -393,21 +432,26 @@ jobs:
           $summary = @(
             "### x2t Windows x64 from ONLYOFFICE $env:VERSION"
             ''
-            '| File | sha256 |'
-            '| --- | --- |'
-            "| DesktopEditors_x64.zip | ``$env:ONLYOFFICE_ZIP_SHA256`` |"
-            "| $zipName | ``$zipSha256`` |"
-            "| x2t.exe | ``$x2tSha256`` |"
-            ''
-            "- Files in the zip: $($entries.Count); Visual C++ runtime in the zip: no"
+            '| File | Version | sha256 |'
+            '| --- | --- | --- |'
+            "| DesktopEditors_x64.zip | $env:VERSION | ``$env:ONLYOFFICE_ZIP_SHA256`` |"
+            "| $zipName | | ``$zipSha256`` |"
+            "| x2t.exe | $((Get-Item -LiteralPath (Join-Path $staging 'x2t.exe')).VersionInfo.FileVersion) | ``$x2tSha256`` |"
           )
+          foreach ($name in $env:VC_RUNTIME_FILES -split '\s+') {
+            $path = Join-Path $staging $name
+            $version = (Get-Item -LiteralPath $path).VersionInfo.FileVersion
+            $summary += "| $name | $version | ``$(Get-Sha256 $path)`` |"
+          }
+          $summary += ''
+          $summary += "- Files in the zip: $($entries.Count), the Visual C++ runtime among them"
           foreach ($fact in Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'x2t-facts.txt')) {
             $summary += "- $fact"
           }
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary
 
       # Runs the zip as shipped, from a fresh unpack and in the app's layout, on
-      # the runner, which has the Visual C++ runtime in System32.
+      # the runner.
       - name: Test x2t from the zip (docx to odt)
         env:
           ZIP_NAME: ${{ steps.zip.outputs.zip_name }}
@@ -424,57 +468,22 @@ jobs:
           if ($result.Bytes -eq 0) { throw 'x2t exited 0 but produced no output' }
           Write-Host "Conversion OK: $($result.Bytes) bytes"
 
-      # The runtime copy for the container test comes from the runner's Visual
-      # Studio, and only after its Microsoft signature checks out.
-      - name: Find the Visual C++ runtime on the runner
-        id: vcruntime
-        run: |
-          $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $found = @(& $vswhere -latest -products * -find 'VC\Redist\MSVC\*\x64\Microsoft.VC143.CRT\msvcp140.dll')
-          if ($found.Count -eq 0) { throw 'Visual Studio has no x64 Microsoft.VC143.CRT' }
-
-          # The newest MSVC redist folder: ...\MSVC\<version>\x64\Microsoft.VC143.CRT.
-          # A folder not named as a version (such as v143) sorts first.
-          function Get-RedistVersion([string] $Dll) {
-            $versionDir = Split-Path (Split-Path (Split-Path $Dll))
-            $parsed = $null
-            if (-not [version]::TryParse((Split-Path $versionDir -Leaf), [ref] $parsed)) { return [version] '0.0' }
-            return $parsed
-          }
-          $newest = $found | Sort-Object { Get-RedistVersion $_ } | Select-Object -Last 1
-          $crtDir = Split-Path $newest
-          Write-Host "Visual C++ runtime folder: $crtDir"
-
-          foreach ($name in $env:VC_RUNTIME_FILES -split '\s+') {
-            $path = Join-Path $crtDir $name
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "$name is missing from $crtDir" }
-            $version = (Get-Item -LiteralPath $path).VersionInfo.FileVersion
-            $signature = Get-AuthenticodeSignature -LiteralPath $path
-            $signer = $signature.SignerCertificate.Subject
-            Write-Host "$name FileVersion $version, signature $($signature.Status), signer $signer"
-            if ($signature.Status -ne 'Valid') { throw "$name does not carry a valid signature" }
-            if ($signer -notlike '*O=Microsoft Corporation*') { throw "$name is not signed by Microsoft" }
-            if (-not $version.StartsWith('14.')) { throw "$name is version $version, not 14.x" }
-          }
-          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "dir=$crtDir"
-
-      # A clean Windows: Server Core with nothing installed. x2t runs twice in
-      # the app's layout, first with the zip alone (a report: it shows whether
-      # the app needs the runtime) and then with the runner's Visual C++ runtime
-      # copied into that test tree only, which has to pass.
+      # A clean Windows: Server Core with nothing installed. x2t runs from the
+      # zip in the app's layout and has to work there. A control run without
+      # the three runtime DLLs shows the image really lacks the runtime by any
+      # path, not only in System32; it is a report and never fails the job.
       - name: Test x2t on a clean Windows Server Core
         env:
           ZIP_NAME: ${{ steps.zip.outputs.zip_name }}
-          VC_RUNTIME_DIR: ${{ steps.vcruntime.outputs.dir }}
         run: |
           . (Join-Path $env:RUNNER_TEMP 'x2t-run.ps1')
           $clean = Join-Path $env:RUNNER_TEMP 'clean'
           $zip = Join-Path $env:RUNNER_TEMP "dist\$env:ZIP_NAME"
-          New-AppLayout -Zip $zip -Root (Join-Path $clean 'without-runtime')
-          New-AppLayout -Zip $zip -Root (Join-Path $clean 'with-runtime')
-          $withRuntimeBinaries = Join-Path $clean 'with-runtime\binaries'
+          New-AppLayout -Zip $zip -Root (Join-Path $clean 'zip')
+          New-AppLayout -Zip $zip -Root (Join-Path $clean 'control')
+          $controlBinaries = Join-Path $clean 'control\binaries'
           foreach ($name in $env:VC_RUNTIME_FILES -split '\s+') {
-            Copy-Item -LiteralPath (Join-Path $env:VC_RUNTIME_DIR $name) -Destination $withRuntimeBinaries
+            Remove-Item -LiteralPath (Join-Path $controlBinaries $name)
           }
           Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'src-tauri\templates\blank.docx') -Destination $clean
           Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'x2t-run.ps1') -Destination $clean
@@ -517,8 +526,8 @@ jobs:
               os_version = [Environment]::OSVersion.Version.ToString()
               image_has_msvcp140 = (Test-Path -LiteralPath (Join-Path $system32 'msvcp140.dll'))
               missing_in_image = @(Get-MissingSystemDll)
-              without_runtime = (Test-Case 'without-runtime')
-              with_runtime = (Test-Case 'with-runtime')
+              zip_run = (Test-Case 'zip')
+              control_run = (Test-Case 'control')
           }
           $results | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath 'C:\t\results.json'
           '@
@@ -531,6 +540,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "docker run exited $LASTEXITCODE" }
 
           $results = Get-Content -Raw -LiteralPath (Join-Path $clean 'results.json') | ConvertFrom-Json
+          $missingList = @($results.missing_in_image | Sort-Object)
 
           function Test-Passed($Case) {
             if ($Case.error) { return $false }
@@ -551,56 +561,47 @@ jobs:
             Write-Host "::endgroup::"
           }
 
-          $vcRuntime = $env:VC_RUNTIME_FILES -split '\s+'
-          $missingList = @($results.missing_in_image | Sort-Object)
-
-          # What the image lacks besides the Visual C++ runtime: the second run
-          # cannot supply it.
-          function Get-MissingBesidesRuntime {
-            $other = @()
-            foreach ($name in $missingList) {
-              if ($name -notin $vcRuntime) { $other += $name }
-            }
-            return $other
-          }
-
           # An image that already has the runtime proves nothing about a clean
-          # Windows, whatever the first run says; and x2t only runs on a clean
-          # one when nothing it imports is missing.
+          # Windows, whatever the run says; and x2t only runs on a clean one
+          # when nothing it takes from System32 is missing.
           function Get-Verdict {
             if ($results.image_has_msvcp140) { return 'inconclusive (image has MSVCP140)' }
             if ($missingList.Count -gt 0) { return 'no' }
-            if (-not (Test-Passed $results.without_runtime)) { return 'no' }
+            if (-not (Test-Passed $results.zip_run)) { return 'no' }
             return 'yes'
           }
 
-          $missingOther = @(Get-MissingBesidesRuntime)
           $verdict = Get-Verdict
+          $controlFailed = -not (Test-Passed $results.control_run)
           Write-Host "Container Windows: $($results.os_version)"
           Write-Host "MSVCP140.dll in the image's System32: $($results.image_has_msvcp140)"
           Write-Host "System DLLs x2t imports that the image lacks: $($missingList -join ', ')"
-          Write-Case 'Zip alone (no Visual C++ runtime)' $results.without_runtime
-          Write-Case 'Zip plus the Visual C++ runtime in binaries\' $results.with_runtime
+          Write-Case 'Zip as published' $results.zip_run
+          Write-Case 'Control: zip without the Visual C++ runtime' $results.control_run
 
           $summary = @(
             ''
             "- x2t runs on a clean Server Core: $verdict"
-            "- Zip alone: docx to odt exit $(Format-ExitCode $results.without_runtime.convert_exit)"
-            "- Missing from the image: $($missingList -join ', ')"
-            "- Missing from the image besides the Visual C++ runtime: $($missingOther -join ', ')"
-            "- Zip plus the Visual C++ runtime (test only, not in the zip): docx to odt exit $(Format-ExitCode $results.with_runtime.convert_exit)"
+            "- Zip as published: docx to odt exit $(Format-ExitCode $results.zip_run.convert_exit)"
+            "- Control without the runtime: docx to odt exit $(Format-ExitCode $results.control_run.convert_exit), fails as expected: $controlFailed"
+            "- Missing from the image besides the Visual C++ runtime: $($missingList -join ', ')"
           )
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary
 
-          foreach ($name in $missingOther) {
+          if (-not $controlFailed) {
+            Write-Host "::warning::x2t ran on Server Core without the Visual C++ runtime DLLs: the image has the runtime somewhere"
+          }
+          foreach ($name in $missingList) {
             Write-Host "::error::Server Core lacks $name, not part of the VC++ runtime"
           }
-          if ($missingOther.Count -gt 0) {
-            throw "Server Core lacks $($missingOther -join ', '), not part of the VC++ runtime"
+          if ($missingList.Count -gt 0) {
+            throw "Server Core lacks $($missingList -join ', '), not part of the VC++ runtime"
           }
-          if (-not (Test-Passed $results.with_runtime)) { throw 'x2t with the Visual C++ runtime failed on Server Core' }
+          # Only a clean image that runs the zip proves the zip; an image with
+          # the runtime cannot, so that run fails too and needs a look.
+          if ($verdict -ne 'yes') { throw "x2t runs on a clean Server Core: $verdict" }
           if (-not $env:X2T_VERSION) { exit 0 }
-          if (-not $results.with_runtime.version_line.EndsWith("Version: $env:X2T_VERSION")) {
+          if (-not $results.zip_run.version_line.EndsWith("Version: $env:X2T_VERSION")) {
             throw "x2t on Server Core does not report version $env:X2T_VERSION"
           }
 
