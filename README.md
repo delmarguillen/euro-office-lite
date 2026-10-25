@@ -38,7 +38,7 @@ npx tauri dev
 
 `setup.ps1` runs `grunt develop` inside sdkjs to generate the JS module loaders (`scripts.js`) that each editor needs at runtime. Run it again after updating the sdkjs submodule.
 
-`get-x2t.ps1` downloads the x2t converter binaries (~60 MB) from the repo's `dependencies` release into `src-tauri/binaries/`. Requires [GitHub CLI](https://cli.github.com/) (`gh`) authenticated.
+`get-x2t.ps1` downloads the x2t converter binaries (~47 MB) from the repo's `dependencies` release into `src-tauri/binaries/`. Requires [GitHub CLI](https://cli.github.com/) (`gh`) authenticated.
 
 ## Build installer
 
@@ -132,7 +132,7 @@ Each window of the app writes its own log, `js-debug-<number>-<number>.log`. The
 
 ## Credits and attribution
 
-Euro-Office Lite is a lightweight desktop shell around the document editors of the [Euro-Office](https://github.com/Euro-Office) project, an independent community fork of the editors originally developed by ONLYOFFICE (Ascensio System SIA). The editing engine ([sdkjs](https://github.com/Euro-Office/sdkjs)) and UI ([web-apps](https://github.com/Euro-Office/web-apps)) are included as unmodified submodules under AGPL-3.0. The x2t document converter binaries are currently taken unmodified from [ONLYOFFICE Desktop Editors](https://github.com/ONLYOFFICE/DesktopEditors) releases; their corresponding source is available at [ONLYOFFICE/core](https://github.com/ONLYOFFICE/core) under the matching version tags (AGPL-3.0). All credit for the editing engine belongs to their respective developers.
+Euro-Office Lite is a lightweight desktop shell around the document editors of the [Euro-Office](https://github.com/Euro-Office) project, an independent community fork of the editors originally developed by ONLYOFFICE (Ascensio System SIA). The editing engine ([sdkjs](https://github.com/Euro-Office/sdkjs)) and UI ([web-apps](https://github.com/Euro-Office/web-apps)) are included as unmodified submodules under AGPL-3.0. The x2t document converter binaries are currently taken unmodified from [ONLYOFFICE Desktop Editors](https://github.com/ONLYOFFICE/DesktopEditors) releases; their corresponding source is available at [ONLYOFFICE/core](https://github.com/ONLYOFFICE/core) under the matching version tags (AGPL-3.0). On Windows, the converter also ships with the Microsoft Visual C++ runtime files it needs (msvcp140.dll, vcruntime140.dll and vcruntime140_1.dll), redistributed under the Microsoft Visual Studio license terms. All credit for the editing engine belongs to their respective developers.
 
 What this project adds on top: the Tauri v2 native shell and desktop bridge, macOS support with signed and notarized builds, packaging for Windows (NSIS), Linux (.deb and Flatpak with a self-hosted repo), fully offline operation with no cloud, no accounts and no telemetry, and native file operations, printing and PDF export.
 
