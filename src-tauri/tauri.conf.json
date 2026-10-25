@@ -27,23 +27,6 @@
     "targets": ["nsis"],
     "icon": ["icons/icon.ico", "icons/icon.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/32x32.png", "icons/256x256.png"],
     "externalBin": ["binaries/x2t"],
-    "resources": [
-      "binaries/*.dll",
-      "binaries/*.config",
-      "binaries/*.dat",
-      "binaries/*.ttf",
-      "binaries/*.js",
-      "binaries/fonts/*",
-      "binaries/core-fonts/*",
-      "templates/*",
-      "editors/sdkjs/word/*",
-      "editors/sdkjs/cell/*",
-      "editors/sdkjs/slide/*",
-      "editors/sdkjs/common/Native/*",
-      "editors/sdkjs/common/AllFonts.js",
-      "editors/sdkjs/common/libfont/engine/*",
-      "editors/web-apps/vendor/xregexp/*"
-    ],
     "fileAssociations": [
       {
         "ext": ["docx"],

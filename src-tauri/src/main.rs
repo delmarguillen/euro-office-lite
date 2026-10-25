@@ -796,7 +796,8 @@ fn run_font_generation(
     }
 }
 
-// The folder of the running executable: the last place x2t is looked for.
+// The folder of the running executable: the last place x2t is looked for on
+// Linux and macOS (Windows only looks in binaries\).
 fn app_exe_dir() -> Option<std::path::PathBuf> {
     std::env::current_exe()
         .ok()

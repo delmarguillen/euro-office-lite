@@ -35,30 +35,13 @@ pub fn is_x2t_binary(name: &str) -> bool {
     }
 }
 
-// The x2t the PDF export and the font scan run: the first match in binaries/,
-// then its parent, then Contents/MacOS, then `exe_dir` (the folder of the
-// app's executable). On Linux and macOS binaries/ holds its own copy of x2t,
-// so these two never run the sidecar that the other conversions use.
+// The x2t the PDF export and the font scan run, and on Windows every other
+// conversion too: the first match in x2t_search_dirs.
 pub fn find_x2t(
     binaries_dir: &std::path::Path,
     exe_dir: Option<&std::path::Path>,
 ) -> Result<std::path::PathBuf, String> {
-    let mut search_dirs = vec![
-        binaries_dir.to_path_buf(),
-        binaries_dir.parent().unwrap_or(binaries_dir).to_path_buf(),
-    ];
-    if let Some(resources) = binaries_dir.parent() {
-        if let Some(contents) = resources.parent() {
-            let macos_dir = contents.join("MacOS");
-            if macos_dir.exists() {
-                search_dirs.push(macos_dir);
-            }
-        }
-    }
-    if let Some(exe_dir) = exe_dir {
-        search_dirs.push(exe_dir.to_path_buf());
-    }
-    for dir in &search_dirs {
+    for dir in &x2t_search_dirs(binaries_dir, exe_dir) {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -69,6 +52,37 @@ pub fn find_x2t(
         }
     }
     Err("x2t executable not found".to_string())
+}
+
+// Windows: binaries\ only. x2t ships there with its libraries and the Visual
+// C++ runtime, and the loader looks in the executable's own folder before
+// System32, so an older runtime installed system-wide never wins.
+// Elsewhere: binaries/, then its parent, then Contents/MacOS, then `exe_dir`
+// (the folder of the app's executable). On Linux and macOS binaries/ holds its
+// own copy of x2t, so the PDF export and the font scan never run the sidecar
+// that the other conversions use.
+fn x2t_search_dirs(
+    binaries_dir: &std::path::Path,
+    exe_dir: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    if cfg!(target_os = "windows") {
+        return vec![binaries_dir.to_path_buf()];
+    }
+    let mut dirs = vec![
+        binaries_dir.to_path_buf(),
+        binaries_dir.parent().unwrap_or(binaries_dir).to_path_buf(),
+    ];
+    let macos_dir = binaries_dir
+        .parent()
+        .and_then(|resources| resources.parent())
+        .map(|contents| contents.join("MacOS"));
+    if let Some(macos_dir) = macos_dir.filter(|dir| dir.exists()) {
+        dirs.push(macos_dir);
+    }
+    if let Some(exe_dir) = exe_dir {
+        dirs.push(exe_dir.to_path_buf());
+    }
+    dirs
 }
 
 /// Where to write the params file x2t is invoked with. Every path inside the
@@ -220,30 +234,6 @@ const DOCTRENDERER_CONFIG_PARENT: &str = r#"<Settings>
 <file>../editors/sdkjs/cell/sdk-all-min.js</file>
 <file>../editors/sdkjs/common/libfont/engine/fonts_native.js</file>
 <file>../editors/sdkjs/cell/sdk-all.js</file>
-</XlstSdk>
-</Settings>"#;
-
-const DOCTRENDERER_CONFIG_CURRENT: &str = r#"<Settings>
-<file>./editors/sdkjs/common/Native/native.js</file>
-<file>./editors/sdkjs/common/Native/jquery_native.js</file>
-<allfonts>./editors/sdkjs/common/AllFonts.js</allfonts>
-<file>./editors/web-apps/vendor/xregexp/xregexp-all-min.js</file>
-<sdkjs>./editors/sdkjs</sdkjs>
-<dictionaries>./dictionaries</dictionaries>
-<DoctSdk>
-<file>./editors/sdkjs/word/sdk-all-min.js</file>
-<file>./editors/sdkjs/common/libfont/engine/fonts_native.js</file>
-<file>./editors/sdkjs/word/sdk-all.js</file>
-</DoctSdk>
-<PpttSdk>
-<file>./editors/sdkjs/slide/sdk-all-min.js</file>
-<file>./editors/sdkjs/common/libfont/engine/fonts_native.js</file>
-<file>./editors/sdkjs/slide/sdk-all.js</file>
-</PpttSdk>
-<XlstSdk>
-<file>./editors/sdkjs/cell/sdk-all-min.js</file>
-<file>./editors/sdkjs/common/libfont/engine/fonts_native.js</file>
-<file>./editors/sdkjs/cell/sdk-all.js</file>
 </XlstSdk>
 </Settings>"#;
 
@@ -506,7 +496,8 @@ pub fn convert_to_pdf(
 }
 
 /// Windows: run x2t directly from binaries_dir (writable, all DLLs present).
-/// Write DoctRenderer.config and AllFonts.js (server) in place.
+/// Write DoctRenderer.config and AllFonts.js (server) in place. DoctRenderer
+/// reads its config from x2t's own folder, which is binaries_dir.
 #[cfg(target_os = "windows")]
 fn setup_windows_direct(
     binaries_dir: &std::path::Path,
@@ -524,7 +515,6 @@ fn setup_windows_direct(
     ),
     String,
 > {
-    let app_root = binaries_dir.parent().unwrap_or(binaries_dir);
     let bin_allfonts = binaries_dir.join("AllFonts.js");
     copy_file(allfonts_js, &bin_allfonts)?;
 
@@ -540,8 +530,8 @@ fn setup_windows_direct(
     }
 
     write_file(
-        &app_root.join("DoctRenderer.config"),
-        DOCTRENDERER_CONFIG_CURRENT,
+        &binaries_dir.join("DoctRenderer.config"),
+        DOCTRENDERER_CONFIG_PARENT,
     )?;
 
     Ok((
@@ -1182,22 +1172,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // NSIS: binaries/ holds no x2t, so the one in the install folder is used,
-    // the same file the sidecar runs.
+    // NSIS: x2t sits in binaries\ with its libraries and the Visual C++
+    // runtime; the install folder holds only the app.
+    #[cfg(target_os = "windows")]
     #[test]
-    fn windows_layout_finds_the_one_in_the_install_folder() {
+    fn windows_layout_finds_the_one_in_binaries() {
         let root = scratch_dir("nsis");
         let binaries = root.join("binaries");
         touch(&binaries.join("kernel.dll"));
+        touch(&binaries.join("msvcp140.dll"));
         touch(&binaries.join("x2t.dll"));
         touch(&binaries.join("x2t.pdb"));
-        touch(&root.join(x2t_name()));
+        touch(&binaries.join("x2t.exe"));
         touch(&root.join("euro-office-lite.exe"));
 
-        assert_eq!(find_x2t(&binaries, Some(&root)), Ok(root.join(x2t_name())));
+        assert_eq!(find_x2t(&binaries, Some(&root)), Ok(binaries.join("x2t.exe")));
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // An x2t in the install folder (the sidecar of earlier installers) would
+    // load an older Visual C++ runtime from System32 before the one in
+    // binaries\, so Windows never runs it, even when it is the only one.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_never_runs_an_x2t_in_the_install_folder() {
+        let root = scratch_dir("nsis-root-x2t");
+        let binaries = root.join("binaries");
+        touch(&binaries.join("kernel.dll"));
+        touch(&root.join("x2t.exe"));
+        touch(&root.join("euro-office-lite.exe"));
+
+        assert_eq!(
+            find_x2t(&binaries, Some(&root)),
+            Err("x2t executable not found".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn the_search_order_is_binaries_parent_macos_then_exe_dir() {
         let root = scratch_dir("order");
@@ -1453,9 +1465,10 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert_eq!(read(binaries.join("font_selection.bin")), b"selection");
         assert_eq!(read(fonts.join("font_selection.bin")), b"selection");
         assert_eq!(
-            read(app.join("DoctRenderer.config")),
-            DOCTRENDERER_CONFIG_CURRENT.as_bytes()
+            read(binaries.join("DoctRenderer.config")),
+            DOCTRENDERER_CONFIG_PARENT.as_bytes()
         );
+        assert!(!app.join("DoctRenderer.config").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
