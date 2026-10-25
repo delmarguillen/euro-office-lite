@@ -29,6 +29,9 @@ pub struct AppState {
     // Encoding, delimiter and line breaks detected when the open document came
     // from a CSV or TXT, so saving it back writes the file the way it was read.
     pub text_options: Mutex<Option<crate::text_import::TextOptions>>,
+    // The PDF the last successful print wrote: the only file open_pdf_viewer
+    // hands to the system viewer. Cleared when a print starts.
+    pub last_print_pdf: Mutex<Option<PathBuf>>,
 }
 
 pub(crate) fn log_event(_state: &AppState, msg: &str) {
@@ -540,6 +543,9 @@ pub async fn print_document(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    // A failed print leaves nothing for the viewer to open.
+    *state.last_print_pdf.lock().unwrap() = None;
+
     let editor_bin = state.temp_dir.join("Editor.bin");
     if !editor_bin.exists() {
         log_event(&state, "[PRINT] failed: Editor.bin not found");
@@ -554,7 +560,7 @@ pub async fn print_document(
         &format!("[PRINT] start editor_bin={} bytes", bin_size),
     );
 
-    let pdf_path = state.temp_dir.join("print_output.pdf");
+    let pdf_path = state.temp_dir.join(PRINT_PDF_NAME);
     if pdf_path.exists() {
         let _ = std::fs::remove_file(&pdf_path);
     }
@@ -586,14 +592,55 @@ pub async fn print_document(
         &state,
         &format!("[PRINT] success pdf_size={} bytes", pdf_size),
     );
+    *state.last_print_pdf.lock().unwrap() = Some(pdf_path.clone());
     Ok(pdf_path.to_string_lossy().to_string())
 }
 
+const PRINT_PDF_NAME: &str = "print_output.pdf";
+
+// The only file the viewer command hands on: the PDF the last print wrote,
+// still a regular file (not a link) directly inside this instance's folder.
+pub(crate) fn last_printed_pdf(
+    last_print: Option<&Path>,
+    temp_dir: &Path,
+) -> Result<PathBuf, String> {
+    let pdf = last_print.ok_or("No printed PDF to open")?;
+    if pdf.file_name() != Some(std::ffi::OsStr::new(PRINT_PDF_NAME)) {
+        return Err("Not the printed PDF".to_string());
+    }
+    let is_file = std::fs::symlink_metadata(pdf)
+        .map(|meta| meta.file_type().is_file())
+        .unwrap_or(false);
+    if !is_file {
+        return Err("The printed PDF is gone".to_string());
+    }
+    let dir = temp_dir.canonicalize().map_err(|e| e.to_string())?;
+    let parent = pdf
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .parent()
+        .map(Path::to_path_buf);
+    if parent.as_deref() != Some(dir.as_path()) {
+        return Err("The printed PDF is outside the instance folder".to_string());
+    }
+    // The path as print_document built it: the canonical form on Windows is a
+    // \\?\ path, which not every program takes.
+    Ok(pdf.to_path_buf())
+}
+
 #[tauri::command]
-pub fn open_pdf_viewer(state: State<'_, AppState>, path: String) -> Result<String, String> {
+pub fn open_pdf_viewer(state: State<'_, AppState>) -> Result<String, String> {
+    let last_print = state.last_print_pdf.lock().unwrap().clone();
+    let path = last_printed_pdf(last_print.as_deref(), &state.temp_dir).map_err(|e| {
+        log_event(&state, &format!("[PRINT] viewer refused: {}", e));
+        e
+    })?;
+
+    // explorer opens the file with its default program and, unlike cmd, does
+    // not read & ^ % in the path as its own syntax.
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("cmd")
-        .args(["/c", "start", "", &path])
+    let result = std::process::Command::new("explorer.exe")
+        .arg(&path)
         .spawn();
 
     #[cfg(target_os = "macos")]
@@ -661,7 +708,6 @@ pub async fn create_new(
     *state.current_file.lock().unwrap() = None;
     result
 }
-
 
 #[tauri::command]
 pub fn write_download_temp(
@@ -1260,5 +1306,80 @@ mod tests {
             None,
             "every later save would otherwise re-record the same file"
         );
+    }
+
+    fn print_dir() -> PathBuf {
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "eo-print-test-{}-{}",
+            std::process::id(),
+            unique
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn printed_pdf_is_handed_on() {
+        let dir = print_dir();
+        let pdf = dir.join(PRINT_PDF_NAME);
+        std::fs::write(&pdf, b"%PDF-1.7").unwrap();
+        assert_eq!(last_printed_pdf(Some(&pdf), &dir).unwrap(), pdf);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn printed_pdf_refused_without_a_print() {
+        let dir = print_dir();
+        // A leftover from an earlier run is not this print's output.
+        std::fs::write(dir.join(PRINT_PDF_NAME), b"%PDF-1.7").unwrap();
+        assert!(last_printed_pdf(None, &dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn printed_pdf_refuses_any_other_file() {
+        let dir = print_dir();
+        let exe = dir.join("tool.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        assert!(last_printed_pdf(Some(&exe), &dir).is_err());
+
+        let other = print_dir();
+        let outside = other.join(PRINT_PDF_NAME);
+        std::fs::write(&outside, b"%PDF-1.7").unwrap();
+        assert!(last_printed_pdf(Some(&outside), &dir).is_err());
+
+        let sub = dir.join("downloads");
+        std::fs::create_dir_all(&sub).unwrap();
+        let nested = sub.join(PRINT_PDF_NAME);
+        std::fs::write(&nested, b"%PDF-1.7").unwrap();
+        assert!(last_printed_pdf(Some(&nested), &dir).is_err());
+
+        let dotted = dir.join("downloads").join("..").join(PRINT_PDF_NAME);
+        std::fs::write(dir.join(PRINT_PDF_NAME), b"%PDF-1.7").unwrap();
+        assert!(
+            last_printed_pdf(Some(&dotted), &dir).is_ok(),
+            "the same file reached through .. is still the printed PDF"
+        );
+
+        // Gone since the print: nothing to open.
+        let _ = std::fs::remove_file(dir.join(PRINT_PDF_NAME));
+        assert!(last_printed_pdf(Some(&dir.join(PRINT_PDF_NAME)), &dir).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn printed_pdf_refuses_a_link_in_its_place() {
+        let dir = print_dir();
+        let target = dir.join("tool.sh");
+        std::fs::write(&target, b"#!/bin/sh").unwrap();
+        let pdf = dir.join(PRINT_PDF_NAME);
+        std::os::unix::fs::symlink(&target, &pdf).unwrap();
+        assert!(last_printed_pdf(Some(&pdf), &dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

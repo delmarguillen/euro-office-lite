@@ -2671,7 +2671,8 @@ window.AscDesktopEditor = {
           remove_after_print: true
         });
       } else {
-        await invoke('open_pdf_viewer', { path: pdfPath });
+        // Opens the PDF print_document just wrote; the backend takes no path.
+        await invoke('open_pdf_viewer');
       }
 
       if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
