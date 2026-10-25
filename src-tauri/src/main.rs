@@ -297,6 +297,7 @@ fn main() {
             file_ops::get_current_path,
             file_ops::take_pending_open_file,
             file_ops::open_pdf_viewer,
+            file_ops::print_to_printer,
             file_ops::convert_for_insert,
             file_ops::get_system_fonts,
             bridge::exec_command,

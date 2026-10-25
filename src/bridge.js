@@ -2660,18 +2660,12 @@ window.AscDesktopEditor = {
         b64 = btoa(binary);
       }
       await invoke('write_editor_bin', { data: b64 });
-      var pdfPath = await invoke('print_document');
+      // The backend keeps the PDF it wrote; the two commands below take no path.
+      await invoke('print_document');
 
       if (printerName) {
-        var printResult = await invoke('plugin:printer|print_pdf', {
-          id: printerName,
-          path: pdfPath,
-          printer: printerName,
-          print_settings: '{}',
-          remove_after_print: true
-        });
+        await invoke('print_to_printer', { printer: printerName });
       } else {
-        // Opens the PDF print_document just wrote; the backend takes no path.
         await invoke('open_pdf_viewer');
       }
 
