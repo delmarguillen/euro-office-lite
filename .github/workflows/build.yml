@@ -289,30 +289,32 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # x2t already carries @executable_path/../Frameworks, which serves the
-      # sidecar in Contents/MacOS; the copy in Contents/Resources/binaries
-      # needs Contents/Frameworks two folders up. Adding a path it has fails.
-      - name: Fix x2t binary (rpath + ad-hoc re-sign)
+      # sidecar in Contents/MacOS. Only the copy in Contents/Resources/binaries
+      # gets ../../Frameworks, so the sidecar never searches outside the .app.
+      # Adding a path it already has fails.
+      - name: Fix x2t binary and its resource copy (rpath + ad-hoc re-sign)
         env:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           echo "::group::Patch x2t rpath and re-sign"
           X2T="src-tauri/binaries/x2t-$TARGET"
-          RPATH="@executable_path/../../Frameworks"
-          RPATHS=$(otool -l "$X2T" | awk '/cmd LC_RPATH$/ { getline; getline; print $2 }' | paste -sd ' ' -)
-          case " $RPATHS " in
-            *" $RPATH "*) echo "x2t already has $RPATH" ;;
-            *) install_name_tool -add_rpath "$RPATH" "$X2T" ;;
-          esac
+          COPY="src-tauri/binaries/x2t"
           codesign --force --sign - "$X2T"
-          echo "Updated rpaths:"
-          otool -l "$X2T" | grep -A2 LC_RPATH
+          cp "$X2T" "$COPY"
+          RPATH="@executable_path/../../Frameworks"
+          RPATHS=$(otool -l "$COPY" | awk '/cmd LC_RPATH$/ { getline; getline; print $2 }' | paste -sd ' ' -)
+          case " $RPATHS " in
+            *" $RPATH "*) echo "x2t copy already has $RPATH" ;;
+            *) install_name_tool -add_rpath "$RPATH" "$COPY" ;;
+          esac
+          codesign --force --sign - "$COPY"
+          echo "x2t resource copy created ($(wc -c < "$COPY") bytes)"
+          for f in "$X2T" "$COPY"; do
+            echo "rpaths of $f:"
+            otool -l "$f" | grep -A2 LC_RPATH
+          done
           echo "::endgroup::"
-
-      - name: Copy x2t to binaries for DoctRenderer PDF path
-        run: |
-          cp "src-tauri/binaries/x2t-${{ matrix.target }}" "src-tauri/binaries/x2t"
-          echo "x2t resource copy created ($(wc -c < src-tauri/binaries/x2t) bytes)"
 
       - name: Prepare DoctRenderer resources
         # The macOS x2t (both targets) is 9.4.0.129, so the sdkjs tag has to
