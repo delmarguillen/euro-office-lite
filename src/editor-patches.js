@@ -1086,7 +1086,9 @@
           },
           customization: {
             about: false,
-            feedback: false
+            feedback: false,
+            // Document macros never run and the editor shows no macro prompt or Macros button.
+            macros: false
           }
         },
         events: {
