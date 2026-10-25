@@ -31,4 +31,5 @@ usually means upstream already has the change: remove that patch from here.
 | `web-apps/0004-onlyoffice-4bb7a73f6.patch` | ONLYOFFICE/web-apps `4bb7a73f652a83f6424fc77caa957f3a07ae108a` |
 | `web-apps/0005-onlyoffice-c34647af7.patch` | ONLYOFFICE/web-apps `c34647af7fcf92e90deab92d59993c2d3ca61e1a` (applies after 0004) |
 | `sdkjs/0001-document-custom-functions-follow-macros.patch` | own |
+| `sdkjs/0002-speech-text-as-plain-text.patch` | own |
 | `doctrenderer-sdkjs/0001-skip-document-custom-functions-in-converter.patch` | own, against ONLYOFFICE/sdkjs `v9.4.0.129` (`75b53d504bfd81bfa35d59bb57dd9e56f7c9235d`) |
