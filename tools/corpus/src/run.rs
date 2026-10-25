@@ -508,8 +508,8 @@ impl DocRun<'_> {
         &self.prepared.layout.binaries_dir
     }
 
-    // The sidecar call converter::convert_file makes for every conversion
-    // that is not a PDF.
+    // The x2t call converter::convert_file makes for every conversion that
+    // is not a PDF.
     fn convert(
         &self,
         input: &Path,
@@ -536,7 +536,7 @@ impl DocRun<'_> {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            // CREATE_NO_WINDOW, as the app's sidecar call.
+            // CREATE_NO_WINDOW, as the app's x2t call.
             command.creation_flags(0x0800_0000);
         }
         let result = command.output().map_err(|e| format!("Failed to spawn x2t: {}", e));

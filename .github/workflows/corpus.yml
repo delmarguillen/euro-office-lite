@@ -324,7 +324,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "7z x exited $LASTEXITCODE for run $n" }
             $plugins = Join-Path $root '$PLUGINSDIR'
             if (Test-Path -LiteralPath $plugins) { Remove-Item -LiteralPath $plugins -Recurse -Force }
-            foreach ($need in 'euro-office-lite.exe', 'x2t.exe', 'binaries', 'editors') {
+            foreach ($need in 'euro-office-lite.exe', 'binaries\x2t.exe', 'binaries', 'editors') {
               if (-not (Test-Path -LiteralPath (Join-Path $root $need))) { throw "$need missing from the extracted tree" }
             }
             $marker = (Get-Date).ToUniversalTime()
