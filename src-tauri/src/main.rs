@@ -8,6 +8,7 @@ mod dictionaries;
 mod file_ops;
 mod launch_args;
 mod note_separator;
+mod protocol_limits;
 mod recent;
 mod recovery;
 mod temp_layout;
@@ -126,6 +127,17 @@ fn apply_title_bar(app: &tauri::App, mode: TitleBar) {
         "title bar mode={:?}{} realized_before_show={}",
         mode, note, realized_before_show
     ));
+}
+
+// The first of the places a bundled resource can live that holds it.
+fn read_resource(app: &tauri::AppHandle, relative: &std::path::Path) -> Option<Vec<u8>> {
+    let resource_dir = app.path().resource_dir().unwrap_or_default();
+    let candidates = [
+        resource_dir.join(relative),
+        resource_dir.join("../src").join(relative),
+        resource_dir.join("binaries").join(relative),
+    ];
+    candidates.iter().find_map(|p| std::fs::read(p).ok())
 }
 
 // x2t runs with a different working directory, so a relative launch argument
@@ -554,6 +566,13 @@ fn main() {
                 };
             }
 
+            let Some(relative) = protocol_limits::resource_relative(path) else {
+                return tauri::http::Response::builder()
+                    .status(403)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(b"Forbidden".to_vec())
+                    .unwrap();
+            };
             let result = if decoded_path.starts_with("abs/") {
                 let raw_abs_path = &decoded_path[4..];
                 // x2t normalizes Windows extended paths (\\?\C:\...) as /?/C:/...
@@ -570,22 +589,10 @@ fn main() {
                 let state = ctx.app_handle().state::<AppState>();
                 let generated = temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
                 std::fs::read(&generated).ok().or_else(|| {
-                    let resource_dir = ctx.app_handle().path().resource_dir().unwrap_or_default();
-                    let candidates = [
-                        resource_dir.join(path),
-                        resource_dir.join("../src").join(path),
-                        resource_dir.join("binaries").join(path),
-                    ];
-                    candidates.iter().find_map(|p| std::fs::read(p).ok())
+                    read_resource(ctx.app_handle(), &relative)
                 })
             } else {
-                let resource_dir = ctx.app_handle().path().resource_dir().unwrap_or_default();
-                let candidates = [
-                    resource_dir.join(path),
-                    resource_dir.join("../src").join(path),
-                    resource_dir.join("binaries").join(path),
-                ];
-                candidates.iter().find_map(|p| std::fs::read(p).ok())
+                read_resource(ctx.app_handle(), &relative)
             };
 
             let effective_path: &str = decoded_path.as_ref();
