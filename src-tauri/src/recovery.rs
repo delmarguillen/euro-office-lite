@@ -484,6 +484,12 @@ pub fn recovery_begin(
     doc_type: String,
     data: String,
 ) -> Result<String, String> {
+    crate::protocol_limits::check_base64_size(
+        "Recovery document",
+        &data,
+        crate::protocol_limits::EDITOR_BIN_MAX_BYTES,
+    )?;
+
     // Changing documents ends the previous session: either it had no changes
     // or the user was asked and chose to discard.
     end_session(&state, true);

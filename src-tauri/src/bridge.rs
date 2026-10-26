@@ -57,6 +57,7 @@ pub fn list_media_dir(state: tauri::State<'_, AppState>) -> String {
 
 #[tauri::command]
 pub fn js_log(msg: String) {
+    let msg = crate::protocol_limits::truncate_log(&msg, crate::protocol_limits::JS_LOG_MAX_BYTES);
     println!("[JS] {}", msg);
-    crate::temp_layout::append_log(&msg);
+    crate::temp_layout::append_log(msg);
 }

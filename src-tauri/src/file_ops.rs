@@ -539,6 +539,11 @@ pub async fn write_editor_bin(
     state: State<'_, AppState>,
     data: String,
 ) -> Result<String, String> {
+    crate::protocol_limits::check_base64_size(
+        "Editor.bin",
+        &data,
+        crate::protocol_limits::EDITOR_BIN_MAX_BYTES,
+    )?;
     let bin_data = STANDARD.decode(&data).map_err(|e| e.to_string())?;
     let output = state.temp_dir.join("Editor.bin");
     std::fs::write(&output, &bin_data).map_err(|e| e.to_string())?;

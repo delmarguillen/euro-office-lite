@@ -238,6 +238,37 @@ pub fn is_generated_font(all_fonts_js: &Path, requested: &str) -> bool {
     is_listed_font(requested, listed)
 }
 
+// Largest Editor.bin the JS may send, decoded. A large document's
+// Editor.bin can pass 100 MB; this leaves room above that.
+pub const EDITOR_BIN_MAX_BYTES: usize = 512 * 1024 * 1024;
+
+// Largest log line kept from the JS; longer lines are cut.
+pub const JS_LOG_MAX_BYTES: usize = 16 * 1024;
+
+// Refuses base64 text that would decode to more than `max_bytes`, before
+// decoding it.
+pub fn check_base64_size(what: &str, data: &str, max_bytes: usize) -> Result<(), String> {
+    let decoded = data.len() / 4 * 3;
+    if decoded <= max_bytes {
+        return Ok(());
+    }
+    Err(format!(
+        "{what} is too large: about {decoded} bytes, limit {max_bytes} bytes"
+    ))
+}
+
+// Cuts a log line to at most `max_bytes`, on a character boundary.
+pub fn truncate_log(msg: &str, max_bytes: usize) -> &str {
+    if msg.len() <= max_bytes {
+        return msg;
+    }
+    let mut end = max_bytes;
+    while !msg.is_char_boundary(end) {
+        end -= 1;
+    }
+    &msg[..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,5 +462,34 @@ mod tests {
         assert!(!is_listed_font("/usr/share/fonts/../../../etc/passwd", &listed));
         assert!(!is_listed_font("/usr/share/fonts/Other.ttf", &listed));
         assert!(!is_listed_font("C:/Windows/win.ini", &listed));
+    }
+
+    #[test]
+    fn base64_within_the_limit_is_accepted() {
+        assert!(check_base64_size("Editor.bin", "AAAA", 3).is_ok());
+        assert!(check_base64_size("Editor.bin", "", 0).is_ok());
+    }
+
+    #[test]
+    fn base64_over_the_limit_is_refused() {
+        let error = check_base64_size("Editor.bin", "AAAAAAAA", 5).unwrap_err();
+        assert!(error.contains("Editor.bin is too large"));
+        assert!(error.contains("limit 5 bytes"));
+    }
+
+    #[test]
+    fn a_short_log_line_is_kept() {
+        assert_eq!(truncate_log("hello", 16), "hello");
+    }
+
+    #[test]
+    fn a_long_log_line_is_cut() {
+        assert_eq!(truncate_log("abcdef", 4), "abcd");
+    }
+
+    #[test]
+    fn a_log_line_is_cut_on_a_character_boundary() {
+        // "é" is two bytes; cutting at byte 2 would split it.
+        assert_eq!(truncate_log("aé", 2), "a");
     }
 }
