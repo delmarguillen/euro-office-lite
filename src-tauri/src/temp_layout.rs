@@ -18,6 +18,9 @@ pub const INSTANCES_DIR: &str = "instances";
 const INSTANCE_LOCK: &str = "instance.lock";
 const FONTDATA_DIR: &str = "fontdata";
 pub const FONTS_MARKER: &str = ".fonts_generated";
+// What the marker holds when the app version was never set, as in tests. It
+// matches no release.
+const VERSION_UNSET: &str = "unset";
 const FONTS_LOCK: &str = "fonts.lock";
 const FONTS_STAGING_PREFIX: &str = "fontdata.new-";
 const LOG_PREFIX: &str = "js-debug-";
@@ -208,18 +211,63 @@ pub fn fontdata_dir(root: &Path) -> PathBuf {
     root.join(FONTDATA_DIR)
 }
 
-// x2t's scan always writes both files and the PDF export uses both, so a
-// cache missing either is a half-installed one and counts as missing.
+// The version from tauri.conf.json, which every release bumps. The crate
+// version in Cargo.toml never changes, so it cannot tell two releases apart.
+static APP_VERSION: OnceLock<String> = OnceLock::new();
+
+pub fn set_app_version(version: String) {
+    store_version(&APP_VERSION, version);
+}
+
+// The version the font cache marker records: the one set at startup.
+pub fn app_version() -> &'static str {
+    stored_version(&APP_VERSION)
+}
+
+// Only the first call sets it: one process is one version.
+fn store_version(cell: &OnceLock<String>, version: String) {
+    let _ = cell.set(version);
+}
+
+fn stored_version(cell: &OnceLock<String>) -> &str {
+    cell.get().map(String::as_str).unwrap_or(VERSION_UNSET)
+}
+
 pub fn fonts_ready(root: &Path) -> bool {
-    let nonempty = |name: &str| {
-        std::fs::metadata(fontdata_dir(root).join(name))
-            .map(|metadata| metadata.len() > 0)
-            .unwrap_or(false)
+    fonts_ready_for(root, app_version())
+}
+
+// x2t's scan always writes both files and the PDF export uses both, so a
+// cache missing either is a half-installed one and counts as missing. A cache
+// built by another version counts as missing too: the scan can change with
+// the bundled x2t and fonts.
+fn fonts_ready_for(root: &Path, version: &str) -> bool {
+    let Ok(marker) = std::fs::read(root.join(FONTS_MARKER)) else {
+        return false;
     };
-    root.join(FONTS_MARKER).exists()
-        && nonempty("AllFonts.js")
-        && nonempty("font_selection.bin")
-        && !(cfg!(target_os = "windows") && has_extended_paths(&fontdata_dir(root)))
+    if !marker_matches(&marker, version) {
+        return false;
+    }
+    let fontdata = fontdata_dir(root);
+    if !is_nonempty(&fontdata.join("AllFonts.js")) {
+        return false;
+    }
+    if !is_nonempty(&fontdata.join("font_selection.bin")) {
+        return false;
+    }
+    !(cfg!(target_os = "windows") && has_extended_paths(&fontdata))
+}
+
+// Markers written before they held a version say "generated", which never
+// matches.
+fn marker_matches(contents: &[u8], version: &str) -> bool {
+    contents == version.as_bytes()
+}
+
+fn is_nonempty(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false)
 }
 
 // Windows caches built from the \\?\ form of the bundled fonts folder list
@@ -304,9 +352,10 @@ pub fn ensure_font_cache(
     }
     let staging = root.join(format!("{}{}", FONTS_STAGING_PREFIX, instance_id));
     let generated = std::fs::create_dir_all(&staging).is_ok() && generate(&staging);
+    let marker = app_version().as_bytes();
     let installed = generated
         && install_font_cache(&staging, &fontdata_dir(root)).is_ok()
-        && write_replacing(&root.join(FONTS_MARKER), b"generated", instance_id).is_ok();
+        && write_replacing(&root.join(FONTS_MARKER), marker, instance_id).is_ok();
     let _ = std::fs::remove_dir_all(&staging);
     drop(lock);
     if installed {
