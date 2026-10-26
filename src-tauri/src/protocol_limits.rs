@@ -295,6 +295,20 @@ pub fn truncate_log(msg: &str, max_bytes: usize) -> &str {
     &msg[..end]
 }
 
+// The origin the app's pages load from: Tauri serves them at
+// http://tauri.localhost on Windows and tauri://localhost elsewhere.
+fn app_origin(windows: bool) -> &'static str {
+    if windows {
+        return "http://tauri.localhost";
+    }
+    "tauri://localhost"
+}
+
+// The CORS header that lets only the app's pages read protocol responses.
+pub fn allow_origin() -> (&'static str, &'static str) {
+    ("Access-Control-Allow-Origin", app_origin(cfg!(windows)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +587,23 @@ mod tests {
     fn a_log_line_is_cut_on_a_character_boundary() {
         // "é" is two bytes; cutting at byte 2 would split it.
         assert_eq!(truncate_log("aé", 2), "a");
+    }
+
+    #[test]
+    fn the_windows_origin_is_tauri_localhost_over_http() {
+        assert_eq!(app_origin(true), "http://tauri.localhost");
+    }
+
+    #[test]
+    fn the_linux_and_macos_origin_is_the_tauri_scheme() {
+        assert_eq!(app_origin(false), "tauri://localhost");
+    }
+
+    #[test]
+    fn the_header_names_this_platform_origin_and_never_any() {
+        let (name, origin) = allow_origin();
+        assert_eq!(name, "Access-Control-Allow-Origin");
+        assert_eq!(origin, app_origin(cfg!(windows)));
+        assert_ne!(origin, "*");
     }
 }

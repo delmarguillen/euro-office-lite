@@ -347,6 +347,7 @@ fn main() {
             dictionaries::list_user_dictionaries,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
+            let allow_origin = protocol_limits::allow_origin();
             let uri = request.uri().to_string();
             let path = temp_layout::protocol_path(&uri);
 
@@ -377,14 +378,14 @@ fn main() {
                         .status(200)
                         .header("Content-Type", ct)
                         .header("Cache-Control", "no-store")
-                        .header("Access-Control-Allow-Origin", "*")
+                        .header(allow_origin.0, allow_origin.1)
                         .body(data)
                         .unwrap();
                 }
                 return tauri::http::Response::builder()
                     .status(404)
                     .header("Cache-Control", "no-store")
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(b"Not Found".to_vec())
                     .unwrap();
             }
@@ -397,7 +398,7 @@ fn main() {
                     .status(200)
                     .header("Content-Type", "text/plain")
                     .header("Cache-Control", "no-store")
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(temp_layout::doc_key(doc.id, doc.seq).into_bytes())
                     .unwrap();
             }
@@ -422,7 +423,7 @@ fn main() {
                             .status(200)
                             .header("Content-Type", "text/plain")
                             .header("Cache-Control", "no-store")
-                            .header("Access-Control-Allow-Origin", "*")
+                            .header(allow_origin.0, allow_origin.1)
                             .body(name.into_bytes())
                             .unwrap()
                     }
@@ -431,7 +432,7 @@ fn main() {
                         tauri::http::Response::builder()
                             .status(404)
                             .header("Cache-Control", "no-store")
-                            .header("Access-Control-Allow-Origin", "*")
+                            .header(allow_origin.0, allow_origin.1)
                             .body(b"Not Found".to_vec())
                             .unwrap()
                     }
@@ -470,7 +471,7 @@ fn main() {
                         return tauri::http::Response::builder()
                             .status(403)
                             .header("Cache-Control", "no-store")
-                            .header("Access-Control-Allow-Origin", "*")
+                            .header(allow_origin.0, allow_origin.1)
                             .body(b"Forbidden".to_vec())
                             .unwrap();
                     }
@@ -487,14 +488,14 @@ fn main() {
                         .status(200)
                         .header("Content-Type", "text/plain")
                         .header("Cache-Control", "no-store")
-                        .header("Access-Control-Allow-Origin", "*")
+                        .header(allow_origin.0, allow_origin.1)
                         .body(name.into_bytes())
                         .unwrap();
                 }
                 return tauri::http::Response::builder()
                     .status(500)
                     .header("Cache-Control", "no-store")
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(b"Copy failed".to_vec())
                     .unwrap();
             }
@@ -536,7 +537,7 @@ fn main() {
                                     .status(200)
                                     .header("Content-Type", "text/plain")
                                     .header("Cache-Control", "no-store")
-                                    .header("Access-Control-Allow-Origin", "*")
+                                    .header(allow_origin.0, allow_origin.1)
                                     .body(full_path.into_bytes())
                                     .unwrap();
                             }
@@ -546,7 +547,7 @@ fn main() {
                 return tauri::http::Response::builder()
                     .status(500)
                     .header("Cache-Control", "no-store")
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(b"Download failed".to_vec())
                     .unwrap();
             }
@@ -580,13 +581,13 @@ fn main() {
                         .status(200)
                         .header("Content-Type", mime)
                         .header("Cache-Control", "no-store")
-                        .header("Access-Control-Allow-Origin", "*")
+                        .header(allow_origin.0, allow_origin.1)
                         .body(bytes)
                         .unwrap(),
                     None => tauri::http::Response::builder()
                         .status(404)
                         .header("Cache-Control", "no-store")
-                        .header("Access-Control-Allow-Origin", "*")
+                        .header(allow_origin.0, allow_origin.1)
                         .body(b"Not Found".to_vec())
                         .unwrap(),
                 };
@@ -595,7 +596,7 @@ fn main() {
             let Some(relative) = protocol_limits::resource_relative(path) else {
                 return tauri::http::Response::builder()
                     .status(403)
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(b"Forbidden".to_vec())
                     .unwrap();
             };
@@ -615,7 +616,7 @@ fn main() {
                 if !protocol_limits::is_generated_font(&all_fonts, abs_path) {
                     return tauri::http::Response::builder()
                         .status(403)
-                        .header("Access-Control-Allow-Origin", "*")
+                        .header(allow_origin.0, allow_origin.1)
                         .body(b"Forbidden".to_vec())
                         .unwrap();
                 }
@@ -659,12 +660,12 @@ fn main() {
                 Some(data) => tauri::http::Response::builder()
                     .status(200)
                     .header("Content-Type", mime)
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(data)
                     .unwrap(),
                 None => tauri::http::Response::builder()
                     .status(404)
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(b"Not Found".to_vec())
                     .unwrap(),
             }
