@@ -96,8 +96,13 @@ var ClipboardHelper = (function() {
     }
     return false;
   }
+  // An absolute local path, as extractImageUriFromPaste returns a file:// URI.
+  function isLocalFilePath(path) {
+    return path.charAt(0) === '/' || /^[A-Za-z]:[\\/]/.test(path);
+  }
   return {
     readNativeClipboardImage: readNativeClipboardImage,
+    isLocalFilePath: isLocalFilePath,
     extractImageUriFromPaste: extractImageUriFromPaste,
     looksLikeImageFilePath: looksLikeImageFilePath,
     installUrlPipelineOverrides: installUrlPipelineOverrides
@@ -310,6 +315,37 @@ function _eoPasteFromLastCopyBinary(ref) {
   if (internalData !== null) ref.editor.asc_PasteData(fmt.Internal, internalData, null, textData);
   else ref.editor.asc_PasteData(last[0].type, last[0].data, null, textData);
   return true;
+}
+
+// A local file from text/uri-list goes in as an image only when the backend
+// finds it on the clipboard and grants it to copy-to-media. Otherwise the
+// paste goes in as its plain text, as the SDK would have pasted it.
+function _eoPasteUriImage(target, imagePath, text) {
+  if (!ClipboardHelper.isLocalFilePath(imagePath)) {
+    target.editor.AddImageUrl([imagePath]);
+    return;
+  }
+  var targetDoc = _eoOpenDocumentUrl(target);
+  invoke('grant_pasted_image', { path: imagePath })
+    .catch(function() { return false; })
+    .then(function(granted) {
+      var now = _getEditor();
+      if (!now.editor || now.editor !== target.editor || _eoOpenDocumentUrl(now) !== targetDoc) {
+        window._eoLog('[EO] paste: dropped, the document changed while waiting');
+        return;
+      }
+      if (granted) {
+        now.editor.AddImageUrl([imagePath]);
+        return;
+      }
+      _eoPasteText(now, text);
+    });
+}
+
+function _eoPasteText(ref, text) {
+  if (!text || !ref.ew || !ref.ew.AscCommon) return;
+  var fmt = ref.ew.AscCommon.c_oAscClipboardDataFormat;
+  ref.editor.asc_PasteData(fmt.Text, text);
 }
 
 // Issue #23: with a non-Latin keyboard layout active (e.g. Cyrillic), WebKitGTK
@@ -1416,7 +1452,8 @@ function _loadEditorBin(b64data, fileName, options) {
           e.stopPropagation();
           var ref = _getEditor();
           if (ref.editor) {
-            ref.editor.AddImageUrl([imagePath]);
+            // clipboardData is unreadable once this handler returns.
+            _eoPasteUriImage(ref, imagePath, cd.getData('text/plain'));
           }
           return;
         }

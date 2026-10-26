@@ -35,6 +35,9 @@ pub struct AppState {
     // Images the user chose in the insert dialog: the only absolute paths
     // copy-to-media reads.
     pub picked_images: Mutex<Vec<PathBuf>>,
+    // Image files pasted from the clipboard that grant_pasted_image found on
+    // it: the other absolute paths copy-to-media reads.
+    pub pasted_images: Mutex<Vec<PathBuf>>,
     // Where a recovered document was saved before the crash: offered by the
     // first Save As, never written to without asking.
     pub save_suggestion: Mutex<Option<PathBuf>>,

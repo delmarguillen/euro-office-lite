@@ -45,6 +45,32 @@ pub fn may_copy_absolute(path: &Path, picked: &[PathBuf]) -> bool {
     has_image_extension(path)
 }
 
+// arboard's X11 backend can leave the uri-list's \r at the end of each path.
+fn clipboard_path(entry: &Path) -> &Path {
+    let Some(text) = entry.to_str() else {
+        return entry;
+    };
+    Path::new(text.trim_end_matches(['\r', '\n']))
+}
+
+// A pasted path that may be granted to copy-to-media: a file the clipboard
+// holds right now, and an image. Both, always.
+pub fn may_copy_pasted(path: &Path, clipboard_files: &[PathBuf]) -> bool {
+    if !clipboard_files.iter().any(|entry| clipboard_path(entry) == path) {
+        return false;
+    }
+    has_image_extension(path)
+}
+
+// An absolute path copy-to-media may read: an image picked in the dialog or
+// one granted when it was pasted.
+pub fn may_copy_granted(path: &Path, picked: &[PathBuf], pasted: &[PathBuf]) -> bool {
+    if may_copy_absolute(path, picked) {
+        return true;
+    }
+    may_copy_absolute(path, pasted)
+}
+
 pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 pub const DOWNLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 const DOWNLOAD_MAX_REDIRECTS: usize = 5;
@@ -331,6 +357,62 @@ mod tests {
         let picked = vec![PathBuf::from("/home/u/.ssh/id_rsa"), PathBuf::from("/home/u/notes.txt")];
         assert!(!may_copy_absolute(Path::new("/home/u/.ssh/id_rsa"), &picked));
         assert!(!may_copy_absolute(Path::new("/home/u/notes.txt"), &picked));
+    }
+
+    #[test]
+    fn an_image_on_the_clipboard_may_be_copied() {
+        let clipboard = vec![PathBuf::from("/home/u/notes.txt"), PathBuf::from("/home/u/Pictures/a.PNG")];
+        assert!(may_copy_pasted(Path::new("/home/u/Pictures/a.PNG"), &clipboard));
+    }
+
+    #[test]
+    fn a_clipboard_file_that_is_not_an_image_is_refused() {
+        let clipboard = vec![PathBuf::from("/home/u/.ssh/id_rsa"), PathBuf::from("/home/u/notes.txt")];
+        assert!(!may_copy_pasted(Path::new("/home/u/.ssh/id_rsa"), &clipboard));
+        assert!(!may_copy_pasted(Path::new("/home/u/notes.txt"), &clipboard));
+    }
+
+    #[test]
+    fn an_image_that_is_not_on_the_clipboard_is_refused() {
+        let clipboard = vec![PathBuf::from("/home/u/Pictures/a.png")];
+        assert!(!may_copy_pasted(Path::new("/home/u/Pictures/b.png"), &clipboard));
+        assert!(!may_copy_pasted(Path::new("/home/u/Pictures/a.png/../b.png"), &clipboard));
+    }
+
+    #[test]
+    fn an_empty_clipboard_allows_nothing() {
+        assert!(!may_copy_pasted(Path::new("/home/u/Pictures/a.png"), &[]));
+    }
+
+    #[test]
+    fn a_clipboard_path_with_a_trailing_carriage_return_still_matches() {
+        let clipboard = vec![PathBuf::from("/home/u/a.png\r")];
+        assert!(may_copy_pasted(Path::new("/home/u/a.png"), &clipboard));
+    }
+
+    #[test]
+    fn a_picked_or_pasted_image_may_be_copied() {
+        let picked = vec![PathBuf::from("/home/u/a.png")];
+        let pasted = vec![PathBuf::from("/home/u/b.png")];
+        assert!(may_copy_granted(Path::new("/home/u/a.png"), &picked, &pasted));
+        assert!(may_copy_granted(Path::new("/home/u/b.png"), &picked, &pasted));
+        assert!(may_copy_granted(Path::new("/home/u/b.png"), &[], &pasted));
+    }
+
+    #[test]
+    fn a_path_neither_picked_nor_pasted_is_refused() {
+        let picked = vec![PathBuf::from("/home/u/a.png")];
+        let pasted = vec![PathBuf::from("/home/u/b.png"), PathBuf::from("/home/u/notes.txt")];
+        assert!(!may_copy_granted(Path::new("/home/u/c.png"), &picked, &pasted));
+        assert!(!may_copy_granted(Path::new("/home/u/notes.txt"), &picked, &pasted));
+        assert!(!may_copy_granted(Path::new("/home/u/a.png"), &[], &[]));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn clipboard_paths_compare_by_component_on_windows() {
+        let clipboard = vec![PathBuf::from("C:/a/b.png")];
+        assert!(may_copy_pasted(Path::new("C:\\a\\b.png"), &clipboard));
     }
 
     #[test]

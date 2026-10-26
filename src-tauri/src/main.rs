@@ -307,6 +307,7 @@ fn main() {
             text_options: Mutex::new(None),
             last_print_pdf: Mutex::new(None),
             picked_images: Mutex::new(Vec::new()),
+            pasted_images: Mutex::new(Vec::new()),
             save_suggestion: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
@@ -331,6 +332,7 @@ fn main() {
             clipboard::read_clipboard_image,
             clipboard::read_clipboard_text,
             clipboard::read_clipboard_html,
+            clipboard::grant_pasted_image,
             recent::recent_files_state,
             recent::set_recent_files_enabled,
             recent::clear_recent_files,
@@ -458,7 +460,13 @@ fn main() {
                 let requested = std::path::Path::new(src_path);
                 let src = if requested.is_absolute() {
                     let picked = state.picked_images.lock().unwrap();
-                    if !protocol_limits::may_copy_absolute(requested, &picked) {
+                    let pasted = state.pasted_images.lock().unwrap();
+                    if !protocol_limits::may_copy_granted(requested, &picked, &pasted) {
+                        let shown: String = src_path.chars().take(200).collect();
+                        file_ops::log_event(
+                            &state,
+                            &format!("[COPY] refused {}: not picked nor on clipboard", shown),
+                        );
                         return tauri::http::Response::builder()
                             .status(403)
                             .header("Cache-Control", "no-store")

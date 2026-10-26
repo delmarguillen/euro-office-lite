@@ -22,6 +22,7 @@ const APP_COMMANDS: &[&str] = &[
     "read_clipboard_image",
     "read_clipboard_text",
     "read_clipboard_html",
+    "grant_pasted_image",
     "recent_files_state",
     "set_recent_files_enabled",
     "clear_recent_files",
