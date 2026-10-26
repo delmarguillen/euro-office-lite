@@ -307,6 +307,7 @@ fn main() {
             text_options: Mutex::new(None),
             last_print_pdf: Mutex::new(None),
             picked_images: Mutex::new(Vec::new()),
+            save_suggestion: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
@@ -343,6 +344,7 @@ fn main() {
             recovery::recovery_candidates,
             recovery::recovery_load,
             recovery::recovery_discard,
+            recovery::get_save_suggestion,
             dictionaries::list_user_dictionaries,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {

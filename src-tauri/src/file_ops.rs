@@ -35,6 +35,9 @@ pub struct AppState {
     // Images the user chose in the insert dialog: the only absolute paths
     // copy-to-media reads.
     pub picked_images: Mutex<Vec<PathBuf>>,
+    // Where a recovered document was saved before the crash: offered by the
+    // first Save As, never written to without asking.
+    pub save_suggestion: Mutex<Option<PathBuf>>,
 }
 
 pub(crate) fn log_event(_state: &AppState, msg: &str) {
@@ -74,6 +77,7 @@ pub(crate) fn switch_document(state: &AppState) -> Result<(), String> {
         }
     }
     clear_document_temp(&state.temp_dir);
+    *state.save_suggestion.lock().unwrap() = None;
     Ok(())
 }
 
@@ -829,6 +833,7 @@ pub async fn create_new(
         .join(template);
 
     *state.current_file.lock().unwrap() = None;
+    *state.save_suggestion.lock().unwrap() = None;
     *state.modified.lock().unwrap() = false;
 
     let result = open_file_inner(

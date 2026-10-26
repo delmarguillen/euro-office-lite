@@ -905,18 +905,6 @@ function _eoBaseName(path) {
   return path.replace(/\\/g, '/').split('/').pop();
 }
 
-// The same table as detect_format in file_ops.rs. Recorded in doc.info so a
-// recovered document is written back in the format its extension asks for.
-function _eoFormatForPath(path) {
-  var map = {
-    docx: 65, doc: 66, odt: 67, rtf: 68, txt: 69,
-    xlsx: 257, xls: 258, ods: 259, csv: 260,
-    pptx: 129, ppt: 130, odp: 131, pdf: 513
-  };
-  if (!path || path.indexOf('.') === -1) return null;
-  return map[path.split('.').pop().toLowerCase()] || null;
-}
-
 function _eoBytesToB64(data) {
   if (typeof data === 'string') return btoa(data);
   var bytes = new Uint8Array(data);
@@ -932,8 +920,6 @@ function _eoBytesToB64(data) {
 function _recoveryBegin(b64data, name, path) {
   invoke('recovery_begin', {
     name: name || _eoBaseName(path) || 'Untitled',
-    path: path || null,
-    format: path ? _eoFormatForPath(path) : null,
     docType: window.AscDesktopEditor._currentDocType || 'word',
     data: b64data
   }).catch(function(e) {
@@ -1105,6 +1091,16 @@ async function _eoRemoveNoteSeparator() {
   await _tell(messages[code] || 'noteSeparatorFailed');
 }
 window._eoRemoveNoteSeparator = _eoRemoveNoteSeparator;
+
+// The path with its file name's extension replaced by `ext`, or added when the
+// name has none. A null path or ext leaves the path as it is.
+function _eoSuggestionWithExt(path, ext) {
+  if (!path || !ext) return path;
+  var nameStart = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1;
+  var dot = path.lastIndexOf('.');
+  if (dot <= nameStart) return path + '.' + ext;
+  return path.slice(0, dot + 1) + ext;
+}
 
 // Which filters the Save As dialog offers. Pulled out of LocalFileSave so the
 // Linux branch below can be reasoned about (and exercised) on its own.
@@ -2286,9 +2282,15 @@ window.AscDesktopEditor = {
         };
         var requestedExt = formatExtensions[fileType] || null;
 
-        var filters = _eoSaveAsFilters(docType, requestedExt, currentPath, _isLinux);
+        // After a recovery there is no current path, only where the document
+        // was saved before: the dialog starts there.
+        var suggestedPath = currentPath ? null : await invoke('get_save_suggestion');
+        var filters = _eoSaveAsFilters(docType, requestedExt, currentPath || suggestedPath, _isLinux);
         var dialog = window.__TAURI__.dialog;
-        var savePath = await dialog.save({ filters: filters });
+        // The suggestion is the old file's name; an export starts as that name
+        // in the format asked for, never as the file itself.
+        var defaultPath = _eoSuggestionWithExt(suggestedPath, requestedExt);
+        var savePath = await dialog.save({ filters: filters, defaultPath: defaultPath || undefined });
         if (savePath) {
           var knownExts = ['docx','doc','odt','rtf','txt','xlsx','xls','ods','csv','pptx','ppt','odp','pdf'];
           var pathExt = savePath.split('.').pop().toLowerCase();
@@ -2303,11 +2305,7 @@ window.AscDesktopEditor = {
               // A Save As moves the document and the session follows it, so a
               // later recovery writes where it lives now. A PDF export only
               // writes a copy, so it is not a save for recovery purposes.
-              invoke('recovery_mark_saved', {
-                path: savePath,
-                format: _eoFormatForPath(savePath),
-                name: savedName
-              }).catch(function(){});
+              invoke('recovery_mark_saved', {}).catch(function(){});
               invoke('set_window_title', { name: savedName }).catch(function(){});
               try {
                 var frames = document.querySelectorAll('iframe');
