@@ -444,6 +444,34 @@ pub(crate) fn end_session(state: &AppState, discard: bool) -> Option<PathBuf> {
     Some(dir)
 }
 
+// Where the session's document lives, from the backend's own current file:
+// the path, its x2t format and its file name. All None for a new document.
+#[derive(Debug, PartialEq)]
+pub struct SessionLocation {
+    pub path: Option<String>,
+    pub format: Option<i32>,
+    pub name: Option<String>,
+}
+
+pub fn session_location(current: Option<&Path>) -> SessionLocation {
+    let Some(current) = current else {
+        return SessionLocation { path: None, format: None, name: None };
+    };
+    let format = crate::x2t_task::detect_format(current);
+    SessionLocation {
+        path: Some(current.to_string_lossy().to_string()),
+        format: (format != 0).then_some(format),
+        name: current.file_name().map(|name| name.to_string_lossy().to_string()),
+    }
+}
+
+// A recovered document is not tied to the path it was saved under: the
+// current file stays empty, so the first save asks where, and the old path
+// is only offered as the suggestion.
+pub fn recovered_paths(saved: Option<&str>) -> (Option<PathBuf>, Option<PathBuf>) {
+    (None, saved.map(PathBuf::from))
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -453,11 +481,15 @@ pub fn recovery_begin(
     app: AppHandle,
     state: State<'_, AppState>,
     name: String,
-    path: Option<String>,
-    format: Option<i32>,
     doc_type: String,
     data: String,
 ) -> Result<String, String> {
+    crate::protocol_limits::check_base64_size(
+        "Recovery document",
+        &data,
+        crate::protocol_limits::EDITOR_BIN_MAX_BYTES,
+    )?;
+
     // Changing documents ends the previous session: either it had no changes
     // or the user was asked and chose to discard.
     end_session(&state, true);
@@ -473,12 +505,16 @@ pub fn recovery_begin(
     std::fs::write(dir.join(BIN_FILE), &bin).map_err(|e| e.to_string())?;
     std::fs::write(changes_path(&dir), b"").map_err(|e| e.to_string())?;
 
+    let current = state.current_file.lock().unwrap().clone();
+    let location = session_location(current.as_deref());
+    let name = location.name.unwrap_or(name);
+
     write_doc_info(
         &dir,
         &DocInfo {
-            path,
-            format,
-            name: name.clone(),
+            path: location.path,
+            format: location.format,
+            name,
             doc_type,
             app_version: app.package_info().version.to_string(),
             saved_count: 0,
@@ -573,12 +609,7 @@ pub fn save_changes(
 // deleteIndex from the start of its session, not from the last save, so
 // emptying would leave the next index pointing past the end.
 #[tauri::command]
-pub fn recovery_mark_saved(
-    state: State<'_, AppState>,
-    path: Option<String>,
-    format: Option<i32>,
-    name: Option<String>,
-) -> Result<String, String> {
+pub fn recovery_mark_saved(state: State<'_, AppState>) -> Result<String, String> {
     let mut guard = state.recovery.lock().unwrap();
     let Some(session) = guard.as_mut() else {
         return Ok("no-session".to_string());
@@ -589,15 +620,17 @@ pub fn recovery_mark_saved(
     let dir = session.dir.clone();
     drop(guard);
 
+    let current = state.current_file.lock().unwrap().clone();
     if let Some(mut info) = read_doc_info(&dir) {
         info.saved_count = saved_count;
         // Save As moves the document: the folder has to point at where it
         // really lives now, or a recovery would offer to write the old path.
-        if path.is_some() {
-            info.path = path;
-            info.format = format;
+        let location = session_location(current.as_deref());
+        if location.path.is_some() {
+            info.path = location.path;
+            info.format = location.format;
         }
-        if let Some(name) = name {
+        if let Some(name) = location.name {
             info.name = name;
         }
         write_doc_info(&dir, &info)?;
@@ -681,9 +714,9 @@ pub fn recovery_load(
     // are cleared like any open does, then the crashed instance's copied in.
     crate::file_ops::switch_document(&state)?;
 
-    if let Some(path) = &path {
-        *state.current_file.lock().unwrap() = Some(PathBuf::from(path));
-    }
+    let (current, suggestion) = recovered_paths(path.as_deref());
+    *state.current_file.lock().unwrap() = current;
+    *state.save_suggestion.lock().unwrap() = suggestion;
 
     let media_src = crate::temp_layout::recovery_media_source(
         &state.temp_root,
@@ -727,6 +760,17 @@ pub fn recovery_load(
         path,
         doc_type,
     })
+}
+
+// The path a Save As after a recovery starts from.
+#[tauri::command]
+pub fn get_save_suggestion(state: State<'_, AppState>) -> Option<String> {
+    state
+        .save_suggestion
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 // `id` absent means "all of them": the start screen offers a discard-all next
@@ -1189,5 +1233,36 @@ mod tests {
     fn scanning_a_root_that_does_not_exist_yet_is_a_noop() {
         let root = scratch().join("never-created");
         assert!(scan_unlocked(&root).is_empty());
+    }
+
+    #[test]
+    fn the_session_location_comes_from_the_current_file() {
+        let location = session_location(Some(Path::new("/home/u/Docs/report.docx")));
+        assert_eq!(
+            location,
+            SessionLocation {
+                path: Some("/home/u/Docs/report.docx".to_string()),
+                format: Some(65),
+                name: Some("report.docx".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_new_document_has_no_location() {
+        assert_eq!(
+            session_location(None),
+            SessionLocation { path: None, format: None, name: None }
+        );
+        assert_eq!(session_location(Some(Path::new("/tmp/notes.xyz"))).format, None);
+    }
+
+    #[test]
+    fn a_recovered_path_is_a_suggestion_not_the_current_file() {
+        assert_eq!(
+            recovered_paths(Some("/home/u/Docs/report.docx")),
+            (None, Some(PathBuf::from("/home/u/Docs/report.docx")))
+        );
+        assert_eq!(recovered_paths(None), (None, None));
     }
 }

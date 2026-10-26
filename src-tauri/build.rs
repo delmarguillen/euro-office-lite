@@ -1,3 +1,42 @@
+// Commands the webview may invoke. Each one also needs its allow-* permission
+// in a capability.
+const APP_COMMANDS: &[&str] = &[
+    "open_file",
+    "save_file",
+    "save_file_as",
+    "write_editor_bin",
+    "print_document",
+    "create_new",
+    "get_current_path",
+    "pick_image_files",
+    "take_pending_open_file",
+    "open_pdf_viewer",
+    "print_to_printer",
+    "convert_for_insert",
+    "get_system_fonts",
+    "set_window_title",
+    "set_document_modified",
+    "js_log",
+    "force_close",
+    "remove_note_separator",
+    "read_clipboard_image",
+    "read_clipboard_text",
+    "read_clipboard_html",
+    "grant_pasted_image",
+    "recent_files_state",
+    "set_recent_files_enabled",
+    "clear_recent_files",
+    "recovery_begin",
+    "save_changes",
+    "recovery_mark_saved",
+    "recovery_end",
+    "recovery_candidates",
+    "recovery_load",
+    "recovery_discard",
+    "get_save_suggestion",
+    "list_user_dictionaries",
+];
+
 fn main() {
     // tauri_build tracks tauri.conf.json, capabilities and the bundled
     // resources, but not frontendDist. The frontend is embedded into the binary
@@ -22,5 +61,7 @@ fn main() {
         println!("cargo:rerun-if-changed=../src-dist/{file}");
     }
 
-    tauri_build::build()
+    let manifest = tauri_build::AppManifest::new().commands(APP_COMMANDS);
+    let attributes = tauri_build::Attributes::new().app_manifest(manifest);
+    tauri_build::try_build(attributes).expect("failed to run tauri-build");
 }

@@ -8,6 +8,7 @@ mod dictionaries;
 mod file_ops;
 mod launch_args;
 mod note_separator;
+mod protocol_limits;
 mod recent;
 mod recovery;
 mod temp_layout;
@@ -126,6 +127,17 @@ fn apply_title_bar(app: &tauri::App, mode: TitleBar) {
         "title bar mode={:?}{} realized_before_show={}",
         mode, note, realized_before_show
     ));
+}
+
+// The first of the places a bundled resource can live that holds it.
+fn read_resource(app: &tauri::AppHandle, relative: &std::path::Path) -> Option<Vec<u8>> {
+    let resource_dir = app.path().resource_dir().unwrap_or_default();
+    let candidates = [
+        resource_dir.join(relative),
+        resource_dir.join("../src").join(relative),
+        resource_dir.join("binaries").join(relative),
+    ];
+    candidates.iter().find_map(|p| std::fs::read(p).ok())
 }
 
 // x2t runs with a different working directory, so a relative launch argument
@@ -294,6 +306,9 @@ fn main() {
             pending_open: Mutex::new(file_to_open),
             text_options: Mutex::new(None),
             last_print_pdf: Mutex::new(None),
+            picked_images: Mutex::new(Vec::new()),
+            pasted_images: Mutex::new(Vec::new()),
+            save_suggestion: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
@@ -303,22 +318,21 @@ fn main() {
             file_ops::print_document,
             file_ops::create_new,
             file_ops::get_current_path,
+            file_ops::pick_image_files,
             file_ops::take_pending_open_file,
             file_ops::open_pdf_viewer,
             file_ops::print_to_printer,
             file_ops::convert_for_insert,
             file_ops::get_system_fonts,
-            bridge::exec_command,
             bridge::set_window_title,
             bridge::set_document_modified,
-            bridge::load_font,
-            bridge::list_media_dir,
             bridge::js_log,
             bridge::force_close,
             note_separator::remove_note_separator,
             clipboard::read_clipboard_image,
             clipboard::read_clipboard_text,
             clipboard::read_clipboard_html,
+            clipboard::grant_pasted_image,
             recent::recent_files_state,
             recent::set_recent_files_enabled,
             recent::clear_recent_files,
@@ -329,9 +343,11 @@ fn main() {
             recovery::recovery_candidates,
             recovery::recovery_load,
             recovery::recovery_discard,
+            recovery::get_save_suggestion,
             dictionaries::list_user_dictionaries,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
+            let allow_origin = protocol_limits::allow_origin();
             let uri = request.uri().to_string();
             let path = temp_layout::protocol_path(&uri);
 
@@ -362,14 +378,14 @@ fn main() {
                         .status(200)
                         .header("Content-Type", ct)
                         .header("Cache-Control", "no-store")
-                        .header("Access-Control-Allow-Origin", "*")
+                        .header(allow_origin.0, allow_origin.1)
                         .body(data)
                         .unwrap();
                 }
                 return tauri::http::Response::builder()
                     .status(404)
                     .header("Cache-Control", "no-store")
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(b"Not Found".to_vec())
                     .unwrap();
             }
@@ -382,7 +398,7 @@ fn main() {
                     .status(200)
                     .header("Content-Type", "text/plain")
                     .header("Cache-Control", "no-store")
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(temp_layout::doc_key(doc.id, doc.seq).into_bytes())
                     .unwrap();
             }
@@ -407,7 +423,7 @@ fn main() {
                             .status(200)
                             .header("Content-Type", "text/plain")
                             .header("Cache-Control", "no-store")
-                            .header("Access-Control-Allow-Origin", "*")
+                            .header(allow_origin.0, allow_origin.1)
                             .body(name.into_bytes())
                             .unwrap()
                     }
@@ -416,7 +432,7 @@ fn main() {
                         tauri::http::Response::builder()
                             .status(404)
                             .header("Cache-Control", "no-store")
-                            .header("Access-Control-Allow-Origin", "*")
+                            .header(allow_origin.0, allow_origin.1)
                             .body(b"Not Found".to_vec())
                             .unwrap()
                     }
@@ -442,8 +458,24 @@ fn main() {
                     .join("insert_tmp")
                     .join("media")
                     .join(std::path::Path::new(src_path).file_name().unwrap_or_default());
-                let src = if std::path::Path::new(src_path).is_absolute() {
-                    std::path::Path::new(src_path)
+                let requested = std::path::Path::new(src_path);
+                let src = if requested.is_absolute() {
+                    let picked = state.picked_images.lock().unwrap();
+                    let pasted = state.pasted_images.lock().unwrap();
+                    if !protocol_limits::may_copy_granted(requested, &picked, &pasted) {
+                        let shown: String = src_path.chars().take(200).collect();
+                        file_ops::log_event(
+                            &state,
+                            &format!("[COPY] refused {}: not picked nor on clipboard", shown),
+                        );
+                        return tauri::http::Response::builder()
+                            .status(403)
+                            .header("Cache-Control", "no-store")
+                            .header(allow_origin.0, allow_origin.1)
+                            .body(b"Forbidden".to_vec())
+                            .unwrap();
+                    }
+                    requested
                 } else {
                     insert_src.as_path()
                 };
@@ -456,14 +488,14 @@ fn main() {
                         .status(200)
                         .header("Content-Type", "text/plain")
                         .header("Cache-Control", "no-store")
-                        .header("Access-Control-Allow-Origin", "*")
+                        .header(allow_origin.0, allow_origin.1)
                         .body(name.into_bytes())
                         .unwrap();
                 }
                 return tauri::http::Response::builder()
                     .status(500)
                     .header("Cache-Control", "no-store")
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(b"Copy failed".to_vec())
                     .unwrap();
             }
@@ -481,8 +513,15 @@ fn main() {
                     .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
                     .collect();
                 let dest_name = if safe_name.is_empty() { "download.jpg".to_string() } else { safe_name };
-                if let Ok(resp) = ureq::get(url).call() {
-                    if let Ok(bytes) = resp.into_body().read_to_vec() {
+                match protocol_limits::download_image(url) {
+                    Err(reason) => {
+                        let shown: String = url.chars().take(200).collect();
+                        file_ops::log_event(
+                            &state,
+                            &format!("[DOWNLOAD] refused {}: {}", shown, reason),
+                        );
+                    }
+                    Ok(bytes) => {
                         // Staging picks the final name, which may not be dest_name if
                         // media/ already holds a different image under it. downloads/
                         // has to follow that name: the bridge answers this request by
@@ -498,7 +537,7 @@ fn main() {
                                     .status(200)
                                     .header("Content-Type", "text/plain")
                                     .header("Cache-Control", "no-store")
-                                    .header("Access-Control-Allow-Origin", "*")
+                                    .header(allow_origin.0, allow_origin.1)
                                     .body(full_path.into_bytes())
                                     .unwrap();
                             }
@@ -508,7 +547,7 @@ fn main() {
                 return tauri::http::Response::builder()
                     .status(500)
                     .header("Cache-Control", "no-store")
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(b"Download failed".to_vec())
                     .unwrap();
             }
@@ -542,18 +581,25 @@ fn main() {
                         .status(200)
                         .header("Content-Type", mime)
                         .header("Cache-Control", "no-store")
-                        .header("Access-Control-Allow-Origin", "*")
+                        .header(allow_origin.0, allow_origin.1)
                         .body(bytes)
                         .unwrap(),
                     None => tauri::http::Response::builder()
                         .status(404)
                         .header("Cache-Control", "no-store")
-                        .header("Access-Control-Allow-Origin", "*")
+                        .header(allow_origin.0, allow_origin.1)
                         .body(b"Not Found".to_vec())
                         .unwrap(),
                 };
             }
 
+            let Some(relative) = protocol_limits::resource_relative(path) else {
+                return tauri::http::Response::builder()
+                    .status(403)
+                    .header(allow_origin.0, allow_origin.1)
+                    .body(b"Forbidden".to_vec())
+                    .unwrap();
+            };
             let result = if decoded_path.starts_with("abs/") {
                 let raw_abs_path = &decoded_path[4..];
                 // x2t normalizes Windows extended paths (\\?\C:\...) as /?/C:/...
@@ -565,27 +611,24 @@ fn main() {
                 } else {
                     raw_abs_path
                 };
+                let state = ctx.app_handle().state::<AppState>();
+                let all_fonts = temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
+                if !protocol_limits::is_generated_font(&all_fonts, abs_path) {
+                    return tauri::http::Response::builder()
+                        .status(403)
+                        .header(allow_origin.0, allow_origin.1)
+                        .body(b"Forbidden".to_vec())
+                        .unwrap();
+                }
                 std::fs::read(abs_path).ok()
             } else if decoded_path.ends_with("sdkjs/common/AllFonts.js") {
                 let state = ctx.app_handle().state::<AppState>();
                 let generated = temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
                 std::fs::read(&generated).ok().or_else(|| {
-                    let resource_dir = ctx.app_handle().path().resource_dir().unwrap_or_default();
-                    let candidates = [
-                        resource_dir.join(path),
-                        resource_dir.join("../src").join(path),
-                        resource_dir.join("binaries").join(path),
-                    ];
-                    candidates.iter().find_map(|p| std::fs::read(p).ok())
+                    read_resource(ctx.app_handle(), &relative)
                 })
             } else {
-                let resource_dir = ctx.app_handle().path().resource_dir().unwrap_or_default();
-                let candidates = [
-                    resource_dir.join(path),
-                    resource_dir.join("../src").join(path),
-                    resource_dir.join("binaries").join(path),
-                ];
-                candidates.iter().find_map(|p| std::fs::read(p).ok())
+                read_resource(ctx.app_handle(), &relative)
             };
 
             let effective_path: &str = decoded_path.as_ref();
@@ -617,12 +660,12 @@ fn main() {
                 Some(data) => tauri::http::Response::builder()
                     .status(200)
                     .header("Content-Type", mime)
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(data)
                     .unwrap(),
                 None => tauri::http::Response::builder()
                     .status(404)
-                    .header("Access-Control-Allow-Origin", "*")
+                    .header(allow_origin.0, allow_origin.1)
                     .body(b"Not Found".to_vec())
                     .unwrap(),
             }

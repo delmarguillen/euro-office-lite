@@ -82,6 +82,57 @@ fn read_clipboard_html_blocking() -> Result<Option<String>, String> {
     }
 }
 
+// How long a paste waits for the clipboard's file list before giving up.
+const FILE_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+// Lets copy-to-media read an absolute image that was pasted, when that file is
+// on the clipboard right now and is an image. The protocol handler never reads
+// the clipboard: on Linux it runs on the GTK main loop.
+#[tauri::command]
+pub async fn grant_pasted_image(path: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let files = tauri::async_runtime::spawn_blocking(clipboard_file_list_with_timeout)
+        .await
+        .unwrap_or_else(|e| {
+            clipboard_log(&format!("[clipboard] grant_pasted_image task failed: {}", e));
+            Vec::new()
+        });
+    let path = PathBuf::from(path);
+    if !crate::protocol_limits::may_copy_pasted(&path, &files) {
+        return Ok(false);
+    }
+    state.pasted_images.lock().unwrap().push(path);
+    Ok(true)
+}
+
+// The Wayland read has no deadline of its own, so it runs on a thread of its
+// own that is left behind if the clipboard owner never answers.
+fn clipboard_file_list_with_timeout() -> Vec<PathBuf> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(clipboard_file_list());
+    });
+    match receiver.recv_timeout(FILE_LIST_TIMEOUT) {
+        Ok(files) => files,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            clipboard_log("[COPY] clipboard file list timed out");
+            Vec::new()
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Vec::new(),
+    }
+}
+
+// An arboard error counts as an empty list.
+fn clipboard_file_list() -> Vec<PathBuf> {
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(c) => c,
+        Err(e) => {
+            clipboard_log(&format!("[clipboard] Failed to open clipboard: {}", e));
+            return Vec::new();
+        }
+    };
+    clipboard.get().file_list().unwrap_or_default()
+}
+
 // Tags sdkjs writes before its binary in the copied HTML's class, per editor.
 fn has_sdkjs_binary_tag(html: &str) -> bool {
     ["docData;", "xslData;", "pptData;", "pdfData;"]

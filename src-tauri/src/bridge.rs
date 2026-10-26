@@ -2,11 +2,6 @@ use crate::file_ops::AppState;
 use tauri::{State, WebviewWindow};
 
 #[tauri::command]
-pub fn exec_command(cmd: String, param: Option<String>) -> Result<String, String> {
-    Ok(format!("cmd:{} param:{:?}", cmd, param))
-}
-
-#[tauri::command]
 pub fn set_window_title(window: WebviewWindow, name: String) -> Result<(), String> {
     window
         .set_title(&format!("Euro-Office Lite — {}", name))
@@ -37,26 +32,8 @@ pub fn force_close(app_handle: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn load_font(_name: String) -> Result<Option<String>, String> {
-    Ok(None)
-}
-
-#[tauri::command]
-pub fn list_media_dir(state: tauri::State<'_, AppState>) -> String {
-    let media_dir = state.temp_dir.join("media");
-    match std::fs::read_dir(&media_dir) {
-        Ok(entries) => entries.flatten()
-            .map(|e| {
-                let sz = std::fs::metadata(e.path()).map(|m| m.len()).unwrap_or(0);
-                format!("{}({})", e.file_name().to_string_lossy(), sz)
-            })
-            .collect::<Vec<_>>().join(", "),
-        Err(_) => "media/ not found".to_string(),
-    }
-}
-
-#[tauri::command]
 pub fn js_log(msg: String) {
+    let msg = crate::protocol_limits::truncate_log(&msg, crate::protocol_limits::JS_LOG_MAX_BYTES);
     println!("[JS] {}", msg);
-    crate::temp_layout::append_log(&msg);
+    crate::temp_layout::append_log(msg);
 }

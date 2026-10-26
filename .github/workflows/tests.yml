@@ -13,6 +13,9 @@ on:
       - 'patches/**'
       - 'scripts/apply-patches.mjs'
       - 'scripts/test-sdkjs-*.mjs'
+      - 'scripts/test-bridge-*.mjs'
+      - 'scripts/bridge-test-harness.mjs'
+      - 'src/bridge.js'
       - '.github/workflows/tests.yml'
   pull_request:
     paths:
@@ -21,6 +24,9 @@ on:
       - 'patches/**'
       - 'scripts/apply-patches.mjs'
       - 'scripts/test-sdkjs-*.mjs'
+      - 'scripts/test-bridge-*.mjs'
+      - 'scripts/bridge-test-harness.mjs'
+      - 'src/bridge.js'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -112,3 +118,9 @@ jobs:
 
       - name: Screen reader text tests
         run: node scripts/test-sdkjs-speech.mjs
+
+      - name: Bridge tests
+        run: |
+          for test in scripts/test-bridge-*.mjs; do
+            node "$test"
+          done
