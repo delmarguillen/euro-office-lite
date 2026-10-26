@@ -603,6 +603,15 @@ fn main() {
                 } else {
                     raw_abs_path
                 };
+                let state = ctx.app_handle().state::<AppState>();
+                let all_fonts = temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
+                if !protocol_limits::is_generated_font(&all_fonts, abs_path) {
+                    return tauri::http::Response::builder()
+                        .status(403)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(b"Forbidden".to_vec())
+                        .unwrap();
+                }
                 std::fs::read(abs_path).ok()
             } else if decoded_path.ends_with("sdkjs/common/AllFonts.js") {
                 let state = ctx.app_handle().state::<AppState>();

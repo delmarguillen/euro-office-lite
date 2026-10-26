@@ -1,9 +1,11 @@
 // What each route of the ascdesktop protocol accepts. Every rule is a plain
 // function so it can be tested without a running app.
 
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime};
 
 // A path under the resource directory: only plain names, so no root, drive
 // prefix (\\?\ included) or ".." can move the join outside it.
@@ -171,6 +173,71 @@ pub fn download_image(start: &str) -> Result<Vec<u8>, String> {
     Err("too many redirects".to_string())
 }
 
+// The strings of window["__fonts_files"] = [ "path", ... ] in AllFonts.js.
+// Escapes are taken as the character they escape, as x2t writes them.
+pub fn font_files(all_fonts_js: &str) -> Vec<String> {
+    let marker = "window[\"__fonts_files\"]";
+    let Some(start) = all_fonts_js.find(marker) else {
+        return Vec::new();
+    };
+    let rest = &all_fonts_js[start + marker.len()..];
+    let Some(open) = rest.find('[') else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    let mut current: Option<String> = None;
+    let mut chars = rest[open + 1..].chars();
+    while let Some(c) = chars.next() {
+        match (current.as_mut(), c) {
+            (None, ']') => break,
+            (None, '"') => current = Some(String::new()),
+            (None, _) => {}
+            (Some(text), '\\') => text.extend(chars.next()),
+            (Some(_), '"') => files.extend(current.take()),
+            (Some(text), _) => text.push(c),
+        }
+    }
+    files
+}
+
+// One spelling for a font path: forward slashes, without the extended prefix
+// x2t may write as \\?\ or /?/.
+pub fn font_path_key(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let plain = path
+        .strip_prefix("//?/")
+        .or_else(|| path.strip_prefix("/?/"))
+        .unwrap_or(&path);
+    plain.to_string()
+}
+
+pub fn is_listed_font(requested: &str, listed: &HashSet<String>) -> bool {
+    listed.contains(&font_path_key(requested))
+}
+
+// The font list of the generated AllFonts.js, read again only when the file
+// changes.
+static FONT_LIST: Mutex<Option<(SystemTime, HashSet<String>)>> = Mutex::new(None);
+
+pub fn is_generated_font(all_fonts_js: &Path, requested: &str) -> bool {
+    let Ok(modified) = std::fs::metadata(all_fonts_js).and_then(|meta| meta.modified()) else {
+        return false;
+    };
+    let mut cache = FONT_LIST.lock().unwrap();
+    let fresh = matches!(cache.as_ref(), Some((seen, _)) if *seen == modified);
+    if !fresh {
+        let Ok(text) = std::fs::read_to_string(all_fonts_js) else {
+            return false;
+        };
+        let listed = font_files(&text).iter().map(|file| font_path_key(file)).collect();
+        *cache = Some((modified, listed));
+    }
+    let Some((_, listed)) = cache.as_ref() else {
+        return false;
+    };
+    is_listed_font(requested, listed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +386,50 @@ mod tests {
         assert!(!is_image_content_type("text/html"));
         assert!(!is_image_content_type("image/"));
         assert!(!is_image_content_type(""));
+    }
+
+    const ALL_FONTS: &str = "\u{feff}window[\"__all_fonts_js_version__\"] = 2;\n\nwindow[\"__fonts_files\"] = [\n\"/usr/share/fonts/DejaVuSans.ttf\",\n\"C:\\\\Windows\\\\Fonts\\\\arial.ttf\",\n\"/?/C:/Users/u/AppData/Local/Microsoft/Windows/Fonts/My \\\"Font\\\".otf\"\n];\nwindow[\"__fonts_infos\"] = [\n[\"DejaVu Sans\",0,0,-1,-1,-1,-1,-1,-1]\n];\n";
+
+    fn listed() -> HashSet<String> {
+        font_files(ALL_FONTS).iter().map(|file| font_path_key(file)).collect()
+    }
+
+    #[test]
+    fn the_font_files_array_is_read_with_its_escapes() {
+        assert_eq!(
+            font_files(ALL_FONTS),
+            vec![
+                "/usr/share/fonts/DejaVuSans.ttf".to_string(),
+                "C:\\Windows\\Fonts\\arial.ttf".to_string(),
+                "/?/C:/Users/u/AppData/Local/Microsoft/Windows/Fonts/My \"Font\".otf".to_string(),
+            ]
+        );
+        assert!(font_files("window[\"__fonts_infos\"] = [];").is_empty());
+    }
+
+    #[test]
+    fn a_listed_font_is_served_in_any_spelling() {
+        let listed = listed();
+        assert!(is_listed_font("/usr/share/fonts/DejaVuSans.ttf", &listed));
+        assert!(is_listed_font("C:/Windows/Fonts/arial.ttf", &listed));
+        assert!(is_listed_font("C:\\Windows\\Fonts\\arial.ttf", &listed));
+        assert!(is_listed_font("\\\\?\\C:\\Windows\\Fonts\\arial.ttf", &listed));
+        assert!(is_listed_font(
+            "C:/Users/u/AppData/Local/Microsoft/Windows/Fonts/My \"Font\".otf",
+            &listed
+        ));
+        assert!(is_listed_font(
+            "/?/C:/Users/u/AppData/Local/Microsoft/Windows/Fonts/My \"Font\".otf",
+            &listed
+        ));
+    }
+
+    #[test]
+    fn a_file_that_is_not_listed_is_refused() {
+        let listed = listed();
+        assert!(!is_listed_font("/etc/passwd", &listed));
+        assert!(!is_listed_font("/usr/share/fonts/../../../etc/passwd", &listed));
+        assert!(!is_listed_font("/usr/share/fonts/Other.ttf", &listed));
+        assert!(!is_listed_font("C:/Windows/win.ini", &listed));
     }
 }
