@@ -639,6 +639,7 @@ fn main() {
                 log_startup("ERROR: bundled binaries directory is missing");
             }
 
+            temp_layout::set_app_version(app.package_info().version.to_string());
             run_font_generation(&temp_root, &instance_id, &binaries_dir);
 
             // Off the startup path: nothing on screen waits for it.

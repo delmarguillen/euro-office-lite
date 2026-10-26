@@ -394,7 +394,7 @@ fn a_start_during_generation_waits_and_does_not_generate_again() {
         let live = fontdata_dir(&other_root);
         std::fs::create_dir_all(&live).unwrap();
         write_fonts(&live, b"theirs");
-        std::fs::write(other_root.join(FONTS_MARKER), b"generated").unwrap();
+        std::fs::write(other_root.join(FONTS_MARKER), app_version()).unwrap();
         drop(held);
     });
 
@@ -445,6 +445,104 @@ fn a_dead_generators_staging_folder_is_cleared() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+fn root_with_marker(marker: &[u8]) -> PathBuf {
+    let root = scratch_root();
+    let live = fontdata_dir(&root);
+    std::fs::create_dir_all(&live).unwrap();
+    write_fonts(&live, b"cache");
+    std::fs::write(root.join(FONTS_MARKER), marker).unwrap();
+    root
+}
+
+#[test]
+fn a_cache_built_by_another_version_is_not_ready() {
+    let root = root_with_marker(b"0.17.41-alpha");
+
+    assert!(!fonts_ready_for(&root, "0.17.42-alpha"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_cache_from_before_markers_held_the_version_is_not_ready() {
+    let root = root_with_marker(b"generated");
+
+    assert!(!fonts_ready_for(&root, "0.17.42-alpha"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// A cell of its own: the app-wide one can be set only once per process.
+#[test]
+fn the_version_set_at_startup_is_the_one_the_marker_records() {
+    let cell = OnceLock::new();
+    assert_eq!(stored_version(&cell), "unset");
+
+    store_version(&cell, "0.17.42-alpha".to_string());
+    store_version(&cell, "0.17.43-alpha".to_string());
+
+    assert_eq!(stored_version(&cell), "0.17.42-alpha");
+}
+
+#[test]
+fn a_cache_built_by_this_version_is_ready() {
+    let root = root_with_marker(b"0.17.42-alpha");
+
+    assert!(fonts_ready_for(&root, "0.17.42-alpha"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// After an update the old cache is rebuilt once, and the new marker makes it
+// ready for the next start.
+#[test]
+fn a_cache_from_an_older_version_is_rebuilt_once() {
+    let root = root_with_marker(b"generated");
+
+    let outcome = ensure_font_cache(
+        &root,
+        "1-1",
+        |dir: &Path| {
+            write_fonts(dir, b"new");
+            true
+        },
+        WAIT,
+        POLL,
+    );
+
+    assert_eq!(outcome, FontCache::Generated);
+    let marker = std::fs::read(root.join(FONTS_MARKER)).unwrap();
+    assert_eq!(marker, app_version().as_bytes());
+    assert_eq!(
+        ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL),
+        FontCache::Ready
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// The app can die after the new files land but before the marker is written:
+// the cache must not pass for ready, and the next start builds it again.
+#[test]
+fn new_files_next_to_the_previous_versions_marker_are_rebuilt() {
+    let root = root_with_marker(b"0.17.41-alpha");
+    write_fonts(&fontdata_dir(&root), b"new, marker not written yet");
+
+    assert!(!fonts_ready_for(&root, "0.17.42-alpha"));
+    assert!(!fonts_ready(&root));
+    let outcome = ensure_font_cache(
+        &root,
+        "1-1",
+        |dir: &Path| {
+            write_fonts(dir, b"rebuilt");
+            true
+        },
+        WAIT,
+        POLL,
+    );
+
+    assert_eq!(outcome, FontCache::Generated);
+    let allfonts = std::fs::read(fontdata_dir(&root).join("AllFonts.js")).unwrap();
+    assert_eq!(allfonts, b"rebuilt");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // What x2t writes for one bundled font when the scan gets the \\?\ form of
 // the fonts folder, and when it gets the plain one.
 const ALLFONTS_EXTENDED: &[u8] =
@@ -490,7 +588,7 @@ fn a_windows_cache_with_extended_paths_is_rebuilt_once() {
     let root = scratch_root();
     let live = fontdata_dir(&root);
     write_cache(&live, ALLFONTS_EXTENDED, SELECTION_EXTENDED);
-    std::fs::write(root.join(FONTS_MARKER), b"generated").unwrap();
+    std::fs::write(root.join(FONTS_MARKER), app_version()).unwrap();
 
     let outcome = ensure_font_cache(
         &root,
