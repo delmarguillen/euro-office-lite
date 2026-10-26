@@ -505,8 +505,15 @@ fn main() {
                     .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
                     .collect();
                 let dest_name = if safe_name.is_empty() { "download.jpg".to_string() } else { safe_name };
-                if let Ok(resp) = ureq::get(url).call() {
-                    if let Ok(bytes) = resp.into_body().read_to_vec() {
+                match protocol_limits::download_image(url) {
+                    Err(reason) => {
+                        let shown: String = url.chars().take(200).collect();
+                        file_ops::log_event(
+                            &state,
+                            &format!("[DOWNLOAD] refused {}: {}", shown, reason),
+                        );
+                    }
+                    Ok(bytes) => {
                         // Staging picks the final name, which may not be dest_name if
                         // media/ already holds a different image under it. downloads/
                         // has to follow that name: the bridge answers this request by

@@ -1,7 +1,9 @@
 // What each route of the ascdesktop protocol accepts. Every rule is a plain
 // function so it can be tested without a running app.
 
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant};
 
 // A path under the resource directory: only plain names, so no root, drive
 // prefix (\\?\ included) or ".." can move the join outside it.
@@ -39,6 +41,134 @@ pub fn may_copy_absolute(path: &Path, picked: &[PathBuf]) -> bool {
         return false;
     }
     has_image_extension(path)
+}
+
+pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
+pub const DOWNLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
+const DOWNLOAD_MAX_REDIRECTS: usize = 5;
+
+fn is_public_ipv4(ip: Ipv4Addr) -> bool {
+    !(ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_multicast()
+        || ip.is_unspecified()
+        || ip.is_broadcast())
+}
+
+fn is_public_ipv6(ip: Ipv6Addr) -> bool {
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return is_public_ipv4(v4);
+    }
+    let first = ip.segments()[0];
+    let link_local = first & 0xffc0 == 0xfe80;
+    let site_local = first & 0xffc0 == 0xfec0;
+    let unique_local = first & 0xfe00 == 0xfc00;
+    !(ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || link_local
+        || site_local
+        || unique_local)
+}
+
+// An address a download may connect to: not this machine, not the local
+// network, not multicast.
+pub fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_public_ipv4(v4),
+        IpAddr::V6(v6) => is_public_ipv6(v6),
+    }
+}
+
+// A host is allowed when it resolves and every address it resolves to is
+// public, so a name that mixes in a private address is refused.
+pub fn host_allowed(addrs: &[IpAddr]) -> bool {
+    !addrs.is_empty() && addrs.iter().all(|ip| is_public_ip(*ip))
+}
+
+pub fn is_download_scheme(url: &url::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+}
+
+pub fn is_image_content_type(content_type: &str) -> bool {
+    let essence = content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    let Some(subtype) = essence.strip_prefix("image/") else {
+        return false;
+    };
+    !subtype.is_empty()
+}
+
+fn check_download_url(url: &url::Url) -> Result<(), String> {
+    if !is_download_scheme(url) {
+        return Err(format!("scheme not allowed: {}", url.scheme()));
+    }
+    let addrs: Vec<IpAddr> = url
+        .socket_addrs(|| None)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|addr| addr.ip())
+        .collect();
+    if !host_allowed(&addrs) {
+        return Err(format!("host not allowed: {}", url.host_str().unwrap_or("")));
+    }
+    Ok(())
+}
+
+// Downloads an image for download-to-media. Redirects are followed here, one
+// hop at a time, so every host is checked before it is contacted.
+pub fn download_image(start: &str) -> Result<Vec<u8>, String> {
+    let deadline = Instant::now() + DOWNLOAD_TIMEOUT;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let mut url = url::Url::parse(start).map_err(|e| e.to_string())?;
+    for _ in 0..=DOWNLOAD_MAX_REDIRECTS {
+        check_download_url(&url)?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("timed out".to_string());
+        }
+        let response = agent
+            .get(url.as_str())
+            .config()
+            .timeout_global(Some(remaining))
+            .build()
+            .call()
+            .map_err(|e| e.to_string())?;
+        let status = response.status();
+        if status.is_redirection() {
+            let Some(location) = response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok())
+            else {
+                return Err(format!("redirect {} without a location", status));
+            };
+            url = url.join(location).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if !status.is_success() {
+            return Err(format!("status {}", status));
+        }
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        if !is_image_content_type(content_type) {
+            return Err(format!("not an image: {}", content_type));
+        }
+        return response
+            .into_body()
+            .with_config()
+            .limit(DOWNLOAD_MAX_BYTES)
+            .read_to_vec()
+            .map_err(|e| e.to_string());
+    }
+    Err("too many redirects".to_string())
 }
 
 #[cfg(test)]
@@ -111,5 +241,83 @@ mod tests {
         assert!(has_image_extension(Path::new("x.tiff")));
         assert!(!has_image_extension(Path::new("x.ico")));
         assert!(!has_image_extension(Path::new("png")));
+    }
+
+    fn ip(text: &str) -> IpAddr {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn a_public_address_may_be_downloaded_from() {
+        assert!(is_public_ip(ip("93.184.216.34")));
+        assert!(is_public_ip(ip("2606:2800:220:1:248:1893:25c8:1946")));
+        assert!(is_public_ip(ip("::ffff:93.184.216.34")));
+    }
+
+    #[test]
+    fn local_and_multicast_ipv4_addresses_are_refused() {
+        for text in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "224.0.0.1",
+            "0.0.0.0",
+            "255.255.255.255",
+        ] {
+            assert!(!is_public_ip(ip(text)), "{}", text);
+        }
+    }
+
+    #[test]
+    fn local_and_multicast_ipv6_addresses_are_refused() {
+        for text in [
+            "::1",
+            "::",
+            "fe80::1",
+            "fc00::1",
+            "fd12:3456::1",
+            "fec0::1",
+            "ff02::1",
+            "::ffff:127.0.0.1",
+            "::ffff:192.168.0.1",
+        ] {
+            assert!(!is_public_ip(ip(text)), "{}", text);
+        }
+    }
+
+    #[test]
+    fn a_host_with_any_private_address_is_refused() {
+        assert!(host_allowed(&[ip("93.184.216.34")]));
+        assert!(!host_allowed(&[ip("93.184.216.34"), ip("10.0.0.1")]));
+        assert!(!host_allowed(&[]));
+    }
+
+    #[test]
+    fn only_http_and_https_are_downloaded() {
+        let parse = |text: &str| url::Url::parse(text).unwrap();
+        assert!(is_download_scheme(&parse("http://example.com/a.png")));
+        assert!(is_download_scheme(&parse("https://example.com/a.png")));
+        assert!(!is_download_scheme(&parse("file:///etc/passwd")));
+        assert!(!is_download_scheme(&parse("ftp://example.com/a.png")));
+    }
+
+    #[test]
+    fn a_literal_local_host_is_refused_before_connecting() {
+        let parse = |text: &str| url::Url::parse(text).unwrap();
+        assert!(check_download_url(&parse("http://127.0.0.1:8080/a.png")).is_err());
+        assert!(check_download_url(&parse("http://[::1]/a.png")).is_err());
+        assert!(check_download_url(&parse("http://169.254.169.254/latest")).is_err());
+        assert!(check_download_url(&parse("http://93.184.216.34/a.png")).is_ok());
+    }
+
+    #[test]
+    fn only_image_content_types_are_kept() {
+        assert!(is_image_content_type("image/png"));
+        assert!(is_image_content_type("Image/JPEG; charset=binary"));
+        assert!(!is_image_content_type("text/html"));
+        assert!(!is_image_content_type("image/"));
+        assert!(!is_image_content_type(""));
     }
 }
