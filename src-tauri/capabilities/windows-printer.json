@@ -4,12 +4,6 @@
   "windows": ["main"],
   "platforms": ["windows"],
   "permissions": [
-    "printer:allow-get-printers",
-    "printer:allow-get-printers-by-name",
-    "printer:allow-print-pdf",
-    "printer:allow-print-html",
-    "printer:allow-get-jobs",
-    "printer:allow-create-temp-file",
-    "printer:allow-remove-temp-file"
+    "printer:allow-get-printers"
   ]
 }

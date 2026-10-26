@@ -29,6 +29,9 @@ pub struct AppState {
     // Encoding, delimiter and line breaks detected when the open document came
     // from a CSV or TXT, so saving it back writes the file the way it was read.
     pub text_options: Mutex<Option<crate::text_import::TextOptions>>,
+    // The PDF the last successful print wrote: the only file open_pdf_viewer
+    // hands to the system viewer. Cleared when a print starts.
+    pub last_print_pdf: Mutex<Option<PathBuf>>,
 }
 
 pub(crate) fn log_event(_state: &AppState, msg: &str) {
@@ -540,6 +543,9 @@ pub async fn print_document(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    // A failed print leaves nothing for the viewer to open.
+    *state.last_print_pdf.lock().unwrap() = None;
+
     let editor_bin = state.temp_dir.join("Editor.bin");
     if !editor_bin.exists() {
         log_event(&state, "[PRINT] failed: Editor.bin not found");
@@ -554,7 +560,7 @@ pub async fn print_document(
         &format!("[PRINT] start editor_bin={} bytes", bin_size),
     );
 
-    let pdf_path = state.temp_dir.join("print_output.pdf");
+    let pdf_path = state.temp_dir.join(PRINT_PDF_NAME);
     if pdf_path.exists() {
         let _ = std::fs::remove_file(&pdf_path);
     }
@@ -586,14 +592,56 @@ pub async fn print_document(
         &state,
         &format!("[PRINT] success pdf_size={} bytes", pdf_size),
     );
+    *state.last_print_pdf.lock().unwrap() = Some(pdf_path.clone());
     Ok(pdf_path.to_string_lossy().to_string())
 }
 
+const PRINT_PDF_NAME: &str = "print_output.pdf";
+
+// The only file the viewer and the printer commands hand on: the PDF the last
+// print wrote, still a regular file (not a link) directly inside this
+// instance's folder.
+pub(crate) fn last_printed_pdf(
+    last_print: Option<&Path>,
+    temp_dir: &Path,
+) -> Result<PathBuf, String> {
+    let pdf = last_print.ok_or("No printed PDF to open")?;
+    if pdf.file_name() != Some(std::ffi::OsStr::new(PRINT_PDF_NAME)) {
+        return Err("Not the printed PDF".to_string());
+    }
+    let is_file = std::fs::symlink_metadata(pdf)
+        .map(|meta| meta.file_type().is_file())
+        .unwrap_or(false);
+    if !is_file {
+        return Err("The printed PDF is gone".to_string());
+    }
+    let dir = temp_dir.canonicalize().map_err(|e| e.to_string())?;
+    let parent = pdf
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .parent()
+        .map(Path::to_path_buf);
+    if parent.as_deref() != Some(dir.as_path()) {
+        return Err("The printed PDF is outside the instance folder".to_string());
+    }
+    // The path as print_document built it: the canonical form on Windows is a
+    // \\?\ path, which not every program takes.
+    Ok(pdf.to_path_buf())
+}
+
 #[tauri::command]
-pub fn open_pdf_viewer(state: State<'_, AppState>, path: String) -> Result<String, String> {
+pub fn open_pdf_viewer(state: State<'_, AppState>) -> Result<String, String> {
+    let last_print = state.last_print_pdf.lock().unwrap().clone();
+    let path = last_printed_pdf(last_print.as_deref(), &state.temp_dir).map_err(|e| {
+        log_event(&state, &format!("[PRINT] viewer refused: {}", e));
+        e
+    })?;
+
+    // explorer opens the file with its default program and, unlike cmd, does
+    // not read & ^ % in the path as its own syntax.
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("cmd")
-        .args(["/c", "start", "", &path])
+    let result = std::process::Command::new("explorer.exe")
+        .arg(&path)
         .spawn();
 
     #[cfg(target_os = "macos")]
@@ -611,6 +659,96 @@ pub fn open_pdf_viewer(state: State<'_, AppState>, path: String) -> Result<Strin
         e.to_string()
     })?;
     Ok("ok".to_string())
+}
+
+// Printer names in the list the printer plugin reads from Windows: Get-Printer
+// as JSON, one object for a single printer and an array for several.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn printer_names(listed: &str) -> Vec<String> {
+    let entries = match serde_json::from_str::<serde_json::Value>(listed.trim()) {
+        Ok(serde_json::Value::Array(items)) => items,
+        Ok(single) => vec![single],
+        Err(_) => Vec::new(),
+    };
+    entries
+        .iter()
+        .filter_map(|entry| entry.get("Name").or_else(|| entry.get("name")))
+        .filter_map(|name| name.as_str())
+        .map(str::to_string)
+        .collect()
+}
+
+// A printer is only printed to when Windows lists it under exactly that name.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn listed_printer(requested: &str, names: &[String]) -> Result<String, String> {
+    names
+        .iter()
+        .find(|name| name.as_str() == requested)
+        .cloned()
+        .ok_or_else(|| "Not a listed printer".to_string())
+}
+
+// Prints the PDF the last print wrote on a printer Windows lists.
+#[tauri::command]
+pub async fn print_to_printer(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    printer: String,
+) -> Result<String, String> {
+    let last_print = state.last_print_pdf.lock().unwrap().clone();
+    let result = match last_printed_pdf(last_print.as_deref(), &state.temp_dir) {
+        Ok(pdf) => send_to_printer(app, &printer, &pdf).await,
+        Err(e) => Err(e),
+    };
+    match &result {
+        Ok(()) => log_event(&state, "[PRINT] sent to printer"),
+        Err(e) => log_event(&state, &format!("[PRINT] printer refused: {}", e)),
+    }
+    // As the plugin call this replaces did, the PDF goes once the printer has
+    // it; a refused request leaves it in place.
+    if let (Ok(()), Some(pdf)) = (&result, last_print) {
+        let _ = std::fs::remove_file(pdf);
+        *state.last_print_pdf.lock().unwrap() = None;
+    }
+    result.map(|()| "ok".to_string())
+}
+
+// Runs the SumatraPDF copy the printer plugin unpacks into the system temp
+// folder at startup. No shell sits between the arguments and the program.
+#[cfg(target_os = "windows")]
+async fn send_to_printer(app: tauri::AppHandle, printer: &str, pdf: &Path) -> Result<(), String> {
+    use tauri_plugin_printer_v2::PrinterExt;
+
+    let listed = tauri::async_runtime::spawn_blocking(move || app.printer().get_printers())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let names = printer_names(&listed);
+    let printer = listed_printer(printer, &names)?;
+
+    let sumatra = std::env::temp_dir().join("sm.exe");
+    let target = pdf.to_path_buf();
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new(&sumatra)
+            .arg("-print-to")
+            .arg(&printer)
+            .args(["-print-settings", "{}", "-silent"])
+            .arg(&target)
+            .status()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("the print program ended with {}", status))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn send_to_printer(_app: tauri::AppHandle, _printer: &str, _pdf: &Path) -> Result<(), String> {
+    Err("Printing to a named printer is only available on Windows".to_string())
 }
 
 #[tauri::command]
@@ -660,38 +798,6 @@ pub async fn create_new(
     .await;
     *state.current_file.lock().unwrap() = None;
     result
-}
-
-
-#[tauri::command]
-pub fn write_download_temp(
-    state: State<'_, AppState>,
-    data: String,
-    url: String,
-) -> Result<String, String> {
-    let download_dir = state.temp_dir.join("downloads");
-    let _ = std::fs::create_dir_all(&download_dir);
-
-    let file_name = url
-        .rsplit('/')
-        .next()
-        .unwrap_or("download")
-        .split('?')
-        .next()
-        .unwrap_or("download");
-    let safe_name = file_name
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
-        .collect::<String>();
-    let dest = download_dir.join(if safe_name.is_empty() {
-        "download".to_string()
-    } else {
-        safe_name
-    });
-
-    let bytes = STANDARD.decode(&data).map_err(|e| e.to_string())?;
-    std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
-    Ok(dest.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -1260,5 +1366,130 @@ mod tests {
             None,
             "every later save would otherwise re-record the same file"
         );
+    }
+
+    fn print_dir() -> PathBuf {
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "eo-print-test-{}-{}",
+            std::process::id(),
+            unique
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn printed_pdf_is_handed_on() {
+        let dir = print_dir();
+        let pdf = dir.join(PRINT_PDF_NAME);
+        std::fs::write(&pdf, b"%PDF-1.7").unwrap();
+        assert_eq!(last_printed_pdf(Some(&pdf), &dir).unwrap(), pdf);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn printed_pdf_refused_without_a_print() {
+        let dir = print_dir();
+        // A leftover from an earlier run is not this print's output.
+        std::fs::write(dir.join(PRINT_PDF_NAME), b"%PDF-1.7").unwrap();
+        assert!(last_printed_pdf(None, &dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn printed_pdf_refuses_any_other_file() {
+        let dir = print_dir();
+        let exe = dir.join("tool.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        assert!(last_printed_pdf(Some(&exe), &dir).is_err());
+
+        let other = print_dir();
+        let outside = other.join(PRINT_PDF_NAME);
+        std::fs::write(&outside, b"%PDF-1.7").unwrap();
+        assert!(last_printed_pdf(Some(&outside), &dir).is_err());
+
+        let sub = dir.join("downloads");
+        std::fs::create_dir_all(&sub).unwrap();
+        let nested = sub.join(PRINT_PDF_NAME);
+        std::fs::write(&nested, b"%PDF-1.7").unwrap();
+        assert!(last_printed_pdf(Some(&nested), &dir).is_err());
+
+        let dotted = dir.join("downloads").join("..").join(PRINT_PDF_NAME);
+        std::fs::write(dir.join(PRINT_PDF_NAME), b"%PDF-1.7").unwrap();
+        assert!(
+            last_printed_pdf(Some(&dotted), &dir).is_ok(),
+            "the same file reached through .. is still the printed PDF"
+        );
+
+        // Gone since the print: nothing to open.
+        let _ = std::fs::remove_file(dir.join(PRINT_PDF_NAME));
+        assert!(last_printed_pdf(Some(&dir.join(PRINT_PDF_NAME)), &dir).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn printed_pdf_refuses_a_link_in_its_place() {
+        let dir = print_dir();
+        let target = dir.join("tool.sh");
+        std::fs::write(&target, b"#!/bin/sh").unwrap();
+        let pdf = dir.join(PRINT_PDF_NAME);
+        std::os::unix::fs::symlink(&target, &pdf).unwrap();
+        assert!(last_printed_pdf(Some(&pdf), &dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // What Get-Printer | ConvertTo-Json prints, trimmed to the fields read here.
+    const TWO_PRINTERS: &str = r#"[
+        {"Name": "Microsoft Print to PDF", "DriverName": "Microsoft Print To PDF"},
+        {"Name": "Office \"Laser\"", "DriverName": "Generic"}
+    ]"#;
+
+    #[test]
+    fn printer_list_reads_one_or_several_printers() {
+        assert_eq!(
+            printer_names(TWO_PRINTERS),
+            vec!["Microsoft Print to PDF".to_string(), "Office \"Laser\"".to_string()]
+        );
+        assert_eq!(
+            printer_names("{\"Name\": \"Only one\"}\r\n"),
+            vec!["Only one".to_string()]
+        );
+        assert!(printer_names("").is_empty());
+        assert!(printer_names("Unsupported OS").is_empty());
+    }
+
+    #[test]
+    fn printing_takes_a_listed_printer() {
+        let names = printer_names(TWO_PRINTERS);
+        assert_eq!(
+            listed_printer("Microsoft Print to PDF", &names).unwrap(),
+            "Microsoft Print to PDF"
+        );
+        assert_eq!(listed_printer("Office \"Laser\"", &names).unwrap(), "Office \"Laser\"");
+    }
+
+    #[test]
+    fn printing_refuses_any_other_printer_name() {
+        let names = printer_names(TWO_PRINTERS);
+        for requested in [
+            "Missing printer",
+            "",
+            "default",
+            "microsoft print to pdf",
+            "Microsoft Print to PDF ",
+            "Microsoft Print to PDF\"; calc; \"",
+            "Microsoft Print to PDF; calc",
+            "$(calc)",
+            "Microsoft Print to PDF$(calc)",
+            "x\" -silent \"C:\\Windows\\win.ini",
+        ] {
+            assert!(listed_printer(requested, &names).is_err(), "{:?}", requested);
+        }
+        assert!(listed_printer("Microsoft Print to PDF", &[]).is_err());
     }
 }

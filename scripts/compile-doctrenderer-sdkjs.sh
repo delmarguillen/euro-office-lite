@@ -15,8 +15,12 @@ REMOTE="${DOCTRENDERER_SDKJS_REMOTE:-https://github.com/ONLYOFFICE/sdkjs.git}"
 STAGING="${DOCTRENDERER_STAGING:-${RUNNER_TEMP:-/tmp}/doctrenderer-sdkjs}"
 ALLFONTS_SOURCE="${ALLFONTS_SOURCE:-$SDKJS/common/AllFonts.js}"
 UI_REF="$(git -C "$SDKJS" rev-parse HEAD)"
+PATCH_RECORD="$(mktemp)"
 
+# The tag's patches come out before the checkout back to the UI revision,
+# which would refuse to overwrite them.
 restore_sdkjs() {
+    node "$SCRIPT_DIR/apply-patches.mjs" revert --record "$PATCH_RECORD"
     git -C "$SDKJS" checkout --detach "$UI_REF" >/dev/null
 }
 trap restore_sdkjs EXIT
@@ -46,6 +50,9 @@ if [ ! -f "$SDKJS/build/Gruntfile.js" ]; then
     echo "Restoring grunt build harness from $UI_REF"
     git -C "$SDKJS" checkout "$UI_REF" -- build
 fi
+
+# patches/doctrenderer-sdkjs/ is written against this tag, not the UI revision.
+node "$SCRIPT_DIR/apply-patches.mjs" apply --only doctrenderer-sdkjs --record "$PATCH_RECORD"
 
 (
     cd "$SDKJS/build"

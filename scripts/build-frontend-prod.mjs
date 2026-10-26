@@ -11,6 +11,7 @@ import {
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyPatches, revertPatches } from './apply-patches.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, '..');
@@ -217,6 +218,11 @@ requirePath(
 await rm(buildRoot, { recursive: true, force: true });
 await rm(outputRoot, { recursive: true, force: true });
 await mkdir(buildRoot, { recursive: true });
+
+// grunt builds sdkjs and web-apps from the submodule trees, so the patches in
+// patches/ go in first. They come back out on any exit, a failed step included.
+const appliedPatches = applyPatches();
+process.on('exit', () => revertPatches(appliedPatches));
 
 const commonEnv = {
   APP_COPYRIGHT: 'Copyright (C) Euro-Office contributors. All rights reserved',

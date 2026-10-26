@@ -285,6 +285,7 @@ fn main() {
             recovery: Mutex::new(None),
             pending_open: Mutex::new(file_to_open),
             text_options: Mutex::new(None),
+            last_print_pdf: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
@@ -296,8 +297,8 @@ fn main() {
             file_ops::get_current_path,
             file_ops::take_pending_open_file,
             file_ops::open_pdf_viewer,
+            file_ops::print_to_printer,
             file_ops::convert_for_insert,
-            file_ops::write_download_temp,
             file_ops::get_system_fonts,
             bridge::exec_command,
             bridge::set_window_title,

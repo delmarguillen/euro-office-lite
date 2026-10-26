@@ -1,0 +1,22 @@
+Origin: own
+
+diff --git a/cell/api_plugins.js b/cell/api_plugins.js
+index 42218a4..2dad955 100644
+--- a/cell/api_plugins.js
++++ b/cell/api_plugins.js
+@@ -194,7 +194,14 @@
+ 		if (undefined === obj)
+ 			obj = AscCommon.getLocalStorageItem(customFunctionsStorageId);
+ 
+-		obj = AscCommonExcel.mergeCustomFunctions(obj, true);
++		// The custom functions a document carries load only in the editor with
++		// macros enabled; the user's own library loads either way.
++		const inConverter = !!window["NATIVE_EDITOR_ENJINE"];
++		const macrosEnabled = !!this.DocInfo && this.DocInfo.asc_getIsEnabledMacroses();
++		if (inConverter || !macrosEnabled)
++			obj = AscCommonExcel.safeJsonParse(obj);
++		else
++			obj = AscCommonExcel.mergeCustomFunctions(obj, true);
+ 
+ 		if (!obj)
+ 			return;

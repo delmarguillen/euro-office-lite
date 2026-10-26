@@ -1,0 +1,97 @@
+Origin: own
+
+diff --git a/common/workerspeech.js b/common/workerspeech.js
+index ba17361bd1..a9949d6c81 100644
+--- a/common/workerspeech.js
++++ b/common/workerspeech.js
+@@ -112,10 +112,6 @@
+ 		this.value = "";
+ 		this.valueEqualAddon = false;
+ 
+-		this.equalAddon = "&nbsp;";
+-		if (AscCommon.AscBrowser.isMacOs)
+-			this.equalAddon = "<br/>";
+-
+ 		this.setEnabled = function(isEnabled)
+ 		{
+ 			if (this.isEnabled === isEnabled)
+@@ -134,7 +130,7 @@
+ 			if (this.isEnabled)
+ 			{
+ 				this.speechElement = document.createElement("div");
+-				this.speechElement.innerHTML = "";
++				this.speechElement.textContent = "";
+ 				this.speechElement.id = "area_id_screen_reader";
+ 
+ 				let style = "position: absolute; left:0; top:-1; z-index: -2; opacity: 0;";
+@@ -176,15 +172,15 @@
+ 				this.timerSetValue = -1;
+ 			}
+ 
+-			if (value !== this.speechElement.innerHTML)
++			if (value !== this.speechElement.textContent)
+ 			{
+-				this.speechElement.innerHTML = value;
++				this.speechElement.textContent = value;
+ 				if (this.isLogEnabled)
+ 					console.log("[speech]: " + value);
+ 			}
+ 			else
+ 			{
+-				this.speechElement.innerHTML = "";
++				this.speechElement.textContent = "";
+ 
+ 				if ("" !== value)
+ 				{
+@@ -196,10 +192,11 @@
+ 			}
+ 		};
+ 
++		// The text the reader announces goes in as text, never as markup.
+ 		// 2) Set value permanently
+ 		this._setValuePermanently = function(value)
+ 		{
+-			this.speechElement.innerHTML = value;
++			this.speechElement.textContent = value;
+ 			if (this.isLogEnabled)
+ 				console.log("[speech]: " + value);
+ 		};
+@@ -210,24 +207,29 @@
+ 			if (this.value !== value)
+ 			{
+ 				this.value = value;
+-				this.speechElement.innerHTML = this.value;
++				this.speechElement.textContent = this.value;
+ 				this.valueEqualAddon = false;
+ 			}
+ 			else
+ 			{
+ 				this.valueEqualAddon = !this.valueEqualAddon;
++				this.speechElement.textContent = this.value;
+ 				if (this.valueEqualAddon)
+-				{
+-					this.speechElement.innerHTML = this.value + this.equalAddon;
+-				}
+-				else
+-				{
+-					this.speechElement.innerHTML = this.value;
+-				}
++					this._appendEqualAddon();
+ 			}
+ 
+ 			if (this.isLogEnabled)
+-				console.log("[speech]: " + this.speechElement.innerHTML);
++				console.log("[speech]: " + this.speechElement.textContent);
++		};
++
++		// A repeated value gets a trailing no-break space, or a line break on
++		// macOS, every other time, so the reader announces it again.
++		this._appendEqualAddon = function()
++		{
++			if (AscCommon.AscBrowser.isMacOs)
++				this.speechElement.appendChild(document.createElement("br"));
++			else
++				this.speechElement.appendChild(document.createTextNode("\u00A0"));
+ 		};
+ 
+ 		// 4) Simple timer

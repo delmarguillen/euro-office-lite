@@ -105,6 +105,12 @@ copy_single_file "$SRC/editor-patches.js"    "$DIST/editor-patches.js"    "edito
 # --- Fonts ---
 copy_tree "$SRC/fonts" "$DIST/fonts" "src/fonts"
 
+# The patches in patches/ are in the submodule trees only while their files
+# are copied, and come back out on any exit.
+PATCH_RECORD="$LOG_DIR/applied-patches.json"
+node "$PROJECT_ROOT/scripts/apply-patches.mjs" apply --record "$PATCH_RECORD"
+trap 'node "$PROJECT_ROOT/scripts/apply-patches.mjs" revert --record "$PATCH_RECORD"' EXIT
+
 # --- web-apps editors (main/ without help/) ---
 for ed in documenteditor spreadsheeteditor presentationeditor; do
     copy_tree "$SRC/web-apps/apps/$ed/main" "$DIST/web-apps/apps/$ed/main" "web-apps/apps/$ed/main" "help"

@@ -10,11 +10,17 @@ on:
     paths:
       - 'src-tauri/**'
       - 'tools/corpus/**'
+      - 'patches/**'
+      - 'scripts/apply-patches.mjs'
+      - 'scripts/test-sdkjs-*.mjs'
       - '.github/workflows/tests.yml'
   pull_request:
     paths:
       - 'src-tauri/**'
       - 'tools/corpus/**'
+      - 'patches/**'
+      - 'scripts/apply-patches.mjs'
+      - 'scripts/test-sdkjs-*.mjs'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -86,3 +92,23 @@ jobs:
         env:
           TAURI_CONFIG: '{"bundle":{"active":false,"resources":[],"externalBin":[]}}'
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+  sdkjs-patch-tests:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Only sdkjs: the scripts read two of its files with patches/sdkjs applied.
+      - name: Fetch the sdkjs submodule
+        run: git submodule update --init --depth 1 src/sdkjs
+
+      - name: Apply the sdkjs patches
+        run: node scripts/apply-patches.mjs apply --only sdkjs
+
+      - name: Custom function library tests
+        run: node scripts/test-sdkjs-custom-functions.mjs
+
+      - name: Screen reader text tests
+        run: node scripts/test-sdkjs-speech.mjs
