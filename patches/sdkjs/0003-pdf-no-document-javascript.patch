@@ -1,0 +1,105 @@
+Origin: own
+
+diff --git a/pdf/src/forms/formActions.js b/pdf/src/forms/formActions.js
+index f878f27..900de2b 100644
+--- a/pdf/src/forms/formActions.js
++++ b/pdf/src/forms/formActions.js
+@@ -737,94 +737,12 @@
+         memory.WriteString(this.script);
+     };
+ 	
++    // Scripts embedded in a PDF are not run: the editor shares its origin with
++    // the app shell. The action still ends normally, so the queue goes on to
++    // the next one and the event keeps its defaults (rc stays true).
+     function EvalScript(str, oParentDoc, oEvent) {
+-        let aArgsNamesToDelete = [
+-            "window",
+-            "setTimeout",
+-            "setInterval",
+-            "XMLHttpRequest",
+-            "Promise",
+-            "console"
+-        ];
+-    
+-        let oApiConsole = {
+-            "println": function(value) {
+-                console.log(value);
+-            },
+-            "clear": function() {
+-                console.clear();
+-            },
+-            "hide": function() {
+-                return false;
+-            },
+-            "show": function() {
+-                return false;
+-            }
+-        };
+-        Object.freeze(oApiConsole);
+-    
+-        let oApiObjects = AscPDF.Api.Types;
+-        let aArgsNamesPdfApi = [
+-            "event",
+-            "color",
+-
+-            "AFNumber_Format",
+-            "AFNumber_Keystroke",
+-            "AFPercent_Format",
+-            "AFPercent_Keystroke",
+-            "AFDate_Format",
+-            "AFDate_Keystroke",
+-            "AFDate_FormatEx",
+-            "AFDate_KeystrokeEx",
+-            "AFTime_Format",
+-            "AFTime_Keystroke",
+-            "AFTime_FormatEx",
+-            "AFTime_KeystrokeEx",
+-            "AFSpecial_Format",
+-            "AFSpecial_Keystroke",
+-            "AFSpecial_KeystrokeEx",
+-            "AFSimple_Calculate",
+-            "AFRange_Validate",
+-        ];
+-    
+-        if (!oParentDoc.globalEventStack) {
+-            oParentDoc.globalEventStack = [];    
+-        }
+-
+-        oParentDoc.globalEventStack.push(oParentDoc.event);
+-        oParentDoc.event = oEvent;
+-
+-        let oApiFunc = AscPDF.Api.Functions;
+-        let aArgsPdfApi = [
+-            oEvent,
+-            oApiObjects["color"],
+-
+-            oApiFunc["AFNumber_Format"],
+-            oApiFunc["AFNumber_Keystroke"],
+-            oApiFunc["AFPercent_Format"],
+-            oApiFunc["AFPercent_Keystroke"],
+-            oApiFunc["AFDate_Format"],
+-            oApiFunc["AFDate_Keystroke"],
+-            oApiFunc["AFDate_FormatEx"],
+-            oApiFunc["AFDate_KeystrokeEx"],
+-            oApiFunc["AFTime_Format"],
+-            oApiFunc["AFTime_Keystroke"],
+-            oApiFunc["AFTime_FormatEx"],
+-            oApiFunc["AFTime_KeystrokeEx"],
+-            oApiFunc["AFSpecial_Format"],
+-            oApiFunc["AFSpecial_Keystroke"],
+-            oApiFunc["AFSpecial_KeystrokeEx"],
+-            oApiFunc["AFSimple_Calculate"],
+-            oApiFunc["AFRange_Validate"]
+-        ];
+-    
+-        let funcArgs = aArgsNamesToDelete.concat(aArgsNamesPdfApi);
+-        funcArgs.push(str);
+-    
+-        let func = Function.apply(null, funcArgs);
+-        func.bind(oParentDoc.GetDocumentApi()).apply(null, new Array(aArgsNamesToDelete.length - 1).concat(oApiConsole, aArgsPdfApi));
++        return;
+     }
+-    
+ 
+     if (!window["AscPDF"])
+ 	    window["AscPDF"] = {};
