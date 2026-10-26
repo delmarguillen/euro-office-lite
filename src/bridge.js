@@ -2182,6 +2182,17 @@ window.AscDesktopEditor = {
       '(*.xml)': { name: 'XML',           extensions: ['xml'] },
       'any':     { name: 'All files',     extensions: ['*'] },
     };
+    // Images go through the backend, which remembers the choice: those are
+    // the only absolute paths copy-to-media will read.
+    if (filterType === 'images') {
+      invoke('pick_image_files', { multiple: !!allowMultiple }).then(function(paths) {
+        if (!paths || !paths.length) return;
+        if (callback) callback(allowMultiple ? paths : paths[0]);
+      }).catch(function(e) {
+        window._eoLog('[EO] OpenFilenameDialog error: ' + (e.message || e));
+      });
+      return;
+    }
     var filter = filterMap[filterType] || filterMap['any'];
     var dialog = window.__TAURI__.dialog;
     dialog.open({

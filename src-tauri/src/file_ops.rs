@@ -32,6 +32,9 @@ pub struct AppState {
     // The PDF the last successful print wrote: the only file open_pdf_viewer
     // hands to the system viewer. Cleared when a print starts.
     pub last_print_pdf: Mutex<Option<PathBuf>>,
+    // Images the user chose in the insert dialog: the only absolute paths
+    // copy-to-media reads.
+    pub picked_images: Mutex<Vec<PathBuf>>,
 }
 
 pub(crate) fn log_event(_state: &AppState, msg: &str) {
@@ -749,6 +752,45 @@ async fn send_to_printer(app: tauri::AppHandle, printer: &str, pdf: &Path) -> Re
 #[cfg(not(target_os = "windows"))]
 async fn send_to_printer(_app: tauri::AppHandle, _printer: &str, _pdf: &Path) -> Result<(), String> {
     Err("Printing to a named printer is only available on Windows".to_string())
+}
+
+// The insert image dialog. The choice is remembered so copy-to-media can tell
+// a path the user picked from any other.
+#[tauri::command]
+pub async fn pick_image_files(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    multiple: bool,
+) -> Result<Option<Vec<String>>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let dialog = window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .add_filter("Images", &crate::protocol_limits::IMAGE_EXTENSIONS);
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        if multiple {
+            dialog.blocking_pick_files()
+        } else {
+            dialog.blocking_pick_file().map(|choice| vec![choice])
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let paths: Vec<PathBuf> = picked
+        .into_iter()
+        .filter_map(|choice| choice.into_path().ok())
+        .collect();
+    state.picked_images.lock().unwrap().extend(paths.iter().cloned());
+    Ok(Some(
+        paths
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+    ))
 }
 
 #[tauri::command]

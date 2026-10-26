@@ -306,6 +306,7 @@ fn main() {
             pending_open: Mutex::new(file_to_open),
             text_options: Mutex::new(None),
             last_print_pdf: Mutex::new(None),
+            picked_images: Mutex::new(Vec::new()),
         })
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
@@ -315,6 +316,7 @@ fn main() {
             file_ops::print_document,
             file_ops::create_new,
             file_ops::get_current_path,
+            file_ops::pick_image_files,
             file_ops::take_pending_open_file,
             file_ops::open_pdf_viewer,
             file_ops::print_to_printer,
@@ -454,8 +456,18 @@ fn main() {
                     .join("insert_tmp")
                     .join("media")
                     .join(std::path::Path::new(src_path).file_name().unwrap_or_default());
-                let src = if std::path::Path::new(src_path).is_absolute() {
-                    std::path::Path::new(src_path)
+                let requested = std::path::Path::new(src_path);
+                let src = if requested.is_absolute() {
+                    let picked = state.picked_images.lock().unwrap();
+                    if !protocol_limits::may_copy_absolute(requested, &picked) {
+                        return tauri::http::Response::builder()
+                            .status(403)
+                            .header("Cache-Control", "no-store")
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body(b"Forbidden".to_vec())
+                            .unwrap();
+                    }
+                    requested
                 } else {
                     insert_src.as_path()
                 };

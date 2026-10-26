@@ -20,6 +20,27 @@ pub fn resource_relative(path: &str) -> Option<PathBuf> {
     Some(relative)
 }
 
+// The image types the insert dialog offers and copy-to-media copies.
+pub const IMAGE_EXTENSIONS: [&str; 11] = [
+    "png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "tif", "tiff", "emf", "wmf",
+];
+
+pub fn has_image_extension(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+}
+
+// An absolute path copy-to-media may read: one the user picked in the image
+// dialog, and an image.
+pub fn may_copy_absolute(path: &Path, picked: &[PathBuf]) -> bool {
+    if !picked.iter().any(|choice| choice == path) {
+        return false;
+    }
+    has_image_extension(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +82,34 @@ mod tests {
         assert_eq!(resource_relative("C:win.ini"), None);
         assert_eq!(resource_relative("\\\\?\\C:\\Windows\\win.ini"), None);
         assert_eq!(resource_relative("\\\\server\\share\\x"), None);
+    }
+
+    #[test]
+    fn a_picked_image_may_be_copied() {
+        let picked = vec![PathBuf::from("/home/u/Pictures/a.PNG"), PathBuf::from("/home/u/b.emf")];
+        assert!(may_copy_absolute(Path::new("/home/u/Pictures/a.PNG"), &picked));
+        assert!(may_copy_absolute(Path::new("/home/u/b.emf"), &picked));
+    }
+
+    #[test]
+    fn a_path_that_was_not_picked_is_refused() {
+        let picked = vec![PathBuf::from("/home/u/Pictures/a.png")];
+        assert!(!may_copy_absolute(Path::new("/home/u/Pictures/b.png"), &picked));
+        assert!(!may_copy_absolute(Path::new("/home/u/Pictures/a.png"), &[]));
+    }
+
+    #[test]
+    fn a_picked_file_that_is_not_an_image_is_refused() {
+        let picked = vec![PathBuf::from("/home/u/.ssh/id_rsa"), PathBuf::from("/home/u/notes.txt")];
+        assert!(!may_copy_absolute(Path::new("/home/u/.ssh/id_rsa"), &picked));
+        assert!(!may_copy_absolute(Path::new("/home/u/notes.txt"), &picked));
+    }
+
+    #[test]
+    fn image_extensions_ignore_case() {
+        assert!(has_image_extension(Path::new("x.JPeG")));
+        assert!(has_image_extension(Path::new("x.tiff")));
+        assert!(!has_image_extension(Path::new("x.ico")));
+        assert!(!has_image_extension(Path::new("png")));
     }
 }
