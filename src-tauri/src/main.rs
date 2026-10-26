@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_quit;
 mod bridge;
 mod clipboard;
 mod converter;
@@ -273,6 +274,13 @@ fn main() {
     {
         builder = builder.plugin(tauri_plugin_printer_v2::init());
     }
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.menu(app_quit::macos_menu);
+    }
+
+    builder = builder.on_menu_event(app_quit::on_menu_event);
 
     builder.manage(AppState {
             current_file: Mutex::new(None),
