@@ -974,3 +974,54 @@ mod capability_tests {
         assert!(!permissions().iter().any(|p| p.starts_with("shell:")));
     }
 }
+
+#[cfg(test)]
+mod csp_tests {
+    fn csp() -> serde_json::Value {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        config["app"]["security"]["csp"].clone()
+    }
+
+    fn sources(directive: &str) -> Vec<String> {
+        csp()[directive]
+            .as_array()
+            .unwrap_or_else(|| panic!("no {directive}"))
+            .iter()
+            .filter_map(|source| source.as_str())
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn the_network_stays_out_of_reach() {
+        for directive in [
+            "default-src",
+            "connect-src",
+            "img-src",
+            "font-src",
+            "frame-src",
+            "media-src",
+        ] {
+            for source in sources(directive) {
+                assert!(source != "*", "{directive} {source}");
+                assert!(!source.starts_with("https:"), "{directive} {source}");
+                let local =
+                    source == "http://ascdesktop.localhost" || source == "http://ipc.localhost";
+                assert!(
+                    !source.starts_with("http:") || local,
+                    "{directive} {source}"
+                );
+            }
+        }
+    }
+
+    // sdkjs compiles code at run time and the editors use inline styles.
+    #[test]
+    fn the_editor_keeps_eval_and_inline() {
+        let scripts = sources("script-src");
+        assert!(scripts.iter().any(|s| s == "'unsafe-eval'"));
+        assert!(scripts.iter().any(|s| s == "'unsafe-inline'"));
+        assert!(sources("style-src").iter().any(|s| s == "'unsafe-inline'"));
+    }
+}

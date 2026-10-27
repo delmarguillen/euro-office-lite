@@ -999,6 +999,17 @@ window.addEventListener('error', function(e) {
 window.addEventListener('unhandledrejection', function(e) {
   window._eoLog('[JS-REJECT]', e.reason || 'unknown');
 });
+
+// What the content security policy blocked, without the full address: the
+// scheme and host say which rule fired, a path could name the user's files.
+function _eoLogCspViolation(e) {
+  var blocked = String(e.blockedURI || '');
+  var origin = blocked.split('/').slice(0, 3).join('/');
+  window._eoLog('[CSP] blocked ' + (e.effectiveDirective || e.violatedDirective) +
+    ' ' + origin + ' source=' + _eoSafeSource(e.sourceFile) + ':' + (e.lineNumber || 0));
+}
+window._eoLogCspViolation = _eoLogCspViolation;
+window.addEventListener('securitypolicyviolation', _eoLogCspViolation);
 var _origConsoleError = console.error;
 console.error = function() {
   var parts = [];

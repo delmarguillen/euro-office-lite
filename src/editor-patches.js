@@ -21,6 +21,10 @@
           _log('[IFRAME-REJECT]', event.reason || 'unknown');
         });
 
+        if (window._eoLogCspViolation) {
+          win.addEventListener('securitypolicyviolation', window._eoLogCspViolation);
+        }
+
         var frameSource = '';
         try {
           frameSource = window._eoSafeSource ?
