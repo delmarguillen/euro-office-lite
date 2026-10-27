@@ -9,8 +9,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SDKJS="$PROJECT_ROOT/src/sdkjs"
 BINARIES="$PROJECT_ROOT/src-tauri/binaries"
 TAG="${DOCTRENDERER_SDKJS_TAG:-v9.4.0.129}"
-# The Euro-Office sdkjs fork only carries tags up to 8.2; the 9.4 tag that
-# matches every platform's x2t exists only upstream.
+# The Euro-Office sdkjs fork only carries tags up to 8.2; the tags that
+# match each platform's x2t (9.4 and 10.0) exist only upstream.
 REMOTE="${DOCTRENDERER_SDKJS_REMOTE:-https://github.com/ONLYOFFICE/sdkjs.git}"
 STAGING="${DOCTRENDERER_STAGING:-${RUNNER_TEMP:-/tmp}/doctrenderer-sdkjs}"
 ALLFONTS_SOURCE="${ALLFONTS_SOURCE:-$SDKJS/common/AllFonts.js}"
