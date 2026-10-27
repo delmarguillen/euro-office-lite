@@ -12,7 +12,7 @@ if (Test-Path (Join-Path $targetDir "x2t.exe")) {
 
 # sha256 of the zip in the 'dependencies' release. A replaced asset must fail
 # the build until its new digest is pinned here.
-$expectedSha256 = 'PENDING_SHA256_WINDOWS_X64_10_0_0_169'
+$expectedSha256 = 'f7d0a6f1e467d04ffec3c1313acc53a80fca528c7667ad565362672d180cafe4'
 
 # A PENDING_ placeholder marks a zip whose digest is not pinned yet.
 if ($expectedSha256.StartsWith('PENDING_')) {
