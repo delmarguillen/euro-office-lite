@@ -484,6 +484,51 @@ pub fn ensure_font_cache(
     }
 }
 
+// Removes the font cache earlier versions kept in the temp root, once the
+// cache lives elsewhere. A version still using it holds fonts.lock while it
+// builds the cache there, so a taken lock leaves it in place. So does any
+// other instance alive, which may be an earlier version reading the cache;
+// the next start removes it. fonts.lock itself stays: another start may
+// already have it open.
+pub fn remove_old_font_cache(temp_root: &Path, font_root: &Path, own_id: &str) -> bool {
+    if temp_root == font_root {
+        return false;
+    }
+    if another_instance_alive(temp_root, own_id) {
+        return false;
+    }
+    let Ok(lock) = take_lock(&temp_root.join(FONTS_LOCK)) else {
+        return false;
+    };
+    let _ = std::fs::remove_file(temp_root.join(FONTS_MARKER));
+    let _ = std::fs::remove_dir_all(fontdata_dir(temp_root));
+    if let Ok(entries) = std::fs::read_dir(temp_root) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(FONTS_STAGING_PREFIX) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    drop(lock);
+    true
+}
+
+// The same check the sweep of dead instances uses: a taken instance.lock.
+fn another_instance_alive(root: &Path, own_id: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(root.join(INSTANCES_DIR)) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name() == own_id {
+            continue;
+        }
+        if is_locked(&entry.path().join(INSTANCE_LOCK)) {
+            return true;
+        }
+    }
+    false
+}
+
 fn write_replacing(path: &Path, bytes: &[u8], tag: &str) -> std::io::Result<()> {
     let tmp = path.with_extension(format!("tmp-{}", tag));
     std::fs::write(&tmp, bytes)?;

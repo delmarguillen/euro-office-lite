@@ -701,8 +701,13 @@ fn main() {
 
             // Off the startup path: nothing on screen waits for it.
             let sweep_root = temp_root.clone();
+            let sweep_font_root = font_root.clone();
+            let sweep_id = instance_id.clone();
             let sweep_handle = app.handle().clone();
-            std::thread::spawn(move || sweep_leftovers(&sweep_handle, &sweep_root));
+            std::thread::spawn(move || {
+                sweep_leftovers(&sweep_handle, &sweep_root);
+                sweep_old_font_cache(&sweep_root, &sweep_font_root, &sweep_id);
+            });
 
             let handle = app.handle().clone();
             if let Some(window) = app.get_webview_window("main") {
@@ -827,6 +832,15 @@ fn sweep_leftovers(app: &tauri::AppHandle, root: &std::path::Path) {
             removed.len(),
             pruned.len()
         ));
+    }
+}
+
+fn sweep_old_font_cache(temp_root: &std::path::Path, font_root: &std::path::Path, own_id: &str) {
+    if !temp_root.join(temp_layout::FONTS_MARKER).exists() {
+        return;
+    }
+    if temp_layout::remove_old_font_cache(temp_root, font_root, own_id) {
+        log_startup("Removed the font cache left in the temp folder by an earlier version");
     }
 }
 

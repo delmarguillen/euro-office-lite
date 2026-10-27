@@ -1292,3 +1292,71 @@ fn a_linked_folder_is_not_followed() {
     assert_ne!(fingerprint(&[root.clone()]), before);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ---------------------------------------------------------------------------
+// Font cache left in the temp root
+// ---------------------------------------------------------------------------
+
+fn temp_root_with_old_cache() -> PathBuf {
+    let root = root_with_marker(b"0.17.43-alpha");
+    std::fs::create_dir_all(root.join(format!("{}1-1", FONTS_STAGING_PREFIX))).unwrap();
+    root
+}
+
+#[test]
+fn the_old_cache_in_the_temp_root_is_removed_when_unused() {
+    let temp = temp_root_with_old_cache();
+    let own = begin_instance(&temp, now(), 2).unwrap();
+    let fonts = scratch_root();
+
+    assert!(remove_old_font_cache(&temp, &fonts, &own.id));
+
+    assert!(!temp.join(FONTS_MARKER).exists());
+    assert!(!fontdata_dir(&temp).exists());
+    assert!(!temp.join(format!("{}1-1", FONTS_STAGING_PREFIX)).exists());
+    let _ = std::fs::remove_dir_all(&temp);
+    let _ = std::fs::remove_dir_all(&fonts);
+}
+
+#[test]
+fn the_old_cache_stays_while_an_earlier_version_holds_its_lock() {
+    let temp = temp_root_with_old_cache();
+    let own = begin_instance(&temp, now(), 2).unwrap();
+    let fonts = scratch_root();
+    let _held = take_lock(&temp.join(FONTS_LOCK)).unwrap();
+
+    assert!(!remove_old_font_cache(&temp, &fonts, &own.id));
+
+    assert!(temp.join(FONTS_MARKER).exists());
+    assert!(fontdata_dir(&temp).join("AllFonts.js").exists());
+    let _ = std::fs::remove_dir_all(&temp);
+    let _ = std::fs::remove_dir_all(&fonts);
+}
+
+#[test]
+fn the_cache_is_kept_when_it_fell_back_to_the_temp_root() {
+    let temp = temp_root_with_old_cache();
+    let own = begin_instance(&temp, now(), 2).unwrap();
+
+    assert!(!remove_old_font_cache(&temp, &temp, &own.id));
+
+    assert!(temp.join(FONTS_MARKER).exists());
+    assert!(fontdata_dir(&temp).join("AllFonts.js").exists());
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn the_old_cache_stays_while_another_instance_is_alive() {
+    let temp = temp_root_with_old_cache();
+    let own = begin_instance(&temp, now(), 2).unwrap();
+    let fonts = scratch_root();
+    let other = begin_instance(&temp, now() - 1, 1).unwrap();
+
+    assert!(!remove_old_font_cache(&temp, &fonts, &own.id));
+
+    assert!(temp.join(FONTS_MARKER).exists());
+    assert!(fontdata_dir(&temp).join("AllFonts.js").exists());
+    other.end();
+    let _ = std::fs::remove_dir_all(&temp);
+    let _ = std::fs::remove_dir_all(&fonts);
+}
