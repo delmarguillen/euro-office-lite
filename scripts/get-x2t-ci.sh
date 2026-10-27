@@ -21,8 +21,8 @@ expected_sha256() {
     case "$1" in
         x2t-binaries-linux-x64-10.0.0.169.zip) echo "PENDING_SHA256_LINUX_X64_10_0_0_169" ;;
         x2t-binaries-linux-arm64-10.0.0.169.zip) echo "PENDING_SHA256_LINUX_ARM64_10_0_0_169" ;;
-        x2t-binaries-macos-arm64-9.4.0.129.zip) echo "ed9a6e1ee9f5155bfde2238f93eeba12d477005c7f7e61f9a858f667a11f3db5" ;;
-        x2t-binaries-macos-x64-9.4.0.129.zip) echo "911bc13abec66cf9aec7e996fec14d289b53009ecaa8261020f5f50450001c6f" ;;
+        x2t-binaries-macos-arm64-10.0.0.169.zip) echo "PENDING_SHA256_MACOS_ARM64_10_0_0_169" ;;
+        x2t-binaries-macos-x64-10.0.0.169.zip) echo "PENDING_SHA256_MACOS_X64_10_0_0_169" ;;
         *) return 1 ;;
     esac
 }
@@ -44,11 +44,11 @@ log "Target dir: $TARGET_DIR"
 if [ "$OS" = "Darwin" ]; then
     case "$TARGET_TRIPLE" in
         x86_64-apple-darwin)
-            ZIP_NAME="x2t-binaries-macos-x64-9.4.0.129.zip"
+            ZIP_NAME="x2t-binaries-macos-x64-10.0.0.169.zip"
             TRIPLE="x86_64-apple-darwin"
             ;;
         aarch64-apple-darwin|"")
-            ZIP_NAME="x2t-binaries-macos-arm64-9.4.0.129.zip"
+            ZIP_NAME="x2t-binaries-macos-arm64-10.0.0.169.zip"
             TRIPLE="aarch64-apple-darwin"
             ;;
         *)
@@ -127,8 +127,8 @@ log "Extracting to $TARGET_DIR..."
 unzip -o "$TEMP_ZIP" -d "$TARGET_DIR"
 rm -f "$TEMP_ZIP"
 
-# x2t 9.x on macOS loads versioned frameworks; codesign rejects a framework
-# whose Versions/Current came out of the zip as a copy instead of a link.
+# x2t 9.x and later on macOS loads versioned frameworks; codesign rejects a
+# framework whose Versions/Current came out of the zip as a copy, not a link.
 if [ "$OS" = "Darwin" ]; then
     FW_COUNT=0
     for fw in "$TARGET_DIR"/*.framework; do

@@ -317,12 +317,12 @@ jobs:
           echo "::endgroup::"
 
       - name: Prepare DoctRenderer resources
-        # The macOS x2t (both targets) is 9.4.0.129, so the sdkjs tag has to
+        # The macOS x2t (both targets) is 10.0.0.169, so the sdkjs tag has to
         # match it; that tag exists only upstream, not in this fork.
         env:
-          DOCTRENDERER_SDKJS_TAG: v9.4.0.129
+          DOCTRENDERER_SDKJS_TAG: v10.0.0.169
           DOCTRENDERER_SDKJS_REMOTE: https://github.com/ONLYOFFICE/sdkjs.git
-          DOCTRENDERER_SDKJS_COMMIT: 75b53d504bfd81bfa35d59bb57dd9e56f7c9235d
+          DOCTRENDERER_SDKJS_COMMIT: 3679e0375a758d7dc59d31337a45461be3525ed8
         run: |
           set -o pipefail
           echo "::group::Copy fonts to binaries"
