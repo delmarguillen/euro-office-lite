@@ -403,6 +403,29 @@
       }, limitMs);
     }
 
+    function _isPdfEditorFrame(win) {
+      try {
+        return win.location.pathname.indexOf('/pdfeditor/') !== -1;
+      } catch(e) {
+        return false;
+      }
+    }
+
+    // Runs fn once the frame has a <head>, for up to 30 s.
+    function _whenHeadReady(win, fn) {
+      var interval = setInterval(function() {
+        try {
+          var head = win.document && win.document.head;
+          if (!head) return;
+          clearInterval(interval);
+          fn(head);
+        } catch(e) {
+          clearInterval(interval);
+        }
+      }, 50);
+      setTimeout(function() { clearInterval(interval); }, 30000);
+    }
+
     function injectBridgeDeep(win) {
       installPinchZoomGuard(win);
       try {
@@ -498,6 +521,21 @@
               }
             }, 50);
             setTimeout(function() { clearInterval(saveAsStyleInterval); }, 30000);
+          }
+
+          // PDF documents run no scripts, and three form features of the PDF
+          // editor are built on them: the date field, the image button field and
+          // the placeholder text of a field. Their controls are hidden rather
+          // than left to create fields that do not work.
+          if (!win._eoPdfScriptFeaturesHidden && _isPdfEditorFrame(win)) {
+            win._eoPdfScriptFeaturesHidden = true;
+            _whenHeadReady(win, function(head) {
+              var style = win.document.createElement('style');
+              style.textContent =
+                '#slot-btn-form-datetime, #slot-btn-form-image { display: none !important; }\n' +
+                'tr.form-text-combo:has(#form-txt-pholder) { display: none !important; }';
+              head.appendChild(style);
+            });
           }
 
           // Language pickers (#6): web-apps renders the spellcheck indicator as
