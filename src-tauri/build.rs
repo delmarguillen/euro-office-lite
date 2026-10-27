@@ -7,8 +7,11 @@ const APP_COMMANDS: &[&str] = &[
     "write_editor_bin",
     "print_document",
     "create_new",
-    "get_current_path",
-    "pick_image_files",
+    "current_document",
+    "pick_document",
+    "pick_files",
+    "pick_save_target",
+    "locate_linked_file",
     "take_pending_open_file",
     "open_pdf_viewer",
     "print_to_printer",
@@ -33,7 +36,6 @@ const APP_COMMANDS: &[&str] = &[
     "recovery_candidates",
     "recovery_load",
     "recovery_discard",
-    "get_save_suggestion",
     "list_user_dictionaries",
 ];
 

@@ -39,6 +39,8 @@ impl Default for RecentStore {
 #[serde(rename_all = "camelCase")]
 pub struct RecentFileView {
     path: String,
+    // What the open command takes for this entry (path_grants.rs).
+    token: String,
     name: String,
     opened_at: u64,
     file_type: i32,
@@ -136,7 +138,10 @@ pub fn record(app: &AppHandle, path: &str) {
 }
 
 #[tauri::command]
-pub async fn recent_files_state(app: AppHandle) -> RecentState {
+pub async fn recent_files_state(
+    app: AppHandle,
+    state: tauri::State<'_, crate::file_ops::AppState>,
+) -> Result<RecentState, String> {
     let store = load(&app);
     let files = store
         .files
@@ -147,6 +152,10 @@ pub async fn recent_files_state(app: AppHandle) -> RecentState {
         .filter(|entry| Path::new(&entry.path).is_file())
         .map(|entry| RecentFileView {
             path: entry.path.clone(),
+            token: state
+                .grants
+                .grant(PathBuf::from(&entry.path), crate::path_grants::GrantKind::Open)
+                .token,
             name: Path::new(&entry.path)
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
@@ -155,10 +164,10 @@ pub async fn recent_files_state(app: AppHandle) -> RecentState {
             file_type: crate::file_ops::detect_format(&PathBuf::from(&entry.path)),
         })
         .collect();
-    RecentState {
+    Ok(RecentState {
         enabled: store.enabled,
         files,
-    }
+    })
 }
 
 #[tauri::command]

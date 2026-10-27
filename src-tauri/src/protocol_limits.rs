@@ -36,8 +36,8 @@ pub fn has_image_extension(path: &Path) -> bool {
     IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
 }
 
-// An absolute path copy-to-media may read: one the user picked in the image
-// dialog, and an image.
+// An absolute path copy-to-media may read: one granted when it was pasted,
+// and an image.
 pub fn may_copy_absolute(path: &Path, picked: &[PathBuf]) -> bool {
     if !picked.iter().any(|choice| choice == path) {
         return false;
@@ -60,15 +60,6 @@ pub fn may_copy_pasted(path: &Path, clipboard_files: &[PathBuf]) -> bool {
         return false;
     }
     has_image_extension(path)
-}
-
-// An absolute path copy-to-media may read: an image picked in the dialog or
-// one granted when it was pasted.
-pub fn may_copy_granted(path: &Path, picked: &[PathBuf], pasted: &[PathBuf]) -> bool {
-    if may_copy_absolute(path, picked) {
-        return true;
-    }
-    may_copy_absolute(path, pasted)
 }
 
 pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
@@ -402,24 +393,6 @@ mod tests {
     fn a_clipboard_path_with_a_trailing_carriage_return_still_matches() {
         let clipboard = vec![PathBuf::from("/home/u/a.png\r")];
         assert!(may_copy_pasted(Path::new("/home/u/a.png"), &clipboard));
-    }
-
-    #[test]
-    fn a_picked_or_pasted_image_may_be_copied() {
-        let picked = vec![PathBuf::from("/home/u/a.png")];
-        let pasted = vec![PathBuf::from("/home/u/b.png")];
-        assert!(may_copy_granted(Path::new("/home/u/a.png"), &picked, &pasted));
-        assert!(may_copy_granted(Path::new("/home/u/b.png"), &picked, &pasted));
-        assert!(may_copy_granted(Path::new("/home/u/b.png"), &[], &pasted));
-    }
-
-    #[test]
-    fn a_path_neither_picked_nor_pasted_is_refused() {
-        let picked = vec![PathBuf::from("/home/u/a.png")];
-        let pasted = vec![PathBuf::from("/home/u/b.png"), PathBuf::from("/home/u/notes.txt")];
-        assert!(!may_copy_granted(Path::new("/home/u/c.png"), &picked, &pasted));
-        assert!(!may_copy_granted(Path::new("/home/u/notes.txt"), &picked, &pasted));
-        assert!(!may_copy_granted(Path::new("/home/u/a.png"), &[], &[]));
     }
 
     #[cfg(windows)]

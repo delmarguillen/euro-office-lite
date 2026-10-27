@@ -547,7 +547,8 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'The document does not have footnotes or endnotes yet. Insert a note first: until then the separator is not kept in the file.',
     noteSeparatorAlready: 'The note separator has already been removed from this document.',
     noteSeparatorAlreadyPresent: 'This document already has its note separator lines.',
-    noteSeparatorFailed: 'The note separator lines could not be changed.'
+    noteSeparatorFailed: 'The note separator lines could not be changed.',
+    locateLinkedFile: 'Locate the linked file'
   },
   es: {
     document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación',
@@ -576,7 +577,8 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'El documento todavía no tiene notas al pie ni notas al final. Inserte una nota primero: hasta entonces el separador no se conserva en el archivo.',
     noteSeparatorAlready: 'El separador de notas ya se había quitado de este documento.',
     noteSeparatorAlreadyPresent: 'Este documento ya tiene sus líneas separadoras de notas.',
-    noteSeparatorFailed: 'No se pudieron cambiar las líneas separadoras de notas.'
+    noteSeparatorFailed: 'No se pudieron cambiar las líneas separadoras de notas.',
+    locateLinkedFile: 'Localiza el archivo vinculado'
   },
   fr: {
     document: 'Document', spreadsheet: 'Feuille de calcul', presentation: 'Présentation',
@@ -907,6 +909,86 @@ function _eoDocTypeForPath(path) {
 }
 window._eoDocTypeForPath = _eoDocTypeForPath;
 
+// Files reach the backend only as the tokens it handed out (path_grants.rs).
+// What the editor holds for a granted file is this name, which keeps the
+// file's extension for sdkjs and goes back to the bridge whenever the editor
+// asks for the file.
+var EO_GRANT_PREFIX = 'eo-grant:';
+
+// Paths the editor got from a dialog that writes them into the document,
+// with the token the same choice was granted under.
+var _eoReferenceTokens = {};
+
+function _eoEditorFileName(file) {
+  if (file.path) {
+    _eoReferenceTokens[file.path] = file.token;
+    return file.path;
+  }
+  return EO_GRANT_PREFIX + file.token + '/' + file.name;
+}
+
+function _eoGrantToken(name) {
+  if (typeof name !== 'string') return null;
+  if (name.indexOf(EO_GRANT_PREFIX) === 0) {
+    return name.slice(EO_GRANT_PREFIX.length).split('/')[0];
+  }
+  return _eoReferenceTokens[name] || null;
+}
+
+// A file the editor names without a token, such as an external reference
+// saved in the document: the user locates it, starting from its name.
+async function _eoInsertToken(name) {
+  var token = _eoGrantToken(name);
+  if (token) return token;
+  if (typeof name !== 'string' || /^https?:\/\//i.test(name)) return null;
+  var located = await invoke('locate_linked_file', {
+    title: _t('locateLinkedFile'),
+    name: name.replace(/\\/g, '/').split('/').pop()
+  });
+  return located ? located.token : null;
+}
+
+async function _eoConvertForInsert(name) {
+  var token = await _eoInsertToken(name);
+  if (!token) return null;
+  return invoke('convert_for_insert', { token: token });
+}
+
+function _eoInsertInto(file, handler, oOptions, label) {
+  _eoConvertForInsert(file).then(function(result) {
+    if (!result) return;
+    var ref = _getEditor();
+    if (ref.ew && ref.ew[handler]) {
+      ref.ew[handler]('', result.data, result.data.length, result.images || {}, oOptions);
+    }
+  }).catch(function(e) {
+    window._eoLog('[EO] ' + label + ' error: ' + (e.message || e));
+  });
+}
+
+async function _eoPickDocument() {
+  return invoke('pick_document', { documents: _t('documents'), all: _t('all') });
+}
+
+// Kept across the reload that switches documents; the token outlives it.
+function _eoSetPendingOpen(file) {
+  if (!file || !file.token) return;
+  localStorage.setItem('eo-pending-open', JSON.stringify({ token: file.token, name: file.name }));
+}
+
+// The editor's recent list names entries by path. The backend's own list
+// gives the token for that path.
+async function _eoOpenRecent(path) {
+  var state = await invoke('recent_files_state').catch(function() { return null; });
+  var files = (state && state.files) || [];
+  var match = files.filter(function(file) { return file.path === path; })[0];
+  if (!match) {
+    window._eoLog('[RECENT] entry no longer listed');
+    return;
+  }
+  window.AscDesktopEditor.LocalFileOpen({ token: match.token, name: match.name });
+}
+
 window.addEventListener('error', function(e) {
   window._eoLog('[JS-ERROR]', {
     name: e.error && e.error.name,
@@ -1139,8 +1221,8 @@ async function _eoRemoveNoteSeparator() {
   if (code === 'removed' || code === 'restored') {
     // Same reopen the document switch uses: the editor holds the document it
     // parsed at open time, and only a fresh open shows the edited file.
-    var path = await invoke('get_current_path').catch(function() { return null; });
-    if (path) localStorage.setItem('eo-pending-open-path', path);
+    var file = await invoke('current_document').catch(function() { return null; });
+    _eoSetPendingOpen(file);
     _forceReload();
     return;
   }
@@ -1148,16 +1230,6 @@ async function _eoRemoveNoteSeparator() {
   await _tell(messages[code] || 'noteSeparatorFailed');
 }
 window._eoRemoveNoteSeparator = _eoRemoveNoteSeparator;
-
-// The path with its file name's extension replaced by `ext`, or added when the
-// name has none. A null path or ext leaves the path as it is.
-function _eoSuggestionWithExt(path, ext) {
-  if (!path || !ext) return path;
-  var nameStart = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1;
-  var dot = path.lastIndexOf('.');
-  if (dot <= nameStart) return path + '.' + ext;
-  return path.slice(0, dot + 1) + ext;
-}
 
 // Which filters the Save As dialog offers. Pulled out of LocalFileSave so the
 // Linux branch below can be reasoned about (and exercised) on its own.
@@ -1175,7 +1247,7 @@ function _eoSuggestionWithExt(path, ext) {
 //
 // Windows and macOS keep the full list: their dialogs append the extension of
 // the selected type themselves, so the choice does survive.
-function _eoSaveAsFilters(docType, requestedExt, currentPath, isLinux) {
+function _eoSaveAsFilters(docType, requestedExt, currentName, isLinux) {
   var byDocType = {
     cell: [
       { name: 'Excel', extensions: ['xlsx'] },
@@ -1212,7 +1284,7 @@ function _eoSaveAsFilters(docType, requestedExt, currentPath, isLinux) {
   // The format the document already is, falling back to the doc type's default
   // when the file was never saved or is of a legacy type Save As does not
   // offer to write back (a .doc or an .xls, say).
-  var currentExt = (currentPath || '').replace(/\\/g, '/').split('/').pop().split('.').pop().toLowerCase();
+  var currentExt = (currentName || '').split('.').pop().toLowerCase();
   var match = null;
   for (var i = 0; i < all.length; i++) {
     if (all[i].extensions[0] === currentExt) { match = all[i]; break; }
@@ -2225,54 +2297,25 @@ window.AscDesktopEditor = {
 
   CheckUserId: () => 'local-user',
 
+  // The dialog opens in the backend, which keeps the paths. The editor gets
+  // _eoEditorFileName(file) for each file, which only the bridge understands,
+  // except for the dialogs whose path goes into the document as text.
   OpenFilenameDialog: function(filterType, allowMultiple, callback) {
-    var filterMap = {
-      'images':  { name: 'Images',       extensions: ['png','jpg','jpeg','gif','bmp','svg','ico','tif','tiff','webp'] },
-      'word':    { name: 'Documents',     extensions: ['docx','doc','odt','rtf','txt'] },
-      'cell':    { name: 'Spreadsheets',  extensions: ['xlsx','xls','ods','csv'] },
-      'video':   { name: 'Video',         extensions: ['mp4','avi','mov','wmv','mkv','webm'] },
-      'audio':   { name: 'Audio',         extensions: ['mp3','wav','ogg','flac','aac','wma'] },
-      'csv/txt': { name: 'CSV / Text',    extensions: ['csv','txt'] },
-      '(*.xml)': { name: 'XML',           extensions: ['xml'] },
-      'any':     { name: 'All files',     extensions: ['*'] },
-    };
-    // Images go through the backend, which remembers the choice: those are
-    // the only absolute paths copy-to-media will read.
-    if (filterType === 'images') {
-      invoke('pick_image_files', { multiple: !!allowMultiple }).then(function(paths) {
-        if (!paths || !paths.length) return;
-        if (callback) callback(allowMultiple ? paths : paths[0]);
-      }).catch(function(e) {
-        window._eoLog('[EO] OpenFilenameDialog error: ' + (e.message || e));
-      });
-      return;
-    }
-    var filter = filterMap[filterType] || filterMap['any'];
-    var dialog = window.__TAURI__.dialog;
-    dialog.open({
-      multiple: !!allowMultiple,
-      filters: [filter, { name: 'All files', extensions: ['*'] }]
-    }).then(function(result) {
-      if (result === null) return;
-      if (callback) callback(result);
+    invoke('pick_files', { kind: filterType, multiple: !!allowMultiple }).then(function(files) {
+      if (!files || !files.length) return;
+      var names = files.map(_eoEditorFileName);
+      if (callback) callback(allowMultiple ? names : names[0]);
     }).catch(function(e) {
       window._eoLog('[EO] OpenFilenameDialog error: ' + (e.message || e));
     });
   },
 
-  LocalFileOpen: async function(path) {
+  // `file` is { token, name } from the backend; without it, the open dialog.
+  LocalFileOpen: async function(file) {
     // One open at a time: Ctrl+O stays live while the indicator is up.
     if (_eoIsOpening()) return;
-    if (!path) {
-      var dialog = window.__TAURI__.dialog;
-      path = await dialog.open({
-        filters: [
-          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv'] },
-          { name: _t('all'), extensions: ['*'] }
-        ]
-      });
-    }
-    if (!path) return;
+    if (!file) file = await _eoPickDocument();
+    if (!file || !file.token) return;
 
     if (window.AscDesktopEditor._currentDocType) {
       if (window.AscDesktopEditor._isModified) {
@@ -2282,7 +2325,7 @@ window.AscDesktopEditor = {
         );
         if (!discard) return;
       }
-      localStorage.setItem('eo-pending-open-path', path);
+      _eoSetPendingOpen(file);
       _forceReload();
       return;
     }
@@ -2290,10 +2333,10 @@ window.AscDesktopEditor = {
     // No editor mounted yet: open it the way the start screen's Open file
     // button does. _loadEditorBin needs a mounted editor, so it cannot help here.
     if (window._eoOpenPath) {
-      await window._eoOpenPath(path);
+      await window._eoOpenPath(file);
       return;
     }
-    window._eoLog('[EO] LocalFileOpen: editor launcher unavailable, cannot open ' + path);
+    window._eoLog('[EO] LocalFileOpen: editor launcher unavailable, cannot open ' + file.name);
   },
 
   LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
@@ -2328,8 +2371,9 @@ window.AscDesktopEditor = {
 
       await invoke('write_editor_bin', { data: b64 });
 
-      var currentPath = await invoke('get_current_path');
-      if (!isSaveAs && !currentPath) isSaveAs = true;
+      var current = await invoke('current_document');
+      var currentName = current ? current.name : null;
+      if (!isSaveAs && !current) isSaveAs = true;
       var wasModified = window.AscDesktopEditor._isModified;
       // A cancelled Save As or a PDF export leaves the open document where it
       // was, so it must not end as a save.
@@ -2344,26 +2388,16 @@ window.AscDesktopEditor = {
         };
         var requestedExt = formatExtensions[fileType] || null;
 
-        // After a recovery there is no current path, only where the document
-        // was saved before: the dialog starts there.
-        var suggestedPath = currentPath ? null : await invoke('get_save_suggestion');
-        var filters = _eoSaveAsFilters(docType, requestedExt, currentPath || suggestedPath, _isLinux);
-        var dialog = window.__TAURI__.dialog;
-        // The suggestion is the old file's name; an export starts as that name
-        // in the format asked for, never as the file itself.
-        var defaultPath = _eoSuggestionWithExt(suggestedPath, requestedExt);
-        var savePath = await dialog.save({ filters: filters, defaultPath: defaultPath || undefined });
-        keepsDocument = !savePath;
-        if (savePath) {
-          var knownExts = ['docx','doc','odt','rtf','txt','xlsx','xls','ods','csv','pptx','ppt','odp','pdf'];
-          var pathExt = savePath.split('.').pop().toLowerCase();
-          if (savePath.indexOf('.') === -1 || knownExts.indexOf(pathExt) === -1) {
-            savePath += '.' + (requestedExt || filters[0].extensions[0]);
-            pathExt = requestedExt || filters[0].extensions[0];
-          }
+        // The backend opens the dialog: where it starts after a recovery and
+        // the extension the chosen name gets are decided there.
+        var filters = _eoSaveAsFilters(docType, requestedExt, currentName, _isLinux);
+        var target = await invoke('pick_save_target', { filters: filters, requestedExt: requestedExt });
+        keepsDocument = !target;
+        if (target) {
+          var pathExt = target.name.split('.').pop().toLowerCase();
           try {
-            await invoke('save_file_as', { path: savePath });
-            var savedName = savePath.replace(/\\/g, '/').split('/').pop();
+            await invoke('save_file_as', { token: target.token });
+            var savedName = target.name;
             keepsDocument = pathExt === 'pdf';
             if (pathExt !== 'pdf') {
               // A Save As moves the document and the session follows it, so a
@@ -2466,7 +2500,11 @@ window.AscDesktopEditor = {
   },
 
   convertFile: function(filePath, targetFormat, callback) {
-    invoke('convert_for_insert', { path: filePath }).then(function(result) {
+    _eoConvertForInsert(filePath).then(function(result) {
+      if (!result) {
+        if (callback) callback(null);
+        return;
+      }
       var binB64 = result.data;
       var raw = atob(binB64);
       var bytes = new Uint8Array(raw.length);
@@ -2487,47 +2525,19 @@ window.AscDesktopEditor = {
   },
 
   CompareDocumentFile: function(file, oOptions) {
-    invoke('convert_for_insert', { path: file }).then(function(result) {
-      var ref = _getEditor();
-      if (ref.ew && ref.ew.onDocumentCompare) {
-        ref.ew.onDocumentCompare('', result.data, result.data.length, result.images || {}, oOptions);
-      }
-    }).catch(function(e) {
-      window._eoLog('[EO] CompareDocumentFile error: ' + (e.message || e));
-    });
+    _eoInsertInto(file, 'onDocumentCompare', oOptions, 'CompareDocumentFile');
   },
 
   CompareDocumentUrl: function(file, oOptions) {
-    invoke('convert_for_insert', { path: file }).then(function(result) {
-      var ref = _getEditor();
-      if (ref.ew && ref.ew.onDocumentCompare) {
-        ref.ew.onDocumentCompare('', result.data, result.data.length, result.images || {}, oOptions);
-      }
-    }).catch(function(e) {
-      window._eoLog('[EO] CompareDocumentUrl error: ' + (e.message || e));
-    });
+    _eoInsertInto(file, 'onDocumentCompare', oOptions, 'CompareDocumentUrl');
   },
 
   MergeDocumentFile: function(file, oOptions) {
-    invoke('convert_for_insert', { path: file }).then(function(result) {
-      var ref = _getEditor();
-      if (ref.ew && ref.ew.onDocumentMerge) {
-        ref.ew.onDocumentMerge('', result.data, result.data.length, result.images || {}, oOptions);
-      }
-    }).catch(function(e) {
-      window._eoLog('[EO] MergeDocumentFile error: ' + (e.message || e));
-    });
+    _eoInsertInto(file, 'onDocumentMerge', oOptions, 'MergeDocumentFile');
   },
 
   MergeDocumentUrl: function(file, oOptions) {
-    invoke('convert_for_insert', { path: file }).then(function(result) {
-      var ref = _getEditor();
-      if (ref.ew && ref.ew.onDocumentMerge) {
-        ref.ew.onDocumentMerge('', result.data, result.data.length, result.images || {}, oOptions);
-      }
-    }).catch(function(e) {
-      window._eoLog('[EO] MergeDocumentUrl error: ' + (e.message || e));
-    });
+    _eoInsertInto(file, 'onDocumentMerge', oOptions, 'MergeDocumentUrl');
   },
 
   LocalFileGetSourcePath: () => '',
@@ -2552,6 +2562,7 @@ window.AscDesktopEditor = {
       return 'eo-missing-' + Date.now() + '-' + (url.split('/').pop() || 'image');
     }
     if (url.indexOf(ASC_PROTO_BASE) === 0) return url;
+    // Granted images and pasted paths are both copied by the backend.
     var protocol = (url.indexOf('http://') === 0 || url.indexOf('https://') === 0)
       ? 'download-to-media' : 'copy-to-media';
     try {
@@ -2821,7 +2832,7 @@ window.AscDesktopEditor = {
         var recent = JSON.parse(param);
         // LocalFileOpen already handles the unsaved-changes confirmation and the
         // reload needed to switch documents.
-        if (recent && recent.path) window.AscDesktopEditor.LocalFileOpen(recent.path);
+        if (recent && recent.path) _eoOpenRecent(recent.path);
       } catch(e) {
         window._eoLog('[EO] open:recent parse error: ' + (e.message || e));
       }
@@ -3001,21 +3012,20 @@ listen('confirm-close', async () => {
   }
 });
 
-async function _eoOpenFromPath(filePath) {
-  var docType = _eoDocTypeForPath(filePath);
-  _eoShowOpening(_eoOpeningFileText(filePath));
+async function _eoOpenGranted(file) {
+  var docType = _eoDocTypeForPath(file.name);
+  _eoShowOpening(_eoOpeningFileText(file.name));
 
   try {
-    var b64data = await invoke('open_file', { path: filePath });
-    var fileName = filePath.replace(/\\/g, '/').split('/').pop();
-    window._pendingFileData = { data: b64data, path: filePath, name: fileName };
+    var b64data = await invoke('open_file', { token: file.token });
+    window._pendingFileData = { data: b64data, path: file.name, name: file.name };
     if (window._openEditor) {
       window._openEditor(docType);
     } else {
       window._eoLog('[OPEN] WARN: editor launcher unavailable, using fallback');
       // The fallback never reaches openEditor, which is what hides it.
       _eoHideOpening();
-      window.AscDesktopEditor.LocalFileOpen(filePath);
+      window.AscDesktopEditor.LocalFileOpen(file);
     }
   } catch(e) {
     window._eoLog('[EO] open-file: conversion failed: ' + (e.message || e));
@@ -3028,8 +3038,8 @@ async function _eoOpenFromPath(filePath) {
 // so the page asks for the launch argument instead, once DOMContentLoaded
 // guarantees the later scripts (and window._openEditor) have run.
 function _eoTakePendingOpenFile() {
-  invoke('take_pending_open_file').then(function(filePath) {
-    if (filePath) return _eoOpenFromPath(filePath);
+  invoke('take_pending_open_file').then(function(file) {
+    if (file) return _eoOpenGranted(file);
   }).catch(function(e) {
     window._eoLog('[EO] open-file: pending path unavailable: ' + (e.message || e));
   });

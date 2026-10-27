@@ -1154,26 +1154,20 @@
     document.querySelector('.btn[data-open]').addEventListener('click', async function() {
       if (!window.AscDesktopEditor) return;
 
-      var dialog = window.__TAURI__.dialog;
-      var path = await dialog.open({
-        filters: [
-          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv'] },
-          { name: _t('all'), extensions: ['*'] }
-        ]
-      });
-      if (!path) return;
-      _openPath(path);
+      var file = await window.__TAURI__.core.invoke('pick_document',
+        { documents: _t('documents'), all: _t('all') });
+      if (!file) return;
+      _openPath(file);
     });
 
     // Every opening goes through open_file, which is where the Rust side records
-    // the recent files entry.
-    async function _openPath(path, silent) {
-      window._eoShowOpening(window._eoOpeningFileText(path));
+    // the recent files entry. `file` is { token, name } from the backend.
+    async function _openPath(file, silent) {
+      window._eoShowOpening(window._eoOpeningFileText(file.name));
       try {
-        var b64data = await window.__TAURI__.core.invoke('open_file', { path: path });
-        var fileName = path.replace(/\\/g, '/').split('/').pop();
-        window._pendingFileData = { data: b64data, path: path, name: fileName };
-        openEditor(window._eoDocTypeForPath(path));
+        var b64data = await window.__TAURI__.core.invoke('open_file', { token: file.token });
+        window._pendingFileData = { data: b64data, path: file.name, name: file.name };
+        openEditor(window._eoDocTypeForPath(file.name));
         return true;
       } catch(e) {
         // Without a dialog the app just drops back to the start screen and the
@@ -1187,7 +1181,7 @@
     }
 
     // Set by the start screen's Recover button, read here for the same reason
-    // eo-pending-open-path is: the editor is mounted once, at startup, and
+    // eo-pending-open is: the editor is mounted once, at startup, and
     // which one to mount is only known after Rust answers.
     var _recovering = (function checkPendingRecoverId() {
       var id = localStorage.getItem('eo-pending-recover-id');
@@ -1218,20 +1212,22 @@
       return true;
     })();
 
-    (function checkPendingOpenPath() {
+    (function checkPendingOpen() {
       if (_recovering) return;
-      var pendingPath = localStorage.getItem('eo-pending-open-path');
-      if (!pendingPath) return;
-      localStorage.removeItem('eo-pending-open-path');
+      var pending = null;
+      try {
+        pending = JSON.parse(localStorage.getItem('eo-pending-open') || 'null');
+      } catch(e) {}
+      localStorage.removeItem('eo-pending-open');
+      if (!pending || !pending.token) return;
 
       startScreen.classList.add('hidden');
-      window._eoShowOpening(window._eoOpeningFileText(pendingPath));
+      window._eoShowOpening(window._eoOpeningFileText(pending.name));
 
-      var docType = window._eoDocTypeForPath(pendingPath);
+      var docType = window._eoDocTypeForPath(pending.name);
 
-      window.__TAURI__.core.invoke('open_file', { path: pendingPath }).then(function(b64data) {
-        var fileName = pendingPath.replace(/\\/g, '/').split('/').pop();
-        window._pendingFileData = { data: b64data, path: pendingPath, name: fileName };
+      window.__TAURI__.core.invoke('open_file', { token: pending.token }).then(function(b64data) {
+        window._pendingFileData = { data: b64data, path: pending.name, name: pending.name };
         openEditor(docType);
       }).catch(function(e) {
         window._eoLog('[EO] Error reopening file:', e);
@@ -1339,10 +1335,13 @@
       }
     }
 
-    async function _openRecentFile(path) {
+    async function _openRecentFile(file) {
       // Silent so the message can be chosen here: recent_files_state only lists
       // files that exist, so a path still listed is damaged, not gone.
-      if (await _openPath(path, true)) return;
+      // The list may have been on screen longer than its tokens last.
+      var fresh = await window.__TAURI__.core.invoke('recent_files_state').catch(function() { return null; });
+      var listed = fresh && fresh.files.filter(function(entry) { return entry.path === file.path; })[0];
+      if (await _openPath(listed || file, true)) return;
       var state = null;
       try {
         state = await window.__TAURI__.core.invoke('recent_files_state');
@@ -1350,8 +1349,8 @@
         _log('[EO] Recent files unavailable: ' + (e.message || e));
       }
       // Exact match: the clicked path is the backend's own string, unaltered.
-      var stillListed = !!state && state.files.some(function(file) {
-        return file.path === path;
+      var stillListed = !!state && state.files.some(function(listed) {
+        return listed.path === file.path;
       });
       await window.__TAURI__.dialog.message(
         _t(stillListed ? 'openErrorMsg' : 'openFailedMsg'),
@@ -1389,7 +1388,7 @@
           span.textContent = field.text;
           row.appendChild(span);
         });
-        row.addEventListener('click', function() { _openRecentFile(file.path); });
+        row.addEventListener('click', function() { _openRecentFile(file); });
 
         var item = document.createElement('li');
         item.appendChild(row);

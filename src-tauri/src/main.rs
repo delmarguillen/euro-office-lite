@@ -5,9 +5,11 @@ mod bridge;
 mod clipboard;
 mod converter;
 mod dictionaries;
+mod file_dialogs;
 mod file_ops;
 mod launch_args;
 mod note_separator;
+mod path_grants;
 mod protocol_limits;
 mod recent;
 mod recovery;
@@ -155,6 +157,30 @@ fn absolute_arg_path(arg: &str, cwd: &std::path::Path) -> Option<std::path::Path
     }
 }
 
+// What copy-to-media reads. An image chosen in the insert dialog comes as
+// "eo-grant:<token>/<name>". After a compare or a merge, sdkjs does not
+// register the url map convert_for_insert hands it and asks for the bare name
+// the inserted binary carries ("image1.png"): that resolves against
+// insert_tmp/media/, by file name only so a relative request cannot walk out
+// of it with a .. Staging is keyed on content, so the file already staged
+// there answers with the name it got at convert time.
+fn copy_source(state: &AppState, src_path: &str) -> Result<std::path::PathBuf, String> {
+    if let Some(granted) = src_path.strip_prefix(file_ops::IMAGE_GRANT_PREFIX) {
+        let token = granted.split('/').next().unwrap_or_default();
+        return state.grants.resolve(token, path_grants::GrantKind::Image);
+    }
+    let requested = std::path::Path::new(src_path);
+    if requested.is_absolute() {
+        let pasted = state.pasted_images.lock().unwrap();
+        if !protocol_limits::may_copy_absolute(requested, &pasted) {
+            return Err("not on the clipboard".to_string());
+        }
+        return Ok(requested.to_path_buf());
+    }
+    let name = requested.file_name().unwrap_or_default();
+    Ok(state.temp_dir.join("insert_tmp").join("media").join(name))
+}
+
 fn main() {
     // WebKitGTK's DMABUF renderer produces jagged/rough canvas rendering on some
     // drivers (Nvidia proprietary especially, issue #27). The Flatpak already sets
@@ -259,17 +285,16 @@ fn main() {
         log_startup("title bar option ignored: it only applies on Linux Wayland");
     }
 
-    let file_to_open: Option<String> = {
+    let file_to_open: Option<std::path::PathBuf> = {
         // An empty base leaves a relative path untouched, which is what we can do
         // when the working directory is unreadable.
         let cwd = std::env::current_dir().unwrap_or_default();
         let path = launch
             .document
             .as_deref()
-            .and_then(|arg| absolute_arg_path(arg, &cwd))
-            .and_then(|path| path.into_os_string().into_string().ok());
+            .and_then(|arg| absolute_arg_path(arg, &cwd));
         if let Some(ref path) = path {
-            let file_name = std::path::Path::new(path)
+            let file_name = path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("unknown");
@@ -304,9 +329,9 @@ fn main() {
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
             pending_open: Mutex::new(file_to_open),
+            grants: path_grants::PathGrants::default(),
             text_options: Mutex::new(None),
             last_print_pdf: Mutex::new(None),
-            picked_images: Mutex::new(Vec::new()),
             pasted_images: Mutex::new(Vec::new()),
             save_suggestion: Mutex::new(None),
         })
@@ -317,8 +342,11 @@ fn main() {
             file_ops::write_editor_bin,
             file_ops::print_document,
             file_ops::create_new,
-            file_ops::get_current_path,
-            file_ops::pick_image_files,
+            file_ops::current_document,
+            file_dialogs::pick_document,
+            file_dialogs::pick_files,
+            file_dialogs::pick_save_target,
+            file_dialogs::locate_linked_file,
             file_ops::take_pending_open_file,
             file_ops::open_pdf_viewer,
             file_ops::print_to_printer,
@@ -343,7 +371,6 @@ fn main() {
             recovery::recovery_candidates,
             recovery::recovery_load,
             recovery::recovery_discard,
-            recovery::get_save_suggestion,
             dictionaries::list_user_dictionaries,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
@@ -453,20 +480,13 @@ fn main() {
                 // name it got at convert time instead of piling up a second copy.
                 // Only the file name, so a relative request cannot walk out of that
                 // directory with a ..
-                let insert_src = state
-                    .temp_dir
-                    .join("insert_tmp")
-                    .join("media")
-                    .join(std::path::Path::new(src_path).file_name().unwrap_or_default());
-                let requested = std::path::Path::new(src_path);
-                let src = if requested.is_absolute() {
-                    let picked = state.picked_images.lock().unwrap();
-                    let pasted = state.pasted_images.lock().unwrap();
-                    if !protocol_limits::may_copy_granted(requested, &picked, &pasted) {
+                let src = match copy_source(&state, src_path) {
+                    Ok(src) => src,
+                    Err(reason) => {
                         let shown: String = src_path.chars().take(200).collect();
                         file_ops::log_event(
                             &state,
-                            &format!("[COPY] refused {}: not picked nor on clipboard", shown),
+                            &format!("[COPY] refused {}: {}", shown, reason),
                         );
                         return tauri::http::Response::builder()
                             .status(403)
@@ -475,13 +495,10 @@ fn main() {
                             .body(b"Forbidden".to_vec())
                             .unwrap();
                     }
-                    requested
-                } else {
-                    insert_src.as_path()
                 };
                 // The reply is the name sdkjs will write into the document, which is not
                 // necessarily the source's: see stage_into_media for the collision rules.
-                if let Some(name) = file_ops::stage_into_media(&media_dir, src) {
+                if let Some(name) = file_ops::stage_into_media(&media_dir, &src) {
                     // no-store: a cached response would skip the actual copy after media/ is
                     // cleared on document switch, leaving a dangling reference
                     return tauri::http::Response::builder()

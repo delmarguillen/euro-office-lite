@@ -17,8 +17,11 @@
     "allow-write-editor-bin",
     "allow-print-document",
     "allow-create-new",
-    "allow-get-current-path",
-    "allow-pick-image-files",
+    "allow-current-document",
+    "allow-pick-document",
+    "allow-pick-files",
+    "allow-pick-save-target",
+    "allow-locate-linked-file",
     "allow-take-pending-open-file",
     "allow-open-pdf-viewer",
     "allow-print-to-printer",
@@ -43,7 +46,6 @@
     "allow-recovery-candidates",
     "allow-recovery-load",
     "allow-recovery-discard",
-    "allow-get-save-suggestion",
     "allow-list-user-dictionaries"
   ]
 }
