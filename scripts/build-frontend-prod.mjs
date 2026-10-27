@@ -132,8 +132,9 @@ async function injectSdkScripts(editor, moduleName) {
   );
   const marker = '<script src="../../../vendor/requirejs/require.js"></script>';
   let html = await readFile(htmlPath, 'utf8');
+  const usesDynamicLoader = html.includes(pdfLoaderMarker);
 
-  if (!html.includes(marker)) {
+  if (!html.includes(marker) && !usesDynamicLoader) {
     fail(`production loader marker not found in ${htmlPath}`);
   }
 
@@ -195,11 +196,50 @@ define('allfonts', [], function() {});
 define('sdk', ['jquery', 'allfonts', 'xregexp', 'socketio'], function() {});
 </script>`;
 
-  html = html.replace(
-    marker,
-    `${scripts.join('\n')}\n${marker}\n${requirePredefineScript}`,
-  );
+  if (usesDynamicLoader) {
+    html = injectIntoDynamicLoader(html, htmlPath, scripts, requirePredefineScript);
+  } else {
+    html = html.replace(
+      marker,
+      `${scripts.join('\n')}\n${marker}\n${requirePredefineScript}`,
+    );
+  }
   await writeFile(htmlPath, html, 'utf8');
+}
+
+// The PDF editor appends require.js from startApp() once it knows whether the
+// document is a form, so there is no static tag to anchor on. The SDK tags go
+// before that inline script, and the module stubs run from the require.js
+// onload handler, before the app module is requested.
+const pdfLoaderMarker = 'script.src = "../../../vendor/requirejs/require.js";';
+const pdfStartAppPattern = /<script>\s*function startApp\(\)/;
+const pdfDataMain = 'script.setAttribute("data-main", "app");';
+
+function injectIntoDynamicLoader(html, htmlPath, scripts, requirePredefineScript) {
+  const startApp = html.match(pdfStartAppPattern);
+  if (!startApp) {
+    fail(`startApp() loader not found in ${htmlPath}`);
+  }
+  if (!html.includes(pdfDataMain)) {
+    fail(`data-main assignment not found in ${htmlPath}`);
+  }
+
+  const stubs = requirePredefineScript
+    .replace('<script>', '')
+    .replace('</script>', '')
+    .trim();
+  const onload = [
+    'script.onload = function() {',
+    stubs,
+    "require(['app']);",
+    '};',
+  ].join('\n');
+
+  const withScripts = html.replace(
+    startApp[0],
+    `${scripts.join('\n')}\n${startApp[0]}`,
+  );
+  return withScripts.replace(pdfDataMain, onload);
 }
 
 requirePath(
