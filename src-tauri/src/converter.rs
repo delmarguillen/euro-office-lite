@@ -203,7 +203,7 @@ mod tests {
         let (base, root) = root_without_cache();
         write_cache(&crate::temp_layout::fontdata_dir(&root), b"cache");
         let marker = root.join(crate::temp_layout::FONTS_MARKER);
-        std::fs::write(marker, crate::temp_layout::app_version()).unwrap();
+        std::fs::write(marker, crate::temp_layout::expected_marker()).unwrap();
 
         let list = pdf_list_for_export(&root, |_: &std::path::Path| panic!("built again"), WAIT);
 
@@ -268,7 +268,7 @@ mod tests {
         std::fs::create_dir_all(&fontdata).unwrap();
         std::fs::write(fontdata.join("AllFonts.js"), b"old").unwrap();
         let marker = root.join(crate::temp_layout::FONTS_MARKER);
-        std::fs::write(marker, crate::temp_layout::app_version()).unwrap();
+        std::fs::write(marker, crate::temp_layout::expected_marker()).unwrap();
 
         assert!(!crate::temp_layout::fonts_ready(&root));
         let list = pdf_list_for_export(
@@ -293,7 +293,7 @@ mod tests {
     fn no_pdf_when_the_build_fails_next_to_an_old_marker() {
         let (base, root) = root_without_cache();
         let marker = root.join(crate::temp_layout::FONTS_MARKER);
-        std::fs::write(&marker, crate::temp_layout::app_version()).unwrap();
+        std::fs::write(&marker, crate::temp_layout::expected_marker()).unwrap();
         // write_replacing writes the marker through this file first.
         std::fs::create_dir_all(marker.with_extension("tmp-1-1")).unwrap();
 

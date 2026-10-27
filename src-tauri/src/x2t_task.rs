@@ -917,6 +917,19 @@ pub fn font_scan_command(
     cmd
 }
 
+// Every font folder the scan reads: the bundled one, those passed to x2t and
+// the standard ones x2t scans on its own. A change in any of them changes
+// the font cache marker.
+pub fn font_scan_dirs(binaries_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![strip_extended_prefix(binaries_dir).join("fonts")];
+    let roots = symlink_scan_roots();
+    dirs.extend(symlink_font_target_dirs(&roots));
+    dirs.extend(roots);
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
 // Runs x2t's font scan into `fontdata_dir` and reports whether it succeeded.
 pub fn generate_fonts(
     fontdata_dir: &std::path::Path,

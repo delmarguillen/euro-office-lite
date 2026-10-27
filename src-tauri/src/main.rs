@@ -693,6 +693,10 @@ fn main() {
             }
 
             temp_layout::set_app_version(app.package_info().version.to_string());
+            temp_layout::set_font_sources(temp_layout::font_sources_text(
+                &binaries_dir,
+                &x2t_task::font_scan_dirs(&binaries_dir),
+            ));
             run_font_generation(&font_root, &instance_id, &binaries_dir);
 
             // Off the startup path: nothing on screen waits for it.

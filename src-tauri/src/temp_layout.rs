@@ -233,19 +233,138 @@ fn stored_version(cell: &OnceLock<String>) -> &str {
     cell.get().map(String::as_str).unwrap_or(VERSION_UNSET)
 }
 
+// What the font scan read besides the app version: the bundled binaries
+// folder (AllFonts.js holds absolute paths into it) and a fingerprint of each
+// font folder x2t is given. Set once at startup; empty until then, as in tests.
+static FONT_SOURCES: OnceLock<String> = OnceLock::new();
+
+pub fn set_font_sources(sources: String) {
+    let _ = FONT_SOURCES.set(sources);
+}
+
+// The marker a cache built by this process carries and a usable cache must
+// match: another version, another install or a change in the font folders
+// each make it differ, and the cache is rebuilt.
+pub fn expected_marker() -> String {
+    marker_text(app_version(), FONT_SOURCES.get().map(String::as_str).unwrap_or(""))
+}
+
+fn marker_text(version: &str, sources: &str) -> String {
+    format!("{}\n{}", version, sources)
+}
+
+// One line for the binaries folder, then one per font folder. The folder
+// limit is shared by all of them.
+pub fn font_sources_text(binaries_dir: &Path, font_dirs: &[PathBuf]) -> String {
+    let binaries = std::fs::canonicalize(binaries_dir).unwrap_or_else(|_| binaries_dir.to_path_buf());
+    let mut text = format!("binaries\t{}\n", binaries.display());
+    let mut budget = FINGERPRINT_MAX_DIRS;
+    for dir in font_dirs {
+        text.push_str(&font_dir_fingerprint(dir, &mut budget));
+        text.push('\n');
+    }
+    text
+}
+
+// Fonts sit in subfolders (a package puts each family in its own), and adding
+// or removing a file changes only the time of the folder that holds it. So
+// the fingerprint walks folders, never files, and keeps the newest time and
+// how many folders it saw. The walk is bounded for slow disks; when it stops
+// early the line says so, and the same tree still gives the same line.
+const FINGERPRINT_MAX_DEPTH: usize = 4;
+const FINGERPRINT_MAX_DIRS: usize = 2000;
+
+struct TreeScan {
+    newest: u128,
+    dirs: usize,
+    truncated: bool,
+}
+
+fn font_dir_fingerprint(dir: &Path, budget: &mut usize) -> String {
+    let Ok(meta) = std::fs::metadata(dir) else {
+        return format!("{}\tmissing", dir.display());
+    };
+    let mut scan = TreeScan {
+        newest: modified_nanos(&meta),
+        dirs: 1,
+        truncated: false,
+    };
+    let mut level = vec![dir.to_path_buf()];
+    for _ in 0..FINGERPRINT_MAX_DEPTH {
+        level = scan_level(&level, &mut scan, budget);
+    }
+    if level.iter().any(|deepest| !subfolders(deepest).is_empty()) {
+        scan.truncated = true;
+    }
+    let mut line = format!("{}\t{}\t{}", dir.display(), scan.newest, scan.dirs);
+    if scan.truncated {
+        line.push_str("\ttruncated");
+    }
+    line
+}
+
+// Adds the folders one level below `parents` to the scan, within the budget,
+// and returns them.
+fn scan_level(parents: &[PathBuf], scan: &mut TreeScan, budget: &mut usize) -> Vec<PathBuf> {
+    let mut next = Vec::new();
+    for parent in parents {
+        for (path, modified) in subfolders(parent) {
+            if *budget == 0 {
+                scan.truncated = true;
+                return next;
+            }
+            *budget -= 1;
+            scan.dirs += 1;
+            scan.newest = scan.newest.max(modified);
+            next.push(path);
+        }
+    }
+    next
+}
+
+// Sorted by name, so a cut at the limit falls in the same place every time.
+fn subfolders(dir: &Path) -> Vec<(PathBuf, u128)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(PathBuf, u128)> = entries.flatten().filter_map(subfolder).collect();
+    found.sort();
+    found
+}
+
+// The entry's own type, so a link to a folder is not one.
+fn subfolder(entry: std::fs::DirEntry) -> Option<(PathBuf, u128)> {
+    let kind = entry.file_type().ok()?;
+    if !kind.is_dir() {
+        return None;
+    }
+    let meta = entry.metadata().ok()?;
+    Some((entry.path(), modified_nanos(&meta)))
+}
+
+fn modified_nanos(meta: &std::fs::Metadata) -> u128 {
+    let Ok(modified) = meta.modified() else {
+        return 0;
+    };
+    modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0)
+}
+
 pub fn fonts_ready(root: &Path) -> bool {
-    fonts_ready_for(root, app_version())
+    fonts_ready_for(root, &expected_marker())
 }
 
 // x2t's scan always writes both files and the PDF export uses both, so a
 // cache missing either is a half-installed one and counts as missing. A cache
-// built by another version counts as missing too: the scan can change with
-// the bundled x2t and fonts.
-fn fonts_ready_for(root: &Path, version: &str) -> bool {
+// whose marker differs counts as missing too: the scan can change with the
+// bundled x2t and fonts, and with the fonts installed.
+fn fonts_ready_for(root: &Path, expected: &str) -> bool {
     let Ok(marker) = std::fs::read(root.join(FONTS_MARKER)) else {
         return false;
     };
-    if !marker_matches(&marker, version) {
+    if !marker_matches(&marker, expected) {
         return false;
     }
     let fontdata = fontdata_dir(root);
@@ -258,10 +377,10 @@ fn fonts_ready_for(root: &Path, version: &str) -> bool {
     !(cfg!(target_os = "windows") && has_extended_paths(&fontdata))
 }
 
-// Markers written before they held a version say "generated", which never
-// matches.
-fn marker_matches(contents: &[u8], version: &str) -> bool {
-    contents == version.as_bytes()
+// Markers written before they held a version say "generated", and those
+// that held only the version have no sources: neither ever matches.
+fn marker_matches(contents: &[u8], expected: &str) -> bool {
+    contents == expected.as_bytes()
 }
 
 fn is_nonempty(path: &Path) -> bool {
@@ -352,10 +471,10 @@ pub fn ensure_font_cache(
     }
     let staging = root.join(format!("{}{}", FONTS_STAGING_PREFIX, instance_id));
     let generated = std::fs::create_dir_all(&staging).is_ok() && generate(&staging);
-    let marker = app_version().as_bytes();
+    let marker = expected_marker();
     let installed = generated
         && install_font_cache(&staging, &fontdata_dir(root)).is_ok()
-        && write_replacing(&root.join(FONTS_MARKER), marker, instance_id).is_ok();
+        && write_replacing(&root.join(FONTS_MARKER), marker.as_bytes(), instance_id).is_ok();
     let _ = std::fs::remove_dir_all(&staging);
     drop(lock);
     if installed {

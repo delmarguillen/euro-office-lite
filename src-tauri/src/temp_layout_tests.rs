@@ -394,7 +394,7 @@ fn a_start_during_generation_waits_and_does_not_generate_again() {
         let live = fontdata_dir(&other_root);
         std::fs::create_dir_all(&live).unwrap();
         write_fonts(&live, b"theirs");
-        std::fs::write(other_root.join(FONTS_MARKER), app_version()).unwrap();
+        std::fs::write(other_root.join(FONTS_MARKER), expected_marker()).unwrap();
         drop(held);
     });
 
@@ -509,7 +509,7 @@ fn a_cache_from_an_older_version_is_rebuilt_once() {
 
     assert_eq!(outcome, FontCache::Generated);
     let marker = std::fs::read(root.join(FONTS_MARKER)).unwrap();
-    assert_eq!(marker, app_version().as_bytes());
+    assert_eq!(marker, expected_marker().as_bytes());
     assert_eq!(
         ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL),
         FontCache::Ready
@@ -588,7 +588,7 @@ fn a_windows_cache_with_extended_paths_is_rebuilt_once() {
     let root = scratch_root();
     let live = fontdata_dir(&root);
     write_cache(&live, ALLFONTS_EXTENDED, SELECTION_EXTENDED);
-    std::fs::write(root.join(FONTS_MARKER), app_version()).unwrap();
+    std::fs::write(root.join(FONTS_MARKER), expected_marker()).unwrap();
 
     let outcome = ensure_font_cache(
         &root,
@@ -1115,5 +1115,180 @@ fn a_font_root_open_to_others_falls_back_to_the_temp_root() {
 
     assert_eq!(choice.path, temp);
     assert!(choice.note.unwrap().contains("permissions 777"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---------------------------------------------------------------------------
+// Font cache marker
+// ---------------------------------------------------------------------------
+
+fn sources_for(binaries: &Path, font_dirs: &[PathBuf]) -> String {
+    font_sources_text(binaries, font_dirs)
+}
+
+#[test]
+fn a_marker_with_only_the_version_is_not_ready() {
+    let base = scratch_root();
+    let sources = sources_for(&base.join("binaries"), &[]);
+    let root = root_with_marker(b"0.17.43-alpha");
+
+    assert!(!fonts_ready_for(&root, &marker_text("0.17.43-alpha", &sources)));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_cache_built_by_another_install_is_not_ready() {
+    let base = scratch_root();
+    let release = base.join("release/binaries");
+    let dev = base.join("dev/binaries");
+    std::fs::create_dir_all(&release).unwrap();
+    std::fs::create_dir_all(&dev).unwrap();
+    let built_by_release = marker_text("0.17.43-alpha", &sources_for(&release, &[]));
+    let root = root_with_marker(built_by_release.as_bytes());
+
+    assert!(fonts_ready_for(&root, &built_by_release));
+    assert!(!fonts_ready_for(&root, &marker_text("0.17.43-alpha", &sources_for(&dev, &[]))));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_new_font_in_a_scanned_folder_makes_the_cache_stale() {
+    let base = scratch_root();
+    let binaries = base.join("binaries");
+    let user_fonts = base.join("user-fonts");
+    std::fs::create_dir_all(&user_fonts).unwrap();
+    std::fs::write(user_fonts.join("a.ttf"), b"a").unwrap();
+    let before = marker_text("0.17.43-alpha", &sources_for(&binaries, &[user_fonts.clone()]));
+    let root = root_with_marker(before.as_bytes());
+
+    std::fs::write(user_fonts.join("b.ttf"), b"b").unwrap();
+    let after = marker_text("0.17.43-alpha", &sources_for(&binaries, &[user_fonts.clone()]));
+
+    assert!(!fonts_ready_for(&root, &after));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_font_folder_that_appears_makes_the_cache_stale() {
+    let base = scratch_root();
+    let binaries = base.join("binaries");
+    let user_fonts = base.join("user-fonts");
+    let before = marker_text("0.17.43-alpha", &sources_for(&binaries, &[user_fonts.clone()]));
+    let root = root_with_marker(before.as_bytes());
+
+    std::fs::create_dir_all(&user_fonts).unwrap();
+    let after = marker_text("0.17.43-alpha", &sources_for(&binaries, &[user_fonts.clone()]));
+
+    assert!(!fonts_ready_for(&root, &after));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_binaries_folder_is_recorded_by_its_real_path() {
+    let base = scratch_root();
+    let real = base.join("opt/binaries");
+    std::fs::create_dir_all(&real).unwrap();
+    let link = base.join("binaries");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    assert_eq!(sources_for(&link, &[]), sources_for(&real, &[]));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---------------------------------------------------------------------------
+// Font folder fingerprint
+// ---------------------------------------------------------------------------
+
+fn fingerprint(dirs: &[PathBuf]) -> String {
+    font_sources_text(Path::new("/no-binaries"), dirs)
+}
+
+// Folder times have a fine resolution, but not every file system has one.
+fn tick() {
+    std::thread::sleep(std::time::Duration::from_millis(20));
+}
+
+#[test]
+fn a_new_folder_two_levels_down_changes_the_fingerprint() {
+    let root = scratch_root();
+    std::fs::create_dir_all(root.join("truetype")).unwrap();
+    let before = fingerprint(&[root.clone()]);
+
+    tick();
+    std::fs::create_dir(root.join("truetype/new-family")).unwrap();
+
+    assert_ne!(fingerprint(&[root.clone()]), before);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_new_file_in_a_subfolder_changes_the_fingerprint() {
+    let root = scratch_root();
+    std::fs::create_dir_all(root.join("truetype/dejavu")).unwrap();
+    let before = fingerprint(&[root.clone()]);
+
+    tick();
+    std::fs::write(root.join("truetype/dejavu/DejaVuSans.ttf"), b"font").unwrap();
+
+    assert_ne!(fingerprint(&[root.clone()]), before);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_fingerprint_stops_four_levels_down_and_says_so() {
+    let root = scratch_root();
+    let deep = root.join("a/b/c/d/e");
+    std::fs::create_dir_all(&deep).unwrap();
+    let before = fingerprint(&[root.clone()]);
+
+    tick();
+    std::fs::create_dir(deep.join("f")).unwrap();
+
+    let after = fingerprint(&[root.clone()]);
+    assert_eq!(after, before);
+    assert!(after.contains("\ttruncated"), "{}", after);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_fingerprint_stops_at_the_folder_limit_and_says_so() {
+    let root = scratch_root();
+    for n in 0..FINGERPRINT_MAX_DIRS + 10 {
+        std::fs::create_dir(root.join(format!("{:05}", n))).unwrap();
+    }
+    let before = fingerprint(&[root.clone()]);
+
+    tick();
+    let past_the_limit = root.join(format!("{:05}", FINGERPRINT_MAX_DIRS + 5));
+    std::fs::create_dir(past_the_limit.join("inner")).unwrap();
+
+    let after = fingerprint(&[root.clone()]);
+    assert_eq!(after, before);
+    assert!(after.contains(&format!("\t{}\ttruncated", FINGERPRINT_MAX_DIRS + 1)), "{}", after);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_folder_is_not_followed() {
+    let base = scratch_root();
+    let root = base.join("fonts");
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir_all(root.join("real")).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, root.join("link")).unwrap();
+    let before = fingerprint(&[root.clone()]);
+
+    tick();
+    std::fs::create_dir(elsewhere.join("new-family")).unwrap();
+    assert_eq!(fingerprint(&[root.clone()]), before);
+
+    std::fs::write(root.join("real/a.ttf"), b"font").unwrap();
+    assert_ne!(fingerprint(&[root.clone()]), before);
     let _ = std::fs::remove_dir_all(&base);
 }
