@@ -1026,3 +1026,94 @@ mod private_root {
         let _ = std::fs::remove_dir_all(&base);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Font cache root
+// ---------------------------------------------------------------------------
+
+fn os(value: &str) -> Option<std::ffi::OsString> {
+    Some(std::ffi::OsString::from(value))
+}
+
+#[test]
+fn the_font_cache_goes_in_each_platforms_user_cache_folder() {
+    let id = "org.euro-office.lite";
+    let linux = linux_cache_dir(None, os("/home/ana")).unwrap();
+    let xdg = linux_cache_dir(os("/srv/cache"), os("/home/ana")).unwrap();
+    let flatpak = linux_cache_dir(
+        os("/home/ana/.var/app/org.euro_office.Lite/cache"),
+        os("/home/ana"),
+    )
+    .unwrap();
+    let macos = macos_cache_dir(os("/Users/ana")).unwrap();
+    let windows = windows_cache_dir(os(r"C:\Users\ana\AppData\Local")).unwrap();
+
+    assert_eq!(font_cache_path(&linux, id), Path::new("/home/ana/.cache/org.euro-office.lite/fonts"));
+    assert_eq!(font_cache_path(&xdg, id), Path::new("/srv/cache/org.euro-office.lite/fonts"));
+    assert_eq!(
+        font_cache_path(&flatpak, id),
+        Path::new("/home/ana/.var/app/org.euro_office.Lite/cache/org.euro-office.lite/fonts")
+    );
+    assert_eq!(font_cache_path(&macos, id), Path::new("/Users/ana/Library/Caches/org.euro-office.lite/fonts"));
+    assert_eq!(windows, PathBuf::from(r"C:\Users\ana\AppData\Local"));
+}
+
+#[test]
+fn a_relative_or_missing_cache_folder_is_not_used() {
+    assert_eq!(linux_cache_dir(os("relative"), os("/home/ana")), Some(PathBuf::from("/home/ana/.cache")));
+    assert_eq!(linux_cache_dir(None, os("")), None);
+    assert_eq!(macos_cache_dir(None), None);
+    assert_eq!(windows_cache_dir(os("")), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_font_root_is_a_private_folder_in_the_user_cache() {
+    let base = scratch_root();
+    let temp = base.join("tmp");
+    let preferred = font_cache_path(&base.join("cache"), "org.euro-office.lite");
+
+    let choice = choose_font_root(&preferred, &temp, ensure_font_dir);
+
+    assert_eq!(choice.path, preferred);
+    assert!(choice.note.is_none());
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(&preferred).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_font_root_that_is_a_link_falls_back_to_the_temp_root() {
+    let base = scratch_root();
+    let temp = base.join("tmp");
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let preferred = font_cache_path(&base.join("cache"), "org.euro-office.lite");
+    std::fs::create_dir_all(preferred.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &preferred).unwrap();
+
+    let choice = choose_font_root(&preferred, &temp, ensure_font_dir);
+
+    assert_eq!(choice.path, temp);
+    assert!(choice.note.unwrap().contains("not a plain folder"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_font_root_open_to_others_falls_back_to_the_temp_root() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = scratch_root();
+    let temp = base.join("tmp");
+    let preferred = font_cache_path(&base.join("cache"), "org.euro-office.lite");
+    std::fs::create_dir_all(&preferred).unwrap();
+    std::fs::set_permissions(&preferred, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+    let choice = choose_font_root(&preferred, &temp, ensure_font_dir);
+
+    assert_eq!(choice.path, temp);
+    assert!(choice.note.unwrap().contains("permissions 777"));
+    let _ = std::fs::remove_dir_all(&base);
+}

@@ -184,7 +184,8 @@ fn main() {
     };
     let temp_root = root_choice.path;
     std::fs::create_dir_all(&temp_root).ok();
-    let font_root = temp_root.clone();
+    let font_choice = temp_layout::font_root(&context.config().identifier, &temp_root);
+    let font_root = font_choice.path;
     let instance = start_instance(&temp_root);
     let temp_dir = instance.dir.clone();
     let instance_id = instance.id.clone();
@@ -205,6 +206,13 @@ fn main() {
         log_startup(&format!(
             "WARNING: temp folder {} is not the preferred one: {}",
             temp_root.display(),
+            note
+        ));
+    }
+    if let Some(note) = &font_choice.note {
+        log_startup(&format!(
+            "WARNING: font cache kept in the temp folder {}: {}",
+            font_root.display(),
             note
         ));
     }

@@ -785,20 +785,107 @@ pub fn temp_root(identifier: &str) -> Result<RootChoice, String> {
 // Where Tauri's app_cache_dir lives, worked out before Tauri is up.
 #[cfg(target_os = "macos")]
 fn user_cache_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
-    Some(PathBuf::from(home).join("Library/Caches"))
+    macos_cache_dir(std::env::var_os("HOME"))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn user_cache_dir() -> Option<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
-        let xdg = PathBuf::from(xdg);
-        if xdg.is_absolute() {
-            return Some(xdg);
-        }
+    linux_cache_dir(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+}
+
+#[cfg(target_os = "windows")]
+fn user_cache_dir() -> Option<PathBuf> {
+    windows_cache_dir(std::env::var_os("LOCALAPPDATA"))
+}
+
+// The rules per platform, apart from the environment so every platform's can
+// be tested anywhere. Inside the Flatpak XDG_CACHE_HOME is the sandbox's own
+// cache folder.
+#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+fn linux_cache_dir(
+    xdg_cache_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let xdg = xdg_cache_home.map(PathBuf::from);
+    if let Some(xdg) = xdg.filter(|xdg| xdg.is_absolute()) {
+        return Some(xdg);
     }
-    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
+    let home = home.filter(|home| !home.is_empty())?;
     Some(PathBuf::from(home).join(".cache"))
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_cache_dir(home: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let home = home.filter(|home| !home.is_empty())?;
+    Some(PathBuf::from(home).join("Library/Caches"))
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_cache_dir(local_app_data: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let dir = local_app_data.filter(|dir| !dir.is_empty())?;
+    Some(PathBuf::from(dir))
+}
+
+// ---------------------------------------------------------------------------
+// Font cache root
+// ---------------------------------------------------------------------------
+
+const FONT_ROOT_DIR: &str = "fonts";
+
+// The font cache outlives the temp folder, which some systems empty on every
+// boot, so it goes in the user's cache folder.
+pub fn font_cache_path(user_cache: &Path, identifier: &str) -> PathBuf {
+    user_cache.join(identifier).join(FONT_ROOT_DIR)
+}
+
+// Where the font cache goes. AllFonts.js decides which absolute paths the
+// abs/ protocol serves, so the folder must be private to this user; when the
+// cache folder is missing or fails that check, the cache stays in the temp
+// root as before, so the app never runs without one.
+pub fn font_root(identifier: &str, temp_root: &Path) -> RootChoice {
+    let Some(user_cache) = user_cache_dir() else {
+        return font_root_fallback(temp_root, "no user cache folder".to_string());
+    };
+    let preferred = font_cache_path(&user_cache, identifier);
+    choose_font_root(&preferred, temp_root, ensure_font_dir)
+}
+
+pub fn choose_font_root(
+    preferred: &Path,
+    temp_root: &Path,
+    ensure: impl Fn(&Path) -> Result<(), String>,
+) -> RootChoice {
+    match ensure(preferred) {
+        Ok(()) => RootChoice {
+            path: preferred.to_path_buf(),
+            note: None,
+        },
+        Err(reason) => font_root_fallback(temp_root, format!("{}: {}", preferred.display(), reason)),
+    }
+}
+
+fn font_root_fallback(temp_root: &Path, reason: String) -> RootChoice {
+    RootChoice {
+        path: temp_root.to_path_buf(),
+        note: Some(reason),
+    }
+}
+
+#[cfg(unix)]
+fn ensure_font_dir(path: &Path) -> Result<(), String> {
+    ensure_private_dir(path, unsafe { libc::getuid() })
+}
+
+// %LOCALAPPDATA% is already private to the user; what is checked is that the
+// folder is a real one and not a link to somewhere else.
+#[cfg(target_os = "windows")]
+fn ensure_font_dir(path: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+    let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err("not a plain folder".to_string());
+    }
+    Ok(())
 }
 
 // Names tried per folder before moving on to the next one.
