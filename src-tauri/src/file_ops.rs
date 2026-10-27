@@ -10,8 +10,10 @@ pub struct AppState {
     // This instance's own folder: everything that belongs to the open
     // document (temp_layout.rs).
     pub temp_dir: PathBuf,
-    // Shared by every instance: the font cache and the logs.
+    // Shared by every instance: the logs and the leftovers of other instances.
     pub temp_root: PathBuf,
+    // Shared by every instance: the font cache.
+    pub font_root: PathBuf,
     pub instance: crate::temp_layout::Instance,
     // Number of the document open in this instance: part of its images'
     // addresses (temp_layout.rs, "Document images").
@@ -361,7 +363,7 @@ async fn open_file_inner(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
         convert_options,
     )
     .await;
@@ -439,7 +441,7 @@ pub async fn save_file(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
         text_options,
     )
     .await?;
@@ -474,7 +476,7 @@ pub async fn save_file_as(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
         text_options,
     )
     .await?;
@@ -586,7 +588,7 @@ pub async fn print_document(
         8192,
         513,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
         None,
     )
     .await
@@ -877,7 +879,7 @@ pub async fn convert_for_insert(
         format_from,
         format_to,
         &insert_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
         None,
     )
     .await?;
@@ -915,7 +917,7 @@ pub async fn convert_for_insert(
 
 #[tauri::command]
 pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
-    let path = crate::temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
+    let path = crate::temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
     std::fs::read_to_string(&path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
 }
 

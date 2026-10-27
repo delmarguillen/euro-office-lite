@@ -184,6 +184,7 @@ fn main() {
     };
     let temp_root = root_choice.path;
     std::fs::create_dir_all(&temp_root).ok();
+    let font_root = temp_root.clone();
     let instance = start_instance(&temp_root);
     let temp_dir = instance.dir.clone();
     let instance_id = instance.id.clone();
@@ -298,6 +299,7 @@ fn main() {
             current_file: Mutex::new(None),
             temp_dir,
             temp_root: temp_root.clone(),
+            font_root: font_root.clone(),
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
             modified: Mutex::new(false),
@@ -612,7 +614,7 @@ fn main() {
                     raw_abs_path
                 };
                 let state = ctx.app_handle().state::<AppState>();
-                let all_fonts = temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
+                let all_fonts = temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
                 if !protocol_limits::is_generated_font(&all_fonts, abs_path) {
                     return tauri::http::Response::builder()
                         .status(403)
@@ -623,7 +625,7 @@ fn main() {
                 std::fs::read(abs_path).ok()
             } else if decoded_path.ends_with("sdkjs/common/AllFonts.js") {
                 let state = ctx.app_handle().state::<AppState>();
-                let generated = temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
+                let generated = temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
                 std::fs::read(&generated).ok().or_else(|| {
                     read_resource(ctx.app_handle(), &relative)
                 })
@@ -683,7 +685,7 @@ fn main() {
             }
 
             temp_layout::set_app_version(app.package_info().version.to_string());
-            run_font_generation(&temp_root, &instance_id, &binaries_dir);
+            run_font_generation(&font_root, &instance_id, &binaries_dir);
 
             // Off the startup path: nothing on screen waits for it.
             let sweep_root = temp_root.clone();
@@ -823,16 +825,16 @@ const FONT_CACHE_WAIT: std::time::Duration = std::time::Duration::from_secs(120)
 const FONT_CACHE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn run_font_generation(
-    temp_root: &std::path::Path,
+    font_root: &std::path::Path,
     instance_id: &str,
     binaries_dir: &std::path::Path,
 ) {
-    let marker = temp_root.join(temp_layout::FONTS_MARKER);
-    if marker.exists() && !temp_layout::fonts_ready(temp_root) {
+    let marker = font_root.join(temp_layout::FONTS_MARKER);
+    if marker.exists() && !temp_layout::fonts_ready(font_root) {
         log_startup("Marker exists but the font cache is missing or stale, regenerating");
     }
     let outcome = temp_layout::ensure_font_cache(
-        temp_root,
+        font_root,
         instance_id,
         |fontdata_dir: &std::path::Path| generate_fonts(fontdata_dir, binaries_dir),
         FONT_CACHE_WAIT,

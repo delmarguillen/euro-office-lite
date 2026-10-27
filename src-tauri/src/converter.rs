@@ -20,9 +20,9 @@ pub async fn convert_file(
     let binaries_dir = resource_dir.join("binaries");
 
     if format_to == 513 {
-        let (temp_root, instance_id) = {
+        let (font_root, instance_id) = {
             let state = app.state::<crate::file_ops::AppState>();
-            (state.temp_root.clone(), state.instance.id.clone())
+            (state.font_root.clone(), state.instance.id.clone())
         };
         let input = input.to_string();
         let output = output.to_string();
@@ -33,7 +33,7 @@ pub async fn convert_file(
         // seconds: neither should hold a thread of the async runtime.
         return tauri::async_runtime::spawn_blocking(move || {
             ensure_pdf_font_cache(
-                &temp_root,
+                &font_root,
                 &instance_id,
                 |staging: &std::path::Path| crate::generate_fonts(staging, &binaries_dir),
                 crate::FONT_CACHE_WAIT,
@@ -116,18 +116,18 @@ fn log_pdf(msg: &str) {
 // list bundled with the app has no font selection table, and the renderer
 // needs one. So a missing cache is built here, and without it there is no PDF.
 fn ensure_pdf_font_cache(
-    temp_root: &std::path::Path,
+    font_root: &std::path::Path,
     instance_id: &str,
     generate: impl FnOnce(&std::path::Path) -> bool,
     wait: std::time::Duration,
     poll: std::time::Duration,
 ) -> Result<(), String> {
-    if crate::temp_layout::fonts_ready(temp_root) {
+    if crate::temp_layout::fonts_ready(font_root) {
         return Ok(());
     }
     log_pdf("font cache missing, building it before the export");
     let outcome =
-        crate::temp_layout::ensure_font_cache(temp_root, instance_id, generate, wait, poll);
+        crate::temp_layout::ensure_font_cache(font_root, instance_id, generate, wait, poll);
     // A failed run can leave files that look complete next to an old marker,
     // so the outcome has to say the cache is good too.
     use crate::temp_layout::FontCache;
@@ -135,7 +135,7 @@ fn ensure_pdf_font_cache(
         outcome,
         FontCache::Ready | FontCache::Generated | FontCache::GeneratedByOther
     );
-    if built && crate::temp_layout::fonts_ready(temp_root) {
+    if built && crate::temp_layout::fonts_ready(font_root) {
         log_pdf(&format!("font cache ready: {:?}", outcome));
         Ok(())
     } else {
