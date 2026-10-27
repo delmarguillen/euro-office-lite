@@ -19,10 +19,10 @@ log() {
 # this working on the bash 3.2 that macOS ships.
 expected_sha256() {
     case "$1" in
-        x2t-binaries-linux-x64-10.0.0.169.zip) echo "PENDING_SHA256_LINUX_X64_10_0_0_169" ;;
-        x2t-binaries-linux-arm64-10.0.0.169.zip) echo "PENDING_SHA256_LINUX_ARM64_10_0_0_169" ;;
-        x2t-binaries-macos-arm64-10.0.0.169.zip) echo "PENDING_SHA256_MACOS_ARM64_10_0_0_169" ;;
-        x2t-binaries-macos-x64-10.0.0.169.zip) echo "PENDING_SHA256_MACOS_X64_10_0_0_169" ;;
+        x2t-binaries-linux-x64-10.0.0.169.zip) echo "5443749c7ce3df9353551570976f3487479d0ca5bb43e05553837d24e9d4e077" ;;
+        x2t-binaries-linux-arm64-10.0.0.169.zip) echo "c4c32397d9b17bb4c5266fd093649d884fcaa361e1f22294c2d8158aac3550c8" ;;
+        x2t-binaries-macos-arm64-10.0.0.169.zip) echo "bd82aa08dec628e5f1b4aad8ff2be3d6938930355023056ad7a920420866e9e8" ;;
+        x2t-binaries-macos-x64-10.0.0.169.zip) echo "d8eef7f83d2a8744d565ffd0c9fe4079749b68c2e1b09563fcd651f2e642bb15" ;;
         *) return 1 ;;
     esac
 }
