@@ -6,11 +6,8 @@
   ],
   "permissions": [
     "core:default",
-    "dialog:default",
-    "dialog:allow-open",
-    "dialog:allow-save",
-    "shell:allow-open",
-    "shell:default",
+    "dialog:allow-message",
+    "dialog:allow-confirm",
     "allow-open-file",
     "allow-save-file",
     "allow-save-file-as",

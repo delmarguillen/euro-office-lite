@@ -943,3 +943,34 @@ mod arg_path_tests {
         assert_eq!(absolute_arg_path("-flag", &temp.0), None);
     }
 }
+
+#[cfg(test)]
+mod capability_tests {
+    fn permissions() -> Vec<String> {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("capability JSON");
+        capability["permissions"]
+            .as_array()
+            .expect("permission list")
+            .iter()
+            .filter_map(|permission| permission.as_str())
+            .map(str::to_string)
+            .collect()
+    }
+
+    // The file dialogs open in the backend (file_dialogs.rs).
+    #[test]
+    fn the_webview_has_no_open_or_save_dialog() {
+        let permissions = permissions();
+        for refused in ["dialog:default", "dialog:allow-open", "dialog:allow-save"] {
+            assert!(!permissions.iter().any(|p| p == refused), "{refused}");
+        }
+    }
+
+    // x2t runs through the shell plugin from Rust, which needs no permission.
+    #[test]
+    fn the_webview_has_no_shell_permission() {
+        assert!(!permissions().iter().any(|p| p.starts_with("shell:")));
+    }
+}
