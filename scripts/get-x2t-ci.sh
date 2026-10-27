@@ -19,8 +19,8 @@ log() {
 # this working on the bash 3.2 that macOS ships.
 expected_sha256() {
     case "$1" in
-        x2t-binaries-linux-x64-9.4.0.129.zip) echo "6b7de53b626b61f5af5137fb9fa6d7b6c314075c7d4530fd8367f3db336a79d0" ;;
-        x2t-binaries-linux-arm64.zip) echo "4abf69447ba6be774881aaf85e04205b1e99801cef231b3c14aea0c3f24efef7" ;;
+        x2t-binaries-linux-x64-10.0.0.169.zip) echo "PENDING_SHA256_LINUX_X64_10_0_0_169" ;;
+        x2t-binaries-linux-arm64-10.0.0.169.zip) echo "PENDING_SHA256_LINUX_ARM64_10_0_0_169" ;;
         x2t-binaries-macos-arm64-9.4.0.129.zip) echo "ed9a6e1ee9f5155bfde2238f93eeba12d477005c7f7e61f9a858f667a11f3db5" ;;
         x2t-binaries-macos-x64-9.4.0.129.zip) echo "911bc13abec66cf9aec7e996fec14d289b53009ecaa8261020f5f50450001c6f" ;;
         *) return 1 ;;
@@ -60,10 +60,10 @@ if [ "$OS" = "Darwin" ]; then
     VERIFY_CMD="otool -L"
 elif [ "$OS" = "Linux" ]; then
     if [ "$ARCH" = "aarch64" ]; then
-        ZIP_NAME="x2t-binaries-linux-arm64.zip"
+        ZIP_NAME="x2t-binaries-linux-arm64-10.0.0.169.zip"
         TRIPLE="aarch64-unknown-linux-gnu"
     else
-        ZIP_NAME="x2t-binaries-linux-x64-9.4.0.129.zip"
+        ZIP_NAME="x2t-binaries-linux-x64-10.0.0.169.zip"
         TRIPLE="x86_64-unknown-linux-gnu"
     fi
     CHECK_PATTERN="x2t-*-linux-gnu"
@@ -86,6 +86,14 @@ if ! EXPECTED_SHA256="$(expected_sha256 "$ZIP_NAME")"; then
     log "ERROR: no pinned sha256 for $ZIP_NAME; add it to expected_sha256()"
     exit 1
 fi
+
+# A PENDING_ placeholder marks a zip whose digest is not pinned yet.
+case "$EXPECTED_SHA256" in
+    PENDING_*)
+        log "ERROR: sha256 for $ZIP_NAME is still the placeholder $EXPECTED_SHA256; pin the published digest in expected_sha256()"
+        exit 1
+        ;;
+esac
 
 # Retry only the download (transient API/network errors); a checksum
 # mismatch below is never retried.
