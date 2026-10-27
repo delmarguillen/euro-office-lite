@@ -330,6 +330,7 @@ for (const editor of [
   'documenteditor',
   'spreadsheeteditor',
   'presentationeditor',
+  'pdfeditor',
 ]) {
   run(
     webAppsGrunt,
@@ -360,6 +361,7 @@ for (const editor of [
   'documenteditor',
   'spreadsheeteditor',
   'presentationeditor',
+  'pdfeditor',
 ]) {
   await rm(
     path.join(
@@ -434,6 +436,8 @@ await cp(path.join(buildRoot, 'web-apps'), path.join(outputRoot, 'web-apps'), {
 await injectSdkScripts('documenteditor', 'word');
 await injectSdkScripts('spreadsheeteditor', 'cell');
 await injectSdkScripts('presentationeditor', 'slide');
+// The PDF editor runs on the word SDK, which bundles the PDF sources.
+await injectSdkScripts('pdfeditor', 'word');
 
 run(
   process.execPath,
