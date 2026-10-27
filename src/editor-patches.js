@@ -1040,6 +1040,13 @@
     // editor iframe exists) cannot zoom the shell.
     installPinchZoomGuard(window);
 
+    function _fileTypeFor(docType) {
+      if (docType === 'cell') return 'xlsx';
+      if (docType === 'slide') return 'pptx';
+      if (docType === 'pdf') return 'pdf';
+      return 'docx';
+    }
+
     window._openEditor = openEditor;
     window._eoOpenPath = _openPath;
     async function openEditor(docType) {
@@ -1068,7 +1075,9 @@
         document: {
           title: (window._pendingFileData && window._pendingFileData.name) || _t('newDocument'),
           url: '_offline_',
-          fileType: docType === 'word' ? 'docx' : docType === 'cell' ? 'xlsx' : 'pptx',
+          fileType: _fileTypeFor(docType),
+          // Known up front, so the PDF editor starts without asking the page.
+          isForm: docType === 'pdf' ? false : undefined,
           key: 'local-' + Date.now(),
           permissions: {
             edit: true,
@@ -1157,7 +1166,7 @@
       var dialog = window.__TAURI__.dialog;
       var path = await dialog.open({
         filters: [
-          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv'] },
+          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pdf'] },
           { name: _t('all'), extensions: ['*'] }
         ]
       });
@@ -1165,12 +1174,12 @@
       _openPath(path);
     });
 
-    // Every opening goes through open_file, which is where the Rust side records
-    // the recent files entry.
+    // Every opening goes through open_file or open_pdf, which is where the Rust
+    // side records the recent files entry.
     async function _openPath(path, silent) {
       window._eoShowOpening(window._eoOpeningFileText(path));
       try {
-        var b64data = await window.__TAURI__.core.invoke('open_file', { path: path });
+        var b64data = await window.__TAURI__.core.invoke(window._eoOpenCommandForPath(path), { path: path });
         var fileName = path.replace(/\\/g, '/').split('/').pop();
         window._pendingFileData = { data: b64data, path: path, name: fileName };
         openEditor(window._eoDocTypeForPath(path));
@@ -1229,7 +1238,7 @@
 
       var docType = window._eoDocTypeForPath(pendingPath);
 
-      window.__TAURI__.core.invoke('open_file', { path: pendingPath }).then(function(b64data) {
+      window.__TAURI__.core.invoke(window._eoOpenCommandForPath(pendingPath), { path: pendingPath }).then(function(b64data) {
         var fileName = pendingPath.replace(/\\/g, '/').split('/').pop();
         window._pendingFileData = { data: b64data, path: pendingPath, name: fileName };
         openEditor(docType);

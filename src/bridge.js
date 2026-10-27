@@ -903,9 +903,16 @@ function _eoDocTypeForPath(path) {
   var ext = String(path || '').split('.').pop().toLowerCase();
   if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) return 'cell';
   if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) return 'slide';
+  if (ext === 'pdf') return 'pdf';
   return 'word';
 }
 window._eoDocTypeForPath = _eoDocTypeForPath;
+
+// A PDF is read as it is by open_pdf; everything else is converted by open_file.
+function _eoOpenCommandForPath(path) {
+  return _eoDocTypeForPath(path) === 'pdf' ? 'open_pdf' : 'open_file';
+}
+window._eoOpenCommandForPath = _eoOpenCommandForPath;
 
 window.addEventListener('error', function(e) {
   window._eoLog('[JS-ERROR]', {
@@ -1491,15 +1498,19 @@ function _loadEditorBin(b64data, fileName, options) {
       _recoveryEnqueue(ref, opts.recovery);
     }
 
+    // A PDF arrives as the file itself, not as an Editor.bin.
+    var isPdf = window.AscDesktopEditor._currentDocType === 'pdf';
     var file = new ref.ew.AscCommon.OpenFileResult();
     file.data = bytes;
-    file.bSerFormat = true;
+    file.bSerFormat = !isPdf;
     ref.editor.openDocument(file);
     ref.ew.AscCommon.History.UserSaveMode = true;
-    _ensureCoreProps(ref);
+    if (!isPdf) _ensureCoreProps(ref);
 
     if (opts.recovery) {
       _recoveryMarkModified(opts.name || _eoBaseName(fileName));
+    } else if (isPdf) {
+      // No crash recovery for PDF yet: its changes cannot be replayed onto the file.
     } else if (!opts.skipRecovery) {
       _recoveryBegin(b64data, opts.name || _eoBaseName(fileName), opts.path || fileName || null);
     }
@@ -2246,7 +2257,7 @@ window.AscDesktopEditor = {
       var dialog = window.__TAURI__.dialog;
       path = await dialog.open({
         filters: [
-          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv'] },
+          { name: _t('documents'), extensions: ['docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'csv', 'pdf'] },
           { name: _t('all'), extensions: ['*'] }
         ]
       });
@@ -2973,7 +2984,7 @@ async function _eoOpenFromPath(filePath) {
   _eoShowOpening(_eoOpeningFileText(filePath));
 
   try {
-    var b64data = await invoke('open_file', { path: filePath });
+    var b64data = await invoke(_eoOpenCommandForPath(filePath), { path: filePath });
     var fileName = filePath.replace(/\\/g, '/').split('/').pop();
     window._pendingFileData = { data: b64data, path: filePath, name: fileName };
     if (window._openEditor) {
