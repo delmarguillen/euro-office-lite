@@ -12,6 +12,7 @@
     "shell:allow-open",
     "shell:default",
     "allow-open-file",
+    "allow-open-pdf",
     "allow-save-file",
     "allow-save-file-as",
     "allow-write-editor-bin",

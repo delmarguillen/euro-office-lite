@@ -236,6 +236,65 @@ pub fn stage_insert_media(
     staged
 }
 
+// A PDF goes to the editor as it is on disk: the PDF editor reads the file
+// itself, so there is no x2t conversion and no Editor.bin.
+#[tauri::command]
+pub async fn open_pdf(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    let input = PathBuf::from(&path);
+    let file_name = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let bytes = read_pdf(&input).map_err(|error| {
+        log_event(
+            &state,
+            &format!("[OPEN] failed file={} error={}", file_name, error),
+        );
+        error
+    })?;
+
+    clear_pending_recent(&state.pending_recent);
+    crate::recovery::end_session(&state, true);
+    switch_document(&state)?;
+
+    log_event(
+        &state,
+        &format!(
+            "[OPEN] success file={} pdf={} bytes",
+            file_name,
+            bytes.len()
+        ),
+    );
+
+    *state.current_file.lock().unwrap() = Some(input);
+    *state.modified.lock().unwrap() = false;
+    *state.text_options.lock().unwrap() = None;
+    super::recent::record(&app, &path);
+
+    Ok(STANDARD.encode(&bytes))
+}
+
+// Reads a PDF after checking its path and size, and that it is one.
+fn read_pdf(path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("not a file".to_string());
+    }
+    crate::protocol_limits::check_pdf_open(path, metadata.len())?;
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    // The size is checked again: the file may have grown since the stat.
+    crate::protocol_limits::check_pdf_open(path, bytes.len() as u64)?;
+    if !crate::protocol_limits::has_pdf_header(&bytes) {
+        return Err("the file is not a PDF".to_string());
+    }
+    Ok(bytes)
+}
+
 #[tauri::command]
 pub async fn open_file(
     app: tauri::AppHandle,
@@ -994,6 +1053,50 @@ mod tests {
         std::fs::write(dir.join("changes/change_0.json"), b"[]").unwrap();
         std::fs::write(dir.join("media/image1.png"), b"not really a png").unwrap();
         dir
+    }
+
+    fn empty_test_dir(label: &str) -> PathBuf {
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "eo-file-ops-{}-{}-{}",
+            label,
+            std::process::id(),
+            unique
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn read_pdf_returns_the_file_as_it_is() {
+        let dir = empty_test_dir("pdf-ok");
+        let path = dir.join("doc.pdf");
+        std::fs::write(&path, b"%PDF-1.7\n%%EOF\n").unwrap();
+        assert_eq!(read_pdf(&path).unwrap(), b"%PDF-1.7\n%%EOF\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_pdf_refuses_a_pdf_name_without_pdf_content() {
+        let dir = empty_test_dir("pdf-fake");
+        let path = dir.join("doc.pdf");
+        std::fs::write(&path, b"PK\x03\x04 not a pdf").unwrap();
+        assert!(read_pdf(&path).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_pdf_refuses_other_extensions_directories_and_missing_files() {
+        let dir = empty_test_dir("pdf-paths");
+        let docx = dir.join("doc.docx");
+        std::fs::write(&docx, b"%PDF-1.7\n").unwrap();
+        let folder = dir.join("folder.pdf");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(read_pdf(&docx).is_err());
+        assert!(read_pdf(&folder).is_err());
+        assert!(read_pdf(&dir.join("missing.pdf")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // Switching documents does invalidate the images, so the full reset still

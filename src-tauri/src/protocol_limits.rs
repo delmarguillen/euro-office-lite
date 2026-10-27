@@ -283,6 +283,40 @@ pub fn check_base64_size(what: &str, data: &str, max_bytes: usize) -> Result<(),
     ))
 }
 
+// Largest PDF open_pdf hands to the editor. The bytes travel as base64 and
+// the editor keeps its own copy, so this stays well below EDITOR_BIN_MAX_BYTES.
+pub const PDF_OPEN_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+// A path open_pdf may read: absolute, a .pdf, and a file of a size the editor
+// can take.
+pub fn check_pdf_open(path: &Path, size: u64) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("the PDF path is not absolute".to_string());
+    }
+    let is_pdf = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"));
+    if !is_pdf {
+        return Err("the file is not a .pdf".to_string());
+    }
+    if size == 0 {
+        return Err("the PDF is empty".to_string());
+    }
+    if size > PDF_OPEN_MAX_BYTES {
+        return Err(format!(
+            "the PDF is too large: {size} bytes, limit {PDF_OPEN_MAX_BYTES} bytes"
+        ));
+    }
+    Ok(())
+}
+
+// A PDF header within the first 1024 bytes, where readers look for it.
+pub fn has_pdf_header(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(1024)];
+    head.windows(5).any(|window| window == b"%PDF-")
+}
+
 // Cuts a log line to at most `max_bytes`, on a character boundary.
 pub fn truncate_log(msg: &str, max_bytes: usize) -> &str {
     if msg.len() <= max_bytes {
@@ -571,6 +605,55 @@ mod tests {
         let error = check_base64_size("Editor.bin", "AAAAAAAA", 5).unwrap_err();
         assert!(error.contains("Editor.bin is too large"));
         assert!(error.contains("limit 5 bytes"));
+    }
+
+    fn abs_pdf(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
+    #[test]
+    fn a_pdf_within_the_limit_may_be_opened() {
+        assert!(check_pdf_open(&abs_pdf("a.pdf"), 1).is_ok());
+        assert!(check_pdf_open(&abs_pdf("a.PDF"), PDF_OPEN_MAX_BYTES).is_ok());
+    }
+
+    #[test]
+    fn a_pdf_over_the_limit_is_refused() {
+        let error = check_pdf_open(&abs_pdf("a.pdf"), PDF_OPEN_MAX_BYTES + 1).unwrap_err();
+        assert!(error.contains("too large"));
+    }
+
+    #[test]
+    fn an_empty_pdf_is_refused() {
+        assert!(check_pdf_open(&abs_pdf("a.pdf"), 0).is_err());
+    }
+
+    #[test]
+    fn a_relative_pdf_path_is_refused() {
+        assert!(check_pdf_open(Path::new("a.pdf"), 1).is_err());
+        assert!(check_pdf_open(Path::new("../a.pdf"), 1).is_err());
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_pdf_is_refused() {
+        assert!(check_pdf_open(&abs_pdf("a.docx"), 1).is_err());
+        assert!(check_pdf_open(&abs_pdf("pdf"), 1).is_err());
+    }
+
+    #[test]
+    fn the_pdf_header_is_found_near_the_start() {
+        assert!(has_pdf_header(b"%PDF-1.7\n"));
+        let mut late = vec![b' '; 1000];
+        late.extend_from_slice(b"%PDF-1.4");
+        assert!(has_pdf_header(&late));
+    }
+
+    #[test]
+    fn bytes_without_a_pdf_header_are_refused() {
+        assert!(!has_pdf_header(b"PK\x03\x04"));
+        let mut far = vec![b' '; 1024];
+        far.extend_from_slice(b"%PDF-1.4");
+        assert!(!has_pdf_header(&far));
     }
 
     #[test]

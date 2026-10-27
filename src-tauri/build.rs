@@ -2,6 +2,7 @@
 // in a capability.
 const APP_COMMANDS: &[&str] = &[
     "open_file",
+    "open_pdf",
     "save_file",
     "save_file_as",
     "write_editor_bin",

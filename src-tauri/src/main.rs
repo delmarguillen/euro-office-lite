@@ -312,6 +312,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
+            file_ops::open_pdf,
             file_ops::save_file,
             file_ops::save_file_as,
             file_ops::write_editor_bin,
