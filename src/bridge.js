@@ -547,8 +547,7 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'The document does not have footnotes or endnotes yet. Insert a note first: until then the separator is not kept in the file.',
     noteSeparatorAlready: 'The note separator has already been removed from this document.',
     noteSeparatorAlreadyPresent: 'This document already has its note separator lines.',
-    noteSeparatorFailed: 'The note separator lines could not be changed.',
-    pdfSaveLater: 'Saving PDF files is not available yet. Your changes stay open in the editor.'
+    noteSeparatorFailed: 'The note separator lines could not be changed.'
   },
   es: {
     document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación',
@@ -577,8 +576,7 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'El documento todavía no tiene notas al pie ni notas al final. Inserte una nota primero: hasta entonces el separador no se conserva en el archivo.',
     noteSeparatorAlready: 'El separador de notas ya se había quitado de este documento.',
     noteSeparatorAlreadyPresent: 'Este documento ya tiene sus líneas separadoras de notas.',
-    noteSeparatorFailed: 'No se pudieron cambiar las líneas separadoras de notas.',
-    pdfSaveLater: 'Guardar archivos PDF todavía no está disponible. Los cambios siguen abiertos en el editor.'
+    noteSeparatorFailed: 'No se pudieron cambiar las líneas separadoras de notas.'
   },
   fr: {
     document: 'Document', spreadsheet: 'Feuille de calcul', presentation: 'Présentation',
@@ -607,8 +605,7 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'Le document ne contient pas encore de notes de bas de page ni de notes de fin. Insérez d\'abord une note : jusque-là, le séparateur n\'est pas conservé dans le fichier.',
     noteSeparatorAlready: 'Le séparateur de notes a déjà été supprimé de ce document.',
     noteSeparatorAlreadyPresent: 'Ce document possède déjà ses lignes de séparation des notes.',
-    noteSeparatorFailed: 'Impossible de modifier les lignes de séparation des notes.',
-    pdfSaveLater: "L'enregistrement des fichiers PDF n'est pas encore disponible. Vos modifications restent ouvertes dans l'éditeur."
+    noteSeparatorFailed: 'Impossible de modifier les lignes de séparation des notes.'
   },
   de: {
     document: 'Dokument', spreadsheet: 'Tabelle', presentation: 'Präsentation',
@@ -637,8 +634,7 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'Das Dokument enthält noch keine Fuß- oder Endnoten. Fügen Sie zuerst eine Fußnote oder Endnote ein: bis dahin wird die Trennlinie nicht in der Datei gespeichert.',
     noteSeparatorAlready: 'Die Fuß-/Endnotentrennlinie wurde aus diesem Dokument bereits entfernt.',
     noteSeparatorAlreadyPresent: 'Dieses Dokument enthält die Trennlinien der Fuß- und Endnoten bereits.',
-    noteSeparatorFailed: 'Die Trennlinien der Fuß- und Endnoten konnten nicht geändert werden.',
-    pdfSaveLater: 'Das Speichern von PDF-Dateien ist noch nicht verfügbar. Ihre Änderungen bleiben im Editor geöffnet.'
+    noteSeparatorFailed: 'Die Trennlinien der Fuß- und Endnoten konnten nicht geändert werden.'
   },
   it: {
     document: 'Documento', spreadsheet: 'Foglio di calcolo', presentation: 'Presentazione',
@@ -667,8 +663,7 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'Il documento non ha ancora note a piè di pagina né note di chiusura. Inserire prima una nota: fino ad allora il separatore non viene conservato nel file.',
     noteSeparatorAlready: 'Il separatore delle note è già stato rimosso da questo documento.',
     noteSeparatorAlreadyPresent: 'Questo documento ha già le linee di separazione delle note.',
-    noteSeparatorFailed: 'Impossibile modificare le linee di separazione delle note.',
-    pdfSaveLater: "Il salvataggio dei file PDF non è ancora disponibile. Le modifiche restano aperte nell'editor."
+    noteSeparatorFailed: 'Impossibile modificare le linee di separazione delle note.'
   },
   pt: {
     document: 'Documento', spreadsheet: 'Planilha', presentation: 'Apresentação',
@@ -697,8 +692,7 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'O documento ainda não tem notas de rodapé nem notas de fim. Insira uma nota primeiro: até lá o separador não é mantido no arquivo.',
     noteSeparatorAlready: 'O separador de notas já foi removido deste documento.',
     noteSeparatorAlreadyPresent: 'Este documento já tem as linhas separadoras de notas.',
-    noteSeparatorFailed: 'Não foi possível alterar as linhas separadoras de notas.',
-    pdfSaveLater: 'Salvar arquivos PDF ainda não está disponível. Suas alterações continuam abertas no editor.'
+    noteSeparatorFailed: 'Não foi possível alterar as linhas separadoras de notas.'
   },
   ru: {
     document: 'Документ', spreadsheet: 'Таблица', presentation: 'Презентация',
@@ -727,8 +721,7 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'В документе пока нет ни обычных, ни концевых сносок. Сначала вставьте сноску: до этого разделитель не сохраняется в файле.',
     noteSeparatorAlready: 'Разделитель сносок уже убран из этого документа.',
     noteSeparatorAlreadyPresent: 'В этом документе линии, отделяющие сноски, уже есть.',
-    noteSeparatorFailed: 'Не удалось изменить линии сносок.',
-    pdfSaveLater: 'Сохранение PDF-файлов пока недоступно. Изменения остаются открытыми в редакторе.'
+    noteSeparatorFailed: 'Не удалось изменить линии сносок.'
   },
   uk: {
     document: 'Документ', spreadsheet: 'Таблиця', presentation: 'Презентація',
@@ -757,8 +750,7 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'У документі поки немає ні звичайних, ні кінцевих виносок. Спочатку вставте виноску: до цього роздільник не зберігається у файлі.',
     noteSeparatorAlready: 'Роздільник виносок уже прибрано з цього документа.',
     noteSeparatorAlreadyPresent: 'У цьому документі лінії, що відокремлюють виноски, уже є.',
-    noteSeparatorFailed: 'Не вдалося змінити лінії виносок.',
-    pdfSaveLater: 'Збереження PDF-файлів поки що недоступне. Зміни залишаються відкритими в редакторі.'
+    noteSeparatorFailed: 'Не вдалося змінити лінії виносок.'
   },
   zh: {
     document: '文档', spreadsheet: '电子表格', presentation: '演示文稿',
@@ -787,8 +779,7 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: '该文档尚无脚注或尾注。请先插入一条脚注或尾注：在此之前，分隔线不会保存到文件中。',
     noteSeparatorAlready: '该文档的脚注/尾注分隔线已经移除。',
     noteSeparatorAlreadyPresent: '此文档已有脚注/尾注分隔线。',
-    noteSeparatorFailed: '无法更改脚注/尾注分隔线。',
-    pdfSaveLater: '暂不支持保存 PDF 文件。您的更改仍保留在编辑器中。'
+    noteSeparatorFailed: '无法更改脚注/尾注分隔线。'
   },
   ja: {
     document: 'ドキュメント', spreadsheet: 'スプレッドシート', presentation: 'プレゼンテーション',
@@ -817,8 +808,7 @@ var _UI_STRINGS = {
     noteSeparatorNoNotes: 'このドキュメントにはまだ脚注も文末脚注もありません。先に注を挿入してください。それまで区切り線はファイルに保存されません。',
     noteSeparatorAlready: 'このドキュメントの注の区切り線はすでに削除されています。',
     noteSeparatorAlreadyPresent: 'この文書にはすでに注の区切り線があります。',
-    noteSeparatorFailed: '注の区切り線を変更できませんでした。',
-    pdfSaveLater: 'PDF ファイルの保存はまだ利用できません。変更はエディターで開いたままです。'
+    noteSeparatorFailed: '注の区切り線を変更できませんでした。'
   }
 };
 
@@ -856,14 +846,75 @@ window._eoSetLang = function(code) {
 
 // ── end i18n ──
 
-// Saving a PDF is not wired yet. The save the editor started is ended as not
-// done, so the document stays marked as modified and closing still warns.
-async function _eoRefusePdfSave(ref) {
-  window._eoLog('[SAVE] refused: saving PDF is not available yet');
-  await window.__TAURI__.dialog.message(_t('pdfSaveLater'), { title: _t('saveError'), kind: 'info' });
-  if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
-    ref.ew.DesktopOfflineAppDocumentEndSave(1);
+function _eoBytesToBase64(bytes) {
+  var binary = '';
+  for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+// The PDF editor's changes to the open PDF, in base64. They describe the file
+// as it was opened; the backend applies them to it.
+function _eoPdfChanges(ref) {
+  var changes = ref.editor.getDocumentRenderer().Save();
+  if (!changes) throw new Error('the PDF editor returned no changes');
+  return _eoBytesToBase64(changes);
+}
+
+// Save As with a PDF open writes a PDF, so the dialog offers nothing else.
+async function _eoAskPdfPath() {
+  var filters = [{ name: 'PDF', extensions: ['pdf'] }];
+  var path = await window.__TAURI__.dialog.save({ filters: filters });
+  if (!path) return null;
+  if (!/\.pdf$/i.test(path)) path += '.pdf';
+  return path;
+}
+
+// Saves the open PDF, over itself or, for Save As, where the user picks. Ends
+// the editor's save the way the other editors do.
+async function _eoSavePdf(ref, isSaveAs) {
+  var wasModified = window.AscDesktopEditor._isModified;
+  var path = null;
+  if (isSaveAs) {
+    path = await _eoAskPdfPath();
+    if (!path) {
+      _eoEndSaveKeepingModified(ref, wasModified);
+      return;
+    }
   }
+  try {
+    await invoke('save_pdf', { data: _eoPdfChanges(ref), path: path });
+  } catch (e) {
+    window._eoLog('[SAVE] pdf failed: ' + ((e && e.message) || e));
+    await window.__TAURI__.dialog.message(
+      _eoIsFontCacheError(e) ? _t('pdfFontsErrorMsg') : _t('saveErrorMsg'),
+      { title: _t('saveError'), kind: 'error' }
+    );
+    if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
+      ref.ew.DesktopOfflineAppDocumentEndSave(1);
+    }
+    return;
+  }
+  if (path) _eoShowSavedName(path);
+  if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
+    ref.ew.DesktopOfflineAppDocumentEndSave(0);
+  }
+}
+
+// The saved file's name in the window title and the editor's title fields.
+function _eoShowSavedName(savePath) {
+  var savedName = savePath.replace(/\\/g, '/').split('/').pop();
+  invoke('set_window_title', { name: savedName }).catch(function(){});
+  try {
+    var frames = document.querySelectorAll('iframe');
+    for (var fi = 0; fi < frames.length; fi++) {
+      try {
+        var titleInput = frames[fi].contentDocument.querySelector('#title-doc-name');
+        if (titleInput) titleInput.value = savedName;
+        var ribInput = frames[fi].contentDocument.querySelector('#rib-doc-name');
+        if (ribInput) ribInput.value = savedName;
+      } catch(te) {}
+    }
+  } catch(te) {}
 }
 
 // One dialog for every failed open. The Rust side already refuses a file the
@@ -2341,7 +2392,7 @@ window.AscDesktopEditor = {
     }
 
     if (docType === 'pdf') {
-      await _eoRefusePdfSave(ref);
+      await _eoSavePdf(ref, isSaveAs);
       return;
     }
 
@@ -2399,25 +2450,13 @@ window.AscDesktopEditor = {
           }
           try {
             await invoke('save_file_as', { path: savePath });
-            var savedName = savePath.replace(/\\/g, '/').split('/').pop();
             keepsDocument = pathExt === 'pdf';
             if (pathExt !== 'pdf') {
               // A Save As moves the document and the session follows it, so a
               // later recovery writes where it lives now. A PDF export only
               // writes a copy, so it is not a save for recovery purposes.
               invoke('recovery_mark_saved', {}).catch(function(){});
-              invoke('set_window_title', { name: savedName }).catch(function(){});
-              try {
-                var frames = document.querySelectorAll('iframe');
-                for (var fi = 0; fi < frames.length; fi++) {
-                  try {
-                    var titleInput = frames[fi].contentDocument.querySelector('#title-doc-name');
-                    if (titleInput) titleInput.value = savedName;
-                    var ribInput = frames[fi].contentDocument.querySelector('#rib-doc-name');
-                    if (ribInput) ribInput.value = savedName;
-                  } catch(te) {}
-                }
-              } catch(te) {}
+              _eoShowSavedName(savePath);
             }
           } catch(saveErr) {
             window._eoLog('[EO] SaveAs failed: ' + saveErr);
