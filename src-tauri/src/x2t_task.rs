@@ -279,6 +279,15 @@ fn xml_escape(value: &str) -> String {
     escaped
 }
 
+// x2t loads nothing from the network or from local paths named inside a
+// document. Every params XML the app writes ends with this block.
+pub fn x2t_options_xml() -> &'static str {
+    "<options>\n\
+<allowPrivateIP>false</allowPrivateIP>\n\
+<allowNetworkRequest>false</allowNetworkRequest>\n\
+</options>\n"
+}
+
 // Paths are passed raw and escaped here, once. `extra` is already XML: the
 // numeric CSV/TXT elements from TextOptions::xml_elements.
 pub fn convert_params_xml(
@@ -296,12 +305,13 @@ pub fn convert_params_xml(
 <m_sFileTo>{}</m_sFileTo>
 <m_nFormatTo>{}</m_nFormatTo>
 <m_sTempDir>{}</m_sTempDir>
-{}</TaskQueueDataConvert>"#,
+{}{}</TaskQueueDataConvert>"#,
         xml_escape(&input.replace('\\', "/")),
         xml_escape(&output.replace('\\', "/")),
         format_to,
         xml_escape(&temp_dir.replace('\\', "/")),
         extra,
+        x2t_options_xml(),
     )
 }
 
@@ -359,12 +369,13 @@ fn pdf_params_xml_with(
 <m_bEmbeddedFonts>true</m_bEmbeddedFonts>
 <m_sFontDir>{}</m_sFontDir>
 <m_sAllFontsPath>{}</m_sAllFontsPath>
-{}</TaskQueueDataConvert>"#,
+{}{}</TaskQueueDataConvert>"#,
         xml_escape(input),
         xml_escape(output),
         xml_escape(&fonts_dir.replace('\\', "/")),
         xml_escape(&allfonts.replace('\\', "/")),
         extra,
+        x2t_options_xml(),
     )
 }
 
@@ -1378,6 +1389,10 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 <m_bEmbeddedFonts>true</m_bEmbeddedFonts>\n\
 <m_sFontDir>C:/eo/fonts</m_sFontDir>\n\
 <m_sAllFontsPath>C:/eo/AllFonts.js</m_sAllFontsPath>\n\
+<options>\n\
+<allowPrivateIP>false</allowPrivateIP>\n\
+<allowNetworkRequest>false</allowNetworkRequest>\n\
+</options>\n\
 </TaskQueueDataConvert>"
         );
     }
@@ -1410,7 +1425,11 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert!(xml.contains("<m_nFormatFrom>513</m_nFormatFrom>"));
         assert!(xml.contains("<m_bFromChanges>true</m_bFromChanges>"));
         assert!(xml.contains("<m_bDontSaveAdditional>true</m_bDontSaveAdditional>"));
-        assert!(xml.ends_with("<m_sTempDir>/t/R&amp;D/tmp</m_sTempDir>\n</TaskQueueDataConvert>"));
+        let expected_end = format!(
+            "<m_sTempDir>/t/R&amp;D/tmp</m_sTempDir>\n{}</TaskQueueDataConvert>",
+            x2t_options_xml()
+        );
+        assert!(xml.ends_with(&expected_end), "{}", xml);
     }
 
     // An app folder whose binaries/ holds the bundled font list and a font
@@ -1762,6 +1781,10 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 <m_nFormatTo>8192</m_nFormatTo>\n\
 <m_sTempDir>C:/Temp/eo</m_sTempDir>\n\
 <m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n\
+<options>\n\
+<allowPrivateIP>false</allowPrivateIP>\n\
+<allowNetworkRequest>false</allowNetworkRequest>\n\
+</options>\n\
 </TaskQueueDataConvert>"
         );
     }
@@ -1806,7 +1829,49 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     #[test]
     fn convert_params_without_text_options_have_no_extra_elements() {
         let xml = convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", "");
-        assert!(xml.ends_with("<m_sTempDir>/t</m_sTempDir>\n</TaskQueueDataConvert>"), "{}", xml);
+        let expected_end = format!("<m_sTempDir>/t</m_sTempDir>\n{}</TaskQueueDataConvert>", x2t_options_xml());
+        assert!(xml.ends_with(&expected_end), "{}", xml);
+    }
+
+    #[test]
+    fn the_options_block_turns_off_network_and_outside_files() {
+        let options = x2t_options_xml();
+        assert!(options.starts_with("<options>"), "{}", options);
+        assert!(options.contains("<allowPrivateIP>false</allowPrivateIP>"), "{}", options);
+        assert!(options.contains("<allowNetworkRequest>false</allowNetworkRequest>"), "{}", options);
+        assert!(options.ends_with("</options>\n"), "{}", options);
+    }
+
+    #[test]
+    fn pdf_params_end_with_the_options_block() {
+        let xml = pdf_params_xml("/d/in.docx", "/d/out.pdf", "/f", "/f/AllFonts.js");
+        let expected_end = format!("{}</TaskQueueDataConvert>", x2t_options_xml());
+        assert!(xml.ends_with(&expected_end), "{}", xml);
+    }
+
+    #[test]
+    fn convert_params_end_with_the_options_block() {
+        let expected_end = format!("{}</TaskQueueDataConvert>", x2t_options_xml());
+        let plain = convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", "");
+        assert!(plain.ends_with(&expected_end), "{}", plain);
+        let text = "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n";
+        let with_text = convert_params_xml("/d/in.csv", "/t/Editor.bin", 8192, "/t", text);
+        assert!(with_text.ends_with(&expected_end), "{}", with_text);
+    }
+
+    #[test]
+    fn every_params_xml_has_the_options_block_once() {
+        let all = [
+            pdf_params_xml("/d/in.docx", "/d/out.pdf", "/f", "/f/AllFonts.js"),
+            pdf_params_xml_with("/d/in.pdf", "/d/out.pdf", "/f", "/f/AllFonts.js", &pdf_changes_params("/t")),
+            convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", ""),
+            convert_params_xml("/t/Editor.bin", "/d/out.docx", 65, "/t", ""),
+        ];
+        for xml in all {
+            assert_eq!(xml.matches("<options>").count(), 1, "{}", xml);
+            assert_eq!(xml.matches("<allowPrivateIP>false</allowPrivateIP>").count(), 1, "{}", xml);
+            assert_eq!(xml.matches("<allowNetworkRequest>false</allowNetworkRequest>").count(), 1, "{}", xml);
+        }
     }
 
     #[test]
