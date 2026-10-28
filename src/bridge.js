@@ -846,6 +846,17 @@ window._eoSetLang = function(code) {
 
 // ── end i18n ──
 
+// Hands the open document to the backend as Editor.bin.
+async function _eoWriteEditorBin(ref) {
+  var binData = ref.editor.asc_nativeGetFile();
+  if (!binData) {
+    // The caller's catch tells the user and releases the editor.
+    throw new Error('Print aborted: asc_nativeGetFile returned no data');
+  }
+  var b64 = typeof binData === 'string' ? btoa(binData) : _eoBytesToBase64(new Uint8Array(binData));
+  await invoke('write_editor_bin', { data: b64 });
+}
+
 function _eoBytesToBase64(bytes) {
   var binary = '';
   for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
@@ -2796,25 +2807,15 @@ window.AscDesktopEditor = {
 
     try {
       window.AscDesktopEditor._isPrinting = true;
-      var binData = ref.editor.asc_nativeGetFile();
-      if (!binData) {
-        // Through the catch below, so the user is told and the editor released.
-        throw new Error('Print aborted: asc_nativeGetFile returned no data');
-      }
-
-      var b64;
-      if (typeof binData === 'string') {
-        b64 = btoa(binData);
-      } else {
-        var binary = '';
-        var bytes = new Uint8Array(binData);
-        for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-        b64 = btoa(binary);
-      }
       var wasModified = window.AscDesktopEditor._isModified;
-      await invoke('write_editor_bin', { data: b64 });
       // The backend keeps the PDF it wrote; the two commands below take no path.
-      await invoke('print_document');
+      if (window.AscDesktopEditor._currentDocType === 'pdf') {
+        // A PDF prints as itself, with the editor's changes applied.
+        await invoke('print_document', { pdfChanges: _eoPdfChanges(ref) });
+      } else {
+        await _eoWriteEditorBin(ref);
+        await invoke('print_document', {});
+      }
 
       if (printerName) {
         await invoke('print_to_printer', { printer: printerName });

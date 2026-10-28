@@ -1,6 +1,7 @@
 // Checks that Save and Save As with a PDF open hand the PDF editor's changes
-// to save_pdf, and that a cancelled or failed save ends as not done. A .docx
-// still saves as before.
+// to save_pdf, that a cancelled or failed save ends as not done, and that
+// Print with a PDF open prints it with its changes. A .docx still saves and
+// prints as before.
 //
 // Run: node scripts/test-bridge-pdf-save.mjs [path/to/bridge.js]
 import { check, finish, loadBridge } from './bridge-test-harness.mjs';
@@ -23,6 +24,8 @@ async function setup(docType, { picked = null, saveFails = false } = {}) {
       save_file: record('save_file'),
       save_file_as: record('save_file_as'),
       save_pdf: record('save_pdf'),
+      print_document: record('print_document', '/tmp/print_output.pdf'),
+      open_pdf_viewer: record('open_pdf_viewer'),
       get_current_path: () => 'C:/docs/report.' + (docType === 'pdf' ? 'pdf' : 'docx'),
       recovery_mark_saved: () => null,
     },
@@ -52,6 +55,13 @@ async function setup(docType, { picked = null, saveFails = false } = {}) {
 async function save(docType, param, options) {
   const env = await setup(docType, options);
   await env.bridge.run(`AscDesktopEditor.LocalFileSave(${JSON.stringify(param)}, '', null, 0, '{}')`);
+  env.bridge.stopTimers();
+  return env;
+}
+
+async function print(docType) {
+  const env = await setup(docType);
+  await env.bridge.run("AscDesktopEditor.Print('')");
   env.bridge.stopTimers();
   return env;
 }
@@ -87,5 +97,17 @@ check(results, '... and ends the save as not done', env.endSaves.join() === '1',
 env = await save('word', '');
 check(results, 'Save with a .docx open still writes the Editor.bin and saves it',
   env.names() === 'write_editor_bin,save_file' && env.messages.length === 0, env.names());
+
+env = await print('pdf');
+const printed = env.calls.find((call) => call.name === 'print_document');
+check(results, 'Print with a PDF open prints it with the editor\'s changes',
+  env.names() === 'print_document,open_pdf_viewer' && printed && (printed.args || {}).pdfChanges === CHANGES_B64,
+  env.names() + ' ' + JSON.stringify(printed && printed.args));
+
+env = await print('word');
+const printedDocx = env.calls.find((call) => call.name === 'print_document');
+check(results, 'Print with a .docx open still goes through the Editor.bin',
+  env.names() === 'write_editor_bin,print_document,open_pdf_viewer' && printedDocx && !(printedDocx.args || {}).pdfChanges,
+  env.names());
 
 finish(results);

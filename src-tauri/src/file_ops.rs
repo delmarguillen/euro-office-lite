@@ -793,13 +793,23 @@ pub async fn write_editor_bin(
     Ok("ok".to_string())
 }
 
+// `pdf_changes` is set when a PDF is open: what prints is that PDF with the
+// editor's changes applied. Otherwise the Editor.bin written before.
 #[tauri::command]
 pub async fn print_document(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    pdf_changes: Option<String>,
 ) -> Result<String, String> {
     // A failed print leaves nothing for the viewer to open.
     *state.last_print_pdf.lock().unwrap() = None;
+
+    if let Some(data) = pdf_changes {
+        return print_pdf(&app, &state, &data).await.map_err(|error| {
+            log_event(&state, &format!("[PRINT] failed: {}", error));
+            error
+        });
+    }
 
     let editor_bin = state.temp_dir.join("Editor.bin");
     if !editor_bin.exists() {
@@ -852,6 +862,30 @@ pub async fn print_document(
 }
 
 const PRINT_PDF_NAME: &str = "print_output.pdf";
+
+async fn print_pdf(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    data: &str,
+) -> Result<String, String> {
+    let changes = decode_pdf_changes(data)?;
+    let pdf_path = state.temp_dir.join(PRINT_PDF_NAME);
+    let work = PdfSaveWork::new(&state.temp_dir);
+    work.stage(&opened_pdf(&state.temp_dir), &changes, &state.temp_dir.join("media"))?;
+    let applied = super::converter::apply_pdf_changes(
+        app,
+        &work.source(),
+        &work.output(),
+        &state.temp_dir,
+        &crate::temp_layout::fontdata_dir(&state.temp_root),
+    )
+    .await;
+    finish_pdf_save(&work, applied, &pdf_path)?;
+
+    log_event(state, "[PRINT] success pdf with changes applied");
+    *state.last_print_pdf.lock().unwrap() = Some(pdf_path.clone());
+    Ok(pdf_path.to_string_lossy().to_string())
+}
 
 // The only file the viewer and the printer commands hand on: the PDF the last
 // print wrote, still a regular file (not a link) directly inside this
