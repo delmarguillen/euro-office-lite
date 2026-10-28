@@ -598,6 +598,8 @@ async fn save_pdf_inner(
     let current = open_pdf_file(state)?;
     let dest = path.map(PathBuf::from).unwrap_or_else(|| current.clone());
     crate::protocol_limits::check_pdf_save_target(&dest)?;
+    // Refused before x2t runs; write_beside_and_rename checks again.
+    crate::save_target::check_writable_destination(&dest)?;
 
     let work = PdfSaveWork::new(&state.temp_dir);
     let opened = opened_pdf(&state.temp_dir);
@@ -689,7 +691,7 @@ impl PdfSaveWork {
         copy_media(media, &self.dir.join("media"))
     }
 
-    // Moves the PDF x2t wrote to `dest`. x2t writes the source back unchanged
+    // Puts the PDF x2t wrote at `dest`. x2t writes the source back unchanged
     // when it cannot apply the changes, so that counts as a failure too.
     pub(crate) fn finish(&self, dest: &Path) -> Result<(), String> {
         let output = std::fs::read(self.output()).map_err(|e| e.to_string())?;
@@ -700,7 +702,7 @@ impl PdfSaveWork {
         if output == source {
             return Err("x2t did not apply the changes".to_string());
         }
-        replace_file(&self.output(), dest)
+        crate::save_target::write_beside_and_rename(&self.output(), dest)
     }
 
     pub(crate) fn clear(&self) {
@@ -719,18 +721,6 @@ fn copy_media(from: &Path, to: &Path) -> Result<(), String> {
         }
         std::fs::copy(entry.path(), to.join(entry.file_name())).map_err(|e| e.to_string())?;
     }
-    Ok(())
-}
-
-// rename replaces `dest` in one step. It cannot cross file systems, and the
-// temp dir is often on another one than the user's file: then the file is
-// copied over `dest`.
-fn replace_file(from: &Path, dest: &Path) -> Result<(), String> {
-    if std::fs::rename(from, dest).is_ok() {
-        return Ok(());
-    }
-    std::fs::copy(from, dest).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(from);
     Ok(())
 }
 

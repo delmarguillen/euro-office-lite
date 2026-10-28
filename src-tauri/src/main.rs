@@ -11,6 +11,7 @@ mod note_separator;
 mod protocol_limits;
 mod recent;
 mod recovery;
+mod save_target;
 mod temp_layout;
 mod text_import;
 mod x2t_task;
