@@ -293,11 +293,7 @@ pub fn check_pdf_open(path: &Path, size: u64) -> Result<(), String> {
     if !path.is_absolute() {
         return Err("the PDF path is not absolute".to_string());
     }
-    let is_pdf = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"));
-    if !is_pdf {
+    if !has_pdf_extension(path) {
         return Err("the file is not a .pdf".to_string());
     }
     if size == 0 {
@@ -315,6 +311,33 @@ pub fn check_pdf_open(path: &Path, size: u64) -> Result<(), String> {
 pub fn has_pdf_header(bytes: &[u8]) -> bool {
     let head = &bytes[..bytes.len().min(1024)];
     head.windows(5).any(|window| window == b"%PDF-")
+}
+
+// Largest change stream save_pdf takes from the PDF editor, decoded. Pages
+// merged in from other files travel inside it, so it gets the same room as
+// the PDF itself.
+pub const PDF_CHANGES_MAX_BYTES: usize = 256 * 1024 * 1024;
+
+// The PDF editor's change stream: "%PDF" and at least one command after it.
+pub fn is_pdf_changes(bytes: &[u8]) -> bool {
+    bytes.len() > 4 && bytes.starts_with(b"%PDF")
+}
+
+fn has_pdf_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+}
+
+// A path save_pdf may write: absolute and a .pdf.
+pub fn check_pdf_save_target(path: &Path) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("the PDF path is not absolute".to_string());
+    }
+    if !has_pdf_extension(path) {
+        return Err("the destination is not a .pdf".to_string());
+    }
+    Ok(())
 }
 
 // Cuts a log line to at most `max_bytes`, on a character boundary.
@@ -654,6 +677,40 @@ mod tests {
         let mut far = vec![b' '; 1024];
         far.extend_from_slice(b"%PDF-1.4");
         assert!(!has_pdf_header(&far));
+    }
+
+    #[test]
+    fn a_change_stream_starts_with_its_signature() {
+        assert!(is_pdf_changes(b"%PDF\x05\x00\x00\x00\x01"));
+        assert!(!is_pdf_changes(b"%PDF"));
+        assert!(!is_pdf_changes(b"PK\x03\x04\x00"));
+        assert!(!is_pdf_changes(b""));
+    }
+
+    #[test]
+    fn a_change_stream_over_the_limit_is_refused() {
+        let over = "A".repeat((PDF_CHANGES_MAX_BYTES / 3 + 1) * 4);
+        assert!(check_base64_size("PDF changes", &over, PDF_CHANGES_MAX_BYTES).is_err());
+        let within = "A".repeat(PDF_CHANGES_MAX_BYTES / 3 * 4);
+        assert!(check_base64_size("PDF changes", &within, PDF_CHANGES_MAX_BYTES).is_ok());
+    }
+
+    #[test]
+    fn a_pdf_may_be_saved_to_an_absolute_pdf_path() {
+        assert!(check_pdf_save_target(&abs_pdf("out.pdf")).is_ok());
+        assert!(check_pdf_save_target(&abs_pdf("OUT.PDF")).is_ok());
+    }
+
+    #[test]
+    fn a_pdf_is_not_saved_under_another_extension() {
+        assert!(check_pdf_save_target(&abs_pdf("out.docx")).is_err());
+        assert!(check_pdf_save_target(&abs_pdf("out")).is_err());
+        assert!(check_pdf_save_target(&abs_pdf("out.pdf.exe")).is_err());
+    }
+
+    #[test]
+    fn a_pdf_is_not_saved_to_a_relative_path() {
+        assert!(check_pdf_save_target(Path::new("out.pdf")).is_err());
     }
 
     #[test]

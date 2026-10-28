@@ -15,6 +15,7 @@
     "allow-open-pdf",
     "allow-save-file",
     "allow-save-file-as",
+    "allow-save-pdf",
     "allow-write-editor-bin",
     "allow-print-document",
     "allow-create-new",

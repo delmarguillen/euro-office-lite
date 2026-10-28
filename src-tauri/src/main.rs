@@ -315,6 +315,7 @@ fn main() {
             file_ops::open_pdf,
             file_ops::save_file,
             file_ops::save_file_as,
+            file_ops::save_pdf,
             file_ops::write_editor_bin,
             file_ops::print_document,
             file_ops::create_new,
