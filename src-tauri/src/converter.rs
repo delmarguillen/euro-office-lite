@@ -20,37 +20,22 @@ pub async fn convert_file(
     let binaries_dir = resource_dir.join("binaries");
 
     if format_to == 513 {
-        let (temp_root, instance_id) = {
-            let state = app.state::<crate::file_ops::AppState>();
-            (state.temp_root.clone(), state.instance.id.clone())
-        };
         let input = input.to_string();
         let output = output.to_string();
         let temp_dir = std::path::PathBuf::from(temp_dir);
-        let fontdata_dir = fontdata_dir.to_path_buf();
-        let exe_dir = crate::app_exe_dir();
-        // Building the font cache can wait up to FONT_CACHE_WAIT and x2t takes
-        // seconds: neither should hold a thread of the async runtime.
-        return tauri::async_runtime::spawn_blocking(move || {
-            ensure_pdf_font_cache(
-                &temp_root,
-                &instance_id,
-                |staging: &std::path::Path| crate::generate_fonts(staging, &binaries_dir),
-                crate::FONT_CACHE_WAIT,
-                crate::FONT_CACHE_POLL,
-            )?;
+        let fontdata = fontdata_dir.to_path_buf();
+        return run_pdf_job(app, binaries_dir, move |binaries_dir, exe_dir| {
             x2t_task::convert_to_pdf(
-                &binaries_dir,
-                exe_dir.as_deref(),
+                binaries_dir,
+                exe_dir,
                 &input,
                 &output,
                 &temp_dir,
-                &fontdata_dir,
+                &fontdata,
                 &log_pdf,
             )
         })
-        .await
-        .map_err(|e| format!("PDF conversion task failed: {}", e))?;
+        .await;
     }
 
     let params_path = params_path(std::path::Path::new(temp_dir), "convert");
@@ -86,6 +71,66 @@ pub async fn convert_file(
             code, stderr
         ))
     }
+}
+
+// Applies the PDF editor's changes to `source_pdf` and writes the result to
+// `output`. The changes are in changes/ next to `source_pdf`.
+pub async fn apply_pdf_changes(
+    app: &AppHandle,
+    source_pdf: &std::path::Path,
+    output: &std::path::Path,
+    temp_dir: &std::path::Path,
+    fontdata_dir: &std::path::Path,
+) -> Result<String, String> {
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let source_pdf = source_pdf.to_string_lossy().into_owned();
+    let output = output.to_string_lossy().into_owned();
+    let temp_dir = temp_dir.to_path_buf();
+    let fontdata = fontdata_dir.to_path_buf();
+    run_pdf_job(app, resource_dir.join("binaries"), move |binaries_dir, exe_dir| {
+        x2t_task::apply_pdf_changes(
+            binaries_dir,
+            exe_dir,
+            &source_pdf,
+            &output,
+            &temp_dir,
+            &fontdata,
+            &log_pdf,
+        )
+    })
+    .await
+}
+
+// Runs an x2t job that writes a PDF, once the font cache it reads exists.
+async fn run_pdf_job<F>(
+    app: &AppHandle,
+    binaries_dir: std::path::PathBuf,
+    job: F,
+) -> Result<String, String>
+where
+    F: FnOnce(&std::path::Path, Option<&std::path::Path>) -> Result<String, String>
+        + Send
+        + 'static,
+{
+    let (temp_root, instance_id) = {
+        let state = app.state::<crate::file_ops::AppState>();
+        (state.temp_root.clone(), state.instance.id.clone())
+    };
+    let exe_dir = crate::app_exe_dir();
+    // Building the font cache can wait up to FONT_CACHE_WAIT and x2t takes
+    // seconds: neither should hold a thread of the async runtime.
+    tauri::async_runtime::spawn_blocking(move || {
+        ensure_pdf_font_cache(
+            &temp_root,
+            &instance_id,
+            |staging: &std::path::Path| crate::generate_fonts(staging, &binaries_dir),
+            crate::FONT_CACHE_WAIT,
+            crate::FONT_CACHE_POLL,
+        )?;
+        job(&binaries_dir, exe_dir.as_deref())
+    })
+    .await
+    .map_err(|e| format!("PDF conversion task failed: {}", e))?
 }
 
 // Windows runs the same x2t as the PDF export, the one in binaries\ (see

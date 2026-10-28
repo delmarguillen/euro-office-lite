@@ -11,6 +11,7 @@ mod note_separator;
 mod protocol_limits;
 mod recent;
 mod recovery;
+mod save_target;
 mod temp_layout;
 mod text_import;
 mod x2t_task;
@@ -312,8 +313,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
+            file_ops::open_pdf,
             file_ops::save_file,
             file_ops::save_file_as,
+            file_ops::save_pdf,
             file_ops::write_editor_bin,
             file_ops::print_document,
             file_ops::create_new,

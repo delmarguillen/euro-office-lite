@@ -115,7 +115,7 @@ if ($LASTEXITCODE -ne 0) { throw 'apply-patches.mjs apply failed' }
 trap { & node $applyPatches revert --record $patchRecord; break }
 
 # --- web-apps editors (main/ without help/) ---
-$editors = @('documenteditor', 'spreadsheeteditor', 'presentationeditor')
+$editors = @('documenteditor', 'spreadsheeteditor', 'presentationeditor', 'pdfeditor')
 foreach ($ed in $editors) {
     Copy-Tree "$src\web-apps\apps\$ed\main" "$dist\web-apps\apps\$ed\main" @('help') "web-apps/apps/$ed/main"
 }
@@ -160,7 +160,7 @@ foreach ($d in $excludedSdk) {
     Log ("EXCL: {0,-55} (not needed at runtime)" -f "sdkjs/$d")
 }
 
-$excludedWebApps = @('pdfeditor', 'visioeditor', 'build', '.docker', '.github', 'test')
+$excludedWebApps = @('visioeditor', 'build', '.docker', '.github', 'test')
 foreach ($d in $excludedWebApps) {
     Log ("EXCL: {0,-55} (not needed at runtime)" -f "web-apps/$d")
 }

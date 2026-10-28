@@ -68,6 +68,7 @@ for (const editor of [
   'documenteditor',
   'spreadsheeteditor',
   'presentationeditor',
+  'pdfeditor',
 ]) {
   required.push(
     `web-apps/apps/${editor}/main/index.html`,
@@ -414,6 +415,7 @@ for (const forbidden of [
   'web-apps/apps/documenteditor/main/resources/help',
   'web-apps/apps/spreadsheeteditor/main/resources/help',
   'web-apps/apps/presentationeditor/main/resources/help',
+  'web-apps/apps/pdfeditor/main/resources/help',
 ]) {
   if (existsSync(path.join(distRoot, forbidden))) {
     fail(`excluded asset was staged: ${forbidden}`);
@@ -424,6 +426,7 @@ const editorModules = new Map([
   ['documenteditor', 'word'],
   ['spreadsheeteditor', 'cell'],
   ['presentationeditor', 'slide'],
+  ['pdfeditor', 'word'],
 ]);
 
 for (const [editor, moduleName] of editorModules) {
