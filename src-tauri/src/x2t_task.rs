@@ -333,8 +333,32 @@ pub fn convert_env(binaries_dir: &std::path::Path) -> Vec<(&'static str, std::ff
     }
 }
 
-// Paths are passed raw and escaped here, once.
 fn pdf_params_xml(input: &str, output: &str, fonts_dir: &str, allfonts: &str) -> String {
+    pdf_params_xml_with(input, output, fonts_dir, allfonts, "")
+}
+
+// x2t reads the editor's changes from changes/ next to the input PDF and
+// writes the input with them applied. Its own scratch files go to `scratch`,
+// and the changes stay out of the output folder.
+fn pdf_changes_params(scratch: &str) -> String {
+    format!(
+        "<m_nFormatFrom>513</m_nFormatFrom>
+<m_bFromChanges>true</m_bFromChanges>
+<m_bDontSaveAdditional>true</m_bDontSaveAdditional>
+<m_sTempDir>{}</m_sTempDir>
+",
+        xml_escape(&scratch.replace('\\', "/"))
+    )
+}
+
+// Paths are passed raw and escaped here, once. `extra` is already XML.
+fn pdf_params_xml_with(
+    input: &str,
+    output: &str,
+    fonts_dir: &str,
+    allfonts: &str,
+    extra: &str,
+) -> String {
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -345,11 +369,12 @@ fn pdf_params_xml(input: &str, output: &str, fonts_dir: &str, allfonts: &str) ->
 <m_bEmbeddedFonts>true</m_bEmbeddedFonts>
 <m_sFontDir>{}</m_sFontDir>
 <m_sAllFontsPath>{}</m_sAllFontsPath>
-{}</TaskQueueDataConvert>"#,
+{}{}</TaskQueueDataConvert>"#,
         xml_escape(input),
         xml_escape(output),
         xml_escape(&fonts_dir.replace('\\', "/")),
         xml_escape(&allfonts.replace('\\', "/")),
+        extra,
         x2t_options_xml(),
     )
 }
@@ -362,6 +387,54 @@ pub fn convert_to_pdf(
     temp_dir: &std::path::Path,
     fontdata_dir: &std::path::Path,
     log: &dyn Fn(&str),
+) -> Result<String, String> {
+    run_x2t_to_pdf(binaries_dir, exe_dir, input, output, temp_dir, fontdata_dir, log, "")
+}
+
+// Writes `source_pdf` with the editor's changes applied to `output`. The
+// changes must already be in changes/ next to `source_pdf`.
+pub fn apply_pdf_changes(
+    binaries_dir: &std::path::Path,
+    exe_dir: Option<&std::path::Path>,
+    source_pdf: &str,
+    output: &str,
+    temp_dir: &std::path::Path,
+    fontdata_dir: &std::path::Path,
+    log: &dyn Fn(&str),
+) -> Result<String, String> {
+    let scratch = temp_dir.join("pdf_changes_tmp");
+    reset_dir(&scratch)?;
+    let result = run_x2t_to_pdf(
+        binaries_dir,
+        exe_dir,
+        source_pdf,
+        output,
+        temp_dir,
+        fontdata_dir,
+        log,
+        &pdf_changes_params(&scratch.to_string_lossy()),
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+fn reset_dir(dir: &std::path::Path) -> Result<(), String> {
+    if dir.exists() {
+        std::fs::remove_dir_all(dir).map_err(|e| path_error("Failed to reset directory", dir, e))?;
+    }
+    create_dir(dir)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_x2t_to_pdf(
+    binaries_dir: &std::path::Path,
+    exe_dir: Option<&std::path::Path>,
+    input: &str,
+    output: &str,
+    temp_dir: &std::path::Path,
+    fontdata_dir: &std::path::Path,
+    log: &dyn Fn(&str),
+    extra_params: &str,
 ) -> Result<String, String> {
     let binaries_dir = &strip_extended_prefix(binaries_dir);
     let output_name = std::path::Path::new(output)
@@ -444,11 +517,12 @@ pub fn convert_to_pdf(
     let allfonts_abs =
         std::fs::canonicalize(&run_allfonts).unwrap_or_else(|_| run_allfonts.clone());
 
-    let xml = pdf_params_xml(
+    let xml = pdf_params_xml_with(
         input,
         output,
         &fonts_dir_for_xml.to_string_lossy(),
         &allfonts_abs.to_string_lossy(),
+        extra_params,
     );
     write_file(&params_xml, &xml)?;
 
@@ -1344,6 +1418,20 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert!(xml.contains("<m_sFileTo>/d/A&amp;amp;B.pdf</m_sFileTo>"));
     }
 
+    #[test]
+    fn pdf_change_params_ask_for_the_changes_and_no_extra_files() {
+        let extra = pdf_changes_params("/t/R&D/tmp");
+        let xml = pdf_params_xml_with("/t/src.pdf", "/t/out.pdf", "/f", "/f/AllFonts.js", &extra);
+        assert!(xml.contains("<m_nFormatFrom>513</m_nFormatFrom>"));
+        assert!(xml.contains("<m_bFromChanges>true</m_bFromChanges>"));
+        assert!(xml.contains("<m_bDontSaveAdditional>true</m_bDontSaveAdditional>"));
+        let expected_end = format!(
+            "<m_sTempDir>/t/R&amp;D/tmp</m_sTempDir>\n{}</TaskQueueDataConvert>",
+            x2t_options_xml()
+        );
+        assert!(xml.ends_with(&expected_end), "{}", xml);
+    }
+
     // An app folder whose binaries/ holds the bundled font list and a font
     // cache folder that is still empty.
     fn app_without_cache(
@@ -1775,6 +1863,7 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     fn every_params_xml_has_the_options_block_once() {
         let all = [
             pdf_params_xml("/d/in.docx", "/d/out.pdf", "/f", "/f/AllFonts.js"),
+            pdf_params_xml_with("/d/in.pdf", "/d/out.pdf", "/f", "/f/AllFonts.js", &pdf_changes_params("/t")),
             convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", ""),
             convert_params_xml("/t/Editor.bin", "/d/out.docx", 65, "/t", ""),
         ];
