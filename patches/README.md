@@ -33,4 +33,4 @@ usually means upstream already has the change: remove that patch from here.
 | `sdkjs/0001-document-custom-functions-follow-macros.patch` | own |
 | `sdkjs/0002-speech-text-as-plain-text.patch` | own |
 | `sdkjs/0003-pdf-no-document-javascript.patch` | own |
-| `doctrenderer-sdkjs/0001-skip-document-custom-functions-in-converter.patch` | own, against ONLYOFFICE/sdkjs `v9.4.0.129` (`75b53d504bfd81bfa35d59bb57dd9e56f7c9235d`) |
+| `doctrenderer-sdkjs/0001-skip-document-custom-functions-in-converter.patch` | own, against ONLYOFFICE/sdkjs `v10.0.0.169` (`3679e0375a758d7dc59d31337a45461be3525ed8`) |

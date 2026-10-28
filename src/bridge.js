@@ -1046,6 +1046,27 @@ function _recoveryMarkModified(name) {
   } catch(e) {}
 }
 
+// Puts the modified mark back, in the JS and in Rust, when something that
+// wrote no copy of the document over it reported it as saved.
+function _eoRestoreModified(wasModified) {
+  if (!wasModified) return;
+  if (window.AscDesktopEditor._isModified) return;
+  window.AscDesktopEditor._isModified = true;
+  invoke('set_document_modified', { modified: true }).catch(function(){});
+}
+
+// Ends a save that sdkjs started but that left the document where it was (a
+// PDF export, a cancelled Save As). EndSave(0) would keep the history index
+// sdkjs moved when the save began and report the document as saved. Any other
+// code closes the "saving" indicator the same way and restores that index;
+// 1 is the code that shows no error message (only 2 does).
+function _eoEndSaveKeepingModified(ref, wasModified) {
+  if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
+    ref.ew.DesktopOfflineAppDocumentEndSave(1);
+  }
+  _eoRestoreModified(wasModified);
+}
+
 function _forceReload() {
   window.onbeforeunload = null;
   var iframes = document.querySelectorAll('iframe');
@@ -2345,6 +2366,10 @@ window.AscDesktopEditor = {
 
       var currentPath = await invoke('get_current_path');
       if (!isSaveAs && !currentPath) isSaveAs = true;
+      var wasModified = window.AscDesktopEditor._isModified;
+      // A cancelled Save As or a PDF export leaves the open document where it
+      // was, so it must not end as a save.
+      var keepsDocument = false;
 
       if (isSaveAs) {
         var formatExtensions = {
@@ -2364,6 +2389,7 @@ window.AscDesktopEditor = {
         // in the format asked for, never as the file itself.
         var defaultPath = _eoSuggestionWithExt(suggestedPath, requestedExt);
         var savePath = await dialog.save({ filters: filters, defaultPath: defaultPath || undefined });
+        keepsDocument = !savePath;
         if (savePath) {
           var knownExts = ['docx','doc','odt','rtf','txt','xlsx','xls','ods','csv','pptx','ppt','odp','pdf'];
           var pathExt = savePath.split('.').pop().toLowerCase();
@@ -2374,6 +2400,7 @@ window.AscDesktopEditor = {
           try {
             await invoke('save_file_as', { path: savePath });
             var savedName = savePath.replace(/\\/g, '/').split('/').pop();
+            keepsDocument = pathExt === 'pdf';
             if (pathExt !== 'pdf') {
               // A Save As moves the document and the session follows it, so a
               // later recovery writes where it lives now. A PDF export only
@@ -2430,6 +2457,10 @@ window.AscDesktopEditor = {
         }
       }
 
+      if (keepsDocument) {
+        _eoEndSaveKeepingModified(ref, wasModified);
+        return;
+      }
       if (ref.ew.DesktopOfflineAppDocumentEndSave) {
         ref.ew.DesktopOfflineAppDocumentEndSave(0);
       }
@@ -2741,6 +2772,7 @@ window.AscDesktopEditor = {
         for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
         b64 = btoa(binary);
       }
+      var wasModified = window.AscDesktopEditor._isModified;
       await invoke('write_editor_bin', { data: b64 });
       // The backend keeps the PDF it wrote; the two commands below take no path.
       await invoke('print_document');
@@ -2754,6 +2786,7 @@ window.AscDesktopEditor = {
       if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
         ref.ew.DesktopOfflineAppDocumentEndSave(0);
       }
+      _eoRestoreModified(wasModified);
     } catch(e) {
       window._eoLog('[EO] Print: ERROR: ' + (e.message || e));
       // Without this a failed print looks like nothing happened.
