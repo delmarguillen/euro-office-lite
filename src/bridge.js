@@ -2641,7 +2641,11 @@ window.AscDesktopEditor = {
   },
 
   LocalFileGetSourcePath: () => '',
-  LocalFileGetSaved: () => false,
+  // An open PDF is always a file on disk. The PDF editor sets its modified mark
+  // from History.Have_Changes(), which counts a file never saved as modified;
+  // the other editors skip that check, and the spreadsheet one also reads this
+  // for link paths, so they keep false.
+  LocalFileGetSaved: () => window.AscDesktopEditor._currentDocType === 'pdf',
   LocalFileGetImageUrl: function(url) {
     if (!url) return url;
     if (url.indexOf('data:') === 0 || url.indexOf('blob:') === 0) return url;
