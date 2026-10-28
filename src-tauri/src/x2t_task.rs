@@ -1746,6 +1746,46 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
+    fn the_options_block_turns_off_network_and_outside_files() {
+        let options = x2t_options_xml();
+        assert!(options.starts_with("<options>"), "{}", options);
+        assert!(options.contains("<allowPrivateIP>false</allowPrivateIP>"), "{}", options);
+        assert!(options.contains("<allowNetworkRequest>false</allowNetworkRequest>"), "{}", options);
+        assert!(options.ends_with("</options>\n"), "{}", options);
+    }
+
+    #[test]
+    fn pdf_params_end_with_the_options_block() {
+        let xml = pdf_params_xml("/d/in.docx", "/d/out.pdf", "/f", "/f/AllFonts.js");
+        let expected_end = format!("{}</TaskQueueDataConvert>", x2t_options_xml());
+        assert!(xml.ends_with(&expected_end), "{}", xml);
+    }
+
+    #[test]
+    fn convert_params_end_with_the_options_block() {
+        let expected_end = format!("{}</TaskQueueDataConvert>", x2t_options_xml());
+        let plain = convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", "");
+        assert!(plain.ends_with(&expected_end), "{}", plain);
+        let text = "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n";
+        let with_text = convert_params_xml("/d/in.csv", "/t/Editor.bin", 8192, "/t", text);
+        assert!(with_text.ends_with(&expected_end), "{}", with_text);
+    }
+
+    #[test]
+    fn every_params_xml_has_the_options_block_once() {
+        let all = [
+            pdf_params_xml("/d/in.docx", "/d/out.pdf", "/f", "/f/AllFonts.js"),
+            convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", ""),
+            convert_params_xml("/t/Editor.bin", "/d/out.docx", 65, "/t", ""),
+        ];
+        for xml in all {
+            assert_eq!(xml.matches("<options>").count(), 1, "{}", xml);
+            assert_eq!(xml.matches("<allowPrivateIP>false</allowPrivateIP>").count(), 1, "{}", xml);
+            assert_eq!(xml.matches("<allowNetworkRequest>false</allowNetworkRequest>").count(), 1, "{}", xml);
+        }
+    }
+
+    #[test]
     fn detect_format_maps_pdf_to_the_x2t_export_id() {
         // 513 is the value both PDF paths branch on before calling the converter.
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.pdf")), 513);
