@@ -502,6 +502,8 @@ pub async fn save_file(
 ) -> Result<String, String> {
     let current = state.current_file.lock().unwrap().clone();
     let dest = current.ok_or("No file is currently open")?;
+    // x2t only reports a failed write as a generic exit code.
+    crate::save_target::check_writable_destination(&dest)?;
 
     let input = state.temp_dir.join("Editor.bin");
     let format_from = 8192;
@@ -538,6 +540,7 @@ pub async fn save_file_as(
     path: String,
 ) -> Result<String, String> {
     let dest = PathBuf::from(&path);
+    crate::save_target::check_writable_destination(&dest)?;
     let input = state.temp_dir.join("Editor.bin");
     let format_from = 8192;
     let format_to = detect_format(&dest);
