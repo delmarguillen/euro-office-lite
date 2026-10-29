@@ -249,7 +249,7 @@ pub async fn open_pdf(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<String, String> {
-    let input = state.grants.resolve(&token, GrantKind::Open)?;
+    let input = pdf_to_open(&state.grants, &token)?;
     let path = input.to_string_lossy().to_string();
     let file_name = input
         .file_name()
@@ -284,6 +284,12 @@ pub async fn open_pdf(
     super::recent::record(&app, &path);
 
     Ok(STANDARD.encode(&bytes))
+}
+
+// The PDF the webview chose to open, by the token the open dialog, the launch
+// argument or the recent list gave it.
+fn pdf_to_open(grants: &crate::path_grants::PathGrants, token: &str) -> Result<PathBuf, String> {
+    grants.resolve(token, GrantKind::Open)
 }
 
 // The PDF editor's changes always describe the file as it was opened, so
@@ -1944,5 +1950,87 @@ mod tests {
         assert!(!opened_pdf(&instance).exists());
         assert!(!instance.join("pdf_save").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn expired_grant(grants: &crate::path_grants::PathGrants, kind: GrantKind) -> String {
+        let long_ago = std::time::Instant::now()
+            .checked_sub(crate::path_grants::GRANT_TTL * 2)
+            .expect("the clock goes back far enough");
+        grants
+            .grant_at(PathBuf::from("/home/u/old.pdf"), kind, long_ago)
+            .token
+    }
+
+    #[test]
+    fn opening_a_pdf_takes_only_an_open_token() {
+        let grants = crate::path_grants::PathGrants::default();
+        let open = grants.grant(PathBuf::from("/home/u/a.pdf"), GrantKind::Open);
+        assert_eq!(pdf_to_open(&grants, &open.token), Ok(PathBuf::from("/home/u/a.pdf")));
+
+        assert!(pdf_to_open(&grants, "0123456789abcdef0123456789abcdef").is_err());
+        assert!(pdf_to_open(&grants, "/home/u/a.pdf").is_err());
+        assert!(pdf_to_open(&grants, &expired_grant(&grants, GrantKind::Open)).is_err());
+        let save = grants.grant(PathBuf::from("/home/u/b.pdf"), GrantKind::Save);
+        assert!(pdf_to_open(&grants, &save.token).is_err());
+        let insert = grants.grant(PathBuf::from("/home/u/c.pdf"), GrantKind::Insert);
+        assert!(pdf_to_open(&grants, &insert.token).is_err());
+    }
+
+    #[test]
+    fn saving_a_pdf_as_takes_only_a_save_token() {
+        let grants = crate::path_grants::PathGrants::default();
+        let current = Path::new("/home/u/open.pdf");
+        let save = grants.grant(PathBuf::from("/home/u/copy.pdf"), GrantKind::Save);
+        assert_eq!(
+            pdf_save_destination(&grants, Some(&save.token), current),
+            Ok(PathBuf::from("/home/u/copy.pdf"))
+        );
+        assert_eq!(pdf_save_destination(&grants, None, current), Ok(current.to_path_buf()));
+
+        let unknown = Some("0123456789abcdef0123456789abcdef");
+        assert!(pdf_save_destination(&grants, unknown, current).is_err());
+        assert!(pdf_save_destination(&grants, Some("/home/u/copy.pdf"), current).is_err());
+        let expired = expired_grant(&grants, GrantKind::Save);
+        assert!(pdf_save_destination(&grants, Some(&expired), current).is_err());
+        let open = grants.grant(PathBuf::from("/home/u/other.pdf"), GrantKind::Open);
+        assert!(pdf_save_destination(&grants, Some(&open.token), current).is_err());
+    }
+
+    #[test]
+    fn a_pdf_saved_as_another_name_ends_in_pdf() {
+        let grants = crate::path_grants::PathGrants::default();
+        let current = Path::new("/home/u/open.pdf");
+        let save = grants.grant(PathBuf::from("/home/u/copy.docx"), GrantKind::Save);
+        assert_eq!(
+            pdf_save_destination(&grants, Some(&save.token), current),
+            Ok(PathBuf::from("/home/u/copy.docx.pdf"))
+        );
+        let upper = grants.grant(PathBuf::from("/home/u/COPY.PDF"), GrantKind::Save);
+        assert_eq!(
+            pdf_save_destination(&grants, Some(&upper.token), current),
+            Ok(PathBuf::from("/home/u/COPY.PDF"))
+        );
+    }
+
+    // The parameters of a command, from its signature in this file.
+    fn command_parameters(name: &str) -> String {
+        let source = include_str!("file_ops.rs");
+        let start = source
+            .find(&format!("pub async fn {}(", name))
+            .or_else(|| source.find(&format!("pub fn {}(", name)))
+            .unwrap_or_else(|| panic!("no command {}", name));
+        let signature = &source[start..];
+        let end = signature.find(") ->").expect("a signature ends with its return type");
+        signature[..end].to_string()
+    }
+
+    #[test]
+    fn no_pdf_command_takes_a_path() {
+        for name in ["open_pdf", "save_pdf", "print_document", "open_pdf_viewer"] {
+            let parameters = command_parameters(name);
+            assert!(!parameters.contains("path"), "{}: {}", name, parameters);
+        }
+        assert!(command_parameters("open_pdf").contains("token: String"));
+        assert!(command_parameters("save_pdf").contains("token: Option<String>"));
     }
 }

@@ -50,7 +50,7 @@ impl PathGrants {
         self.resolve_at(token, kind, Instant::now())
     }
 
-    fn grant_at(&self, path: PathBuf, kind: GrantKind, now: Instant) -> GrantedFile {
+    pub(crate) fn grant_at(&self, path: PathBuf, kind: GrantKind, now: Instant) -> GrantedFile {
         let token = new_token();
         let name = file_name(&path);
         let grant = Grant {
