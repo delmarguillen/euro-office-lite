@@ -16,6 +16,10 @@ pub async fn convert_file(
     fontdata_dir: &std::path::Path,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<String, String> {
+    if format_to == 8192 {
+        check_container_content(input)?;
+    }
+
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let binaries_dir = resource_dir.join("binaries");
 
@@ -191,6 +195,25 @@ fn ensure_pdf_font_cache(
         log_pdf(&error);
         Err(error)
     }
+}
+
+// Opening and inserting convert the user's file to Editor.bin (8192); this runs
+// before x2t is launched for them.
+fn check_container_content(input: &str) -> Result<(), String> {
+    let path = std::path::Path::new(input);
+    let head = read_head(path).map_err(|e| e.to_string())?;
+    if x2t_task::content_matches_extension(path, &head) {
+        return Ok(());
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
+    Err(format!("This file is not a valid .{}", ext.to_lowercase()))
+}
+
+fn read_head(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut head = Vec::new();
+    std::fs::File::open(path)?.take(8).read_to_end(&mut head)?;
+    Ok(head)
 }
 
 #[cfg(test)]
