@@ -857,6 +857,27 @@ pub fn is_empty_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
+const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+// A container format must start like one; x2t would otherwise pick the format
+// from the content. OOXML is a ZIP, or a CFB when it has a password. ODF is
+// always a ZIP. Other extensions (doc, xls, rtf...) are left to x2t.
+pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return true;
+    };
+    let is_zip = head.starts_with(ZIP_SIGNATURE);
+    let is_cfb = head.starts_with(CFB_SIGNATURE);
+    match ext.to_lowercase().as_str() {
+        "docx" | "docm" | "dotx" | "dotm" => is_zip || is_cfb,
+        "xlsx" | "xlsm" | "xltx" | "xltm" => is_zip || is_cfb,
+        "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => is_zip || is_cfb,
+        "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => is_zip,
+        _ => true,
+    }
+}
+
 // x2t does not use fontconfig: it scans a fixed list of directories
 // (/usr/share/fonts, /usr/share/X11/fonts, /usr/local/share/fonts and a couple more),
 // so fonts installed per user or exposed by the Flatpak host mounts are invisible to
@@ -1871,6 +1892,55 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
             assert_eq!(xml.matches("<options>").count(), 1, "{}", xml);
             assert_eq!(xml.matches("<allowPrivateIP>false</allowPrivateIP>").count(), 1, "{}", xml);
             assert_eq!(xml.matches("<allowNetworkRequest>false</allowNetworkRequest>").count(), 1, "{}", xml);
+        }
+    }
+
+    const HTML_HEAD: &[u8] = b"<html><body>";
+    const OOXML_EXTENSIONS: &[&str] = &[
+        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx",
+        "potm", "ppsx", "ppsm",
+    ];
+    const ODF_EXTENSIONS: &[&str] = &["odt", "ods", "odp", "ott", "ots", "otp"];
+
+    fn matches(name: &str, head: &[u8]) -> bool {
+        content_matches_extension(std::path::Path::new(name), head)
+    }
+
+    #[test]
+    fn container_extensions_accept_a_zip() {
+        for ext in OOXML_EXTENSIONS.iter().chain(ODF_EXTENSIONS) {
+            assert!(matches(&format!("/d/a.{ext}"), b"PK\x03\x04rest"), "{ext}");
+        }
+    }
+
+    #[test]
+    fn ooxml_extensions_accept_a_cfb_and_odf_ones_do_not() {
+        for ext in OOXML_EXTENSIONS {
+            assert!(matches(&format!("/d/a.{ext}"), CFB_SIGNATURE), "{ext}");
+        }
+        for ext in ODF_EXTENSIONS {
+            assert!(!matches(&format!("/d/a.{ext}"), CFB_SIGNATURE), "{ext}");
+        }
+    }
+
+    #[test]
+    fn container_extensions_reject_html_and_an_empty_file() {
+        for ext in OOXML_EXTENSIONS.iter().chain(ODF_EXTENSIONS) {
+            assert!(!matches(&format!("/d/a.{ext}"), HTML_HEAD), "{ext}");
+            assert!(!matches(&format!("/d/a.{ext}"), b""), "{ext}");
+        }
+    }
+
+    #[test]
+    fn container_extension_check_ignores_case() {
+        assert!(!matches("/d/A.DOCX", HTML_HEAD));
+        assert!(matches("/d/A.DOCX", b"PK\x03\x04"));
+    }
+
+    #[test]
+    fn legacy_and_other_extensions_are_left_to_x2t() {
+        for name in ["/d/a.doc", "/d/a.xls", "/d/a.ppt", "/d/a.rtf", "/d/a.txt", "/d/a.csv", "/d/a"] {
+            assert!(matches(name, HTML_HEAD), "{name}");
         }
     }
 
