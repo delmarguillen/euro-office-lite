@@ -177,6 +177,39 @@ check(results, 'a recent entry is reopened by its token', pending === JSON.strin
   String(pending));
 run.bridge.stopTimers();
 
+// A PDF given as the launch argument.
+run = await setup({
+  take_pending_open_file: () => ({ token: 'tok-launch-pdf', name: 'launch.pdf' }),
+  open_pdf: (args) => { everyCall.push({ command: 'open_pdf', args }); return 'JVBERg=='; },
+});
+await settle();
+check(results, 'a PDF launch argument opens by token',
+  everyCall.some((call) => call.command === 'open_pdf' && call.args.token === 'tok-launch-pdf'),
+  JSON.stringify(everyCall.filter((call) => call.command === 'open_pdf')));
+run.bridge.stopTimers();
+
+// Save As and Print with a PDF open.
+const pdfCommands = {
+  current_document: () => ({ token: 'tok-current', name: 'report.pdf' }),
+  pick_save_target: (args) => { everyCall.push({ command: 'pick_save_target', args }); return { token: 'tok-save-pdf', name: 'copy.pdf' }; },
+  save_pdf: (args) => { everyCall.push({ command: 'save_pdf', args }); return 'ok'; },
+  print_document: (args) => { everyCall.push({ command: 'print_document', args }); return 'ok'; },
+  open_pdf_viewer: () => 'ok',
+};
+run = await setup({ ...pdfCommands, take_pending_open_file: () => null });
+run.bridge.sandbox.AscDesktopEditor._currentDocType = 'pdf';
+run.bridge.sandbox.AscDesktopEditor._editorWindow.Asc.editor.getDocumentRenderer = () => ({ Save: () => new Uint8Array([1]) });
+await run.bridge.run("AscDesktopEditor.LocalFileSave('saveas=true', '', null, 513, '')");
+await run.bridge.run("AscDesktopEditor.Print('')");
+await settle();
+const pdfSaves = everyCall.filter((call) => call.command === 'save_pdf');
+check(results, 'a PDF Save As saves by token',
+  pdfSaves.length === 1 && pdfSaves[0].args.token === 'tok-save-pdf', JSON.stringify(pdfSaves));
+check(results, '... and opens no dialog of its own', run.jsDialogs.length === 0, JSON.stringify(run.jsDialogs));
+check(results, 'a PDF prints without naming a file',
+  everyCall.some((call) => call.command === 'print_document'), JSON.stringify(everyCall.slice(-3)));
+run.bridge.stopTimers();
+
 // Across every run above: no command got a path.
 check(results, 'no command receives a path', pathsSent(everyCall).length === 0,
   JSON.stringify(pathsSent(everyCall)));
