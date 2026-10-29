@@ -18,14 +18,13 @@ async function setup(docType, failure) {
       save_file: fail,
       save_file_as: fail,
       save_pdf: fail,
-      pick_save_target: () => ({ token: 'tok-copy', name: 'copy.docx' }),
+      pick_save_target: () => ({ token: 'tok-copy', name: 'copy.' + (docType === 'pdf' ? 'pdf' : 'docx') }),
       recovery_mark_saved: () => null,
     },
   });
   const messages = [];
   const endSaves = [];
   bridge.sandbox.__TAURI__.dialog = {
-    save: () => Promise.resolve('/home/user/docs/copy.' + (docType === 'pdf' ? 'pdf' : 'docx')),
     message: (text, options) => { messages.push({ text, title: options && options.title }); return Promise.resolve(); },
   };
   bridge.sandbox.AscDesktopEditor._currentDocType = docType;

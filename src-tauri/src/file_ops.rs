@@ -588,9 +588,9 @@ pub async fn save_pdf(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     data: String,
-    path: Option<String>,
+    token: Option<String>,
 ) -> Result<String, String> {
-    let result = save_pdf_inner(&app, &state, &data, path).await;
+    let result = save_pdf_inner(&app, &state, &data, token).await;
     if let Err(error) = &result {
         log_event(&state, &format!("[SAVE] pdf failed: {}", error));
     }
@@ -601,11 +601,11 @@ async fn save_pdf_inner(
     app: &tauri::AppHandle,
     state: &AppState,
     data: &str,
-    path: Option<String>,
+    token: Option<String>,
 ) -> Result<String, String> {
     let changes = decode_pdf_changes(data)?;
     let current = open_pdf_file(state)?;
-    let dest = path.map(PathBuf::from).unwrap_or_else(|| current.clone());
+    let dest = pdf_save_destination(&state.grants, token.as_deref(), &current)?;
     crate::protocol_limits::check_pdf_save_target(&dest)?;
     // Refused before x2t runs; write_beside_and_rename checks again.
     crate::save_target::check_writable_destination(&dest)?;
@@ -633,6 +633,29 @@ async fn save_pdf_inner(
     }
     *state.modified.lock().unwrap() = false;
     Ok("ok".to_string())
+}
+
+// Save writes over the open PDF; Save As writes where its token points, as a
+// .pdf even when the name chosen in the dialog ends otherwise.
+fn pdf_save_destination(
+    grants: &crate::path_grants::PathGrants,
+    token: Option<&str>,
+    current: &Path,
+) -> Result<PathBuf, String> {
+    let Some(token) = token else {
+        return Ok(current.to_path_buf());
+    };
+    let chosen = grants.resolve(token, GrantKind::Save)?;
+    Ok(with_pdf_extension(chosen))
+}
+
+fn with_pdf_extension(path: PathBuf) -> PathBuf {
+    if crate::protocol_limits::has_pdf_extension(&path) {
+        return path;
+    }
+    let mut name = path.into_os_string();
+    name.push(".pdf");
+    PathBuf::from(name)
 }
 
 // Replaces `dest` only when x2t succeeded and wrote the changed PDF. The work

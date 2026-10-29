@@ -884,28 +884,33 @@ function _eoPdfChanges(ref) {
 }
 
 // Save As with a PDF open writes a PDF, so the dialog offers nothing else.
-async function _eoAskPdfPath() {
-  var filters = [{ name: 'PDF', extensions: ['pdf'] }];
-  var path = await window.__TAURI__.dialog.save({ filters: filters });
-  if (!path) return null;
-  if (!/\.pdf$/i.test(path)) path += '.pdf';
-  return path;
+var EO_PDF_SAVE_FILTERS = [{ name: 'PDF', extensions: ['pdf'] }];
+
+async function _eoPickPdfTarget() {
+  return invoke('pick_save_target', { filters: EO_PDF_SAVE_FILTERS, requestedExt: 'pdf' });
+}
+
+// save_pdf writes a .pdf even when the name chosen ends otherwise.
+function _eoPdfName(name) {
+  if (/\.pdf$/i.test(name)) return name;
+  return name + '.pdf';
 }
 
 // Saves the open PDF, over itself or, for Save As, where the user picks. Ends
 // the editor's save the way the other editors do.
 async function _eoSavePdf(ref, isSaveAs) {
   var wasModified = window.AscDesktopEditor._isModified;
-  var path = null;
+  var target = null;
   if (isSaveAs) {
-    path = await _eoAskPdfPath();
-    if (!path) {
+    target = await _eoPickPdfTarget();
+    if (!target) {
       _eoEndSaveKeepingModified(ref, wasModified);
       return;
     }
   }
+  var token = target ? target.token : null;
   try {
-    await invoke('save_pdf', { data: _eoPdfChanges(ref), path: path });
+    await invoke('save_pdf', { data: _eoPdfChanges(ref), token: token });
   } catch (e) {
     window._eoLog('[SAVE] pdf failed: ' + ((e && e.message) || e));
     await window.__TAURI__.dialog.message(
@@ -917,15 +922,14 @@ async function _eoSavePdf(ref, isSaveAs) {
     }
     return;
   }
-  if (path) _eoShowSavedName(path);
+  if (target) _eoShowSavedName(_eoPdfName(target.name));
   if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
     ref.ew.DesktopOfflineAppDocumentEndSave(0);
   }
 }
 
 // The saved file's name in the window title and the editor's title fields.
-function _eoShowSavedName(savePath) {
-  var savedName = savePath.replace(/\\/g, '/').split('/').pop();
+function _eoShowSavedName(savedName) {
   invoke('set_window_title', { name: savedName }).catch(function(){});
   try {
     var frames = document.querySelectorAll('iframe');

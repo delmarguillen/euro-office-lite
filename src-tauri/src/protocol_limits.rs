@@ -314,7 +314,7 @@ pub fn is_pdf_changes(bytes: &[u8]) -> bool {
     bytes.len() > 4 && bytes.starts_with(b"%PDF")
 }
 
-fn has_pdf_extension(path: &Path) -> bool {
+pub fn has_pdf_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
