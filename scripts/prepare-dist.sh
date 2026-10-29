@@ -112,7 +112,7 @@ node "$PROJECT_ROOT/scripts/apply-patches.mjs" apply --record "$PATCH_RECORD"
 trap 'node "$PROJECT_ROOT/scripts/apply-patches.mjs" revert --record "$PATCH_RECORD"' EXIT
 
 # --- web-apps editors (main/ without help/) ---
-for ed in documenteditor spreadsheeteditor presentationeditor; do
+for ed in documenteditor spreadsheeteditor presentationeditor pdfeditor; do
     copy_tree "$SRC/web-apps/apps/$ed/main" "$DIST/web-apps/apps/$ed/main" "web-apps/apps/$ed/main" "help"
 done
 
@@ -151,7 +151,7 @@ for d in tests build visio .docker .github; do
     log "$(printf 'EXCL: %-55s (not needed at runtime)' "sdkjs/$d")"
 done
 
-for d in pdfeditor visioeditor build .docker .github test; do
+for d in visioeditor build .docker .github test; do
     log "$(printf 'EXCL: %-55s (not needed at runtime)' "web-apps/$d")"
 done
 

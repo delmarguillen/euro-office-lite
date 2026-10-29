@@ -99,8 +99,10 @@ pub(crate) fn switch_document(state: &AppState) -> Result<(), String> {
 // changes/ is in the list only to sweep what older versions left there: the
 // editor's changes now live in the recovery session folder (recovery.rs), never
 // in the temp dir.
+// pdf_open/ and pdf_save/ hold the opened PDF and a save in progress, and
+// belong to the open document as well.
 pub(crate) fn clear_document_temp(temp_dir: &std::path::Path) {
-    for dir in ["changes", "media", "insert_tmp", "downloads"] {
+    for dir in ["changes", "media", "insert_tmp", "downloads", "pdf_open", "pdf_save"] {
         let path = temp_dir.join(dir);
         if path.exists() {
             let _ = std::fs::remove_dir_all(&path);
@@ -236,6 +238,80 @@ pub fn stage_insert_media(
         }
     }
     staged
+}
+
+// A PDF goes to the editor as it is on disk: the PDF editor reads the file
+// itself, so there is no x2t conversion and no Editor.bin.
+#[tauri::command]
+pub async fn open_pdf(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    let input = PathBuf::from(&path);
+    let file_name = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let bytes = read_pdf(&input).map_err(|error| {
+        log_event(
+            &state,
+            &format!("[OPEN] failed file={} error={}", file_name, error),
+        );
+        error
+    })?;
+
+    clear_pending_recent(&state.pending_recent);
+    crate::recovery::end_session(&state, true);
+    switch_document(&state)?;
+    keep_opened_pdf(&state.temp_dir, &bytes)?;
+
+    log_event(
+        &state,
+        &format!(
+            "[OPEN] success file={} pdf={} bytes",
+            file_name,
+            bytes.len()
+        ),
+    );
+
+    *state.current_file.lock().unwrap() = Some(input);
+    *state.modified.lock().unwrap() = false;
+    *state.text_options.lock().unwrap() = None;
+    super::recent::record(&app, &path);
+
+    Ok(STANDARD.encode(&bytes))
+}
+
+// The PDF editor's changes always describe the file as it was opened, so
+// every save applies them to this copy, never to a file saved since.
+pub(crate) fn opened_pdf(temp_dir: &Path) -> PathBuf {
+    temp_dir.join("pdf_open").join("opened.pdf")
+}
+
+fn keep_opened_pdf(temp_dir: &Path, bytes: &[u8]) -> Result<(), String> {
+    let copy = opened_pdf(temp_dir);
+    if let Some(dir) = copy.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&copy, bytes).map_err(|e| e.to_string())
+}
+
+// Reads a PDF after checking its path and size, and that it is one.
+fn read_pdf(path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("not a file".to_string());
+    }
+    crate::protocol_limits::check_pdf_open(path, metadata.len())?;
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    // The size is checked again: the file may have grown since the stat.
+    crate::protocol_limits::check_pdf_open(path, bytes.len() as u64)?;
+    if !crate::protocol_limits::has_pdf_header(&bytes) {
+        return Err("the file is not a PDF".to_string());
+    }
+    Ok(bytes)
 }
 
 #[tauri::command]
@@ -428,6 +504,8 @@ pub async fn save_file(
 ) -> Result<String, String> {
     let current = state.current_file.lock().unwrap().clone();
     let dest = current.ok_or("No file is currently open")?;
+    // x2t only reports a failed write as a generic exit code.
+    crate::save_target::check_writable_destination(&dest)?;
 
     let input = state.temp_dir.join("Editor.bin");
     let format_from = 8192;
@@ -464,6 +542,7 @@ pub async fn save_file_as(
     path: String,
 ) -> Result<String, String> {
     let dest = PathBuf::from(&path);
+    crate::save_target::check_writable_destination(&dest)?;
     let input = state.temp_dir.join("Editor.bin");
     let format_from = 8192;
     let format_to = detect_format(&dest);
@@ -494,6 +573,160 @@ pub async fn save_file_as(
         super::recent::record(&app, &path);
     }
     Ok("ok".to_string())
+}
+
+// Saves the open PDF: x2t applies the PDF editor's changes (`data`, base64)
+// onto the PDF as it was opened, and the result goes to `path`, or over the
+// open file when there is none. The destination is only replaced once x2t has
+// written a complete PDF.
+#[tauri::command]
+pub async fn save_pdf(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    data: String,
+    path: Option<String>,
+) -> Result<String, String> {
+    let result = save_pdf_inner(&app, &state, &data, path).await;
+    if let Err(error) = &result {
+        log_event(&state, &format!("[SAVE] pdf failed: {}", error));
+    }
+    result
+}
+
+async fn save_pdf_inner(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    data: &str,
+    path: Option<String>,
+) -> Result<String, String> {
+    let changes = decode_pdf_changes(data)?;
+    let current = open_pdf_file(state)?;
+    let dest = path.map(PathBuf::from).unwrap_or_else(|| current.clone());
+    crate::protocol_limits::check_pdf_save_target(&dest)?;
+    // Refused before x2t runs; write_beside_and_rename checks again.
+    crate::save_target::check_writable_destination(&dest)?;
+
+    let work = PdfSaveWork::new(&state.temp_dir);
+    let opened = opened_pdf(&state.temp_dir);
+    work.stage(&opened, &changes, &state.temp_dir.join("media"))?;
+    let applied = super::converter::apply_pdf_changes(
+        app,
+        &work.source(),
+        &work.output(),
+        &state.temp_dir,
+        &crate::temp_layout::fontdata_dir(&state.font_root),
+    )
+    .await;
+    finish_pdf_save(&work, applied, &dest)?;
+
+    log_event(
+        state,
+        &format!("[SAVE] pdf success changes={} bytes", changes.len()),
+    );
+    if dest != current {
+        *state.current_file.lock().unwrap() = Some(dest.clone());
+        super::recent::record(app, &dest.to_string_lossy());
+    }
+    *state.modified.lock().unwrap() = false;
+    Ok("ok".to_string())
+}
+
+// Replaces `dest` only when x2t succeeded and wrote the changed PDF. The work
+// folder goes either way.
+fn finish_pdf_save(
+    work: &PdfSaveWork,
+    applied: Result<String, String>,
+    dest: &Path,
+) -> Result<(), String> {
+    let finished = applied.and_then(|_| work.finish(dest));
+    work.clear();
+    finished
+}
+
+fn decode_pdf_changes(data: &str) -> Result<Vec<u8>, String> {
+    use crate::protocol_limits::{check_base64_size, is_pdf_changes, PDF_CHANGES_MAX_BYTES};
+    check_base64_size("PDF changes", data, PDF_CHANGES_MAX_BYTES)?;
+    let changes = STANDARD.decode(data).map_err(|e| e.to_string())?;
+    if !is_pdf_changes(&changes) {
+        return Err("not PDF editor changes".to_string());
+    }
+    Ok(changes)
+}
+
+// Where the open PDF lives now: the file it was read from, or where it was
+// last saved as.
+fn open_pdf_file(state: &AppState) -> Result<PathBuf, String> {
+    let current = state.current_file.lock().unwrap().clone();
+    let Some(source) = current else {
+        return Err("No file is currently open".to_string());
+    };
+    crate::protocol_limits::check_pdf_save_target(&source)?;
+    Ok(source)
+}
+
+// The folder in the instance's temp dir where a PDF save is prepared: a copy
+// of the opened PDF with the changes in changes/ beside it, as x2t expects,
+// and the PDF x2t writes.
+pub(crate) struct PdfSaveWork {
+    dir: PathBuf,
+}
+
+impl PdfSaveWork {
+    pub(crate) fn new(temp_dir: &Path) -> Self {
+        PdfSaveWork {
+            dir: temp_dir.join("pdf_save"),
+        }
+    }
+
+    pub(crate) fn source(&self) -> PathBuf {
+        self.dir.join("source.pdf")
+    }
+
+    pub(crate) fn output(&self) -> PathBuf {
+        self.dir.join("output.pdf")
+    }
+
+    // Images the editor placed are looked up in media/ next to the source.
+    pub(crate) fn stage(&self, source: &Path, changes: &[u8], media: &Path) -> Result<(), String> {
+        self.clear();
+        let changes_dir = self.dir.join("changes");
+        std::fs::create_dir_all(&changes_dir).map_err(|e| e.to_string())?;
+        std::fs::copy(source, self.source()).map_err(|e| e.to_string())?;
+        std::fs::write(changes_dir.join("changes0.bin"), changes).map_err(|e| e.to_string())?;
+        copy_media(media, &self.dir.join("media"))
+    }
+
+    // Puts the PDF x2t wrote at `dest`. x2t writes the source back unchanged
+    // when it cannot apply the changes, so that counts as a failure too.
+    pub(crate) fn finish(&self, dest: &Path) -> Result<(), String> {
+        let output = std::fs::read(self.output()).map_err(|e| e.to_string())?;
+        if !crate::protocol_limits::has_pdf_header(&output) {
+            return Err("x2t did not write a PDF".to_string());
+        }
+        let source = std::fs::read(self.source()).map_err(|e| e.to_string())?;
+        if output == source {
+            return Err("x2t did not apply the changes".to_string());
+        }
+        crate::save_target::write_beside_and_rename(&self.output(), dest)
+    }
+
+    pub(crate) fn clear(&self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn copy_media(from: &Path, to: &Path) -> Result<(), String> {
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        if !entry.path().is_file() {
+            continue;
+        }
+        std::fs::copy(entry.path(), to.join(entry.file_name())).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 // Without this, x2t writes every CSV as UTF-8 with commas, so saving over a
@@ -555,13 +788,23 @@ pub async fn write_editor_bin(
     Ok("ok".to_string())
 }
 
+// `pdf_changes` is set when a PDF is open: what prints is that PDF with the
+// editor's changes applied. Otherwise the Editor.bin written before.
 #[tauri::command]
 pub async fn print_document(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    pdf_changes: Option<String>,
 ) -> Result<String, String> {
     // A failed print leaves nothing for the viewer to open.
     *state.last_print_pdf.lock().unwrap() = None;
+
+    if let Some(data) = pdf_changes {
+        return print_pdf(&app, &state, &data).await.map_err(|error| {
+            log_event(&state, &format!("[PRINT] failed: {}", error));
+            error
+        });
+    }
 
     let editor_bin = state.temp_dir.join("Editor.bin");
     if !editor_bin.exists() {
@@ -614,6 +857,30 @@ pub async fn print_document(
 }
 
 const PRINT_PDF_NAME: &str = "print_output.pdf";
+
+async fn print_pdf(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    data: &str,
+) -> Result<String, String> {
+    let changes = decode_pdf_changes(data)?;
+    let pdf_path = state.temp_dir.join(PRINT_PDF_NAME);
+    let work = PdfSaveWork::new(&state.temp_dir);
+    work.stage(&opened_pdf(&state.temp_dir), &changes, &state.temp_dir.join("media"))?;
+    let applied = super::converter::apply_pdf_changes(
+        app,
+        &work.source(),
+        &work.output(),
+        &state.temp_dir,
+        &crate::temp_layout::fontdata_dir(&state.font_root),
+    )
+    .await;
+    finish_pdf_save(&work, applied, &pdf_path)?;
+
+    log_event(state, "[PRINT] success pdf with changes applied");
+    *state.last_print_pdf.lock().unwrap() = Some(pdf_path.clone());
+    Ok(pdf_path.to_string_lossy().to_string())
+}
 
 // The only file the viewer and the printer commands hand on: the PDF the last
 // print wrote, still a regular file (not a link) directly inside this
@@ -996,6 +1263,50 @@ mod tests {
         std::fs::write(dir.join("changes/change_0.json"), b"[]").unwrap();
         std::fs::write(dir.join("media/image1.png"), b"not really a png").unwrap();
         dir
+    }
+
+    fn empty_test_dir(label: &str) -> PathBuf {
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "eo-file-ops-{}-{}-{}",
+            label,
+            std::process::id(),
+            unique
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn read_pdf_returns_the_file_as_it_is() {
+        let dir = empty_test_dir("pdf-ok");
+        let path = dir.join("doc.pdf");
+        std::fs::write(&path, b"%PDF-1.7\n%%EOF\n").unwrap();
+        assert_eq!(read_pdf(&path).unwrap(), b"%PDF-1.7\n%%EOF\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_pdf_refuses_a_pdf_name_without_pdf_content() {
+        let dir = empty_test_dir("pdf-fake");
+        let path = dir.join("doc.pdf");
+        std::fs::write(&path, b"PK\x03\x04 not a pdf").unwrap();
+        assert!(read_pdf(&path).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_pdf_refuses_other_extensions_directories_and_missing_files() {
+        let dir = empty_test_dir("pdf-paths");
+        let docx = dir.join("doc.docx");
+        std::fs::write(&docx, b"%PDF-1.7\n").unwrap();
+        let folder = dir.join("folder.pdf");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(read_pdf(&docx).is_err());
+        assert!(read_pdf(&folder).is_err());
+        assert!(read_pdf(&dir.join("missing.pdf")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // Switching documents does invalidate the images, so the full reset still
@@ -1548,5 +1859,103 @@ mod tests {
             assert!(listed_printer(requested, &names).is_err(), "{:?}", requested);
         }
         assert!(listed_printer("Microsoft Print to PDF", &[]).is_err());
+    }
+
+    // An instance folder with an opened PDF and the file it was opened from.
+    fn pdf_save_scratch() -> (PathBuf, PathBuf, PdfSaveWork) {
+        let root = std::env::temp_dir().join(format!(
+            "eol-pdf-save-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("instance/media")).unwrap();
+        std::fs::write(root.join("instance/media/image1.png"), b"png").unwrap();
+        let original = root.join("doc.pdf");
+        std::fs::write(&original, b"%PDF-1.7 original").unwrap();
+        let work = PdfSaveWork::new(&root.join("instance"));
+        work.stage(&original, b"%PDF\x01changes", &root.join("instance/media"))
+            .unwrap();
+        (root, original, work)
+    }
+
+    #[test]
+    fn a_pdf_save_stages_the_source_changes_and_media_for_x2t() {
+        let (root, _original, work) = pdf_save_scratch();
+        assert_eq!(std::fs::read(work.source()).unwrap(), b"%PDF-1.7 original");
+        let changes = work.source().with_file_name("changes").join("changes0.bin");
+        assert_eq!(std::fs::read(changes).unwrap(), b"%PDF\x01changes");
+        let image = work.source().with_file_name("media").join("image1.png");
+        assert_eq!(std::fs::read(image).unwrap(), b"png");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_failed_x2t_leaves_the_original_untouched() {
+        let (root, original, work) = pdf_save_scratch();
+        std::fs::write(work.output(), b"%PDF-1.7 half written").unwrap();
+
+        let result = finish_pdf_save(&work, Err("x2t exit 89".to_string()), &original);
+
+        assert_eq!(result, Err("x2t exit 89".to_string()));
+        assert_eq!(std::fs::read(&original).unwrap(), b"%PDF-1.7 original");
+        assert!(!root.join("instance/pdf_save").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn x2t_writing_the_source_back_unchanged_is_a_failure() {
+        let (root, original, work) = pdf_save_scratch();
+        std::fs::copy(work.source(), work.output()).unwrap();
+        std::fs::write(&original, b"%PDF-1.7 edited elsewhere").unwrap();
+
+        let result = finish_pdf_save(&work, Ok("ok".to_string()), &original);
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&original).unwrap(), b"%PDF-1.7 edited elsewhere");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_output_that_is_not_a_pdf_leaves_the_original_untouched() {
+        let (root, original, work) = pdf_save_scratch();
+        std::fs::write(work.output(), b"garbage").unwrap();
+
+        assert!(finish_pdf_save(&work, Ok("ok".to_string()), &original).is_err());
+        assert_eq!(std::fs::read(&original).unwrap(), b"%PDF-1.7 original");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_successful_pdf_save_replaces_the_destination() {
+        let (root, original, work) = pdf_save_scratch();
+        std::fs::write(work.output(), b"%PDF-1.7 original + update").unwrap();
+
+        finish_pdf_save(&work, Ok("ok".to_string()), &original).unwrap();
+
+        assert_eq!(std::fs::read(&original).unwrap(), b"%PDF-1.7 original + update");
+        assert!(!root.join("instance/pdf_save").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pdf_changes_without_their_signature_are_refused() {
+        assert!(decode_pdf_changes(&STANDARD.encode(b"%PDF\x01")).is_ok());
+        assert!(decode_pdf_changes(&STANDARD.encode(b"PK\x03\x04")).is_err());
+        assert!(decode_pdf_changes("not base64!").is_err());
+    }
+
+    #[test]
+    fn the_opened_pdf_is_kept_until_the_document_changes() {
+        let (root, _original, _work) = pdf_save_scratch();
+        let instance = root.join("instance");
+
+        keep_opened_pdf(&instance, b"%PDF-1.7 as opened").unwrap();
+        assert_eq!(std::fs::read(opened_pdf(&instance)).unwrap(), b"%PDF-1.7 as opened");
+
+        clear_document_temp(&instance);
+        assert!(!opened_pdf(&instance).exists());
+        assert!(!instance.join("pdf_save").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
