@@ -2033,4 +2033,42 @@ mod tests {
         assert!(command_parameters("open_pdf").contains("token: String"));
         assert!(command_parameters("save_pdf").contains("token: Option<String>"));
     }
+
+    // What save_pdf does once x2t has applied the changes, from the token on:
+    // the x2t step is stood in for by writing its output.
+    fn save_pdf_without_x2t(
+        grants: &crate::path_grants::PathGrants,
+        token: &str,
+        current: &Path,
+        work: &PdfSaveWork,
+    ) -> Result<PathBuf, String> {
+        let dest = pdf_save_destination(grants, Some(token), current)?;
+        crate::save_target::check_writable_destination(&dest)?;
+        std::fs::write(work.output(), b"%PDF-1.7 original + update").unwrap();
+        finish_pdf_save(work, Ok("ok".to_string()), &dest)?;
+        Ok(dest)
+    }
+
+    #[test]
+    fn a_pdf_save_token_writes_the_file_and_an_open_token_writes_nothing() {
+        let (root, original, work) = pdf_save_scratch();
+        let grants = crate::path_grants::PathGrants::default();
+        let copy = root.join("copy.pdf");
+
+        let save = grants.grant(copy.clone(), GrantKind::Save);
+        let written = save_pdf_without_x2t(&grants, &save.token, &original, &work).unwrap();
+        assert_eq!(written, copy);
+        assert_eq!(std::fs::read(&copy).unwrap(), b"%PDF-1.7 original + update");
+
+        let refused = root.join("refused.pdf");
+        let work = PdfSaveWork::new(&root.join("instance"));
+        work.stage(&original, b"%PDF\x01changes", &root.join("instance/media"))
+            .unwrap();
+        let open = grants.grant(refused.clone(), GrantKind::Open);
+        assert!(save_pdf_without_x2t(&grants, &open.token, &original, &work).is_err());
+        assert!(!refused.exists());
+        assert_eq!(std::fs::read(&original).unwrap(), b"%PDF-1.7 original");
+        work.clear();
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
