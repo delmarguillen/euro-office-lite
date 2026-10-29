@@ -1083,8 +1083,8 @@ async function _eoOpenRecent(path) {
 }
 
 // A PDF is read as it is by open_pdf; everything else is converted by open_file.
-function _eoOpenCommandForPath(path) {
-  return _eoDocTypeForPath(path) === 'pdf' ? 'open_pdf' : 'open_file';
+function _eoOpenCommandForPath(name) {
+  return _eoDocTypeForPath(name) === 'pdf' ? 'open_pdf' : 'open_file';
 }
 window._eoOpenCommandForPath = _eoOpenCommandForPath;
 

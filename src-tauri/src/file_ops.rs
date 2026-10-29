@@ -247,9 +247,10 @@ pub fn stage_insert_media(
 pub async fn open_pdf(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-    path: String,
+    token: String,
 ) -> Result<String, String> {
-    let input = PathBuf::from(&path);
+    let input = state.grants.resolve(&token, GrantKind::Open)?;
+    let path = input.to_string_lossy().to_string();
     let file_name = input
         .file_name()
         .and_then(|name| name.to_str())
