@@ -279,6 +279,15 @@ fn xml_escape(value: &str) -> String {
     escaped
 }
 
+// x2t loads nothing from the network or from local paths named inside a
+// document. Every params XML the app writes ends with this block.
+pub fn x2t_options_xml() -> &'static str {
+    "<options>\n\
+<allowPrivateIP>false</allowPrivateIP>\n\
+<allowNetworkRequest>false</allowNetworkRequest>\n\
+</options>\n"
+}
+
 // Paths are passed raw and escaped here, once. `extra` is already XML: the
 // numeric CSV/TXT elements from TextOptions::xml_elements.
 pub fn convert_params_xml(
@@ -296,12 +305,13 @@ pub fn convert_params_xml(
 <m_sFileTo>{}</m_sFileTo>
 <m_nFormatTo>{}</m_nFormatTo>
 <m_sTempDir>{}</m_sTempDir>
-{}</TaskQueueDataConvert>"#,
+{}{}</TaskQueueDataConvert>"#,
         xml_escape(&input.replace('\\', "/")),
         xml_escape(&output.replace('\\', "/")),
         format_to,
         xml_escape(&temp_dir.replace('\\', "/")),
         extra,
+        x2t_options_xml(),
     )
 }
 
@@ -323,8 +333,32 @@ pub fn convert_env(binaries_dir: &std::path::Path) -> Vec<(&'static str, std::ff
     }
 }
 
-// Paths are passed raw and escaped here, once.
 fn pdf_params_xml(input: &str, output: &str, fonts_dir: &str, allfonts: &str) -> String {
+    pdf_params_xml_with(input, output, fonts_dir, allfonts, "")
+}
+
+// x2t reads the editor's changes from changes/ next to the input PDF and
+// writes the input with them applied. Its own scratch files go to `scratch`,
+// and the changes stay out of the output folder.
+fn pdf_changes_params(scratch: &str) -> String {
+    format!(
+        "<m_nFormatFrom>513</m_nFormatFrom>
+<m_bFromChanges>true</m_bFromChanges>
+<m_bDontSaveAdditional>true</m_bDontSaveAdditional>
+<m_sTempDir>{}</m_sTempDir>
+",
+        xml_escape(&scratch.replace('\\', "/"))
+    )
+}
+
+// Paths are passed raw and escaped here, once. `extra` is already XML.
+fn pdf_params_xml_with(
+    input: &str,
+    output: &str,
+    fonts_dir: &str,
+    allfonts: &str,
+    extra: &str,
+) -> String {
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -335,11 +369,13 @@ fn pdf_params_xml(input: &str, output: &str, fonts_dir: &str, allfonts: &str) ->
 <m_bEmbeddedFonts>true</m_bEmbeddedFonts>
 <m_sFontDir>{}</m_sFontDir>
 <m_sAllFontsPath>{}</m_sAllFontsPath>
-</TaskQueueDataConvert>"#,
+{}{}</TaskQueueDataConvert>"#,
         xml_escape(input),
         xml_escape(output),
         xml_escape(&fonts_dir.replace('\\', "/")),
         xml_escape(&allfonts.replace('\\', "/")),
+        extra,
+        x2t_options_xml(),
     )
 }
 
@@ -351,6 +387,54 @@ pub fn convert_to_pdf(
     temp_dir: &std::path::Path,
     fontdata_dir: &std::path::Path,
     log: &dyn Fn(&str),
+) -> Result<String, String> {
+    run_x2t_to_pdf(binaries_dir, exe_dir, input, output, temp_dir, fontdata_dir, log, "")
+}
+
+// Writes `source_pdf` with the editor's changes applied to `output`. The
+// changes must already be in changes/ next to `source_pdf`.
+pub fn apply_pdf_changes(
+    binaries_dir: &std::path::Path,
+    exe_dir: Option<&std::path::Path>,
+    source_pdf: &str,
+    output: &str,
+    temp_dir: &std::path::Path,
+    fontdata_dir: &std::path::Path,
+    log: &dyn Fn(&str),
+) -> Result<String, String> {
+    let scratch = temp_dir.join("pdf_changes_tmp");
+    reset_dir(&scratch)?;
+    let result = run_x2t_to_pdf(
+        binaries_dir,
+        exe_dir,
+        source_pdf,
+        output,
+        temp_dir,
+        fontdata_dir,
+        log,
+        &pdf_changes_params(&scratch.to_string_lossy()),
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+fn reset_dir(dir: &std::path::Path) -> Result<(), String> {
+    if dir.exists() {
+        std::fs::remove_dir_all(dir).map_err(|e| path_error("Failed to reset directory", dir, e))?;
+    }
+    create_dir(dir)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_x2t_to_pdf(
+    binaries_dir: &std::path::Path,
+    exe_dir: Option<&std::path::Path>,
+    input: &str,
+    output: &str,
+    temp_dir: &std::path::Path,
+    fontdata_dir: &std::path::Path,
+    log: &dyn Fn(&str),
+    extra_params: &str,
 ) -> Result<String, String> {
     let binaries_dir = &strip_extended_prefix(binaries_dir);
     let output_name = std::path::Path::new(output)
@@ -433,11 +517,12 @@ pub fn convert_to_pdf(
     let allfonts_abs =
         std::fs::canonicalize(&run_allfonts).unwrap_or_else(|_| run_allfonts.clone());
 
-    let xml = pdf_params_xml(
+    let xml = pdf_params_xml_with(
         input,
         output,
         &fonts_dir_for_xml.to_string_lossy(),
         &allfonts_abs.to_string_lossy(),
+        extra_params,
     );
     write_file(&params_xml, &xml)?;
 
@@ -770,6 +855,27 @@ pub fn is_empty_file(path: &std::path::Path) -> bool {
     std::fs::metadata(path)
         .map(|metadata| metadata.len() == 0)
         .unwrap_or(false)
+}
+
+const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
+const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+// A container format must start like one; x2t would otherwise pick the format
+// from the content. OOXML is a ZIP, or a CFB when it has a password. ODF is
+// always a ZIP. Other extensions (doc, xls, rtf...) are left to x2t.
+pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return true;
+    };
+    let is_zip = head.starts_with(ZIP_SIGNATURE);
+    let is_cfb = head.starts_with(CFB_SIGNATURE);
+    match ext.to_lowercase().as_str() {
+        "docx" | "docm" | "dotx" | "dotm" => is_zip || is_cfb,
+        "xlsx" | "xlsm" | "xltx" | "xltm" => is_zip || is_cfb,
+        "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => is_zip || is_cfb,
+        "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => is_zip,
+        _ => true,
+    }
 }
 
 // x2t does not use fontconfig: it scans a fixed list of directories
@@ -1304,6 +1410,10 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 <m_bEmbeddedFonts>true</m_bEmbeddedFonts>\n\
 <m_sFontDir>C:/eo/fonts</m_sFontDir>\n\
 <m_sAllFontsPath>C:/eo/AllFonts.js</m_sAllFontsPath>\n\
+<options>\n\
+<allowPrivateIP>false</allowPrivateIP>\n\
+<allowNetworkRequest>false</allowNetworkRequest>\n\
+</options>\n\
 </TaskQueueDataConvert>"
         );
     }
@@ -1327,6 +1437,20 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         let xml = pdf_params_xml("/d/A&amp;B.docx", "/d/A&amp;B.pdf", "/f", "/f/AllFonts.js");
         assert!(xml.contains("<m_sFileFrom>/d/A&amp;amp;B.docx</m_sFileFrom>"));
         assert!(xml.contains("<m_sFileTo>/d/A&amp;amp;B.pdf</m_sFileTo>"));
+    }
+
+    #[test]
+    fn pdf_change_params_ask_for_the_changes_and_no_extra_files() {
+        let extra = pdf_changes_params("/t/R&D/tmp");
+        let xml = pdf_params_xml_with("/t/src.pdf", "/t/out.pdf", "/f", "/f/AllFonts.js", &extra);
+        assert!(xml.contains("<m_nFormatFrom>513</m_nFormatFrom>"));
+        assert!(xml.contains("<m_bFromChanges>true</m_bFromChanges>"));
+        assert!(xml.contains("<m_bDontSaveAdditional>true</m_bDontSaveAdditional>"));
+        let expected_end = format!(
+            "<m_sTempDir>/t/R&amp;D/tmp</m_sTempDir>\n{}</TaskQueueDataConvert>",
+            x2t_options_xml()
+        );
+        assert!(xml.ends_with(&expected_end), "{}", xml);
     }
 
     // An app folder whose binaries/ holds the bundled font list and a font
@@ -1678,6 +1802,10 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 <m_nFormatTo>8192</m_nFormatTo>\n\
 <m_sTempDir>C:/Temp/eo</m_sTempDir>\n\
 <m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n\
+<options>\n\
+<allowPrivateIP>false</allowPrivateIP>\n\
+<allowNetworkRequest>false</allowNetworkRequest>\n\
+</options>\n\
 </TaskQueueDataConvert>"
         );
     }
@@ -1722,7 +1850,98 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     #[test]
     fn convert_params_without_text_options_have_no_extra_elements() {
         let xml = convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", "");
-        assert!(xml.ends_with("<m_sTempDir>/t</m_sTempDir>\n</TaskQueueDataConvert>"), "{}", xml);
+        let expected_end = format!("<m_sTempDir>/t</m_sTempDir>\n{}</TaskQueueDataConvert>", x2t_options_xml());
+        assert!(xml.ends_with(&expected_end), "{}", xml);
+    }
+
+    #[test]
+    fn the_options_block_turns_off_network_and_outside_files() {
+        let options = x2t_options_xml();
+        assert!(options.starts_with("<options>"), "{}", options);
+        assert!(options.contains("<allowPrivateIP>false</allowPrivateIP>"), "{}", options);
+        assert!(options.contains("<allowNetworkRequest>false</allowNetworkRequest>"), "{}", options);
+        assert!(options.ends_with("</options>\n"), "{}", options);
+    }
+
+    #[test]
+    fn pdf_params_end_with_the_options_block() {
+        let xml = pdf_params_xml("/d/in.docx", "/d/out.pdf", "/f", "/f/AllFonts.js");
+        let expected_end = format!("{}</TaskQueueDataConvert>", x2t_options_xml());
+        assert!(xml.ends_with(&expected_end), "{}", xml);
+    }
+
+    #[test]
+    fn convert_params_end_with_the_options_block() {
+        let expected_end = format!("{}</TaskQueueDataConvert>", x2t_options_xml());
+        let plain = convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", "");
+        assert!(plain.ends_with(&expected_end), "{}", plain);
+        let text = "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n";
+        let with_text = convert_params_xml("/d/in.csv", "/t/Editor.bin", 8192, "/t", text);
+        assert!(with_text.ends_with(&expected_end), "{}", with_text);
+    }
+
+    #[test]
+    fn every_params_xml_has_the_options_block_once() {
+        let all = [
+            pdf_params_xml("/d/in.docx", "/d/out.pdf", "/f", "/f/AllFonts.js"),
+            pdf_params_xml_with("/d/in.pdf", "/d/out.pdf", "/f", "/f/AllFonts.js", &pdf_changes_params("/t")),
+            convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", ""),
+            convert_params_xml("/t/Editor.bin", "/d/out.docx", 65, "/t", ""),
+        ];
+        for xml in all {
+            assert_eq!(xml.matches("<options>").count(), 1, "{}", xml);
+            assert_eq!(xml.matches("<allowPrivateIP>false</allowPrivateIP>").count(), 1, "{}", xml);
+            assert_eq!(xml.matches("<allowNetworkRequest>false</allowNetworkRequest>").count(), 1, "{}", xml);
+        }
+    }
+
+    const HTML_HEAD: &[u8] = b"<html><body>";
+    const OOXML_EXTENSIONS: &[&str] = &[
+        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx",
+        "potm", "ppsx", "ppsm",
+    ];
+    const ODF_EXTENSIONS: &[&str] = &["odt", "ods", "odp", "ott", "ots", "otp"];
+
+    fn matches(name: &str, head: &[u8]) -> bool {
+        content_matches_extension(std::path::Path::new(name), head)
+    }
+
+    #[test]
+    fn container_extensions_accept_a_zip() {
+        for ext in OOXML_EXTENSIONS.iter().chain(ODF_EXTENSIONS) {
+            assert!(matches(&format!("/d/a.{ext}"), b"PK\x03\x04rest"), "{ext}");
+        }
+    }
+
+    #[test]
+    fn ooxml_extensions_accept_a_cfb_and_odf_ones_do_not() {
+        for ext in OOXML_EXTENSIONS {
+            assert!(matches(&format!("/d/a.{ext}"), CFB_SIGNATURE), "{ext}");
+        }
+        for ext in ODF_EXTENSIONS {
+            assert!(!matches(&format!("/d/a.{ext}"), CFB_SIGNATURE), "{ext}");
+        }
+    }
+
+    #[test]
+    fn container_extensions_reject_html_and_an_empty_file() {
+        for ext in OOXML_EXTENSIONS.iter().chain(ODF_EXTENSIONS) {
+            assert!(!matches(&format!("/d/a.{ext}"), HTML_HEAD), "{ext}");
+            assert!(!matches(&format!("/d/a.{ext}"), b""), "{ext}");
+        }
+    }
+
+    #[test]
+    fn container_extension_check_ignores_case() {
+        assert!(!matches("/d/A.DOCX", HTML_HEAD));
+        assert!(matches("/d/A.DOCX", b"PK\x03\x04"));
+    }
+
+    #[test]
+    fn legacy_and_other_extensions_are_left_to_x2t() {
+        for name in ["/d/a.doc", "/d/a.xls", "/d/a.ppt", "/d/a.rtf", "/d/a.txt", "/d/a.csv", "/d/a"] {
+            assert!(matches(name, HTML_HEAD), "{name}");
+        }
     }
 
     #[test]

@@ -528,6 +528,7 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'The current document has unsaved changes. Do you want to discard them and open another file?',
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
     saveError: 'Save error', saveErrorMsg: 'Could not save the file.\n\nTarget format not compatible with this document type.',
+    saveDeniedMsg: 'Could not save the file.\n\nYou do not have permission to write there, or the file is read-only.',
     pdfFontsErrorMsg: 'The PDF could not be created because the app could not prepare its fonts. Try again in a moment. If it keeps failing, restart Euro-Office Lite.',
     printError: 'Print failed', printErrorMsg: 'The document could not be printed. Please try again.',
     documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
@@ -558,6 +559,7 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y abrir otro archivo?',
     unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
     saveError: 'Error al guardar', saveErrorMsg: 'No se pudo guardar el archivo.\n\nFormato de destino no compatible con este tipo de documento.',
+    saveDeniedMsg: 'No se pudo guardar el archivo.\n\nNo tiene permiso para escribir en esa ubicación, o el archivo es de solo lectura.',
     pdfFontsErrorMsg: 'No se pudo crear el PDF porque la aplicación no pudo preparar sus fuentes. Inténtelo de nuevo en un momento. Si sigue fallando, reinicie Euro-Office Lite.',
     printError: 'Error al imprimir', printErrorMsg: 'No se pudo imprimir el documento. Inténtelo de nuevo.',
     documents: 'Documentos', all: 'Todos', plainText: 'Texto plano', user: 'Usuario', language: 'Idioma',
@@ -588,6 +590,7 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et ouvrir un autre fichier ?',
     unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
     saveError: 'Erreur de sauvegarde', saveErrorMsg: 'Impossible d\'enregistrer le fichier.\n\nFormat de destination incompatible avec ce type de document.',
+    saveDeniedMsg: 'Impossible d\'enregistrer le fichier.\n\nVous n\'avez pas l\'autorisation d\'écrire à cet emplacement, ou le fichier est en lecture seule.',
     pdfFontsErrorMsg: 'Impossible de créer le PDF, car l\'application n\'a pas pu préparer ses polices. Réessayez dans un instant. Si le problème persiste, redémarrez Euro-Office Lite.',
     printError: 'Échec de l\'impression', printErrorMsg: 'Impossible d\'imprimer le document. Veuillez réessayer.',
     documents: 'Documents', all: 'Tous', plainText: 'Texte brut', user: 'Utilisateur', language: 'Langue',
@@ -617,6 +620,7 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und eine andere Datei öffnen?',
     unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
     saveError: 'Speicherfehler', saveErrorMsg: 'Die Datei konnte nicht gespeichert werden.\n\nZielformat nicht kompatibel mit diesem Dokumenttyp.',
+    saveDeniedMsg: 'Die Datei konnte nicht gespeichert werden.\n\nSie haben keine Schreibberechtigung für diesen Ort, oder die Datei ist schreibgeschützt.',
     pdfFontsErrorMsg: 'Das PDF konnte nicht erstellt werden, weil die App ihre Schriftarten nicht vorbereiten konnte. Versuchen Sie es gleich noch einmal. Wenn der Fehler weiterhin auftritt, starten Sie Euro-Office Lite neu.',
     printError: 'Druckfehler', printErrorMsg: 'Das Dokument konnte nicht gedruckt werden. Bitte versuchen Sie es erneut.',
     documents: 'Dokumente', all: 'Alle', plainText: 'Nur Text', user: 'Benutzer', language: 'Sprache',
@@ -646,6 +650,7 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e aprire un altro file?',
     unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
     saveError: 'Errore di salvataggio', saveErrorMsg: 'Impossibile salvare il file.\n\nFormato di destinazione non compatibile con questo tipo di documento.',
+    saveDeniedMsg: 'Impossibile salvare il file.\n\nNon si dispone dell\'autorizzazione a scrivere in questa posizione, oppure il file è di sola lettura.',
     pdfFontsErrorMsg: 'Impossibile creare il PDF perché l\'app non è riuscita a preparare i suoi caratteri. Riprova tra un momento. Se il problema persiste, riavvia Euro-Office Lite.',
     printError: 'Errore di stampa', printErrorMsg: 'Impossibile stampare il documento. Riprova.',
     documents: 'Documenti', all: 'Tutti', plainText: 'Testo normale', user: 'Utente', language: 'Lingua',
@@ -675,6 +680,7 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'O documento atual tem alterações não salvas. Deseja descartá-las e abrir outro arquivo?',
     unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
     saveError: 'Erro ao salvar', saveErrorMsg: 'Não foi possível salvar o arquivo.\n\nFormato de destino não compatível com este tipo de documento.',
+    saveDeniedMsg: 'Não foi possível salvar o arquivo.\n\nVocê não tem permissão para gravar nesse local, ou o arquivo é somente leitura.',
     pdfFontsErrorMsg: 'Não foi possível criar o PDF porque o aplicativo não conseguiu preparar suas fontes. Tente novamente em instantes. Se o problema continuar, reinicie o Euro-Office Lite.',
     printError: 'Erro ao imprimir', printErrorMsg: 'Não foi possível imprimir o documento. Tente novamente.',
     documents: 'Documentos', all: 'Todos', plainText: 'Texto simples', user: 'Usuário', language: 'Idioma',
@@ -704,6 +710,7 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Текущий документ содержит несохранённые изменения. Отменить их и открыть другой файл?',
     unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
     saveError: 'Ошибка сохранения', saveErrorMsg: 'Не удалось сохранить файл.\n\nФормат назначения несовместим с этим типом документа.',
+    saveDeniedMsg: 'Не удалось сохранить файл.\n\nНет прав на запись в это место, или файл доступен только для чтения.',
     pdfFontsErrorMsg: 'Не удалось создать PDF, так как приложению не удалось подготовить шрифты. Повторите попытку через несколько секунд. Если ошибка повторится, перезапустите Euro-Office Lite.',
     printError: 'Ошибка печати', printErrorMsg: 'Не удалось напечатать документ. Повторите попытку.',
     documents: 'Документы', all: 'Все', plainText: 'Обычный текст', user: 'Пользователь', language: 'Язык',
@@ -733,6 +740,7 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і відкрити інший файл?',
     unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
     saveError: 'Помилка збереження', saveErrorMsg: 'Не вдалося зберегти файл.\n\nФормат призначення несумісний із цим типом документа.',
+    saveDeniedMsg: 'Не вдалося зберегти файл.\n\nНемає дозволу на запис у це місце, або файл доступний лише для читання.',
     pdfFontsErrorMsg: 'Не вдалося створити PDF, оскільки застосунку не вдалося підготувати шрифти. Спробуйте ще раз за мить. Якщо помилка повториться, перезапустіть Euro-Office Lite.',
     printError: 'Помилка друку', printErrorMsg: 'Не вдалося надрукувати документ. Спробуйте ще раз.',
     documents: 'Документи', all: 'Усі', plainText: 'Звичайний текст', user: 'Користувач', language: 'Мова',
@@ -762,6 +770,7 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: '当前文档有未保存的更改。是否放弃更改并打开另一个文件？',
     unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
     saveError: '保存错误', saveErrorMsg: '无法保存文件。\n\n目标格式与此文档类型不兼容。',
+    saveDeniedMsg: '无法保存文件。\n\n您没有写入该位置的权限，或该文件为只读。',
     pdfFontsErrorMsg: '无法创建 PDF，因为应用无法准备字体。请稍后重试。如果问题仍然存在，请重新启动 Euro-Office Lite。',
     printError: '打印错误', printErrorMsg: '无法打印文档。请重试。',
     documents: '文档', all: '所有文件', plainText: '纯文本', user: '用户', language: '语言',
@@ -791,6 +800,7 @@ var _UI_STRINGS = {
     unsavedDiscardOpen: '現在のドキュメントには未保存の変更があります。変更を破棄して別のファイルを開きますか？',
     unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
     saveError: '保存エラー', saveErrorMsg: 'ファイルを保存できませんでした。\n\n対象の形式はこのドキュメントタイプと互換性がありません。',
+    saveDeniedMsg: 'ファイルを保存できませんでした。\n\nその場所への書き込み権限がないか、ファイルが読み取り専用です。',
     pdfFontsErrorMsg: 'アプリがフォントを準備できなかったため、PDF を作成できませんでした。しばらくしてからもう一度お試しください。問題が解決しない場合は、Euro-Office Lite を再起動してください。',
     printError: '印刷エラー', printErrorMsg: 'ドキュメントを印刷できませんでした。もう一度お試しください。',
     documents: 'ドキュメント', all: 'すべて', plainText: 'プレーンテキスト', user: 'ユーザー', language: '言語',
@@ -847,6 +857,88 @@ window._eoSetLang = function(code) {
 };
 
 // ── end i18n ──
+
+// Hands the open document to the backend as Editor.bin.
+async function _eoWriteEditorBin(ref) {
+  var binData = ref.editor.asc_nativeGetFile();
+  if (!binData) {
+    // The caller's catch tells the user and releases the editor.
+    throw new Error('Print aborted: asc_nativeGetFile returned no data');
+  }
+  var b64 = typeof binData === 'string' ? btoa(binData) : _eoBytesToBase64(new Uint8Array(binData));
+  await invoke('write_editor_bin', { data: b64 });
+}
+
+function _eoBytesToBase64(bytes) {
+  var binary = '';
+  for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+// The PDF editor's changes to the open PDF, in base64. They describe the file
+// as it was opened; the backend applies them to it.
+function _eoPdfChanges(ref) {
+  var changes = ref.editor.getDocumentRenderer().Save();
+  if (!changes) throw new Error('the PDF editor returned no changes');
+  return _eoBytesToBase64(changes);
+}
+
+// Save As with a PDF open writes a PDF, so the dialog offers nothing else.
+async function _eoAskPdfPath() {
+  var filters = [{ name: 'PDF', extensions: ['pdf'] }];
+  var path = await window.__TAURI__.dialog.save({ filters: filters });
+  if (!path) return null;
+  if (!/\.pdf$/i.test(path)) path += '.pdf';
+  return path;
+}
+
+// Saves the open PDF, over itself or, for Save As, where the user picks. Ends
+// the editor's save the way the other editors do.
+async function _eoSavePdf(ref, isSaveAs) {
+  var wasModified = window.AscDesktopEditor._isModified;
+  var path = null;
+  if (isSaveAs) {
+    path = await _eoAskPdfPath();
+    if (!path) {
+      _eoEndSaveKeepingModified(ref, wasModified);
+      return;
+    }
+  }
+  try {
+    await invoke('save_pdf', { data: _eoPdfChanges(ref), path: path });
+  } catch (e) {
+    window._eoLog('[SAVE] pdf failed: ' + ((e && e.message) || e));
+    await window.__TAURI__.dialog.message(
+      _eoSaveErrorText(e),
+      { title: _t('saveError'), kind: 'error' }
+    );
+    if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
+      ref.ew.DesktopOfflineAppDocumentEndSave(1);
+    }
+    return;
+  }
+  if (path) _eoShowSavedName(path);
+  if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
+    ref.ew.DesktopOfflineAppDocumentEndSave(0);
+  }
+}
+
+// The saved file's name in the window title and the editor's title fields.
+function _eoShowSavedName(savePath) {
+  var savedName = savePath.replace(/\\/g, '/').split('/').pop();
+  invoke('set_window_title', { name: savedName }).catch(function(){});
+  try {
+    var frames = document.querySelectorAll('iframe');
+    for (var fi = 0; fi < frames.length; fi++) {
+      try {
+        var titleInput = frames[fi].contentDocument.querySelector('#title-doc-name');
+        if (titleInput) titleInput.value = savedName;
+        var ribInput = frames[fi].contentDocument.querySelector('#rib-doc-name');
+        if (ribInput) ribInput.value = savedName;
+      } catch(te) {}
+    }
+  } catch(te) {}
+}
 
 // One dialog for every failed open. The Rust side already refuses a file the
 // converter cannot read, but the reason only reached js-debug.log: the user saw
@@ -905,6 +997,7 @@ function _eoDocTypeForPath(path) {
   var ext = String(path || '').split('.').pop().toLowerCase();
   if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) return 'cell';
   if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) return 'slide';
+  if (ext === 'pdf') return 'pdf';
   return 'word';
 }
 window._eoDocTypeForPath = _eoDocTypeForPath;
@@ -988,6 +1081,12 @@ async function _eoOpenRecent(path) {
   }
   window.AscDesktopEditor.LocalFileOpen({ token: match.token, name: match.name });
 }
+
+// A PDF is read as it is by open_pdf; everything else is converted by open_file.
+function _eoOpenCommandForPath(path) {
+  return _eoDocTypeForPath(path) === 'pdf' ? 'open_pdf' : 'open_file';
+}
+window._eoOpenCommandForPath = _eoOpenCommandForPath;
 
 window.addEventListener('error', function(e) {
   window._eoLog('[JS-ERROR]', {
@@ -1317,6 +1416,20 @@ function _eoIsFontCacheError(error) {
   return text.indexOf('font-cache-unavailable') === 0;
 }
 
+// The backend starts its error with this when it may not write the file: a
+// read-only file or a folder the user cannot write to.
+function _eoIsSaveDeniedError(error) {
+  var text = (error && error.message) || String(error);
+  return text.indexOf('save-denied') === 0;
+}
+
+// What the failed-save dialog says, from the backend's error.
+function _eoSaveErrorText(error) {
+  if (_eoIsFontCacheError(error)) return _t('pdfFontsErrorMsg');
+  if (_eoIsSaveDeniedError(error)) return _t('saveDeniedMsg');
+  return _t('saveErrorMsg');
+}
+
 function _getEditor() {
   var ew = window.AscDesktopEditor._editorWindow || _findEditorWindow(window);
   if (ew) window.AscDesktopEditor._editorWindow = ew;
@@ -1595,15 +1708,19 @@ function _loadEditorBin(b64data, fileName, options) {
       _recoveryEnqueue(ref, opts.recovery);
     }
 
+    // A PDF arrives as the file itself, not as an Editor.bin.
+    var isPdf = window.AscDesktopEditor._currentDocType === 'pdf';
     var file = new ref.ew.AscCommon.OpenFileResult();
     file.data = bytes;
-    file.bSerFormat = true;
+    file.bSerFormat = !isPdf;
     ref.editor.openDocument(file);
     ref.ew.AscCommon.History.UserSaveMode = true;
-    _ensureCoreProps(ref);
+    if (!isPdf) _ensureCoreProps(ref);
 
     if (opts.recovery) {
       _recoveryMarkModified(opts.name || _eoBaseName(fileName));
+    } else if (isPdf) {
+      // No crash recovery for PDF yet: its changes cannot be replayed onto the file.
     } else if (!opts.skipRecovery) {
       _recoveryBegin(b64data, opts.name || _eoBaseName(fileName), opts.path || fileName || null);
     }
@@ -2363,6 +2480,11 @@ window.AscDesktopEditor = {
       return;
     }
 
+    if (docType === 'pdf') {
+      await _eoSavePdf(ref, isSaveAs);
+      return;
+    }
+
     try {
       var binData = ref.editor.asc_nativeGetFile();
       if (!binData) {
@@ -2408,30 +2530,18 @@ window.AscDesktopEditor = {
           var pathExt = target.name.split('.').pop().toLowerCase();
           try {
             await invoke('save_file_as', { token: target.token });
-            var savedName = target.name;
             keepsDocument = pathExt === 'pdf';
             if (pathExt !== 'pdf') {
               // A Save As moves the document and the session follows it, so a
               // later recovery writes where it lives now. A PDF export only
               // writes a copy, so it is not a save for recovery purposes.
               invoke('recovery_mark_saved', {}).catch(function(){});
-              invoke('set_window_title', { name: savedName }).catch(function(){});
-              try {
-                var frames = document.querySelectorAll('iframe');
-                for (var fi = 0; fi < frames.length; fi++) {
-                  try {
-                    var titleInput = frames[fi].contentDocument.querySelector('#title-doc-name');
-                    if (titleInput) titleInput.value = savedName;
-                    var ribInput = frames[fi].contentDocument.querySelector('#rib-doc-name');
-                    if (ribInput) ribInput.value = savedName;
-                  } catch(te) {}
-                }
-              } catch(te) {}
+              _eoShowSavedName(target.name);
             }
           } catch(saveErr) {
             window._eoLog('[EO] SaveAs failed: ' + saveErr);
             await window.__TAURI__.dialog.message(
-              _eoIsFontCacheError(saveErr) ? _t('pdfFontsErrorMsg') : _t('saveErrorMsg'),
+              _eoSaveErrorText(saveErr),
               { title: _t('saveError'), kind: 'error' }
             );
             if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
@@ -2456,7 +2566,7 @@ window.AscDesktopEditor = {
           // without this the document looks written and is not.
           window._eoLog('[EO] Save failed: ' + saveErr);
           await window.__TAURI__.dialog.message(
-            _t('saveErrorMsg'),
+            _eoSaveErrorText(saveErr),
             { title: _t('saveError'), kind: 'error' }
           );
           if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
@@ -2552,7 +2662,11 @@ window.AscDesktopEditor = {
   },
 
   LocalFileGetSourcePath: () => '',
-  LocalFileGetSaved: () => false,
+  // An open PDF is always a file on disk. The PDF editor sets its modified mark
+  // from History.Have_Changes(), which counts a file never saved as modified;
+  // the other editors skip that check, and the spreadsheet one also reads this
+  // for link paths, so they keep false.
+  LocalFileGetSaved: () => window.AscDesktopEditor._currentDocType === 'pdf',
   LocalFileGetImageUrl: function(url) {
     if (!url) return url;
     if (url.indexOf('data:') === 0 || url.indexOf('blob:') === 0) return url;
@@ -2743,25 +2857,15 @@ window.AscDesktopEditor = {
 
     try {
       window.AscDesktopEditor._isPrinting = true;
-      var binData = ref.editor.asc_nativeGetFile();
-      if (!binData) {
-        // Through the catch below, so the user is told and the editor released.
-        throw new Error('Print aborted: asc_nativeGetFile returned no data');
-      }
-
-      var b64;
-      if (typeof binData === 'string') {
-        b64 = btoa(binData);
-      } else {
-        var binary = '';
-        var bytes = new Uint8Array(binData);
-        for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-        b64 = btoa(binary);
-      }
       var wasModified = window.AscDesktopEditor._isModified;
-      await invoke('write_editor_bin', { data: b64 });
       // The backend keeps the PDF it wrote; the two commands below take no path.
-      await invoke('print_document');
+      if (window.AscDesktopEditor._currentDocType === 'pdf') {
+        // A PDF prints as itself, with the editor's changes applied.
+        await invoke('print_document', { pdfChanges: _eoPdfChanges(ref) });
+      } else {
+        await _eoWriteEditorBin(ref);
+        await invoke('print_document', {});
+      }
 
       if (printerName) {
         await invoke('print_to_printer', { printer: printerName });
@@ -3028,7 +3132,7 @@ async function _eoOpenGranted(file) {
   _eoShowOpening(_eoOpeningFileText(file.name));
 
   try {
-    var b64data = await invoke('open_file', { token: file.token });
+    var b64data = await invoke(_eoOpenCommandForPath(file.name), { token: file.token });
     window._pendingFileData = { data: b64data, path: file.name, name: file.name };
     if (window._openEditor) {
       window._openEditor(docType);

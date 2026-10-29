@@ -407,6 +407,29 @@
       }, limitMs);
     }
 
+    function _isPdfEditorFrame(win) {
+      try {
+        return win.location.pathname.indexOf('/pdfeditor/') !== -1;
+      } catch(e) {
+        return false;
+      }
+    }
+
+    // Runs fn once the frame has a <head>, for up to 30 s.
+    function _whenHeadReady(win, fn) {
+      var interval = setInterval(function() {
+        try {
+          var head = win.document && win.document.head;
+          if (!head) return;
+          clearInterval(interval);
+          fn(head);
+        } catch(e) {
+          clearInterval(interval);
+        }
+      }, 50);
+      setTimeout(function() { clearInterval(interval); }, 30000);
+    }
+
     function injectBridgeDeep(win) {
       installPinchZoomGuard(win);
       try {
@@ -502,6 +525,21 @@
               }
             }, 50);
             setTimeout(function() { clearInterval(saveAsStyleInterval); }, 30000);
+          }
+
+          // PDF documents run no scripts, and three form features of the PDF
+          // editor are built on them: the date field, the image button field and
+          // the placeholder text of a field. Their controls are hidden rather
+          // than left to create fields that do not work.
+          if (!win._eoPdfScriptFeaturesHidden && _isPdfEditorFrame(win)) {
+            win._eoPdfScriptFeaturesHidden = true;
+            _whenHeadReady(win, function(head) {
+              var style = win.document.createElement('style');
+              style.textContent =
+                '#slot-btn-form-datetime, #slot-btn-form-image { display: none !important; }\n' +
+                'tr.form-text-combo:has(#form-txt-pholder) { display: none !important; }';
+              head.appendChild(style);
+            });
           }
 
           // Language pickers (#6): web-apps renders the spellcheck indicator as
@@ -1044,6 +1082,13 @@
     // editor iframe exists) cannot zoom the shell.
     installPinchZoomGuard(window);
 
+    function _fileTypeFor(docType) {
+      if (docType === 'cell') return 'xlsx';
+      if (docType === 'slide') return 'pptx';
+      if (docType === 'pdf') return 'pdf';
+      return 'docx';
+    }
+
     window._openEditor = openEditor;
     window._eoOpenPath = _openPath;
     async function openEditor(docType) {
@@ -1072,7 +1117,9 @@
         document: {
           title: (window._pendingFileData && window._pendingFileData.name) || _t('newDocument'),
           url: '_offline_',
-          fileType: docType === 'word' ? 'docx' : docType === 'cell' ? 'xlsx' : 'pptx',
+          fileType: _fileTypeFor(docType),
+          // Known up front, so the PDF editor starts without asking the page.
+          isForm: docType === 'pdf' ? false : undefined,
           key: 'local-' + Date.now(),
           permissions: {
             edit: true,
@@ -1164,12 +1211,12 @@
       _openPath(file);
     });
 
-    // Every opening goes through open_file, which is where the Rust side records
-    // the recent files entry. `file` is { token, name } from the backend.
+    // Every opening goes through open_file or open_pdf, which is where the Rust
+    // side records the recent files entry. `file` is { token, name } from the backend.
     async function _openPath(file, silent) {
       window._eoShowOpening(window._eoOpeningFileText(file.name));
       try {
-        var b64data = await window.__TAURI__.core.invoke('open_file', { token: file.token });
+        var b64data = await window.__TAURI__.core.invoke(window._eoOpenCommandForPath(file.name), { token: file.token });
         window._pendingFileData = { data: b64data, path: file.name, name: file.name };
         openEditor(window._eoDocTypeForPath(file.name));
         return true;
@@ -1230,7 +1277,7 @@
 
       var docType = window._eoDocTypeForPath(pending.name);
 
-      window.__TAURI__.core.invoke('open_file', { token: pending.token }).then(function(b64data) {
+      window.__TAURI__.core.invoke(window._eoOpenCommandForPath(pending.name), { token: pending.token }).then(function(b64data) {
         window._pendingFileData = { data: b64data, path: pending.name, name: pending.name };
         openEditor(docType);
       }).catch(function(e) {

@@ -9,8 +9,8 @@ use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 
 const ALL_FILES: [&str; 1] = ["*"];
 
-const OPEN_EXTENSIONS: [&str; 9] = [
-    "docx", "xlsx", "pptx", "odt", "ods", "odp", "rtf", "txt", "csv",
+const OPEN_EXTENSIONS: [&str; 10] = [
+    "docx", "xlsx", "pptx", "odt", "ods", "odp", "rtf", "txt", "csv", "pdf",
 ];
 
 // The formats Save As writes. A chosen name without one of them gets the

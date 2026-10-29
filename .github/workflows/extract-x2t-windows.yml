@@ -89,6 +89,20 @@ jobs:
         with:
           persist-credentials: false
 
+      # windows-2025 images from 2026-10 install Docker but leave its service stopped.
+      - name: Start the Docker service
+        run: |
+          $service = Get-Service docker -ErrorAction SilentlyContinue
+          if (-not $service) { throw "No docker service on this runner image ($env:ImageVersion)" }
+          Start-Service docker
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Get-Date) -lt $deadline) {
+            docker version *> $null
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds 2
+          }
+          throw "docker did not answer within 60 s after Start-Service"
+
       - name: Diagnose environment
         run: |
           Write-Host "::group::System info"

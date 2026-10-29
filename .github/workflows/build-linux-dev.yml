@@ -25,18 +25,18 @@ jobs:
       matrix:
         include:
           # The sdkjs tag has to match the x2t the target ships. Both targets
-          # take x2t 9.4.0.129 from the dependencies release, and its sdkjs tag
+          # take x2t 10.0.0.169 from the dependencies release, and its sdkjs tag
           # exists only upstream, not in this fork.
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
-            sdkjs_tag: v9.4.0.129
+            sdkjs_tag: v10.0.0.169
             sdkjs_remote: https://github.com/ONLYOFFICE/sdkjs.git
-            sdkjs_commit: 75b53d504bfd81bfa35d59bb57dd9e56f7c9235d
+            sdkjs_commit: 3679e0375a758d7dc59d31337a45461be3525ed8
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
-            sdkjs_tag: v9.4.0.129
+            sdkjs_tag: v10.0.0.169
             sdkjs_remote: https://github.com/ONLYOFFICE/sdkjs.git
-            sdkjs_commit: 75b53d504bfd81bfa35d59bb57dd9e56f7c9235d
+            sdkjs_commit: 3679e0375a758d7dc59d31337a45461be3525ed8
 
     steps:
       - name: Checkout

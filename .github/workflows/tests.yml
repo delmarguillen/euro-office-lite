@@ -106,7 +106,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # Only sdkjs: the scripts read two of its files with patches/sdkjs applied.
+      # Only sdkjs: the scripts read three of its files with patches/sdkjs applied.
       - name: Fetch the sdkjs submodule
         run: git submodule update --init --depth 1 src/sdkjs
 
@@ -118,6 +118,9 @@ jobs:
 
       - name: Screen reader text tests
         run: node scripts/test-sdkjs-speech.mjs
+
+      - name: PDF JavaScript action tests
+        run: node scripts/test-sdkjs-pdf-no-javascript.mjs
 
       - name: Bridge tests
         run: |
