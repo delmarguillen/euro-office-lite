@@ -521,6 +521,7 @@ pub async fn save_file(
         text_options,
     )
     .await?;
+    crate::theme_fonts::repair_after_save(&state, &dest).await;
     finish_text_save(&state, &dest, text_options);
 
     // The 0-byte file this document was opened from now holds a real document,
@@ -557,6 +558,7 @@ pub async fn save_file_as(
         text_options,
     )
     .await?;
+    crate::theme_fonts::repair_after_save(&state, &dest).await;
     finish_text_save(&state, &dest, text_options);
 
     // A PDF export leaves the document itself untouched (current_file keeps
