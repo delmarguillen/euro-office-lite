@@ -1088,8 +1088,10 @@
     window._openEditor = openEditor;
     window._eoOpenPath = _openPath;
     async function openEditor(docType) {
-      // Font generation finishes in Tauri setup. Fetch its result before the
-      // editor iframe is created so injection does not race LoadDocumentFonts.
+      // The font cache may still be building (fonts_state.rs): sdkjs reads
+      // AllFonts.js once, so the editor waits for the final one. Then fetch it
+      // before the iframe is created so injection does not race LoadDocumentFonts.
+      await window._eoWaitForFonts();
       await _prepareSystemFonts();
       if (!window._pendingFileData) {
         try {

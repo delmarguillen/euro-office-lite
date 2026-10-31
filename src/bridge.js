@@ -985,7 +985,47 @@ function _eoOpeningFileText(path) {
   return _t('openingFile').replace('{name}', function() { return name; });
 }
 
+// The font cache may still be building when the page loads (fonts_state.rs).
+// sdkjs reads AllFonts.js once, when the editor loads, so the editor waits
+// for the final list instead of loading the bundled one. Failed opens it with
+// the bundled list, as before. One promise for every caller.
+var _eoFontsSettled = null;
+function _eoWaitForFonts() {
+  if (!_eoFontsSettled) _eoFontsSettled = _eoAskFontsStatus();
+  return _eoFontsSettled;
+}
+
+// Listens first and asks second, so a "fonts-ready" sent in between is not lost.
+async function _eoAskFontsStatus() {
+  var settle;
+  var settledByEvent = new Promise(function(resolve) { settle = resolve; });
+  try {
+    await listen('fonts-ready', function(event) { settle(event.payload); });
+    var status = await invoke('fonts_status');
+    if (status !== 'pending') return status;
+  } catch(e) {
+    window._eoLog('[EO] fonts: status unavailable, opening without waiting: ' + (e.message || e));
+    return 'failed';
+  }
+  window._eoLog('[EO] fonts: cache is being built, the editor waits for it');
+  var settledStatus = await _eoWithFontsNotice(settledByEvent);
+  window._eoLog('[EO] fonts: ' + settledStatus);
+  return settledStatus;
+}
+
+// Over the start screen while the cache builds. An open already under way
+// keeps its own text, and the overlay stays up for it afterwards.
+async function _eoWithFontsNotice(settled) {
+  var notice = _t('preparingFonts');
+  if (!_eoIsOpening()) _eoShowOpening(notice);
+  var status = await settled;
+  var text = document.getElementById('opening-text');
+  if (text && text.textContent === notice) _eoHideOpening();
+  return status;
+}
+
 window._eoShowOpening = _eoShowOpening;
+window._eoWaitForFonts = _eoWaitForFonts;
 window._eoHideOpening = _eoHideOpening;
 window._eoOpeningFileText = _eoOpeningFileText;
 
@@ -3113,6 +3153,8 @@ async function _eoOpenFromPath(filePath) {
     var b64data = await invoke(_eoOpenCommandForPath(filePath), { path: filePath });
     var fileName = filePath.replace(/\\/g, '/').split('/').pop();
     window._pendingFileData = { data: b64data, path: filePath, name: fileName };
+    // Converting did not need the font cache; the editor does.
+    await _eoWaitForFonts();
     if (window._openEditor) {
       window._openEditor(docType);
     } else {
@@ -3132,6 +3174,7 @@ async function _eoOpenFromPath(filePath) {
 // so the page asks for the launch argument instead, once DOMContentLoaded
 // guarantees the later scripts (and window._openEditor) have run.
 function _eoTakePendingOpenFile() {
+  _eoWaitForFonts();
   invoke('take_pending_open_file').then(function(filePath) {
     if (filePath) return _eoOpenFromPath(filePath);
   }).catch(function(e) {
