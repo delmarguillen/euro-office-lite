@@ -31,3 +31,4 @@ utf16le-crlf.txt	comparable	open,save		plain		TXT in UTF-16 LE with CRLF, as Not
 cjk.docx	system-fonts	open,save,pdf	CJK system fonts sample	plain		Chinese and Japanese, drawn with whatever the runner has
 arabic-rtl.docx	system-fonts	open,save,pdf	Arabic system fonts sample	plain		Arabic right-to-left paragraph; the PDF must embed one of the script_fonts	DejaVu Sans|Tahoma
 hebrew.docx	system-fonts	open,save,pdf	Hebrew system fonts sample	plain		Hebrew right-to-left paragraph; the PDF must embed one of the script_fonts	DejaVu Sans|Tahoma
+no-theme.rtf	comparable	open,save,pdf	RTF without a theme|Second RTF paragraph	plain	docx,odt	an RTF without a themedata group: x2t gives it its default theme; saved back as rtf, docx and odt

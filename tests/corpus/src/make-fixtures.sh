@@ -38,6 +38,15 @@ for doc in liberation-carlito justified amp-name metadata rich cyrillic-greek cj
   convert docx "$doc.fodt"
 done
 convert odt basic.fodt
+
+# Writer writes RTF without a \themedata group, so x2t gives this document
+# its built-in default theme when it opens it. With one, it would test nothing.
+convert rtf no-theme.fodt
+if grep -q 'themedata' "$OUT/no-theme.rtf"; then
+  echo "make-fixtures.sh: no-theme.rtf has a \\themedata group" >&2
+  exit 1
+fi
+
 # Calc and Impress name Arial and Times New Roman in the OOXML they export,
 # whatever the source says, so the xlsx and pptx are system-fonts fixtures and
 # the same sources also go out as ODF, which keeps the Liberation names.
