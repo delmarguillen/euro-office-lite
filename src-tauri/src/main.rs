@@ -142,6 +142,12 @@ fn read_resource(app: &tauri::AppHandle, relative: &std::path::Path) -> Option<V
     candidates.iter().find_map(|p| std::fs::read(p).ok())
 }
 
+// The fonts the app ships, the ones the bundled AllFonts.js names.
+fn bundled_fonts_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    let resource_dir = app.path().resource_dir().unwrap_or_default();
+    x2t_task::strip_extended_prefix(&resource_dir.join("binaries")).join("fonts")
+}
+
 // x2t runs with a different working directory, so a relative launch argument
 // must be anchored to ours. A plain join, not canonicalize: that would resolve
 // symlinks and, on Windows, add the \\?\ prefix to the path kept in recents.
@@ -631,7 +637,9 @@ fn main() {
                 };
                 let state = ctx.app_handle().state::<AppState>();
                 let all_fonts = temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
-                if !protocol_limits::is_generated_font(&all_fonts, abs_path) {
+                let fonts_pending = state.fonts.status() == fonts_state::FontsStatus::Pending;
+                let bundled_fonts = bundled_fonts_dir(ctx.app_handle());
+                if !protocol_limits::may_serve_font(&all_fonts, abs_path, fonts_pending, &bundled_fonts) {
                     return tauri::http::Response::builder()
                         .status(403)
                         .header(allow_origin.0, allow_origin.1)
@@ -876,6 +884,9 @@ fn start_font_generation(
     let handle = app.clone();
     let on_settled = move |status: fonts_state::FontsStatus| {
         log_startup(&format!("Font cache status: {:?}", status));
+        if status == fonts_state::FontsStatus::Ready {
+            protocol_limits::forget_font_list();
+        }
         let _ = handle.emit(fonts_state::FONTS_READY_EVENT, status);
     };
     let started = fonts_state::start(fonts.clone(), cache_ready, generate, on_settled);

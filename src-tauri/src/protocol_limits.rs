@@ -264,6 +264,38 @@ pub fn is_generated_font(all_fonts_js: &Path, requested: &str) -> bool {
     is_listed_font(requested, listed)
 }
 
+// Read again on the next request: the cache has just been built, and its
+// AllFonts.js may share a modification time with the one it replaced.
+pub fn forget_font_list() {
+    *FONT_LIST.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+// A font file in the folder the app bundles. Both sides are resolved first, so
+// ".." or a link cannot lead out of it; a missing file is no font.
+pub fn is_bundled_font(requested: &str, bundled_fonts: &Path) -> bool {
+    let Ok(file) = std::fs::canonicalize(font_path_key(requested)) else {
+        return false;
+    };
+    let Ok(folder) = std::fs::canonicalize(bundled_fonts) else {
+        return false;
+    };
+    file.starts_with(&folder) && file.is_file()
+}
+
+// While the cache is being built there is no new list: the bundled fonts,
+// which the fallback list names, are served too.
+pub fn may_serve_font(
+    all_fonts_js: &Path,
+    requested: &str,
+    fonts_pending: bool,
+    bundled_fonts: &Path,
+) -> bool {
+    if fonts_pending && is_bundled_font(requested, bundled_fonts) {
+        return true;
+    }
+    is_generated_font(all_fonts_js, requested)
+}
+
 // Largest Editor.bin the JS may send, decoded. A large document's
 // Editor.bin can pass 100 MB; this leaves room above that.
 pub const EDITOR_BIN_MAX_BYTES: usize = 512 * 1024 * 1024;
@@ -615,6 +647,105 @@ mod tests {
         assert!(!is_listed_font("/usr/share/fonts/../../../etc/passwd", &listed));
         assert!(!is_listed_font("/usr/share/fonts/Other.ttf", &listed));
         assert!(!is_listed_font("C:/Windows/win.ini", &listed));
+    }
+
+    // FONT_LIST is shared by the whole process: these tests take turns.
+    static FONT_LIST_TESTS: Mutex<()> = Mutex::new(());
+
+    struct FontDirs {
+        base: PathBuf,
+        bundled: PathBuf,
+        all_fonts: PathBuf,
+    }
+
+    impl Drop for FontDirs {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    // binaries/fonts/Bundled.ttf, other/Other.ttf, and an AllFonts.js that
+    // lists `listed` with a fixed modification time.
+    fn font_dirs(name: &str, listed: &[&Path]) -> FontDirs {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let base = std::env::temp_dir().join(format!("eo-abs-{}-{}", name, unique));
+        let bundled = base.join("binaries").join("fonts");
+        std::fs::create_dir_all(&bundled).unwrap();
+        std::fs::create_dir_all(base.join("other")).unwrap();
+        std::fs::write(bundled.join("Bundled.ttf"), b"font").unwrap();
+        std::fs::write(base.join("other").join("Other.ttf"), b"font").unwrap();
+        let all_fonts = base.join("AllFonts.js");
+        write_all_fonts(&all_fonts, listed);
+        FontDirs { base, bundled, all_fonts }
+    }
+
+    fn write_all_fonts(path: &Path, listed: &[&Path]) {
+        let names: Vec<String> = listed
+            .iter()
+            .map(|file| format!("{:?}", file.to_string_lossy()))
+            .collect();
+        let text = format!("window[\"__fonts_files\"] = [{}];\n", names.join(","));
+        std::fs::write(path, text).unwrap();
+        let fixed = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(fixed).unwrap();
+    }
+
+    fn text(path: &Path) -> String {
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn while_fonts_are_pending_a_bundled_font_is_served() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("pending", &[]);
+        forget_font_list();
+        let bundled = text(&dirs.bundled.join("Bundled.ttf"));
+
+        assert!(may_serve_font(&dirs.all_fonts, &bundled, true, &dirs.bundled));
+    }
+
+    #[test]
+    fn while_fonts_are_pending_any_other_font_is_refused() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("pending-other", &[]);
+        forget_font_list();
+        let other = text(&dirs.base.join("other").join("Other.ttf"));
+        let escaping = text(&dirs.bundled.join("..").join("..").join("other").join("Other.ttf"));
+        let missing = text(&dirs.bundled.join("Missing.ttf"));
+
+        assert!(!may_serve_font(&dirs.all_fonts, &other, true, &dirs.bundled));
+        assert!(!may_serve_font(&dirs.all_fonts, &escaping, true, &dirs.bundled));
+        assert!(!may_serve_font(&dirs.all_fonts, &missing, true, &dirs.bundled));
+    }
+
+    #[test]
+    fn once_fonts_are_ready_only_the_new_list_is_served() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("ready", &[]);
+        let other_path = dirs.base.join("other").join("Other.ttf");
+        write_all_fonts(&dirs.all_fonts, &[&other_path]);
+        forget_font_list();
+        let bundled = text(&dirs.bundled.join("Bundled.ttf"));
+
+        assert!(may_serve_font(&dirs.all_fonts, &text(&other_path), false, &dirs.bundled));
+        assert!(!may_serve_font(&dirs.all_fonts, &bundled, false, &dirs.bundled));
+    }
+
+    #[test]
+    fn the_list_is_read_again_once_forgotten_even_with_the_same_time() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("reload", &[]);
+        let other_path = dirs.base.join("other").join("Other.ttf");
+        forget_font_list();
+        assert!(!may_serve_font(&dirs.all_fonts, &text(&other_path), false, &dirs.bundled));
+
+        write_all_fonts(&dirs.all_fonts, &[&other_path]);
+        forget_font_list();
+
+        assert!(may_serve_font(&dirs.all_fonts, &text(&other_path), false, &dirs.bundled));
     }
 
     #[test]
