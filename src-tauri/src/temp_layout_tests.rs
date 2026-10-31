@@ -1163,6 +1163,8 @@ fn a_new_font_in_a_scanned_folder_makes_the_cache_stale() {
     let before = marker_text("0.17.43-alpha", &sources_for(&binaries, &[user_fonts.clone()]));
     let root = root_with_marker(before.as_bytes());
 
+    // Folder mtimes have coarse granularity; wait so the new font changes it.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
     std::fs::write(user_fonts.join("b.ttf"), b"b").unwrap();
     let after = marker_text("0.17.43-alpha", &sources_for(&binaries, &[user_fonts.clone()]));
 
