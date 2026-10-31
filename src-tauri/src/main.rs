@@ -6,6 +6,7 @@ mod clipboard;
 mod converter;
 mod dictionaries;
 mod file_ops;
+mod fonts_state;
 mod launch_args;
 mod note_separator;
 mod protocol_limits;
@@ -304,11 +305,14 @@ fn main() {
 
     builder = builder.on_menu_event(app_quit::on_menu_event);
 
+    let fonts = std::sync::Arc::new(fonts_state::FontsState::pending());
+
     builder.manage(AppState {
             current_file: Mutex::new(None),
             temp_dir,
             temp_root: temp_root.clone(),
             font_root: font_root.clone(),
+            fonts: fonts.clone(),
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
             modified: Mutex::new(false),
@@ -337,6 +341,7 @@ fn main() {
             file_ops::print_to_printer,
             file_ops::convert_for_insert,
             file_ops::get_system_fonts,
+            file_ops::fonts_status,
             bridge::set_window_title,
             bridge::set_document_modified,
             bridge::js_log,
@@ -700,7 +705,7 @@ fn main() {
                 &binaries_dir,
                 &x2t_task::font_scan_dirs(&binaries_dir),
             ));
-            run_font_generation(&font_root, &instance_id, &binaries_dir);
+            start_font_generation(app.handle(), &fonts, &font_root, &instance_id, &binaries_dir);
 
             // Off the startup path: nothing on screen waits for it.
             let sweep_root = temp_root.clone();
@@ -853,11 +858,40 @@ fn sweep_old_font_cache(temp_root: &std::path::Path, font_root: &std::path::Path
 const FONT_CACHE_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 const FONT_CACHE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-fn run_font_generation(
+// Off the startup path: the window paints while the cache is built, and the
+// frontend waits for "fonts-ready" before it opens the editor. A warm cache is
+// Ready before anything starts.
+fn start_font_generation(
+    app: &tauri::AppHandle,
+    fonts: &std::sync::Arc<fonts_state::FontsState>,
     font_root: &std::path::Path,
     instance_id: &str,
     binaries_dir: &std::path::Path,
 ) {
+    let cache_ready = temp_layout::fonts_ready(font_root);
+    let font_root = font_root.to_path_buf();
+    let instance_id = instance_id.to_string();
+    let binaries_dir = binaries_dir.to_path_buf();
+    let generate = move || run_font_generation(&font_root, &instance_id, &binaries_dir);
+    let handle = app.clone();
+    let on_settled = move |status: fonts_state::FontsStatus| {
+        log_startup(&format!("Font cache status: {:?}", status));
+        let _ = handle.emit(fonts_state::FONTS_READY_EVENT, status);
+    };
+    let started = fonts_state::start(fonts.clone(), cache_ready, generate, on_settled);
+    if !cache_ready && started.is_none() {
+        log_startup("ERROR: could not start the font cache thread");
+        fonts.finish(fonts_state::FontsStatus::Failed);
+        let _ = app.emit(fonts_state::FONTS_READY_EVENT, fonts_state::FontsStatus::Failed);
+    }
+}
+
+// Reports whether the cache is usable once it returns.
+fn run_font_generation(
+    font_root: &std::path::Path,
+    instance_id: &str,
+    binaries_dir: &std::path::Path,
+) -> bool {
     let marker = font_root.join(temp_layout::FONTS_MARKER);
     if marker.exists() && !temp_layout::fonts_ready(font_root) {
         log_startup("Marker exists but the font cache is missing or stale, regenerating");
@@ -878,6 +912,15 @@ fn run_font_generation(
         ),
         _ => {}
     }
+    // A failed run can leave files next to an old marker (converter.rs), so
+    // the outcome has to say the cache is good too.
+    let built = matches!(
+        outcome,
+        temp_layout::FontCache::Ready
+            | temp_layout::FontCache::Generated
+            | temp_layout::FontCache::GeneratedByOther
+    );
+    built && temp_layout::fonts_ready(font_root)
 }
 
 // The folder of the running executable: the last place x2t is looked for on

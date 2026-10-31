@@ -14,6 +14,8 @@ pub struct AppState {
     pub temp_root: PathBuf,
     // Shared by every instance: the font cache.
     pub font_root: PathBuf,
+    // Whether that cache is built yet (fonts_state.rs).
+    pub fonts: std::sync::Arc<crate::fonts_state::FontsState>,
     pub instance: crate::temp_layout::Instance,
     // Number of the document open in this instance: part of its images'
     // addresses (temp_layout.rs, "Document images").
@@ -1082,6 +1084,12 @@ pub fn get_current_path(state: State<'_, AppState>) -> Option<String> {
         .unwrap()
         .as_ref()
         .map(|p| p.to_string_lossy().to_string())
+}
+
+// Asked once by the frontend; "fonts-ready" carries the change after that.
+#[tauri::command]
+pub fn fonts_status(state: State<'_, AppState>) -> crate::fonts_state::FontsStatus {
+    state.fonts.status()
 }
 
 // Hands over the launch argument once: a page reload must not open it again.
