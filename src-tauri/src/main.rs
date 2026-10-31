@@ -14,6 +14,7 @@ mod recovery;
 mod save_target;
 mod temp_layout;
 mod text_import;
+mod theme_fonts;
 mod x2t_task;
 
 use file_ops::AppState;
