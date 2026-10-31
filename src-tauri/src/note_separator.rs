@@ -155,7 +155,7 @@ fn apply_at(path: &Path, action: Action) -> Result<String, String> {
     Ok(code.to_string())
 }
 
-fn temp_sibling(path: &Path) -> PathBuf {
+pub(crate) fn temp_sibling(path: &Path) -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -183,7 +183,7 @@ pub fn apply_to_docx(
 
     // Every part present and carrying notes of its own is looked at. Both may be
     // there, either alone, or neither.
-    let mut edits: Vec<(String, String)> = Vec::new();
+    let mut edits: Vec<(String, Vec<u8>)> = Vec::new();
     let mut any_real_notes = false;
     let mut any_run_present = false;
 
@@ -213,7 +213,7 @@ pub fn apply_to_docx(
             Action::Restore => restore_separator_runs(&xml, note_element),
         };
         if let Some(edited) = edited {
-            edits.push((part.to_string(), edited));
+            edits.push((part.to_string(), edited.into_bytes()));
         }
     }
 
@@ -238,7 +238,7 @@ pub fn apply_to_docx(
     ))
 }
 
-fn read_entry<R: Read + std::io::Seek>(
+pub(crate) fn read_entry<R: Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
     name: &str,
 ) -> Result<Option<Vec<u8>>, String> {
@@ -256,9 +256,9 @@ fn read_entry<R: Read + std::io::Seek>(
 // Every entry is copied across byte for byte except the ones in `edits`. Stored
 // entries stay stored and everything else is deflated: a docx uses no other
 // method, and re-deflating changes only the packaging, not the content.
-fn rewrite_package<R: Read + std::io::Seek>(
+pub(crate) fn rewrite_package<R: Read + std::io::Seek>(
     archive: &mut zip::ZipArchive<R>,
-    edits: &[(String, String)],
+    edits: &[(String, Vec<u8>)],
 ) -> Result<Vec<u8>, String> {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
 
@@ -281,8 +281,8 @@ fn rewrite_package<R: Read + std::io::Seek>(
             });
 
         let replacement = edits.iter().find(|(part, _)| *part == name);
-        let payload = if let Some((_, xml)) = replacement {
-            xml.as_bytes().to_vec()
+        let payload = if let Some((_, data)) = replacement {
+            data.clone()
         } else {
             let mut data = Vec::new();
             entry
