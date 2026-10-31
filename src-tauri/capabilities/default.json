@@ -26,6 +26,7 @@
     "allow-print-to-printer",
     "allow-convert-for-insert",
     "allow-get-system-fonts",
+    "allow-fonts-status",
     "allow-set-window-title",
     "allow-set-document-modified",
     "allow-js-log",
