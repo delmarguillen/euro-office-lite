@@ -1190,8 +1190,14 @@ pub async fn convert_for_insert(
     }))
 }
 
+// A sync command runs on the main thread, so it never waits for the build:
+// the editor only asks once the status has settled (bridge.js), and an early
+// call gets this error and the bundled list (font-patches.js).
 #[tauri::command]
 pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
+    if state.fonts.status() == crate::fonts_state::FontsStatus::Pending {
+        return Err("The font cache is still being built".to_string());
+    }
     let path = crate::temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
     std::fs::read_to_string(&path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
 }
