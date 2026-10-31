@@ -1011,3 +1011,51 @@ mod arg_path_tests {
         assert_eq!(absolute_arg_path("-flag", &temp.0), None);
     }
 }
+
+// Builds the font cache with a real x2t, off the startup path. Ignored by
+// default: it needs x2t and its libraries in EO_X2T_BINARIES (the folder the
+// app ships as binaries/), as get-x2t-ci.sh unpacks them.
+// Run: EO_X2T_BINARIES=/path/binaries cargo test -- --ignored real_x2t
+#[cfg(test)]
+mod font_startup_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    #[ignore]
+    fn real_x2t_builds_the_cache_after_startup_returns() {
+        let Ok(binaries) = std::env::var("EO_X2T_BINARIES") else {
+            panic!("EO_X2T_BINARIES is not set");
+        };
+        let binaries_dir = std::path::PathBuf::from(binaries);
+        let font_root = std::env::temp_dir().join(format!("eo-real-x2t-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&font_root);
+        std::fs::create_dir_all(&font_root).unwrap();
+        temp_layout::set_font_sources(temp_layout::font_sources_text(
+            &binaries_dir,
+            &x2t_task::font_scan_dirs(&binaries_dir),
+        ));
+        assert!(!temp_layout::fonts_ready(&font_root), "the cache starts cold");
+
+        let fonts = std::sync::Arc::new(fonts_state::FontsState::pending());
+        let (root, dir) = (font_root.clone(), binaries_dir.clone());
+        let started = Instant::now();
+        let thread = fonts_state::start(
+            fonts.clone(),
+            temp_layout::fonts_ready(&font_root),
+            move || run_font_generation(&root, "real-x2t", &dir),
+            |_| {},
+        );
+        let startup = started.elapsed();
+
+        assert!(thread.is_some());
+        assert_eq!(fonts.status(), fonts_state::FontsStatus::Pending);
+        let status = fonts.wait_settled(Duration::from_secs(300));
+        let build = started.elapsed();
+        eprintln!("startup returned after {:?}, cache built after {:?}", startup, build);
+        assert_eq!(status, fonts_state::FontsStatus::Ready);
+        assert!(temp_layout::fonts_ready(&font_root));
+        assert!(startup < build / 10, "startup {:?} vs build {:?}", startup, build);
+        let _ = std::fs::remove_dir_all(&font_root);
+    }
+}
