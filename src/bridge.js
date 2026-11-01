@@ -549,6 +549,16 @@ var _UI_STRINGS = {
     noteSeparatorAlready: 'The note separator has already been removed from this document.',
     noteSeparatorAlreadyPresent: 'This document already has its note separator lines.',
     noteSeparatorFailed: 'The note separator lines could not be changed.',
+    addLanguage: 'Add spell check language…',
+    addLanguageTitle: 'Add language',
+    languageAdded: 'The {lang} dictionary is installed. Open a document to check its spelling.',
+    languageAddedRestart: 'The {lang} dictionary is installed. Restart Euro-Office Lite to check its spelling: the spell checker loaded its languages when the first document opened.',
+    languageExists: 'A {lang} dictionary is already installed. Replace it with the files you chose?',
+    languageNotAPair: 'Choose two files: one ending in .aff and one ending in .dic.',
+    languageNamesDiffer: 'The two files are for different languages ({detail}). Choose an .aff and a .dic with the same name, for example es_ES.aff and es_ES.dic.',
+    languageBadName: 'The file name "{detail}" is not a language code. Rename the files to a code such as es, es_ES or en-GB and try again.',
+    languageNotADictionary: '{detail} is not a hunspell dictionary file. It is empty or it is a web page.',
+    languageFailed: 'The dictionary could not be installed: {detail}',
     locateLinkedFile: 'Locate the linked file'
   },
   es: {
@@ -1456,6 +1466,56 @@ function _eoIsFontCacheError(error) {
 
 // The backend starts its error with this when it may not write the file: a
 // read-only file or a folder the user cannot write to.
+// "Add spell check language…" on the start screen. The dialog opens in the
+// backend (dictionary_import.rs); errors come back as "dictionary-<code>: <detail>".
+var _EO_IMPORT_MESSAGES = {
+  'not-a-pair': 'languageNotAPair',
+  'names-differ': 'languageNamesDiffer',
+  'bad-name': 'languageBadName',
+  'not-a-dictionary': 'languageNotADictionary'
+};
+
+function _eoImportError(error) {
+  var text = (error && error.message) || String(error);
+  var match = /^dictionary-([a-z-]+): ([\s\S]*)$/.exec(text);
+  if (!match) return { code: 'io', detail: text };
+  return { code: match[1], detail: match[2] };
+}
+
+function _eoFill(key, values) {
+  return _t(key).replace(/\{(lang|detail)\}/g, function(_, name) { return values[name] || ''; });
+}
+
+async function _eoAddLanguage(replace) {
+  var dialog = window.__TAURI__.dialog;
+  var title = _t('addLanguageTitle');
+  var lang;
+  try {
+    lang = await invoke('import_dictionary', { replace: !!replace });
+  } catch (e) {
+    var error = _eoImportError(e);
+    window._eoLog('[SPELL] import failed: ' + error.code + ': ' + error.detail);
+    if (error.code === 'exists') {
+      var yes = await dialog.confirm(_eoFill('languageExists', { lang: error.detail }),
+        { title: title, kind: 'warning' });
+      return yes ? _eoAddLanguage(true) : null;
+    }
+    var key = _EO_IMPORT_MESSAGES[error.code] || 'languageFailed';
+    await dialog.message(_eoFill(key, { detail: error.detail }), { title: title, kind: 'error' });
+    return null;
+  }
+  if (!lang) return null;
+  window._eoLog('[SPELL] dictionary installed: ' + lang);
+  // A running worker keeps the language list it started with, so a language
+  // added after the first document needs a restart. The app does not restart
+  // by itself: another window may hold unsaved changes.
+  var running = SpellCheckBridge.reloadUserFolders();
+  var added = running ? 'languageAddedRestart' : 'languageAdded';
+  await dialog.message(_eoFill(added, { lang: lang }), { title: title, kind: 'info' });
+  return lang;
+}
+window._eoAddLanguage = _eoAddLanguage;
+
 function _eoIsSaveDeniedError(error) {
   var text = (error && error.message) || String(error);
   return text.indexOf('save-denied') === 0;
@@ -2366,9 +2426,20 @@ var SpellCheckBridge = (function() {
   // before the first document is ready and the worker never has to wait.
   _dictionariesReady();
 
+  // Forgets the user folder list so the next document asks the backend again.
+  // Returns true when the worker is already running with the old list.
+  function reloadUserFolders() {
+    _userFoldersPromise = null;
+    _userFolders = null;
+    _packed = null;
+    _userFoldersReady();
+    return _worker !== null;
+  }
+
   return {
     check: check,
     attach: attach,
+    reloadUserFolders: reloadUserFolders,
     // Exposed for the pure-function tests; not part of the editor contract.
     _splitTask: _splitTask,
     _mergeAnswer: _mergeAnswer

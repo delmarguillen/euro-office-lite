@@ -1463,6 +1463,10 @@
         .catch(function(e) { _log('[EO] Recent files clear failed: ' + (e.message || e)); });
     });
 
+    document.getElementById('add-language').addEventListener('click', function() {
+      window._eoAddLanguage(false);
+    });
+
     document.getElementById('recent-remember').addEventListener('change', function() {
       window.__TAURI__.core.invoke('set_recent_files_enabled', { enabled: this.checked })
         .then(_refreshRecentFiles)
