@@ -96,6 +96,14 @@ check(results, 'a failed PDF save says so',
   env.messages.length === 1 && env.messages[0] === env.t('saveErrorMsg'), JSON.stringify(env.messages));
 check(results, '... and ends the save as not done', env.endSaves.join() === '1', env.endSaves.join());
 
+// save_pdf refuses a Save As name that does not end in .pdf; the bridge
+// reports it like any failed save and writes nothing else.
+env = await save('pdf', 'saveas=true;', { picked: { token: 'tok-docx', name: 'copy.docx' }, saveFails: true });
+check(results, 'a PDF Save As to a name not ending in .pdf says it failed',
+  env.names() === 'save_pdf' && env.messages.length === 1 && env.messages[0] === env.t('saveErrorMsg'),
+  env.names() + ' ' + JSON.stringify(env.messages));
+check(results, '... and ends the save as not done', env.endSaves.join() === '1', env.endSaves.join());
+
 env = await save('word', '');
 check(results, 'Save with a .docx open still writes the Editor.bin and saves it',
   env.names() === 'write_editor_bin,save_file' && env.messages.length === 0, env.names());

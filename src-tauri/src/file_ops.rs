@@ -645,8 +645,9 @@ async fn save_pdf_inner(
     Ok("ok".to_string())
 }
 
-// Save writes over the open PDF; Save As writes where its token points, as a
-// .pdf even when the name chosen in the dialog ends otherwise.
+// Save writes over the open PDF; Save As writes exactly the file its token
+// names, which the dialog confirmed. A name not ending in .pdf is refused, not
+// renamed: the renamed file was never confirmed and may already exist.
 fn pdf_save_destination(
     grants: &crate::path_grants::PathGrants,
     token: Option<&str>,
@@ -656,16 +657,10 @@ fn pdf_save_destination(
         return Ok(current.to_path_buf());
     };
     let chosen = grants.resolve(token, GrantKind::Save)?;
-    Ok(with_pdf_extension(chosen))
-}
-
-fn with_pdf_extension(path: PathBuf) -> PathBuf {
-    if crate::protocol_limits::has_pdf_extension(&path) {
-        return path;
+    if !crate::protocol_limits::has_pdf_extension(&chosen) {
+        return Err("a PDF can only be saved to a name ending in .pdf".to_string());
     }
-    let mut name = path.into_os_string();
-    name.push(".pdf");
-    PathBuf::from(name)
+    Ok(chosen)
 }
 
 // Replaces `dest` only when x2t succeeded and wrote the changed PDF. The work
@@ -2013,14 +2008,11 @@ mod tests {
     }
 
     #[test]
-    fn a_pdf_saved_as_another_name_ends_in_pdf() {
+    fn a_pdf_saved_as_another_name_is_refused() {
         let grants = crate::path_grants::PathGrants::default();
         let current = Path::new("/home/u/open.pdf");
         let save = grants.grant(PathBuf::from("/home/u/copy.docx"), GrantKind::Save);
-        assert_eq!(
-            pdf_save_destination(&grants, Some(&save.token), current),
-            Ok(PathBuf::from("/home/u/copy.docx.pdf"))
-        );
+        assert!(pdf_save_destination(&grants, Some(&save.token), current).is_err());
         let upper = grants.grant(PathBuf::from("/home/u/COPY.PDF"), GrantKind::Save);
         assert_eq!(
             pdf_save_destination(&grants, Some(&upper.token), current),

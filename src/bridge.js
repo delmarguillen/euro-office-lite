@@ -890,12 +890,6 @@ async function _eoPickPdfTarget() {
   return invoke('pick_save_target', { filters: EO_PDF_SAVE_FILTERS, requestedExt: 'pdf' });
 }
 
-// save_pdf writes a .pdf even when the name chosen ends otherwise.
-function _eoPdfName(name) {
-  if (/\.pdf$/i.test(name)) return name;
-  return name + '.pdf';
-}
-
 // Saves the open PDF, over itself or, for Save As, where the user picks. Ends
 // the editor's save the way the other editors do.
 async function _eoSavePdf(ref, isSaveAs) {
@@ -922,7 +916,7 @@ async function _eoSavePdf(ref, isSaveAs) {
     }
     return;
   }
-  if (target) _eoShowSavedName(_eoPdfName(target.name));
+  if (target) _eoShowSavedName(target.name);
   if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
     ref.ew.DesktopOfflineAppDocumentEndSave(0);
   }
