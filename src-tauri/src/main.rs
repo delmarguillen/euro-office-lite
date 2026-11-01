@@ -131,9 +131,37 @@ fn apply_title_bar(app: &tauri::App, mode: TitleBar) {
     ));
 }
 
-// main is built hidden (see main) and the window state plugin has already
-// restored it when setup runs. On Linux the window is either built visible or
-// shown by apply_title_bar.
+// GTK is already up here: tao started it to build the window.
+#[cfg(target_os = "linux")]
+fn on_wayland(window: &tauri::WebviewWindow) -> bool {
+    use gtk::prelude::*;
+    let Ok(gtk_window) = window.gtk_window() else {
+        return false;
+    };
+    gtk_window.display().backend().is_wayland()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn on_wayland(_window: &tauri::WebviewWindow) -> bool {
+    false
+}
+
+// The plugin skips main (see window_state::plugin), so this is the one place it
+// is restored, before setup shows it.
+fn restore_main_window(app: &tauri::App) {
+    use tauri_plugin_window_state::WindowExt;
+    let Some(window) = app.get_webview_window(window_state::MAIN_WINDOW) else {
+        log_startup("ERROR: restore: no main window");
+        return;
+    };
+    let flags = window_state::restored_flags(on_wayland(&window));
+    if let Err(e) = window.restore_state(flags) {
+        log_startup(&format!("ERROR: restore main window: {e}"));
+    }
+}
+
+// main is built hidden (see main) and restored when setup shows it. On Linux
+// the window is either built visible or shown by apply_title_bar.
 #[cfg(not(target_os = "linux"))]
 fn show_main_window(app: &tauri::App) {
     let Some(window) = app.get_webview_window("main") else {
@@ -696,6 +724,8 @@ fn main() {
             }
         })
         .setup(move |app| {
+            // Restored before it is shown, so a hidden window appears once.
+            restore_main_window(app);
             // First, so a hidden window is shown as early as the default one.
             #[cfg(target_os = "linux")]
             apply_title_bar(app, title_bar);
