@@ -29,6 +29,7 @@ async function setup(extra = {}) {
   };
   const bridge = await loadBridge({
     invoke: {
+      fonts_status: recorded('fonts_status', 'ready'),
       take_pending_open_file: recorded('take_pending_open_file',
         { token: 'tok-launch', name: 'launch.docx' }),
       open_file: recorded('open_file', 'Ymlu'),
@@ -166,8 +167,10 @@ check(results, 'an inserted image is copied by token',
   copyUrl.endsWith('copy-to-media/eo-grant:tok-images/a.png'), copyUrl);
 run.bridge.stopTimers();
 
-// Reopening from the editor's recent list.
+// Reopening from the editor's recent list. The launch argument opens first,
+// after the font wait, so it settles before an editor counts as mounted.
 run = await setup();
+await settle();
 run.bridge.sandbox.AscDesktopEditor._currentDocType = 'word';
 run.bridge.sandbox.location = { reload: () => {} };
 run.bridge.run(`AscDesktopEditor.execCommand('open:recent', ${JSON.stringify(JSON.stringify({ id: 0, path: HOME + 'recent.docx' }))})`);
@@ -213,5 +216,7 @@ run.bridge.stopTimers();
 // Across every run above: no command got a path.
 check(results, 'no command receives a path', pathsSent(everyCall).length === 0,
   JSON.stringify(pathsSent(everyCall)));
+check(results, '... fonts_status among them',
+  everyCall.some((call) => call.command === 'fonts_status'), 'fonts_status never asked');
 
 finish(results);
