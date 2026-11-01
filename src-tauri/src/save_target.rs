@@ -10,10 +10,18 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// instead of showing a generic error.
 pub const SAVE_DENIED_ERROR: &str = "save-denied";
 
+/// Start of the error a save returns when another program holds the
+/// destination open without sharing write access (Windows only).
+pub const SAVE_LOCKED_ERROR: &str = "save-locked";
+
+// Windows ERROR_SHARING_VIOLATION.
+const SHARING_VIOLATION: i32 = 32;
+
 static TEMP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-// Refuses a destination that exists and is read-only, before anything is
-// written. A new file passes: whether its folder takes it shows on writing.
+// Refuses a destination that exists and is read-only or locked by another
+// program, before anything is written. A new file passes: whether its folder
+// takes it shows on writing.
 pub fn check_writable_destination(dest: &Path) -> Result<(), String> {
     let Ok(metadata) = std::fs::metadata(dest) else {
         return Ok(());
@@ -21,7 +29,22 @@ pub fn check_writable_destination(dest: &Path) -> Result<(), String> {
     if metadata.permissions().readonly() {
         return Err(denied(dest, "the file is read-only"));
     }
-    Ok(())
+    if metadata.is_dir() {
+        return Ok(());
+    }
+    // Opening for write without truncate or create leaves content and dates as
+    // they were. Only Windows refuses it for a file another program has open.
+    let Err(error) = OpenOptions::new().write(true).open(dest) else {
+        return Ok(());
+    };
+    if is_sharing_violation(&error) {
+        return Err(locked(dest, &error.to_string()));
+    }
+    Err(save_error(dest, error))
+}
+
+fn is_sharing_violation(error: &std::io::Error) -> bool {
+    cfg!(windows) && error.raw_os_error() == Some(SHARING_VIOLATION)
 }
 
 // Puts a copy of `from` at `dest` in one step: the copy is written next to
@@ -95,6 +118,10 @@ fn save_error(dest: &Path, error: std::io::Error) -> String {
 
 fn denied(dest: &Path, reason: &str) -> String {
     format!("{}: {}: {}", SAVE_DENIED_ERROR, dest.display(), reason)
+}
+
+fn locked(dest: &Path, reason: &str) -> String {
+    format!("{}: {}: {}", SAVE_LOCKED_ERROR, dest.display(), reason)
 }
 
 #[cfg(test)]
@@ -194,6 +221,47 @@ mod tests {
         let dest = dir.join("doc.docx");
         assert!(check_writable_destination(&dest).is_ok());
         std::fs::write(&dest, b"PK").unwrap();
+        assert!(check_writable_destination(&dest).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_check_leaves_an_existing_file_unchanged() {
+        let dir = test_dir("check-untouched");
+        let dest = dir.join("doc.docx");
+        std::fs::write(&dest, b"PK original").unwrap();
+        let before = std::fs::metadata(&dest).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        assert!(check_writable_destination(&dest).is_ok());
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"PK original");
+        assert_eq!(std::fs::metadata(&dest).unwrap().modified().unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sharing_violation_is_a_locked_error_only_on_windows() {
+        let error = std::io::Error::from_raw_os_error(SHARING_VIOLATION);
+        assert_eq!(is_sharing_violation(&error), cfg!(windows));
+        let message = locked(Path::new("doc.docx"), "in use");
+        assert!(message.starts_with(SAVE_LOCKED_ERROR), "{}", message);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_open_without_write_sharing_fails_the_check() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = test_dir("check-locked");
+        let dest = dir.join("doc.docx");
+        std::fs::write(&dest, b"PK").unwrap();
+        // FILE_SHARE_READ only, as a program that keeps the file open does.
+        let holder = OpenOptions::new().read(true).share_mode(1).open(&dest).unwrap();
+
+        let error = check_writable_destination(&dest).unwrap_err();
+
+        assert!(error.starts_with(SAVE_LOCKED_ERROR), "{}", error);
+        drop(holder);
         assert!(check_writable_destination(&dest).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -577,6 +577,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
     saveError: 'Save error', saveErrorMsg: 'Could not save the file.\n\nTarget format not compatible with this document type.',
     saveDeniedMsg: 'Could not save the file.\n\nYou do not have permission to write there, or the file is read-only.',
+    saveLockedMsg: 'Could not save the file.\n\nIt may be open in another program.',
     pdfFontsErrorMsg: 'The PDF could not be created because the app could not prepare its fonts. Try again in a moment. If it keeps failing, restart Euro-Office Lite.',
     printError: 'Print failed', printErrorMsg: 'The document could not be printed. Please try again.',
     documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
@@ -1385,6 +1386,11 @@ function _eoIsFontCacheError(error) {
 
 // The backend starts its error with this when it may not write the file: a
 // read-only file or a folder the user cannot write to.
+function _eoIsSaveLockedError(error) {
+  var text = (error && error.message) || String(error);
+  return text.indexOf('save-locked') === 0;
+}
+
 function _eoIsSaveDeniedError(error) {
   var text = (error && error.message) || String(error);
   return text.indexOf('save-denied') === 0;
@@ -1394,6 +1400,7 @@ function _eoIsSaveDeniedError(error) {
 function _eoSaveErrorText(error) {
   if (_eoIsFontCacheError(error)) return _t('pdfFontsErrorMsg');
   if (_eoIsSaveDeniedError(error)) return _t('saveDeniedMsg');
+  if (_eoIsSaveLockedError(error)) return _t('saveLockedMsg');
   return _t('saveErrorMsg');
 }
 
