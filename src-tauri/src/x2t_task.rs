@@ -1944,6 +1944,26 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         }
     }
 
+    const WORD97_DOC: &[u8] = include_bytes!("../../tests/fixtures/word97.doc");
+    const ENCRYPTED_DOCX: &[u8] = include_bytes!("../../tests/fixtures/encrypted-test.docx");
+
+    #[test]
+    fn real_fixtures_start_with_the_cfb_signature() {
+        assert!(WORD97_DOC.starts_with(CFB_SIGNATURE));
+        assert!(ENCRYPTED_DOCX.starts_with(CFB_SIGNATURE));
+    }
+
+    #[test]
+    fn a_real_word_97_doc_is_accepted() {
+        assert!(matches("/d/a.doc", WORD97_DOC));
+    }
+
+    #[test]
+    fn a_real_encrypted_docx_is_accepted_as_docx_but_not_as_odt() {
+        assert!(matches("/d/a.docx", ENCRYPTED_DOCX));
+        assert!(!matches("/d/a.odt", ENCRYPTED_DOCX));
+    }
+
     #[test]
     fn detect_format_maps_pdf_to_the_x2t_export_id() {
         // 513 is the value both PDF paths branch on before calling the converter.
