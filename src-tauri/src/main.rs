@@ -132,7 +132,9 @@ fn apply_title_bar(app: &tauri::App, mode: TitleBar) {
 }
 
 // main is built hidden (see main) and the window state plugin has already
-// restored it when setup runs.
+// restored it when setup runs. On Linux the window is either built visible or
+// shown by apply_title_bar.
+#[cfg(not(target_os = "linux"))]
 fn show_main_window(app: &tauri::App) {
     let Some(window) = app.get_webview_window("main") else {
         log_startup("ERROR: show: no main window");
@@ -260,10 +262,17 @@ fn main() {
     // build it hidden and let setup apply the mode and show it.
     #[cfg(target_os = "linux")]
     let title_bar = wayland_title_bar(title_bar);
-    // Also hidden so the window state plugin restores size and position before
-    // the window is on screen; setup shows it.
+    // Hidden also lets the window state plugin restore size and position before
+    // the window is on screen; setup shows it. Linux keeps the default mode
+    // visible: tao's Wayland header sits in a GTK event box whose input window,
+    // mapped in the same pass as the header, goes over its buttons and they
+    // stop taking clicks.
+    #[cfg(target_os = "linux")]
+    let build_hidden = title_bar != TitleBar::Default;
+    #[cfg(not(target_os = "linux"))]
+    let build_hidden = true;
     for window in context.config_mut().app.windows.iter_mut() {
-        if window.label == "main" {
+        if window.label == "main" && build_hidden {
             window.visible = false;
         }
     }
@@ -690,13 +699,8 @@ fn main() {
             // First, so a hidden window is shown as early as the default one.
             #[cfg(target_os = "linux")]
             apply_title_bar(app, title_bar);
-            #[cfg(target_os = "linux")]
-            let shown_by_title_bar = title_bar != TitleBar::Default;
             #[cfg(not(target_os = "linux"))]
-            let shown_by_title_bar = false;
-            if !shown_by_title_bar {
-                show_main_window(app);
-            }
+            show_main_window(app);
 
             let resource_dir = app.path().resource_dir().unwrap_or_default();
             let binaries_dir = resource_dir.join("binaries");
