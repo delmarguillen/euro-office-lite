@@ -954,13 +954,7 @@ async function _eoSavePdf(ref, isSaveAs) {
     await invoke('save_pdf', { data: _eoPdfChanges(ref), path: path });
   } catch (e) {
     window._eoLog('[SAVE] pdf failed: ' + ((e && e.message) || e));
-    await window.__TAURI__.dialog.message(
-      _eoSaveErrorText(e),
-      { title: _t('saveError'), kind: 'error' }
-    );
-    if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
-      ref.ew.DesktopOfflineAppDocumentEndSave(1);
-    }
+    await _eoFailSave(ref, e, wasModified);
     return;
   }
   if (path) _eoShowSavedName(path);
@@ -1181,6 +1175,18 @@ function _eoEndSaveKeepingModified(ref, wasModified) {
     ref.ew.DesktopOfflineAppDocumentEndSave(1);
   }
   _eoRestoreModified(wasModified);
+}
+
+// Ends a save that failed. The modified mark goes back before the error
+// dialog, not after it: sdkjs reported the document as saved when the save
+// began, and the title must not lose its mark while the dialog is open.
+async function _eoFailSave(ref, err, wasModified) {
+  _eoRestoreModified(wasModified);
+  await window.__TAURI__.dialog.message(
+    _eoSaveErrorText(err),
+    { title: _t('saveError'), kind: 'error' }
+  );
+  _eoEndSaveKeepingModified(ref, wasModified);
 }
 
 function _forceReload() {
@@ -2539,13 +2545,7 @@ window.AscDesktopEditor = {
             }
           } catch(saveErr) {
             window._eoLog('[EO] SaveAs failed: ' + saveErr);
-            await window.__TAURI__.dialog.message(
-              _eoSaveErrorText(saveErr),
-              { title: _t('saveError'), kind: 'error' }
-            );
-            if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
-              ref.ew.DesktopOfflineAppDocumentEndSave(1);
-            }
+            await _eoFailSave(ref, saveErr, wasModified);
             return;
           }
         }
@@ -2564,13 +2564,7 @@ window.AscDesktopEditor = {
           // disk, and the editor's own "saved" indicator says nothing about it:
           // without this the document looks written and is not.
           window._eoLog('[EO] Save failed: ' + saveErr);
-          await window.__TAURI__.dialog.message(
-            _eoSaveErrorText(saveErr),
-            { title: _t('saveError'), kind: 'error' }
-          );
-          if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
-            ref.ew.DesktopOfflineAppDocumentEndSave(1);
-          }
+          await _eoFailSave(ref, saveErr, wasModified);
           return;
         }
       }
