@@ -762,17 +762,6 @@ pub fn recovery_load(
     })
 }
 
-// The path a Save As after a recovery starts from.
-#[tauri::command]
-pub fn get_save_suggestion(state: State<'_, AppState>) -> Option<String> {
-    state
-        .save_suggestion
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string())
-}
-
 // `id` absent means "all of them": the start screen offers a discard-all next
 // to the per-row discard. A folder held by a live instance is left alone.
 #[tauri::command]
