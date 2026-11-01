@@ -6,15 +6,9 @@
         if (!win || win._eoDiagnosticsInstalled) return;
         win._eoDiagnosticsInstalled = true;
 
+        // Capture phase: resource load failures inside the frame do not bubble.
         win.addEventListener('error', function(event) {
-          var error = event.error || {};
-          var source = window._eoSafeSource ?
-            window._eoSafeSource(event.filename || '') : (event.filename || '');
-          _log('[IFRAME-ERROR]', {
-            name: error.name,
-            message: event.message || error.message,
-            stack: error.stack
-          }, 'source=' + source + ':' + (event.lineno || 0) + ':' + (event.colno || 0));
+          _log('[IFRAME-ERROR]', window._eoDescribeErrorEvent(event));
         }, true);
 
         win.addEventListener('unhandledrejection', function(event) {
