@@ -55,6 +55,57 @@ fn unpack(package: &Path, dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, Strin
     Ok(parts)
 }
 
+const EMBEDDED_PACKAGES: [&str; 7] = [".xlsx", ".pptx", ".docx", ".xlsm", ".ods", ".odt", ".odp"];
+
+fn is_embedded_package(name: &str, bytes: &[u8]) -> bool {
+    EMBEDDED_PACKAGES.iter().any(|ext| name.ends_with(ext)) && bytes.starts_with(b"PK\x03\x04")
+}
+
+// The parts of one embedded package, keyed `<part>!/<inner path>`, or None
+// when unzip cannot read it.
+fn unpack_embedded(name: &str, bytes: &[u8], scratch: &Path) -> Option<BTreeMap<String, Vec<u8>>> {
+    std::fs::create_dir_all(scratch).ok()?;
+    let file = scratch.join("embedded.zip");
+    std::fs::write(&file, bytes).ok()?;
+    let inner = unpack(&file, &scratch.join("embedded"));
+    let _ = std::fs::remove_file(&file);
+    let inner = inner.ok()?;
+    Some(inner.into_iter().map(|(path, bytes)| (format!("{}!/{}", name, path), bytes)).collect())
+}
+
+// The parts of a package with each embedded package opened one level deep:
+// a zip is not byte-for-byte deterministic (dates, order, compression), so
+// its own hash can change while its content does not. A package inside the
+// embedded one stays binary, and so does one unzip cannot read.
+fn with_embedded(parts: &BTreeMap<String, Vec<u8>>, scratch: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut all = BTreeMap::new();
+    for (name, bytes) in parts {
+        let opened = if is_embedded_package(name, bytes) { unpack_embedded(name, bytes, scratch) } else { None };
+        match opened {
+            Some(inner) => all.extend(inner),
+            None => {
+                all.insert(name.clone(), bytes.clone());
+            }
+        }
+    }
+    all
+}
+
+// The `part:` rows of a package: the hash of the normalized XML, or of the
+// bytes of any other part.
+fn part_rows(parts: &BTreeMap<String, Vec<u8>>) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    for (name, bytes) in parts {
+        let hash = if is_xml(name) {
+            sha256::hex(normalize::normalize_part(name, &String::from_utf8_lossy(bytes)).as_bytes())
+        } else {
+            sha256::hex(bytes)
+        };
+        rows.push((format!("part:{}", name), hash));
+    }
+    rows
+}
+
 fn numbered(parts: &BTreeMap<String, Vec<u8>>, prefix: &str) -> Vec<(u32, String)> {
     parts
         .iter()
@@ -550,13 +601,9 @@ fn check_package(
 ) -> Result<(), String> {
     let doc = entry.doc.as_str();
     let parts = unpack(file, &scratch.join("out"))?;
-    for (name, bytes) in &parts {
-        let hash = if is_xml(name) {
-            sha256::hex(normalize::normalize_part(name, &String::from_utf8_lossy(bytes)).as_bytes())
-        } else {
-            sha256::hex(bytes)
-        };
-        report.push(doc, variant, step, &format!("part:{}", name), hash);
+    // The text and fonts checks below read the outer parts only.
+    for (check, hash) in part_rows(&with_embedded(&parts, &scratch.join("inner"))) {
+        report.push(doc, variant, step, &check, hash);
     }
     let text = package_text(ext, &parts);
     report.write_text(entry, variant, step, &text)?;
@@ -762,6 +809,94 @@ mod tests {
         parts.insert("xl/styles.xml".to_string(), b"<styleSheet><fonts><font><name val=\"Liberation Sans\"/></font><font><name val=\"Carlito\"/></font></fonts></styleSheet>".to_vec());
         parts.insert("xl/theme/theme1.xml".to_string(), b"<a:theme><a:latin typeface=\"Liberation Sans\"/><a:ea typeface=\"\"/></a:theme>".to_vec());
         assert_eq!(foreign_fonts(&parts), (Vec::new(), 0));
+    }
+
+    // A zip of these files made with the zip command, with every file dated
+    // `date` (touch -d) and stored with this compression level.
+    fn zip_bytes(dir: &Path, files: &[(&str, &[u8])], date: &str, level: &str) -> Vec<u8> {
+        let _ = std::fs::remove_dir_all(dir);
+        let content = dir.join("content");
+        for (name, bytes) in files {
+            let path = content.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            assert!(Command::new("touch").args(["-d", date]).arg(&path).status().unwrap().success());
+        }
+        let names: Vec<&str> = files.iter().map(|(name, _)| *name).collect();
+        let zip = dir.join("package.zip");
+        let status = Command::new("zip").current_dir(&content).args(["-q", "-X", level]).arg(&zip).args(&names).status().unwrap();
+        assert!(status.success());
+        let bytes = std::fs::read(&zip).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        bytes
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("corpus-embedded-{}-{}", name, std::process::id()))
+    }
+
+    const SHEET: &[u8] = b"<worksheet><sheetData/></worksheet>";
+
+    fn workbook(name: &str, date: &str, level: &str) -> Vec<u8> {
+        zip_bytes(&scratch(name), &[("xl/worksheets/sheet1.xml", SHEET), ("xl/workbook.xml", b"<workbook/>")], date, level)
+    }
+
+    fn row_names(rows: &[(String, String)]) -> Vec<&str> {
+        rows.iter().map(|(check, _)| check.as_str()).collect()
+    }
+
+    #[test]
+    fn an_embedded_workbook_gives_its_own_part_rows() {
+        let embedded = "word/embeddings/Microsoft_Excel_Worksheet.xlsx";
+        let mut parts = BTreeMap::new();
+        parts.insert("word/document.xml".to_string(), b"<w:document/>".to_vec());
+        parts.insert(embedded.to_string(), workbook("one", "2020-01-01 00:00", "-6"));
+        let all = with_embedded(&parts, &scratch("one-inner"));
+        let rows = part_rows(&all);
+        assert_eq!(
+            row_names(&rows),
+            vec![
+                "part:word/document.xml",
+                "part:word/embeddings/Microsoft_Excel_Worksheet.xlsx!/xl/workbook.xml",
+                "part:word/embeddings/Microsoft_Excel_Worksheet.xlsx!/xl/worksheets/sheet1.xml",
+            ]
+        );
+        assert_eq!(rows[2].1, sha256::hex(SHEET));
+        // The text still reads the outer parts only.
+        assert_eq!(package_text("docx", &parts), package_text("docx", &all));
+    }
+
+    #[test]
+    fn a_corrupt_embedded_package_stays_binary() {
+        let mut parts = BTreeMap::new();
+        let broken = b"PK\x03\x04 not a zip".to_vec();
+        parts.insert("ppt/embeddings/sheet.xlsx".to_string(), broken.clone());
+        parts.insert("ppt/embeddings/plain.xlsx".to_string(), b"not even PK".to_vec());
+        let all = with_embedded(&parts, &scratch("corrupt"));
+        assert_eq!(all, parts);
+        assert_eq!(part_rows(&all)[1], ("part:ppt/embeddings/sheet.xlsx".to_string(), sha256::hex(&broken)));
+    }
+
+    #[test]
+    fn a_package_inside_the_embedded_one_is_not_opened() {
+        let deepest = workbook("deepest", "2020-01-01 00:00", "-6");
+        let middle = zip_bytes(&scratch("middle"), &[("ppt/embeddings/inner.xlsx", &deepest)], "2020-01-01 00:00", "-6");
+        let mut parts = BTreeMap::new();
+        parts.insert("word/embeddings/deck.pptx".to_string(), middle);
+        let rows = part_rows(&with_embedded(&parts, &scratch("nested")));
+        assert_eq!(rows, vec![("part:word/embeddings/deck.pptx!/ppt/embeddings/inner.xlsx".to_string(), sha256::hex(&deepest))]);
+    }
+
+    #[test]
+    fn embedded_zips_with_the_same_content_give_the_same_rows() {
+        let old = workbook("old", "2020-01-01 00:00", "-0");
+        let new = workbook("new", "2024-06-30 12:34", "-9");
+        assert_ne!(old, new);
+        let rows = |bytes: Vec<u8>, name: &str| {
+            let parts = BTreeMap::from([("xl/embeddings/book.xlsx".to_string(), bytes)]);
+            part_rows(&with_embedded(&parts, &scratch(name)))
+        };
+        assert_eq!(rows(old, "old-inner"), rows(new, "new-inner"));
     }
 
     #[test]
