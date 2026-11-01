@@ -215,7 +215,14 @@ fn sort_content_types(xml: &str) -> String {
 
 // A package part with what changes on every save removed. Parts not listed
 // here are compared as they are.
+// The path inside the package that holds a part: `a.xlsx!/xl/styles.xml`
+// is `xl/styles.xml` of the embedded workbook.
+pub fn inner_path(part: &str) -> &str {
+    part.rsplit_once("!/").map_or(part, |(_, inner)| inner)
+}
+
 pub fn normalize_part(part: &str, xml: &str) -> String {
+    let part = inner_path(part);
     match part {
         "docProps/core.xml" => remove_elements(
             xml,
@@ -502,6 +509,18 @@ pub fn ooxml_font_names(xml: &str) -> FontNames {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_embedded_part_is_normalized_by_its_inner_path() {
+        let core = "<cp:coreProperties><dcterms:created>2024</dcterms:created><dc:title>T</dc:title></cp:coreProperties>";
+        let embedded = normalize_part("word/embeddings/book.xlsx!/docProps/core.xml", core);
+        assert_eq!(embedded, normalize_part("docProps/core.xml", core));
+        assert_ne!(embedded, core);
+        // A docx inside an xlsx follows the word/ rule; the prefix alone does not.
+        let paragraph = "<w:p w:rsidR=\"00A1\"/>";
+        assert_eq!(normalize_part("xl/embeddings/a.docx!/word/document.xml", paragraph), "<w:p/>");
+        assert_eq!(normalize_part("word/embeddings/a.xlsx!/xl/sharedStrings.xml", paragraph), paragraph);
+    }
 
     #[test]
     fn core_properties_lose_dates_and_counters_but_keep_the_user_metadata() {

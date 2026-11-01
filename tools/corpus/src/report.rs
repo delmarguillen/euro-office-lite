@@ -55,6 +55,57 @@ fn unpack(package: &Path, dir: &Path) -> Result<BTreeMap<String, Vec<u8>>, Strin
     Ok(parts)
 }
 
+const EMBEDDED_PACKAGES: [&str; 7] = [".xlsx", ".pptx", ".docx", ".xlsm", ".ods", ".odt", ".odp"];
+
+fn is_embedded_package(name: &str, bytes: &[u8]) -> bool {
+    EMBEDDED_PACKAGES.iter().any(|ext| name.ends_with(ext)) && bytes.starts_with(b"PK\x03\x04")
+}
+
+// The parts of one embedded package, keyed `<part>!/<inner path>`, or None
+// when unzip cannot read it.
+fn unpack_embedded(name: &str, bytes: &[u8], scratch: &Path) -> Option<BTreeMap<String, Vec<u8>>> {
+    std::fs::create_dir_all(scratch).ok()?;
+    let file = scratch.join("embedded.zip");
+    std::fs::write(&file, bytes).ok()?;
+    let inner = unpack(&file, &scratch.join("embedded"));
+    let _ = std::fs::remove_file(&file);
+    let inner = inner.ok()?;
+    Some(inner.into_iter().map(|(path, bytes)| (format!("{}!/{}", name, path), bytes)).collect())
+}
+
+// The parts of a package with each embedded package opened one level deep:
+// a zip is not byte-for-byte deterministic (dates, order, compression), so
+// its own hash can change while its content does not. A package inside the
+// embedded one stays binary, and so does one unzip cannot read.
+fn with_embedded(parts: &BTreeMap<String, Vec<u8>>, scratch: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut all = BTreeMap::new();
+    for (name, bytes) in parts {
+        let opened = if is_embedded_package(name, bytes) { unpack_embedded(name, bytes, scratch) } else { None };
+        match opened {
+            Some(inner) => all.extend(inner),
+            None => {
+                all.insert(name.clone(), bytes.clone());
+            }
+        }
+    }
+    all
+}
+
+// The `part:` rows of a package: the hash of the normalized XML, or of the
+// bytes of any other part.
+fn part_rows(parts: &BTreeMap<String, Vec<u8>>) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    for (name, bytes) in parts {
+        let hash = if is_xml(name) {
+            sha256::hex(normalize::normalize_part(name, &String::from_utf8_lossy(bytes)).as_bytes())
+        } else {
+            sha256::hex(bytes)
+        };
+        rows.push((format!("part:{}", name), hash));
+    }
+    rows
+}
+
 fn numbered(parts: &BTreeMap<String, Vec<u8>>, prefix: &str) -> Vec<(u32, String)> {
     parts
         .iter()
@@ -86,12 +137,23 @@ fn is_xml(name: &str) -> bool {
     name.ends_with(".xml") || name.ends_with(".rels")
 }
 
+// A theme part (`xl/theme/theme1.xml`, `ppt/theme/theme2.xml`): its fonts are
+// defaults the styles and the text may not use.
+fn is_theme(name: &str) -> bool {
+    let Some((dir, file)) = name.rsplit_once('/') else {
+        return false;
+    };
+    (dir == "theme" || dir.ends_with("/theme")) && file.ends_with(".xml")
+}
+
 // The fonts an OOXML package names that the comparable documents may not,
-// and how many theme script entries the check skipped.
+// and how many script entries the check skipped. Theme parts are left out:
+// x2t's default theme names Calibri and Cambria in every xlsx and pptx, and
+// the theme keeps its own part: row.
 pub fn foreign_fonts(parts: &BTreeMap<String, Vec<u8>>) -> (Vec<String>, usize) {
     let mut names = Vec::new();
     let mut scripts_ignored = 0;
-    for (_, bytes) in parts.iter().filter(|(name, _)| is_xml(name)) {
+    for (_, bytes) in parts.iter().filter(|(name, _)| is_xml(name) && !is_theme(name)) {
         let found = normalize::ooxml_font_names(&String::from_utf8_lossy(bytes));
         scripts_ignored += found.scripts_ignored;
         names.extend(found.names.into_iter().filter(|name| !allfonts::CHECKED_FAMILIES.contains(&name.as_str())));
@@ -550,13 +612,9 @@ fn check_package(
 ) -> Result<(), String> {
     let doc = entry.doc.as_str();
     let parts = unpack(file, &scratch.join("out"))?;
-    for (name, bytes) in &parts {
-        let hash = if is_xml(name) {
-            sha256::hex(normalize::normalize_part(name, &String::from_utf8_lossy(bytes)).as_bytes())
-        } else {
-            sha256::hex(bytes)
-        };
-        report.push(doc, variant, step, &format!("part:{}", name), hash);
+    // The text and fonts checks below read the outer parts only.
+    for (check, hash) in part_rows(&with_embedded(&parts, &scratch.join("inner"))) {
+        report.push(doc, variant, step, &check, hash);
     }
     let text = package_text(ext, &parts);
     report.write_text(entry, variant, step, &text)?;
@@ -745,15 +803,33 @@ mod tests {
     fn an_xlsx_naming_other_fonts_leaves_the_comparison() {
         let mut parts = BTreeMap::new();
         parts.insert("xl/styles.xml".to_string(), b"<styleSheet><fonts><font><name val=\"Liberation Sans\"/></font><font><name val=\"Calibri\"/></font></fonts></styleSheet>".to_vec());
-        parts.insert("xl/theme/theme1.xml".to_string(), b"<a:theme><a:latin typeface=\"Arial\"/><a:font script=\"Jpan\" typeface=\"MS Gothic\"/></a:theme>".to_vec());
+        parts.insert("xl/theme/theme1.xml".to_string(), b"<a:theme><a:latin typeface=\"Arial\"/></a:theme>".to_vec());
+        parts.insert("xl/drawings/drawing1.xml".to_string(), b"<xdr:wsDr><a:latin typeface=\"Arial\"/><a:font script=\"Jpan\" typeface=\"MS Gothic\"/></xdr:wsDr>".to_vec());
         parts.insert("xl/media/image1.png".to_string(), b"typeface=\"Nope\"".to_vec());
         let (foreign, scripts_ignored) = foreign_fonts(&parts);
         assert_eq!(foreign, vec!["Arial", "Calibri"]);
         assert_eq!(scripts_ignored, 1);
+        parts.remove("xl/drawings/drawing1.xml");
+        assert_eq!(foreign_fonts(&parts), (vec!["Calibri".to_string()], 0));
         assert_eq!(class_value(&entry("comparable"), &foreign, false), "auto-system-fonts");
         assert_eq!(class_value(&entry("comparable"), &[], false), "comparable");
         assert_eq!(class_value(&entry("comparable"), &[], true), "spoofed");
         assert_eq!(class_value(&entry("system-fonts"), &foreign, true), "system-fonts");
+    }
+
+    #[test]
+    fn an_xlsx_with_only_the_default_theme_stays_comparable() {
+        let theme = b"<a:theme><a:majorFont><a:latin typeface=\"Cambria\"/><a:font script=\"Jpan\" typeface=\"MS Gothic\"/></a:majorFont><a:minorFont><a:latin typeface=\"Calibri\"/></a:minorFont></a:theme>";
+        let mut parts = BTreeMap::new();
+        parts.insert("xl/styles.xml".to_string(), b"<styleSheet><fonts><font><name val=\"Liberation Sans\"/></font><font><name val=\"Carlito\"/></font></fonts></styleSheet>".to_vec());
+        parts.insert("xl/theme/theme1.xml".to_string(), theme.to_vec());
+        parts.insert("ppt/theme/theme2.xml".to_string(), theme.to_vec());
+        parts.insert("theme/theme/theme1.xml".to_string(), theme.to_vec());
+        let (foreign, scripts_ignored) = foreign_fonts(&parts);
+        assert_eq!((foreign.as_slice(), scripts_ignored), (&[][..], 0));
+        assert_eq!(class_value(&entry("comparable"), &foreign, false), "comparable");
+        // The theme keeps its own row.
+        assert!(part_rows(&parts).iter().any(|(check, _)| check == "part:xl/theme/theme1.xml"));
     }
 
     #[test]
@@ -762,6 +838,103 @@ mod tests {
         parts.insert("xl/styles.xml".to_string(), b"<styleSheet><fonts><font><name val=\"Liberation Sans\"/></font><font><name val=\"Carlito\"/></font></fonts></styleSheet>".to_vec());
         parts.insert("xl/theme/theme1.xml".to_string(), b"<a:theme><a:latin typeface=\"Liberation Sans\"/><a:ea typeface=\"\"/></a:theme>".to_vec());
         assert_eq!(foreign_fonts(&parts), (Vec::new(), 0));
+    }
+
+    // These helpers and the tests that build zips use zip and GNU touch -d
+    // (BSD touch on macOS rejects that date), and the report runs on Linux.
+    // A zip of these files made with the zip command, with every file dated
+    // `date` (touch -d) and stored with this compression level.
+    #[cfg(target_os = "linux")]
+    fn zip_bytes(dir: &Path, files: &[(&str, &[u8])], date: &str, level: &str) -> Vec<u8> {
+        let _ = std::fs::remove_dir_all(dir);
+        let content = dir.join("content");
+        for (name, bytes) in files {
+            let path = content.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            assert!(Command::new("touch").args(["-d", date]).arg(&path).status().unwrap().success());
+        }
+        let names: Vec<&str> = files.iter().map(|(name, _)| *name).collect();
+        let zip = dir.join("package.zip");
+        let status = Command::new("zip").current_dir(&content).args(["-q", "-X", level]).arg(&zip).args(&names).status().unwrap();
+        assert!(status.success());
+        let bytes = std::fs::read(&zip).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        bytes
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("corpus-embedded-{}-{}", name, std::process::id()))
+    }
+
+    #[cfg(target_os = "linux")]
+    const SHEET: &[u8] = b"<worksheet><sheetData/></worksheet>";
+
+    #[cfg(target_os = "linux")]
+    fn workbook(name: &str, date: &str, level: &str) -> Vec<u8> {
+        zip_bytes(&scratch(name), &[("xl/worksheets/sheet1.xml", SHEET), ("xl/workbook.xml", b"<workbook/>")], date, level)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn row_names(rows: &[(String, String)]) -> Vec<&str> {
+        rows.iter().map(|(check, _)| check.as_str()).collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_embedded_workbook_gives_its_own_part_rows() {
+        let embedded = "word/embeddings/Microsoft_Excel_Worksheet.xlsx";
+        let mut parts = BTreeMap::new();
+        parts.insert("word/document.xml".to_string(), b"<w:document/>".to_vec());
+        parts.insert(embedded.to_string(), workbook("one", "2020-01-01 00:00", "-6"));
+        let all = with_embedded(&parts, &scratch("one-inner"));
+        let rows = part_rows(&all);
+        assert_eq!(
+            row_names(&rows),
+            vec![
+                "part:word/document.xml",
+                "part:word/embeddings/Microsoft_Excel_Worksheet.xlsx!/xl/workbook.xml",
+                "part:word/embeddings/Microsoft_Excel_Worksheet.xlsx!/xl/worksheets/sheet1.xml",
+            ]
+        );
+        assert_eq!(rows[2].1, sha256::hex(SHEET));
+        // The text still reads the outer parts only.
+        assert_eq!(package_text("docx", &parts), package_text("docx", &all));
+    }
+
+    #[test]
+    fn a_corrupt_embedded_package_stays_binary() {
+        let mut parts = BTreeMap::new();
+        let broken = b"PK\x03\x04 not a zip".to_vec();
+        parts.insert("ppt/embeddings/sheet.xlsx".to_string(), broken.clone());
+        parts.insert("ppt/embeddings/plain.xlsx".to_string(), b"not even PK".to_vec());
+        let all = with_embedded(&parts, &scratch("corrupt"));
+        assert_eq!(all, parts);
+        assert_eq!(part_rows(&all)[1], ("part:ppt/embeddings/sheet.xlsx".to_string(), sha256::hex(&broken)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_package_inside_the_embedded_one_is_not_opened() {
+        let deepest = workbook("deepest", "2020-01-01 00:00", "-6");
+        let middle = zip_bytes(&scratch("middle"), &[("ppt/embeddings/inner.xlsx", &deepest)], "2020-01-01 00:00", "-6");
+        let mut parts = BTreeMap::new();
+        parts.insert("word/embeddings/deck.pptx".to_string(), middle);
+        let rows = part_rows(&with_embedded(&parts, &scratch("nested")));
+        assert_eq!(rows, vec![("part:word/embeddings/deck.pptx!/ppt/embeddings/inner.xlsx".to_string(), sha256::hex(&deepest))]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn embedded_zips_with_the_same_content_give_the_same_rows() {
+        let old = workbook("old", "2020-01-01 00:00", "-0");
+        let new = workbook("new", "2024-06-30 12:34", "-9");
+        assert_ne!(old, new);
+        let rows = |bytes: Vec<u8>, name: &str| {
+            let parts = BTreeMap::from([("xl/embeddings/book.xlsx".to_string(), bytes)]);
+            part_rows(&with_embedded(&parts, &scratch(name)))
+        };
+        assert_eq!(rows(old, "old-inner"), rows(new, "new-inner"));
     }
 
     #[test]
