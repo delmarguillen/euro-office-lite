@@ -1015,6 +1015,63 @@ fn symlink_scan_roots() -> Vec<std::path::PathBuf> {
     Vec::new()
 }
 
+// The folders x2t's own scan reads on Windows (CApplicationFonts::
+// GetSetupFontFiles in ONLYOFFICE core): C:\Windows\Fonts, and for the current
+// user AppData\Local\Microsoft\Windows\Fonts and its FontCache\4\CloudFonts.
+// The HKLM font entries it also reads point into the Fonts folder or are full
+// paths. x2t spells the folders out from C:\Windows and C:\Users\<name>; the
+// fingerprint takes them from %WINDIR% and %LOCALAPPDATA%.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn windows_font_dirs(
+    windir: Option<&std::path::Path>,
+    local_app_data: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(windir) = windir {
+        dirs.push(windir.join("Fonts"));
+    }
+    if let Some(local) = local_app_data {
+        dirs.push(local.join("Microsoft").join("Windows").join("Fonts"));
+        dirs.push(local.join("Microsoft").join("FontCache").join("4").join("CloudFonts"));
+    }
+    dirs
+}
+
+// The folders x2t's own scan reads on macOS: /Library/Fonts and
+// /System/Library/Fonts, plus every font CoreText lists, which takes in the
+// user's ~/Library/Fonts.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn macos_font_dirs(home: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![
+        std::path::PathBuf::from("/System/Library/Fonts"),
+        std::path::PathBuf::from("/Library/Fonts"),
+    ];
+    if let Some(home) = home {
+        dirs.push(home.join("Library").join("Fonts"));
+    }
+    dirs
+}
+
+// A folder that does not exist yet stays in the list: the fingerprint writes
+// it as missing, so creating it changes the marker.
+#[cfg(windows)]
+fn platform_font_dirs() -> Vec<std::path::PathBuf> {
+    let windir = std::env::var_os("WINDIR").map(std::path::PathBuf::from);
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    windows_font_dirs(windir.as_deref(), local_app_data.as_deref())
+}
+
+#[cfg(target_os = "macos")]
+fn platform_font_dirs() -> Vec<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    macos_font_dirs(home.as_deref())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn platform_font_dirs() -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
 // x2t writes the font paths exactly as it receives them into AllFonts.js and
 // font_selection.bin, and the PDF export reads them back from there, so the
 // scan never gets the \\?\ form of the bundled fonts folder.
@@ -1045,6 +1102,7 @@ pub fn font_scan_dirs(binaries_dir: &std::path::Path) -> Vec<std::path::PathBuf>
     let roots = symlink_scan_roots();
     dirs.extend(symlink_font_target_dirs(&roots));
     dirs.extend(roots);
+    dirs.extend(platform_font_dirs());
     dirs.sort();
     dirs.dedup();
     dirs
