@@ -1,10 +1,10 @@
 # Euro-Office Lite
 
-Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~89 MB (Windows), ~113-120 MB (macOS), ~121 MB (Linux x64 .deb), ~129 MB (Linux arm64 .deb), ~82 MB (Flatpak). No cloud, no telemetry.
+Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~86 MB (Windows), ~119-125 MB (macOS), ~133 MB (Linux x64 .deb), ~130 MB (Linux arm64 .deb), ~89 MB (Flatpak). No cloud, no telemetry.
 
-Supports Word, Excel, and PowerPoint documents with native file operations and direct printing. Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
+Supports Word, Excel and PowerPoint documents, OpenDocument files, RTF, CSV and plain text, with native file operations and printing. Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
 
-> **Alpha**: This project is in early development. Core features work (create, open, edit, save), but expect rough edges. Printing works on Windows; PDF export works on all platforms.
+> **Alpha**: This project is in early development. Core features work (create, open, edit, save, PDF export), but expect rough edges. Printing sends the document to a printer on Windows and opens it in the system PDF viewer on macOS and Linux.
 
 <p align="center">
   <img src="assets/demo.gif" alt="Euro-Office Lite demo" width="800">
@@ -17,7 +17,7 @@ Supports Word, Excel, and PowerPoint documents with native file operations and d
 Euro-Office Lite is alpha. A few things you will run into early:
 
 - **Only English and Spanish are checked out of the box** (#6). Dictionaries for both ship with the app (every regional Spanish variant is checked). Text in other languages is left unchecked, not marked as wrong, and you can add any other language yourself: see [Adding more spellcheck languages](#adding-more-spellcheck-languages).
-- **Plain text (.txt) and .csv files cannot be opened yet.** They need an encoding and delimiter dialog the app does not have; DOCX, XLSX, PPTX, ODT, ODS, ODP and RTF all work.
+- **The Windows installers are not signed yet.** Windows may show a SmartScreen warning the first time you run the installer; choose "More info" and then "Run anyway".
 
 ## Requirements
 
@@ -52,16 +52,16 @@ Output goes to `src-tauri/target/release/bundle/nsis/`.
 ## Architecture
 
 ```
-User <-> Tauri WebView2 <-> sdkjs/web-apps (editor UI)
+User <-> Tauri webview <-> sdkjs/web-apps (editor UI)
                         <-> bridge.js (desktop bridge shim)
                         <-> Rust backend <-> x2t (format conversion)
-                                         <-> tauri-plugin-printer-v2 (native printing)
+                                         <-> tauri-plugin-printer-v2 (Windows printing)
 ```
 
 - **sdkjs / web-apps**: Editor frontend (submodules, do not modify)
 - **bridge.js**: Implements the `AscDesktopEditor` API that sdkjs expects from a desktop host
 - **x2t**: Converts between DOCX/XLSX/PPTX and Editor.bin (sdkjs internal format)
-- **Printing**: Generates PDF via x2t + DoctRenderer. On Windows, sends to printer via bundled SumatraPDF. On Linux, opens PDF with the system viewer via xdg-open
+- **Printing**: Generates PDF via x2t + DoctRenderer. On Windows, sends to printer via bundled SumatraPDF. On macOS and Linux, opens the PDF in the system viewer
 
 ## CI/CD
 
@@ -132,7 +132,7 @@ Each window of the app writes its own log, `js-debug-<number>-<number>.log`. The
 
 ## Credits and attribution
 
-Euro-Office Lite is a lightweight desktop shell around the document editors of the [Euro-Office](https://github.com/Euro-Office) project, an independent community fork of the editors originally developed by ONLYOFFICE (Ascensio System SIA). The editing engine ([sdkjs](https://github.com/Euro-Office/sdkjs)) and UI ([web-apps](https://github.com/Euro-Office/web-apps)) are included as unmodified submodules under AGPL-3.0. The x2t document converter binaries are currently taken unmodified from [ONLYOFFICE Desktop Editors](https://github.com/ONLYOFFICE/DesktopEditors) releases; their corresponding source is available at [ONLYOFFICE/core](https://github.com/ONLYOFFICE/core) under the matching version tags (AGPL-3.0). On Windows, the converter also ships with the Microsoft Visual C++ runtime files it needs (msvcp140.dll, vcruntime140.dll and vcruntime140_1.dll), redistributed under the Microsoft Visual Studio license terms. All credit for the editing engine belongs to their respective developers.
+Euro-Office Lite is a lightweight desktop shell around the document editors of the [Euro-Office](https://github.com/Euro-Office) project, an independent community fork of the editors originally developed by ONLYOFFICE (Ascensio System SIA). The editing engine ([sdkjs](https://github.com/Euro-Office/sdkjs)) and UI ([web-apps](https://github.com/Euro-Office/web-apps)) are included as submodules under AGPL-3.0, with a few small patches applied at build time (see `patches/`). The x2t document converter binaries are currently taken unmodified from [ONLYOFFICE Desktop Editors](https://github.com/ONLYOFFICE/DesktopEditors) releases, and the scripts x2t uses for PDF export are built from [ONLYOFFICE/sdkjs](https://github.com/ONLYOFFICE/sdkjs) at the tag that matches the converter; their corresponding source is available at [ONLYOFFICE/core](https://github.com/ONLYOFFICE/core) and ONLYOFFICE/sdkjs under the matching version tags (AGPL-3.0). On Windows, the converter also ships with the Microsoft Visual C++ runtime files it needs (msvcp140.dll, vcruntime140.dll and vcruntime140_1.dll), redistributed under the Microsoft Visual Studio license terms. All credit for the editing engine belongs to their respective developers.
 
 What this project adds on top: the Tauri v2 native shell and desktop bridge, macOS support with signed and notarized builds, packaging for Windows (NSIS), Linux (.deb and Flatpak with a self-hosted repo), fully offline operation with no cloud, no accounts and no telemetry, and native file operations, printing and PDF export.
 
