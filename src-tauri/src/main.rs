@@ -131,6 +131,18 @@ fn apply_title_bar(app: &tauri::App, mode: TitleBar) {
     ));
 }
 
+// main is built hidden (see main) and the window state plugin has already
+// restored it when setup runs.
+fn show_main_window(app: &tauri::App) {
+    let Some(window) = app.get_webview_window("main") else {
+        log_startup("ERROR: show: no main window");
+        return;
+    };
+    if let Err(e) = window.show() {
+        log_startup(&format!("ERROR: show main window: {e}"));
+    }
+}
+
 // The first of the places a bundled resource can live that holds it.
 fn read_resource(app: &tauri::AppHandle, relative: &std::path::Path) -> Option<Vec<u8>> {
     let resource_dir = app.path().resource_dir().unwrap_or_default();
@@ -248,12 +260,11 @@ fn main() {
     // build it hidden and let setup apply the mode and show it.
     #[cfg(target_os = "linux")]
     let title_bar = wayland_title_bar(title_bar);
-    #[cfg(target_os = "linux")]
-    if title_bar != TitleBar::Default {
-        for window in context.config_mut().app.windows.iter_mut() {
-            if window.label == "main" {
-                window.visible = false;
-            }
+    // Also hidden so the window state plugin restores size and position before
+    // the window is on screen; setup shows it.
+    for window in context.config_mut().app.windows.iter_mut() {
+        if window.label == "main" {
+            window.visible = false;
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -679,6 +690,13 @@ fn main() {
             // First, so a hidden window is shown as early as the default one.
             #[cfg(target_os = "linux")]
             apply_title_bar(app, title_bar);
+            #[cfg(target_os = "linux")]
+            let shown_by_title_bar = title_bar != TitleBar::Default;
+            #[cfg(not(target_os = "linux"))]
+            let shown_by_title_bar = false;
+            if !shown_by_title_bar {
+                show_main_window(app);
+            }
 
             let resource_dir = app.path().resource_dir().unwrap_or_default();
             let binaries_dir = resource_dir.join("binaries");
