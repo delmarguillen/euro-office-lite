@@ -273,16 +273,15 @@ pub fn is_bundled_font(requested: &str, bundled_fonts: &Path) -> bool {
     file.starts_with(&folder) && file.is_file()
 }
 
-// While the cache is being built there is no new list, and the one on disk
-// belongs to the cache being replaced: only the bundled fonts, which the
-// fallback list names, are served.
+// Unless the cache is ready, the list on disk is old or incomplete and the
+// JS gets the bundled list instead: only the bundled fonts are served.
 pub fn may_serve_font(
     all_fonts_js: &Path,
     requested: &str,
-    fonts_pending: bool,
+    bundled_only: bool,
     bundled_fonts: &Path,
 ) -> bool {
-    if fonts_pending {
+    if bundled_only {
         return is_bundled_font(requested, bundled_fonts);
     }
     is_generated_font(all_fonts_js, requested)
@@ -708,6 +707,23 @@ mod tests {
 
         assert!(!may_serve_font(&dirs.all_fonts, &other, true, &dirs.bundled));
         assert!(may_serve_font(&dirs.all_fonts, &other, false, &dirs.bundled));
+    }
+
+    // After a failed build the old AllFonts.js is still on disk; the caller
+    // passes bundled_only = true, so its fonts are refused.
+    #[test]
+    fn when_the_cache_failed_the_old_list_is_not_used() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("failed-old-list", &[]);
+        let other = dirs.base.join("other").join("Other.ttf");
+        write_all_fonts(&dirs.all_fonts, &[&other]);
+        forget_font_list();
+        let bundled_only = !crate::fonts_state::uses_generated_list(crate::fonts_state::FontsStatus::Failed);
+        let bundled = text(&dirs.bundled.join("Bundled.ttf"));
+
+        assert!(bundled_only);
+        assert!(!may_serve_font(&dirs.all_fonts, &text(&other), bundled_only, &dirs.bundled));
+        assert!(may_serve_font(&dirs.all_fonts, &bundled, bundled_only, &dirs.bundled));
     }
 
     #[test]

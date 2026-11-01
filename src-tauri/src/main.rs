@@ -654,9 +654,9 @@ fn main() {
                 };
                 let state = ctx.app_handle().state::<AppState>();
                 let all_fonts = temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
-                let fonts_pending = state.fonts.status() == fonts_state::FontsStatus::Pending;
+                let bundled_only = !fonts_state::uses_generated_list(state.fonts.status());
                 let bundled_fonts = bundled_fonts_dir(ctx.app_handle());
-                if !protocol_limits::may_serve_font(&all_fonts, abs_path, fonts_pending, &bundled_fonts) {
+                if !protocol_limits::may_serve_font(&all_fonts, abs_path, bundled_only, &bundled_fonts) {
                     return tauri::http::Response::builder()
                         .status(403)
                         .header(allow_origin.0, allow_origin.1)
