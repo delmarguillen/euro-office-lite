@@ -355,8 +355,8 @@ mod tests {
     }
 
     // The files land but the run still fails (here the new marker cannot be
-    // written), next to the marker of an earlier run: the files look complete,
-    // the outcome says they are not.
+    // written): the marker of the earlier run went before the files did, so
+    // the cache does not pass for ready either.
     #[test]
     fn no_pdf_when_the_build_fails_next_to_an_old_marker() {
         let (base, root) = root_without_cache();
@@ -374,7 +374,7 @@ mod tests {
             WAIT,
         );
 
-        assert!(crate::temp_layout::fonts_ready(&root), "the files look complete");
+        assert!(!crate::temp_layout::fonts_ready(&root), "the old marker is gone");
         let error = list.expect_err("a failed build is not a usable cache");
         assert!(error.starts_with(FONT_CACHE_ERROR), "{}", error);
         assert!(error.contains("Failed"), "{}", error);

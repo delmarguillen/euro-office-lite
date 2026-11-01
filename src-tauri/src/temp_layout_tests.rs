@@ -1362,3 +1362,28 @@ fn the_old_cache_stays_while_another_instance_is_alive() {
     let _ = std::fs::remove_dir_all(&temp);
     let _ = std::fs::remove_dir_all(&fonts);
 }
+
+// A file that cannot replace its counterpart stops the install midway: the
+// old marker must already be gone, so no instance reads the mixed cache.
+#[test]
+fn an_install_failing_midway_leaves_no_marker() {
+    let root = root_with_marker(b"0.17.41-alpha");
+    let blocker = fontdata_dir(&root).join("blocker");
+    std::fs::create_dir_all(blocker.join("inside")).unwrap();
+
+    let outcome = ensure_font_cache(
+        &root,
+        "1-1",
+        |dir: &Path| {
+            write_fonts(dir, b"new");
+            std::fs::write(dir.join("blocker"), b"file over a folder").unwrap();
+            true
+        },
+        WAIT,
+        POLL,
+    );
+
+    assert_eq!(outcome, FontCache::Failed);
+    assert!(!root.join(FONTS_MARKER).exists());
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -418,6 +418,13 @@ fn install_font_cache(staging: &Path, fontdata: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+fn remove_marker(root: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(root.join(FONTS_MARKER)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum FontCache {
     Ready,
@@ -472,7 +479,11 @@ pub fn ensure_font_cache(
     let staging = root.join(format!("{}{}", FONTS_STAGING_PREFIX, instance_id));
     let generated = std::fs::create_dir_all(&staging).is_ok() && generate(&staging);
     let marker = expected_marker();
+    // The marker goes before the files do: an instance whose fingerprint
+    // matches it reads the cache without the lock, and a rename failing
+    // midway must not leave a mixed cache marked valid.
     let installed = generated
+        && remove_marker(root).is_ok()
         && install_font_cache(&staging, &fontdata_dir(root)).is_ok()
         && write_replacing(&root.join(FONTS_MARKER), marker.as_bytes(), instance_id).is_ok();
     let _ = std::fs::remove_dir_all(&staging);
