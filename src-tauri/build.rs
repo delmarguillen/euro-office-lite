@@ -40,6 +40,7 @@ const APP_COMMANDS: &[&str] = &[
     "recovery_load",
     "recovery_discard",
     "list_user_dictionaries",
+    "import_dictionary",
 ];
 
 fn main() {
