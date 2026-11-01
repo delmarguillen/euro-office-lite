@@ -273,16 +273,17 @@ pub fn is_bundled_font(requested: &str, bundled_fonts: &Path) -> bool {
     file.starts_with(&folder) && file.is_file()
 }
 
-// While the cache is being built there is no new list: the bundled fonts,
-// which the fallback list names, are served too.
+// While the cache is being built there is no new list, and the one on disk
+// belongs to the cache being replaced: only the bundled fonts, which the
+// fallback list names, are served.
 pub fn may_serve_font(
     all_fonts_js: &Path,
     requested: &str,
     fonts_pending: bool,
     bundled_fonts: &Path,
 ) -> bool {
-    if fonts_pending && is_bundled_font(requested, bundled_fonts) {
-        return true;
+    if fonts_pending {
+        return is_bundled_font(requested, bundled_fonts);
     }
     is_generated_font(all_fonts_js, requested)
 }
@@ -692,6 +693,21 @@ mod tests {
         assert!(!may_serve_font(&dirs.all_fonts, &other, true, &dirs.bundled));
         assert!(!may_serve_font(&dirs.all_fonts, &escaping, true, &dirs.bundled));
         assert!(!may_serve_font(&dirs.all_fonts, &missing, true, &dirs.bundled));
+    }
+
+    // The old AllFonts.js still on disk lists a font that exists outside the
+    // bundled folder: refused while pending, served once ready.
+    #[test]
+    fn while_fonts_are_pending_the_old_list_is_not_used() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("pending-old-list", &[]);
+        let other = dirs.base.join("other").join("Other.ttf");
+        write_all_fonts(&dirs.all_fonts, &[&other]);
+        forget_font_list();
+        let other = text(&other);
+
+        assert!(!may_serve_font(&dirs.all_fonts, &other, true, &dirs.bundled));
+        assert!(may_serve_font(&dirs.all_fonts, &other, false, &dirs.bundled));
     }
 
     #[test]
