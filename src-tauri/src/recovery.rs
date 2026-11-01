@@ -19,7 +19,6 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 
 use crate::file_ops::{log_event, AppState};
