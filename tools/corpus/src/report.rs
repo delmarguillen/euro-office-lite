@@ -840,8 +840,11 @@ mod tests {
         assert_eq!(foreign_fonts(&parts), (Vec::new(), 0));
     }
 
+    // These helpers and the tests that build zips need the zip and touch
+    // commands, which Windows runners lack; the report itself runs on Linux.
     // A zip of these files made with the zip command, with every file dated
     // `date` (touch -d) and stored with this compression level.
+    #[cfg(unix)]
     fn zip_bytes(dir: &Path, files: &[(&str, &[u8])], date: &str, level: &str) -> Vec<u8> {
         let _ = std::fs::remove_dir_all(dir);
         let content = dir.join("content");
@@ -864,16 +867,20 @@ mod tests {
         std::env::temp_dir().join(format!("corpus-embedded-{}-{}", name, std::process::id()))
     }
 
+    #[cfg(unix)]
     const SHEET: &[u8] = b"<worksheet><sheetData/></worksheet>";
 
+    #[cfg(unix)]
     fn workbook(name: &str, date: &str, level: &str) -> Vec<u8> {
         zip_bytes(&scratch(name), &[("xl/worksheets/sheet1.xml", SHEET), ("xl/workbook.xml", b"<workbook/>")], date, level)
     }
 
+    #[cfg(unix)]
     fn row_names(rows: &[(String, String)]) -> Vec<&str> {
         rows.iter().map(|(check, _)| check.as_str()).collect()
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_embedded_workbook_gives_its_own_part_rows() {
         let embedded = "word/embeddings/Microsoft_Excel_Worksheet.xlsx";
@@ -906,6 +913,7 @@ mod tests {
         assert_eq!(part_rows(&all)[1], ("part:ppt/embeddings/sheet.xlsx".to_string(), sha256::hex(&broken)));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_package_inside_the_embedded_one_is_not_opened() {
         let deepest = workbook("deepest", "2020-01-01 00:00", "-6");
@@ -916,6 +924,7 @@ mod tests {
         assert_eq!(rows, vec![("part:word/embeddings/deck.pptx!/ppt/embeddings/inner.xlsx".to_string(), sha256::hex(&deepest))]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn embedded_zips_with_the_same_content_give_the_same_rows() {
         let old = workbook("old", "2020-01-01 00:00", "-0");
