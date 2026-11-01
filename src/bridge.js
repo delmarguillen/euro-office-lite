@@ -3203,7 +3203,7 @@ function _eoTakePendingOpenFile() {
   invoke('take_pending_open_file').then(function(file) {
     if (file) return _eoOpenGranted(file);
   }).catch(function(e) {
-    window._eoLog('[EO] open-file: pending path unavailable: ' + (e.message || e));
+    window._eoLog('[EO] open-file: pending file unavailable: ' + (e.message || e));
   });
 }
 if (document.readyState === 'loading') {
