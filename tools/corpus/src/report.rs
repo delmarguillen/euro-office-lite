@@ -137,12 +137,23 @@ fn is_xml(name: &str) -> bool {
     name.ends_with(".xml") || name.ends_with(".rels")
 }
 
+// A theme part (`xl/theme/theme1.xml`, `ppt/theme/theme2.xml`): its fonts are
+// defaults the styles and the text may not use.
+fn is_theme(name: &str) -> bool {
+    let Some((dir, file)) = name.rsplit_once('/') else {
+        return false;
+    };
+    (dir == "theme" || dir.ends_with("/theme")) && file.ends_with(".xml")
+}
+
 // The fonts an OOXML package names that the comparable documents may not,
-// and how many theme script entries the check skipped.
+// and how many script entries the check skipped. Theme parts are left out:
+// x2t's default theme names Calibri and Cambria in every xlsx and pptx, and
+// the theme keeps its own part: row.
 pub fn foreign_fonts(parts: &BTreeMap<String, Vec<u8>>) -> (Vec<String>, usize) {
     let mut names = Vec::new();
     let mut scripts_ignored = 0;
-    for (_, bytes) in parts.iter().filter(|(name, _)| is_xml(name)) {
+    for (_, bytes) in parts.iter().filter(|(name, _)| is_xml(name) && !is_theme(name)) {
         let found = normalize::ooxml_font_names(&String::from_utf8_lossy(bytes));
         scripts_ignored += found.scripts_ignored;
         names.extend(found.names.into_iter().filter(|name| !allfonts::CHECKED_FAMILIES.contains(&name.as_str())));
@@ -792,15 +803,33 @@ mod tests {
     fn an_xlsx_naming_other_fonts_leaves_the_comparison() {
         let mut parts = BTreeMap::new();
         parts.insert("xl/styles.xml".to_string(), b"<styleSheet><fonts><font><name val=\"Liberation Sans\"/></font><font><name val=\"Calibri\"/></font></fonts></styleSheet>".to_vec());
-        parts.insert("xl/theme/theme1.xml".to_string(), b"<a:theme><a:latin typeface=\"Arial\"/><a:font script=\"Jpan\" typeface=\"MS Gothic\"/></a:theme>".to_vec());
+        parts.insert("xl/theme/theme1.xml".to_string(), b"<a:theme><a:latin typeface=\"Arial\"/></a:theme>".to_vec());
+        parts.insert("xl/drawings/drawing1.xml".to_string(), b"<xdr:wsDr><a:latin typeface=\"Arial\"/><a:font script=\"Jpan\" typeface=\"MS Gothic\"/></xdr:wsDr>".to_vec());
         parts.insert("xl/media/image1.png".to_string(), b"typeface=\"Nope\"".to_vec());
         let (foreign, scripts_ignored) = foreign_fonts(&parts);
         assert_eq!(foreign, vec!["Arial", "Calibri"]);
         assert_eq!(scripts_ignored, 1);
+        parts.remove("xl/drawings/drawing1.xml");
+        assert_eq!(foreign_fonts(&parts), (vec!["Calibri".to_string()], 0));
         assert_eq!(class_value(&entry("comparable"), &foreign, false), "auto-system-fonts");
         assert_eq!(class_value(&entry("comparable"), &[], false), "comparable");
         assert_eq!(class_value(&entry("comparable"), &[], true), "spoofed");
         assert_eq!(class_value(&entry("system-fonts"), &foreign, true), "system-fonts");
+    }
+
+    #[test]
+    fn an_xlsx_with_only_the_default_theme_stays_comparable() {
+        let theme = b"<a:theme><a:majorFont><a:latin typeface=\"Cambria\"/><a:font script=\"Jpan\" typeface=\"MS Gothic\"/></a:majorFont><a:minorFont><a:latin typeface=\"Calibri\"/></a:minorFont></a:theme>";
+        let mut parts = BTreeMap::new();
+        parts.insert("xl/styles.xml".to_string(), b"<styleSheet><fonts><font><name val=\"Liberation Sans\"/></font><font><name val=\"Carlito\"/></font></fonts></styleSheet>".to_vec());
+        parts.insert("xl/theme/theme1.xml".to_string(), theme.to_vec());
+        parts.insert("ppt/theme/theme2.xml".to_string(), theme.to_vec());
+        parts.insert("theme/theme/theme1.xml".to_string(), theme.to_vec());
+        let (foreign, scripts_ignored) = foreign_fonts(&parts);
+        assert_eq!((foreign.as_slice(), scripts_ignored), (&[][..], 0));
+        assert_eq!(class_value(&entry("comparable"), &foreign, false), "comparable");
+        // The theme keeps its own row.
+        assert!(part_rows(&parts).iter().any(|(check, _)| check == "part:xl/theme/theme1.xml"));
     }
 
     #[test]
