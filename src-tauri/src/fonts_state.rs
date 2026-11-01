@@ -16,6 +16,13 @@ pub enum FontsStatus {
     Failed,
 }
 
+// Only a cache this start built or accepted holds a usable AllFonts.js. While
+// Pending the file is the one being replaced; after Failed it is the one the
+// start rejected. Either way the editor gets the bundled list.
+pub fn uses_generated_list(status: FontsStatus) -> bool {
+    status == FontsStatus::Ready
+}
+
 pub struct FontsState {
     status: Mutex<FontsStatus>,
     settled: Condvar,
@@ -96,6 +103,13 @@ mod tests {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = seen.clone();
         (seen, move |status| sink.lock().unwrap().push(status))
+    }
+
+    #[test]
+    fn only_a_ready_cache_gives_the_generated_list() {
+        assert!(uses_generated_list(FontsStatus::Ready));
+        assert!(!uses_generated_list(FontsStatus::Pending));
+        assert!(!uses_generated_list(FontsStatus::Failed));
     }
 
     #[test]

@@ -667,9 +667,9 @@ fn main() {
             } else if decoded_path.ends_with("sdkjs/common/AllFonts.js") {
                 let state = ctx.app_handle().state::<AppState>();
                 let generated = temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
-                std::fs::read(&generated).ok().or_else(|| {
-                    read_resource(ctx.app_handle(), &relative)
-                })
+                let from_cache = fonts_state::uses_generated_list(state.fonts.status());
+                let cached = if from_cache { std::fs::read(&generated).ok() } else { None };
+                cached.or_else(|| read_resource(ctx.app_handle(), &relative))
             } else {
                 read_resource(ctx.app_handle(), &relative)
             };

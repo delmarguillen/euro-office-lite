@@ -1185,11 +1185,15 @@ pub async fn convert_for_insert(
 // call gets this error and the bundled list (font-patches.js).
 #[tauri::command]
 pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
-    if state.fonts.status() == crate::fonts_state::FontsStatus::Pending {
-        return Err("The font cache is still being built".to_string());
-    }
     let path = crate::temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
-    std::fs::read_to_string(&path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
+    generated_font_list(state.fonts.status(), &path)
+}
+
+fn generated_font_list(status: crate::fonts_state::FontsStatus, path: &Path) -> Result<String, String> {
+    if !crate::fonts_state::uses_generated_list(status) {
+        return Err(format!("The font cache is not usable: {:?}", status));
+    }
+    std::fs::read_to_string(path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
 }
 
 // Case-insensitive on Windows only, even though the default macOS filesystem is
@@ -1985,6 +1989,20 @@ mod tests {
         assert!(pdf_to_open(&grants, &save.token).is_err());
         let insert = grants.grant(PathBuf::from("/home/u/c.pdf"), GrantKind::Insert);
         assert!(pdf_to_open(&grants, &insert.token).is_err());
+    }
+
+    #[test]
+    fn the_font_list_comes_from_the_cache_only_once_it_is_ready() {
+        use crate::fonts_state::FontsStatus;
+        let dir = std::env::temp_dir().join(format!("eo-font-list-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("AllFonts.js");
+        std::fs::write(&path, "old list").unwrap();
+
+        assert!(generated_font_list(FontsStatus::Pending, &path).is_err());
+        assert!(generated_font_list(FontsStatus::Failed, &path).is_err());
+        assert_eq!(generated_font_list(FontsStatus::Ready, &path), Ok("old list".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
