@@ -443,7 +443,55 @@ function _eoFormatLogValue(value) {
   }
 }
 
+// A resource that fails to load (<img>, <script>, <link>...) fires a plain
+// Event named "error" at its element; it does not bubble, so a window sees it
+// only in the capture phase, with no message, filename or error.
+function _eoIsScriptErrorEvent(event) {
+  return Boolean(event.message || event.filename || event.error);
+}
+
+function _eoIsElementTarget(target) {
+  return Boolean(target) && typeof target.tagName === 'string';
+}
+
+function _eoDescribeResourceUrl(element) {
+  var url = String(element.src || element.href || element.currentSrc || '');
+  if (!url) return '(none)';
+  var scheme = url.substring(0, 5).toLowerCase();
+  if (scheme === 'data:' || scheme === 'blob:') return scheme;
+  return _eoSafeSource(url);
+}
+
+function _eoDescribeScriptError(event) {
+  var error = event.error || {};
+  var fields = _eoFormatLogValue({
+    name: error.name,
+    message: event.message || error.message,
+    stack: error.stack
+  });
+  var source = _eoSafeSource(event.filename || '');
+  return fields + ' source=' + source + ':' + (event.lineno || 0) + ':' + (event.colno || 0);
+}
+
+function _eoDescribeErrorEvent(event) {
+  try {
+    if (!event) return 'type=(none)';
+    if (_eoIsScriptErrorEvent(event)) return _eoDescribeScriptError(event);
+
+    var target = event.target;
+    if (_eoIsElementTarget(target)) {
+      return 'resource=' + target.tagName.toLowerCase() + ' src=' + _eoDescribeResourceUrl(target);
+    }
+
+    var constructorName = target && target.constructor && target.constructor.name;
+    return 'type=' + String(event.type || '(none)') + ' target=' + String(constructorName || '(none)');
+  } catch(e) {
+    return '[undescribable error event]';
+  }
+}
+
 window._eoSafeSource = _eoSafeSource;
+window._eoDescribeErrorEvent = _eoDescribeErrorEvent;
 window._eoFormatLogValue = _eoFormatLogValue;
 window._eoLogBuffer = [];
 window._eoLog = function() {
@@ -1007,11 +1055,7 @@ function _eoOpenCommandForPath(path) {
 window._eoOpenCommandForPath = _eoOpenCommandForPath;
 
 window.addEventListener('error', function(e) {
-  window._eoLog('[JS-ERROR]', {
-    name: e.error && e.error.name,
-    message: e.message || (e.error && e.error.message),
-    stack: e.error && e.error.stack
-  }, 'source=' + _eoSafeSource(e.filename) + ':' + (e.lineno || 0) + ':' + (e.colno || 0));
+  window._eoLog('[JS-ERROR]', _eoDescribeErrorEvent(e));
 });
 window.addEventListener('unhandledrejection', function(e) {
   window._eoLog('[JS-REJECT]', e.reason || 'unknown');
