@@ -14,6 +14,7 @@ mod recovery;
 mod save_target;
 mod temp_layout;
 mod text_import;
+mod window_state;
 mod x2t_task;
 
 use file_ops::AppState;
@@ -281,7 +282,8 @@ fn main() {
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init());
+        .plugin(tauri_plugin_shell::init())
+        .plugin(window_state::plugin());
 
     #[cfg(target_os = "windows")]
     {
