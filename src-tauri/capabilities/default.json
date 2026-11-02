@@ -18,6 +18,7 @@
     "allow-create-new",
     "allow-current-document",
     "allow-pick-document",
+    "allow-pick-pdf",
     "allow-pick-files",
     "allow-pick-save-target",
     "allow-locate-linked-file",

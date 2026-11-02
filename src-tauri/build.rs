@@ -11,6 +11,7 @@ const APP_COMMANDS: &[&str] = &[
     "create_new",
     "current_document",
     "pick_document",
+    "pick_pdf",
     "pick_files",
     "pick_save_target",
     "locate_linked_file",
