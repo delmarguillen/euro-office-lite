@@ -1464,8 +1464,6 @@ function _eoIsFontCacheError(error) {
   return text.indexOf('font-cache-unavailable') === 0;
 }
 
-// The backend starts its error with this when it may not write the file: a
-// read-only file or a folder the user cannot write to.
 // "Add spell check language…" on the start screen. The dialog opens in the
 // backend (dictionary_import.rs); errors come back as "dictionary-<code>: <detail>".
 var _EO_IMPORT_MESSAGES = {
@@ -1516,6 +1514,8 @@ async function _eoAddLanguage(replace) {
 }
 window._eoAddLanguage = _eoAddLanguage;
 
+// The backend starts its error with this when it may not write the file: a
+// read-only file or a folder the user cannot write to.
 function _eoIsSaveDeniedError(error) {
   var text = (error && error.message) || String(error);
   return text.indexOf('save-denied') === 0;
