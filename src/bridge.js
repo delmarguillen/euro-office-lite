@@ -556,7 +556,7 @@ var _UI_STRINGS = {
     languageExists: 'A {lang} dictionary is already installed. Replace it with the files you chose?',
     languageNotAPair: 'Choose two files: one ending in .aff and one ending in .dic.',
     languageNamesDiffer: 'The two files are for different languages ({detail}). Choose an .aff and a .dic with the same name, for example es_ES.aff and es_ES.dic.',
-    languageBadName: 'The file name "{detail}" is not a language code. Rename the files to a code such as es, es_ES or en-GB and try again.',
+    languageBadName: 'The file name "{detail}" is not a language code. Rename the files to a code such as fr_FR and try again.',
     languageNotADictionary: '{detail} is not a hunspell dictionary file. It is empty or it is a web page.',
     languageFailed: 'The dictionary could not be installed: {detail}',
     locateLinkedFile: 'Locate the linked file'
