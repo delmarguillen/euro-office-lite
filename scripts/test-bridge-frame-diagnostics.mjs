@@ -26,7 +26,13 @@ class FakeWindow {
     this.document = {};
     this.location = { href, pathname: href };
   }
-  addEventListener(type, fn, capture) { this.listeners.push({ type, fn, capture }); }
+  // Like the DOM, adding the same (type, fn, capture) again is ignored.
+  addEventListener(type, fn, capture) {
+    const same = (l) => l.type === type && l.fn === fn && Boolean(l.capture) === Boolean(capture);
+    if (this.listeners.some(same)) return;
+    this.listeners.push({ type, fn, capture });
+  }
+  count(type) { return this.listeners.filter((l) => l.type === type).length; }
   removeEventListener(type, fn) { this.listeners = this.listeners.filter((l) => !(l.type === type && l.fn === fn)); }
   fire(type, event) { this.listeners.filter((l) => l.type === type).forEach((l) => l.fn(event)); }
 }
@@ -43,12 +49,16 @@ let before = countErrors();
 kept.fire('error', errorEvent);
 check(results, 'kept window logs an error after navigation exactly once', countErrors() - before === 1,
   String(countErrors() - before));
-check(results, 'kept window has one error and one rejection listener',
-  kept.listeners.length === 2, String(kept.listeners.length));
+const oneOfEach = (win) => win.count('error') === 1 && win.count('unhandledrejection') === 1
+  && win.count('securitypolicyviolation') <= 1;
+check(results, 'kept window has one error, one rejection and at most one CSP listener',
+  oneOfEach(kept), String(kept.listeners.length));
 
 // A second install on the same document changes nothing.
+const listenersBefore = kept.listeners.length;
 install(kept);
-check(results, 'reinstall on the same document adds no listener', kept.listeners.length === 2);
+check(results, 'reinstall on the same document adds no listener',
+  kept.listeners.length === listenersBefore && oneOfEach(kept), String(kept.listeners.length));
 
 // New window object after navigation.
 const fresh = new FakeWindow('file:///app/web-apps/apps/documenteditor/main/index.html');
