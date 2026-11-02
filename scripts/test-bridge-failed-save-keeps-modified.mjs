@@ -10,7 +10,7 @@ import { check, finish, loadBridge } from './bridge-test-harness.mjs';
 const results = [];
 const DOCX = 65;
 
-async function failingBridge({ docType, currentPath, savePath }) {
+async function failingBridge({ docType, currentName, saveName }) {
   const sent = [];
   const atDialog = [];
   let bridge;
@@ -21,8 +21,9 @@ async function failingBridge({ docType, currentPath, savePath }) {
   bridge = await loadBridge({
     invoke: {
       write_editor_bin: () => 'ok',
-      get_current_path: () => currentPath,
-      get_save_suggestion: () => null,
+      current_document: () => ({ token: 'tok-current', name: currentName }),
+      pick_save_target: () => (saveName ? { token: 'tok-copy', name: saveName } : null),
+      recovery_mark_saved: () => null,
       save_file: reportSavedThenFail,
       save_file_as: reportSavedThenFail,
       save_pdf: reportSavedThenFail,
@@ -31,7 +32,6 @@ async function failingBridge({ docType, currentPath, savePath }) {
     },
   });
   bridge.sandbox.__TAURI__.dialog = {
-    save: () => Promise.resolve(savePath),
     message: () => {
       atDialog.push({ js: bridge.sandbox.AscDesktopEditor._isModified, rust: sent[sent.length - 1] });
       return Promise.resolve();
@@ -53,9 +53,9 @@ async function failingBridge({ docType, currentPath, savePath }) {
 }
 
 const cases = [
-  { name: 'save', docType: 'word', currentPath: '/docs/report.docx', savePath: null, param: '' },
-  { name: 'Save As', docType: 'word', currentPath: '/docs/report.docx', savePath: '/docs/bad.docx', param: 'saveas=true' },
-  { name: 'PDF Save As', docType: 'pdf', currentPath: '/docs/form.pdf', savePath: '/docs/bad.pdf', param: 'saveas=true' },
+  { name: 'save', docType: 'word', currentName: 'report.docx', saveName: null, param: '' },
+  { name: 'Save As', docType: 'word', currentName: 'report.docx', saveName: 'bad.docx', param: 'saveas=true' },
+  { name: 'PDF Save As', docType: 'pdf', currentName: 'form.pdf', saveName: 'bad.pdf', param: 'saveas=true' },
 ];
 
 for (const c of cases) {
