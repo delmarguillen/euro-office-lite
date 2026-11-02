@@ -584,6 +584,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
     saveError: 'Save error', saveErrorMsg: 'Could not save the file.\n\nTarget format not compatible with this document type.',
     saveDeniedMsg: 'Could not save the file.\n\nYou do not have permission to write there, or the file is read-only.',
+    saveLockedMsg: 'Could not save the file.\n\nIt may be open in another program.',
     pdfFontsErrorMsg: 'The PDF could not be created because the app could not prepare its fonts. Try again in a moment. If it keeps failing, restart Euro-Office Lite.',
     printError: 'Print failed', printErrorMsg: 'The document could not be printed. Please try again.',
     documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
@@ -948,7 +949,7 @@ async function _eoPickPdfTarget() {
 // Saves the open PDF, over itself or, for Save As, where the user picks. Ends
 // the editor's save the way the other editors do.
 async function _eoSavePdf(ref, isSaveAs) {
-  var wasModified = window.AscDesktopEditor._isModified;
+  var wasModified = _eoUnsavedChanges;
   var target = null;
   if (isSaveAs) {
     target = await _eoPickPdfTarget();
@@ -962,16 +963,11 @@ async function _eoSavePdf(ref, isSaveAs) {
     await invoke('save_pdf', { data: _eoPdfChanges(ref), token: token });
   } catch (e) {
     window._eoLog('[SAVE] pdf failed: ' + ((e && e.message) || e));
-    await window.__TAURI__.dialog.message(
-      _eoSaveErrorText(e),
-      { title: _t('saveError'), kind: 'error' }
-    );
-    if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
-      ref.ew.DesktopOfflineAppDocumentEndSave(1);
-    }
+    await _eoFailSave(ref, e, wasModified);
     return;
   }
   if (target) _eoShowSavedName(target.name);
+  _eoMarkSavedChanges();
   if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
     ref.ew.DesktopOfflineAppDocumentEndSave(0);
   }
@@ -1295,15 +1291,31 @@ function _recoveryEnqueue(ref, recovery) {
 function _recoveryMarkModified(name) {
   try {
     window.AscDesktopEditor._isModified = true;
+    _eoMarkUnsavedChanges();
     invoke('set_document_modified', { modified: true }).catch(function(){});
     if (name) invoke('set_window_title', { name: name }).catch(function(){});
   } catch(e) {}
+}
+
+// Whether the document has changes no save has written yet. sdkjs calls
+// onDocumentModifiedChanged(false) when a save begins, before LocalFileSave,
+// so _isModified is already false when the save reads it. This flag ignores
+// that false: only a change sets it and only a save that ends well clears it.
+var _eoUnsavedChanges = false;
+
+function _eoMarkUnsavedChanges() {
+  _eoUnsavedChanges = true;
+}
+
+function _eoMarkSavedChanges() {
+  _eoUnsavedChanges = false;
 }
 
 // Puts the modified mark back, in the JS and in Rust, when something that
 // wrote no copy of the document over it reported it as saved.
 function _eoRestoreModified(wasModified) {
   if (!wasModified) return;
+  _eoMarkUnsavedChanges();
   if (window.AscDesktopEditor._isModified) return;
   window.AscDesktopEditor._isModified = true;
   invoke('set_document_modified', { modified: true }).catch(function(){});
@@ -1319,6 +1331,18 @@ function _eoEndSaveKeepingModified(ref, wasModified) {
     ref.ew.DesktopOfflineAppDocumentEndSave(1);
   }
   _eoRestoreModified(wasModified);
+}
+
+// Ends a save that failed. The modified mark goes back before the error
+// dialog, not after it: sdkjs reported the document as saved when the save
+// began, and the title must not lose its mark while the dialog is open.
+async function _eoFailSave(ref, err, wasModified) {
+  _eoRestoreModified(wasModified);
+  await window.__TAURI__.dialog.message(
+    _eoSaveErrorText(err),
+    { title: _t('saveError'), kind: 'error' }
+  );
+  _eoEndSaveKeepingModified(ref, wasModified);
 }
 
 function _forceReload() {
@@ -1507,6 +1531,11 @@ function _eoIsFontCacheError(error) {
 
 // The backend starts its error with this when it may not write the file: a
 // read-only file or a folder the user cannot write to.
+function _eoIsSaveLockedError(error) {
+  var text = (error && error.message) || String(error);
+  return text.indexOf('save-locked') === 0;
+}
+
 function _eoIsSaveDeniedError(error) {
   var text = (error && error.message) || String(error);
   return text.indexOf('save-denied') === 0;
@@ -1516,6 +1545,7 @@ function _eoIsSaveDeniedError(error) {
 function _eoSaveErrorText(error) {
   if (_eoIsFontCacheError(error)) return _t('pdfFontsErrorMsg');
   if (_eoIsSaveDeniedError(error)) return _t('saveDeniedMsg');
+  if (_eoIsSaveLockedError(error)) return _t('saveLockedMsg');
   return _t('saveErrorMsg');
 }
 
@@ -2596,7 +2626,7 @@ window.AscDesktopEditor = {
       var current = await invoke('current_document');
       var currentName = current ? current.name : null;
       if (!isSaveAs && !current) isSaveAs = true;
-      var wasModified = window.AscDesktopEditor._isModified;
+      var wasModified = _eoUnsavedChanges;
       // A cancelled Save As or a PDF export leaves the open document where it
       // was, so it must not end as a save.
       var keepsDocument = false;
@@ -2629,13 +2659,7 @@ window.AscDesktopEditor = {
             }
           } catch(saveErr) {
             window._eoLog('[EO] SaveAs failed: ' + saveErr);
-            await window.__TAURI__.dialog.message(
-              _eoSaveErrorText(saveErr),
-              { title: _t('saveError'), kind: 'error' }
-            );
-            if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
-              ref.ew.DesktopOfflineAppDocumentEndSave(1);
-            }
+            await _eoFailSave(ref, saveErr, wasModified);
             return;
           }
         }
@@ -2654,13 +2678,7 @@ window.AscDesktopEditor = {
           // disk, and the editor's own "saved" indicator says nothing about it:
           // without this the document looks written and is not.
           window._eoLog('[EO] Save failed: ' + saveErr);
-          await window.__TAURI__.dialog.message(
-            _eoSaveErrorText(saveErr),
-            { title: _t('saveError'), kind: 'error' }
-          );
-          if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
-            ref.ew.DesktopOfflineAppDocumentEndSave(1);
-          }
+          await _eoFailSave(ref, saveErr, wasModified);
           return;
         }
       }
@@ -2669,6 +2687,7 @@ window.AscDesktopEditor = {
         _eoEndSaveKeepingModified(ref, wasModified);
         return;
       }
+      _eoMarkSavedChanges();
       if (ref.ew.DesktopOfflineAppDocumentEndSave) {
         ref.ew.DesktopOfflineAppDocumentEndSave(0);
       }
@@ -2804,6 +2823,7 @@ window.AscDesktopEditor = {
   LocalFileGetModified: function() { return window.AscDesktopEditor._isModified; },
   LocalFileSetModified: function(modified) {
     window.AscDesktopEditor._isModified = modified;
+    if (modified) _eoMarkUnsavedChanges();
     invoke('set_document_modified', { modified }).catch(function(){});
   },
 
@@ -2948,7 +2968,7 @@ window.AscDesktopEditor = {
 
     try {
       window.AscDesktopEditor._isPrinting = true;
-      var wasModified = window.AscDesktopEditor._isModified;
+      var wasModified = _eoUnsavedChanges;
       // The backend keeps the PDF it wrote; the two commands below take no path.
       if (window.AscDesktopEditor._currentDocType === 'pdf') {
         // A PDF prints as itself, with the editor's changes applied.
@@ -2990,6 +3010,7 @@ window.AscDesktopEditor = {
 
   onDocumentModifiedChanged: function(modified) {
     window.AscDesktopEditor._isModified = modified;
+    if (modified) _eoMarkUnsavedChanges();
     invoke('set_document_modified', { modified }).catch(function(){});
   },
   getViewportSettings: function() {
