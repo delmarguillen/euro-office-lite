@@ -129,11 +129,23 @@ pub fn sort_picked(paths: &[PathBuf]) -> Result<(PathBuf, PathBuf), ImportError>
     }
 }
 
-// Both files hold bytes and neither is an HTML page. The .aff is not required
+// Hunspell .aff and .dic files are text; a NUL byte means an image or an
+// archive renamed. Only the start is read: that is where a binary shows it.
+const BINARY_SNIFF_BYTES: usize = 4096;
+
+fn looks_binary(bytes: &[u8]) -> bool {
+    let start = &bytes[..bytes.len().min(BINARY_SNIFF_BYTES)];
+    start.contains(&0)
+}
+
+// Both files hold bytes, neither is an HTML page nor binary. The .aff is not required
 // to carry a SET line: hunspell defaults to ISO8859-1 without one, and some
 // real .aff files put it after a long comment header.
 pub fn check_content(name: &str, bytes: &[u8]) -> Result<(), ImportError> {
     if !is_dictionary_asset(bytes) {
+        return Err(ImportError::NotADictionary(name.to_string()));
+    }
+    if looks_binary(bytes) {
         return Err(ImportError::NotADictionary(name.to_string()));
     }
     Ok(())
@@ -339,6 +351,24 @@ mod tests {
         );
         assert_eq!(check_content("es.aff", b"SET UTF-8\nTRY abc"), Ok(()));
         assert_eq!(check_content("es.dic", b"2\nhola\nadios"), Ok(()));
+    }
+
+    #[test]
+    fn binary_content_is_refused() {
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+        assert_eq!(
+            check_content("it_IT.aff", png),
+            Err(ImportError::NotADictionary("it_IT.aff".to_string()))
+        );
+        let mut late_nul = vec![b'a'; 4095];
+        late_nul.push(0);
+        assert_eq!(
+            check_content("it_IT.dic", &late_nul),
+            Err(ImportError::NotADictionary("it_IT.dic".to_string()))
+        );
+        let mut past_the_start = vec![b'a'; 4096];
+        past_the_start.push(0);
+        assert_eq!(check_content("it_IT.dic", &past_the_start), Ok(()));
     }
 
     #[test]
