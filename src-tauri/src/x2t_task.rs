@@ -1015,6 +1015,63 @@ fn symlink_scan_roots() -> Vec<std::path::PathBuf> {
     Vec::new()
 }
 
+// The folders x2t's own scan reads on Windows (CApplicationFonts::
+// GetSetupFontFiles in ONLYOFFICE core): C:\Windows\Fonts, and for the current
+// user AppData\Local\Microsoft\Windows\Fonts and its FontCache\4\CloudFonts.
+// The HKLM font entries it also reads point into the Fonts folder or are full
+// paths. x2t spells the folders out from C:\Windows and C:\Users\<name>; the
+// fingerprint takes them from %WINDIR% and %LOCALAPPDATA%.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn windows_font_dirs(
+    windir: Option<&std::path::Path>,
+    local_app_data: Option<&std::path::Path>,
+) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(windir) = windir {
+        dirs.push(windir.join("Fonts"));
+    }
+    if let Some(local) = local_app_data {
+        dirs.push(local.join("Microsoft").join("Windows").join("Fonts"));
+        dirs.push(local.join("Microsoft").join("FontCache").join("4").join("CloudFonts"));
+    }
+    dirs
+}
+
+// The folders x2t's own scan reads on macOS: /Library/Fonts and
+// /System/Library/Fonts, plus every font CoreText lists, which takes in the
+// user's ~/Library/Fonts.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn macos_font_dirs(home: Option<&std::path::Path>) -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![
+        std::path::PathBuf::from("/System/Library/Fonts"),
+        std::path::PathBuf::from("/Library/Fonts"),
+    ];
+    if let Some(home) = home {
+        dirs.push(home.join("Library").join("Fonts"));
+    }
+    dirs
+}
+
+// A folder that does not exist yet stays in the list: the fingerprint writes
+// it as missing, so creating it changes the marker.
+#[cfg(windows)]
+fn platform_font_dirs() -> Vec<std::path::PathBuf> {
+    let windir = std::env::var_os("WINDIR").map(std::path::PathBuf::from);
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+    windows_font_dirs(windir.as_deref(), local_app_data.as_deref())
+}
+
+#[cfg(target_os = "macos")]
+fn platform_font_dirs() -> Vec<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    macos_font_dirs(home.as_deref())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn platform_font_dirs() -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
 // x2t writes the font paths exactly as it receives them into AllFonts.js and
 // font_selection.bin, and the PDF export reads them back from there, so the
 // scan never gets the \\?\ form of the bundled fonts folder.
@@ -1045,6 +1102,7 @@ pub fn font_scan_dirs(binaries_dir: &std::path::Path) -> Vec<std::path::PathBuf>
     let roots = symlink_scan_roots();
     dirs.extend(symlink_font_target_dirs(&roots));
     dirs.extend(roots);
+    dirs.extend(platform_font_dirs());
     dirs.sort();
     dirs.dedup();
     dirs
@@ -2203,6 +2261,133 @@ mod font_scan_tests {
             );
             assert_eq!(Path::new(cmd.get_program()), plain.join("x2t.exe"));
             assert_eq!(cmd.get_current_dir(), Some(plain.join("binaries").as_path()));
+        }
+    }
+}
+
+#[cfg(test)]
+mod platform_font_dir_tests {
+    use super::{macos_font_dirs, windows_font_dirs};
+    use crate::temp_layout::font_sources_text;
+    use std::path::{Path, PathBuf};
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("eo-platform-fonts-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // Folder times have a fine resolution, but not every file system has one.
+    fn tick() {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    fn sources(windir: &Path, local: &Path) -> String {
+        font_sources_text(
+            Path::new("/no-binaries"),
+            &windows_font_dirs(Some(windir), Some(local)),
+        )
+    }
+
+    #[test]
+    fn windows_dirs_come_from_windir_and_local_app_data() {
+        let dirs = windows_font_dirs(
+            Some(Path::new(r"C:\Windows")),
+            Some(Path::new(r"C:\Users\ana\AppData\Local")),
+        );
+        assert_eq!(
+            dirs,
+            vec![
+                Path::new(r"C:\Windows").join("Fonts"),
+                Path::new(r"C:\Users\ana\AppData\Local")
+                    .join("Microsoft")
+                    .join("Windows")
+                    .join("Fonts"),
+                Path::new(r"C:\Users\ana\AppData\Local")
+                    .join("Microsoft")
+                    .join("FontCache")
+                    .join("4")
+                    .join("CloudFonts"),
+            ]
+        );
+    }
+
+    #[test]
+    fn windows_dirs_without_the_variables_are_empty() {
+        assert!(windows_font_dirs(None, None).is_empty());
+        assert_eq!(
+            windows_font_dirs(Some(Path::new("W")), None),
+            vec![Path::new("W").join("Fonts")]
+        );
+    }
+
+    #[test]
+    fn macos_dirs_add_the_user_folder_when_home_is_known() {
+        let system = vec![
+            PathBuf::from("/System/Library/Fonts"),
+            PathBuf::from("/Library/Fonts"),
+        ];
+        assert_eq!(macos_font_dirs(None), system);
+        let mut with_home = system.clone();
+        with_home.push(Path::new("/Users/ana").join("Library").join("Fonts"));
+        assert_eq!(macos_font_dirs(Some(Path::new("/Users/ana"))), with_home);
+    }
+
+    #[test]
+    fn a_font_added_to_the_system_folder_changes_the_sources() {
+        let root = scratch("system");
+        let (windir, local) = (root.join("Windows"), root.join("Local"));
+        std::fs::create_dir_all(windir.join("Fonts")).unwrap();
+        let before = sources(&windir, &local);
+
+        tick();
+        std::fs::write(windir.join("Fonts").join("new.ttf"), b"x").unwrap();
+
+        assert_ne!(sources(&windir, &local), before);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_font_added_to_the_user_folder_changes_the_sources() {
+        let root = scratch("user");
+        let (windir, local) = (root.join("Windows"), root.join("Local"));
+        let user_fonts = local.join("Microsoft").join("Windows").join("Fonts");
+        std::fs::create_dir_all(&user_fonts).unwrap();
+        let before = sources(&windir, &local);
+
+        tick();
+        std::fs::write(user_fonts.join("new.ttf"), b"x").unwrap();
+
+        assert_ne!(sources(&windir, &local), before);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Windows creates the per-user folder with the first per-user font.
+    #[test]
+    fn creating_the_missing_user_folder_changes_the_sources() {
+        let root = scratch("missing");
+        let (windir, local) = (root.join("Windows"), root.join("Local"));
+        let before = sources(&windir, &local);
+        assert!(before.contains("missing"));
+
+        std::fs::create_dir_all(local.join("Microsoft").join("Windows").join("Fonts")).unwrap();
+
+        assert_ne!(sources(&windir, &local), before);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_scan_dirs_hold_no_windows_or_macos_folders() {
+        use super::font_scan_dirs;
+        let dirs = font_scan_dirs(Path::new("/opt/eo/binaries"));
+        assert_eq!(dirs[0], Path::new("/opt/eo/binaries").join("fonts"));
+        for dir in &dirs {
+            assert!(!dir.starts_with("/System/Library"), "{}", dir.display());
+            assert!(!dir.starts_with("/Library"), "{}", dir.display());
+            assert!(!dir.ends_with("Library/Fonts"), "{}", dir.display());
         }
     }
 }
