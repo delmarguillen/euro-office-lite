@@ -36,8 +36,8 @@ pub fn has_image_extension(path: &Path) -> bool {
     IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
 }
 
-// An absolute path copy-to-media may read: one the user picked in the image
-// dialog, and an image.
+// An absolute path copy-to-media may read: one granted when it was pasted,
+// and an image.
 pub fn may_copy_absolute(path: &Path, picked: &[PathBuf]) -> bool {
     if !picked.iter().any(|choice| choice == path) {
         return false;
@@ -60,15 +60,6 @@ pub fn may_copy_pasted(path: &Path, clipboard_files: &[PathBuf]) -> bool {
         return false;
     }
     has_image_extension(path)
-}
-
-// An absolute path copy-to-media may read: an image picked in the dialog or
-// one granted when it was pasted.
-pub fn may_copy_granted(path: &Path, picked: &[PathBuf], pasted: &[PathBuf]) -> bool {
-    if may_copy_absolute(path, picked) {
-        return true;
-    }
-    may_copy_absolute(path, pasted)
 }
 
 pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
@@ -264,6 +255,38 @@ pub fn is_generated_font(all_fonts_js: &Path, requested: &str) -> bool {
     is_listed_font(requested, listed)
 }
 
+// Read again on the next request: the cache has just been built, and its
+// AllFonts.js may share a modification time with the one it replaced.
+pub fn forget_font_list() {
+    *FONT_LIST.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+// A font file in the folder the app bundles. Both sides are resolved first, so
+// ".." or a link cannot lead out of it; a missing file is no font.
+pub fn is_bundled_font(requested: &str, bundled_fonts: &Path) -> bool {
+    let Ok(file) = std::fs::canonicalize(font_path_key(requested)) else {
+        return false;
+    };
+    let Ok(folder) = std::fs::canonicalize(bundled_fonts) else {
+        return false;
+    };
+    file.starts_with(&folder) && file.is_file()
+}
+
+// Unless the cache is ready, the list on disk is old or incomplete and the
+// JS gets the bundled list instead: only the bundled fonts are served.
+pub fn may_serve_font(
+    all_fonts_js: &Path,
+    requested: &str,
+    bundled_only: bool,
+    bundled_fonts: &Path,
+) -> bool {
+    if bundled_only {
+        return is_bundled_font(requested, bundled_fonts);
+    }
+    is_generated_font(all_fonts_js, requested)
+}
+
 // Largest Editor.bin the JS may send, decoded. A large document's
 // Editor.bin can pass 100 MB; this leaves room above that.
 pub const EDITOR_BIN_MAX_BYTES: usize = 512 * 1024 * 1024;
@@ -323,7 +346,7 @@ pub fn is_pdf_changes(bytes: &[u8]) -> bool {
     bytes.len() > 4 && bytes.starts_with(b"%PDF")
 }
 
-fn has_pdf_extension(path: &Path) -> bool {
+pub fn has_pdf_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
@@ -459,24 +482,6 @@ mod tests {
     fn a_clipboard_path_with_a_trailing_carriage_return_still_matches() {
         let clipboard = vec![PathBuf::from("/home/u/a.png\r")];
         assert!(may_copy_pasted(Path::new("/home/u/a.png"), &clipboard));
-    }
-
-    #[test]
-    fn a_picked_or_pasted_image_may_be_copied() {
-        let picked = vec![PathBuf::from("/home/u/a.png")];
-        let pasted = vec![PathBuf::from("/home/u/b.png")];
-        assert!(may_copy_granted(Path::new("/home/u/a.png"), &picked, &pasted));
-        assert!(may_copy_granted(Path::new("/home/u/b.png"), &picked, &pasted));
-        assert!(may_copy_granted(Path::new("/home/u/b.png"), &[], &pasted));
-    }
-
-    #[test]
-    fn a_path_neither_picked_nor_pasted_is_refused() {
-        let picked = vec![PathBuf::from("/home/u/a.png")];
-        let pasted = vec![PathBuf::from("/home/u/b.png"), PathBuf::from("/home/u/notes.txt")];
-        assert!(!may_copy_granted(Path::new("/home/u/c.png"), &picked, &pasted));
-        assert!(!may_copy_granted(Path::new("/home/u/notes.txt"), &picked, &pasted));
-        assert!(!may_copy_granted(Path::new("/home/u/a.png"), &[], &[]));
     }
 
     #[cfg(windows)]
@@ -615,6 +620,137 @@ mod tests {
         assert!(!is_listed_font("/usr/share/fonts/../../../etc/passwd", &listed));
         assert!(!is_listed_font("/usr/share/fonts/Other.ttf", &listed));
         assert!(!is_listed_font("C:/Windows/win.ini", &listed));
+    }
+
+    // FONT_LIST is shared by the whole process: these tests take turns.
+    static FONT_LIST_TESTS: Mutex<()> = Mutex::new(());
+
+    struct FontDirs {
+        base: PathBuf,
+        bundled: PathBuf,
+        all_fonts: PathBuf,
+    }
+
+    impl Drop for FontDirs {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    // binaries/fonts/Bundled.ttf, other/Other.ttf, and an AllFonts.js that
+    // lists `listed` with a fixed modification time.
+    fn font_dirs(name: &str, listed: &[&Path]) -> FontDirs {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let base = std::env::temp_dir().join(format!("eo-abs-{}-{}", name, unique));
+        let bundled = base.join("binaries").join("fonts");
+        std::fs::create_dir_all(&bundled).unwrap();
+        std::fs::create_dir_all(base.join("other")).unwrap();
+        std::fs::write(bundled.join("Bundled.ttf"), b"font").unwrap();
+        std::fs::write(base.join("other").join("Other.ttf"), b"font").unwrap();
+        let all_fonts = base.join("AllFonts.js");
+        write_all_fonts(&all_fonts, listed);
+        FontDirs { base, bundled, all_fonts }
+    }
+
+    fn write_all_fonts(path: &Path, listed: &[&Path]) {
+        let names: Vec<String> = listed
+            .iter()
+            .map(|file| format!("{:?}", file.to_string_lossy()))
+            .collect();
+        let text = format!("window[\"__fonts_files\"] = [{}];\n", names.join(","));
+        std::fs::write(path, text).unwrap();
+        let fixed = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(fixed).unwrap();
+    }
+
+    fn text(path: &Path) -> String {
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn while_fonts_are_pending_a_bundled_font_is_served() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("pending", &[]);
+        forget_font_list();
+        let bundled = text(&dirs.bundled.join("Bundled.ttf"));
+
+        assert!(may_serve_font(&dirs.all_fonts, &bundled, true, &dirs.bundled));
+    }
+
+    #[test]
+    fn while_fonts_are_pending_any_other_font_is_refused() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("pending-other", &[]);
+        forget_font_list();
+        let other = text(&dirs.base.join("other").join("Other.ttf"));
+        let escaping = text(&dirs.bundled.join("..").join("..").join("other").join("Other.ttf"));
+        let missing = text(&dirs.bundled.join("Missing.ttf"));
+
+        assert!(!may_serve_font(&dirs.all_fonts, &other, true, &dirs.bundled));
+        assert!(!may_serve_font(&dirs.all_fonts, &escaping, true, &dirs.bundled));
+        assert!(!may_serve_font(&dirs.all_fonts, &missing, true, &dirs.bundled));
+    }
+
+    // The old AllFonts.js still on disk lists a font that exists outside the
+    // bundled folder: refused while pending, served once ready.
+    #[test]
+    fn while_fonts_are_pending_the_old_list_is_not_used() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("pending-old-list", &[]);
+        let other = dirs.base.join("other").join("Other.ttf");
+        write_all_fonts(&dirs.all_fonts, &[&other]);
+        forget_font_list();
+        let other = text(&other);
+
+        assert!(!may_serve_font(&dirs.all_fonts, &other, true, &dirs.bundled));
+        assert!(may_serve_font(&dirs.all_fonts, &other, false, &dirs.bundled));
+    }
+
+    // After a failed build the old AllFonts.js is still on disk; the caller
+    // passes bundled_only = true, so its fonts are refused.
+    #[test]
+    fn when_the_cache_failed_the_old_list_is_not_used() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("failed-old-list", &[]);
+        let other = dirs.base.join("other").join("Other.ttf");
+        write_all_fonts(&dirs.all_fonts, &[&other]);
+        forget_font_list();
+        let bundled_only = !crate::fonts_state::uses_generated_list(crate::fonts_state::FontsStatus::Failed);
+        let bundled = text(&dirs.bundled.join("Bundled.ttf"));
+
+        assert!(bundled_only);
+        assert!(!may_serve_font(&dirs.all_fonts, &text(&other), bundled_only, &dirs.bundled));
+        assert!(may_serve_font(&dirs.all_fonts, &bundled, bundled_only, &dirs.bundled));
+    }
+
+    #[test]
+    fn once_fonts_are_ready_only_the_new_list_is_served() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("ready", &[]);
+        let other_path = dirs.base.join("other").join("Other.ttf");
+        write_all_fonts(&dirs.all_fonts, &[&other_path]);
+        forget_font_list();
+        let bundled = text(&dirs.bundled.join("Bundled.ttf"));
+
+        assert!(may_serve_font(&dirs.all_fonts, &text(&other_path), false, &dirs.bundled));
+        assert!(!may_serve_font(&dirs.all_fonts, &bundled, false, &dirs.bundled));
+    }
+
+    #[test]
+    fn the_list_is_read_again_once_forgotten_even_with_the_same_time() {
+        let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
+        let dirs = font_dirs("reload", &[]);
+        let other_path = dirs.base.join("other").join("Other.ttf");
+        forget_font_list();
+        assert!(!may_serve_font(&dirs.all_fonts, &text(&other_path), false, &dirs.bundled));
+
+        write_all_fonts(&dirs.all_fonts, &[&other_path]);
+        forget_font_list();
+
+        assert!(may_serve_font(&dirs.all_fonts, &text(&other_path), false, &dirs.bundled));
     }
 
     #[test]

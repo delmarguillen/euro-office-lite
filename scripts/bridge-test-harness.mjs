@@ -19,6 +19,8 @@ export function bridgePathFromArgs() {
 export async function loadBridge({ platform = 'Linux x86_64', invoke = {} } = {}) {
   const logs = [];
   const timers = new Set();
+  // What the bridge listens for, so a check can send it a backend event.
+  const listeners = new Map();
   const handlers = {
     js_log: () => null,
     take_pending_open_file: () => null,
@@ -74,7 +76,13 @@ export async function loadBridge({ platform = 'Linux x86_64', invoke = {} } = {}
           }
         },
       },
-      event: { listen: () => Promise.resolve(() => {}) },
+      event: {
+        listen: (name, handler) => {
+          if (!listeners.has(name)) listeners.set(name, []);
+          listeners.get(name).push(handler);
+          return Promise.resolve(() => {});
+        },
+      },
     },
   };
   sandbox.window = sandbox;
@@ -87,6 +95,9 @@ export async function loadBridge({ platform = 'Linux x86_64', invoke = {} } = {}
     sandbox,
     logs,
     run: (code) => vm.runInContext(code, sandbox),
+    emit(name, payload) {
+      for (const handler of listeners.get(name) || []) handler({ payload });
+    },
     // Pending bridge timers must not keep a finished check alive.
     stopTimers() { for (const timer of timers) clearTimeout(timer); timers.clear(); },
   };

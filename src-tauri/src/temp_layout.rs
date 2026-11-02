@@ -233,19 +233,138 @@ fn stored_version(cell: &OnceLock<String>) -> &str {
     cell.get().map(String::as_str).unwrap_or(VERSION_UNSET)
 }
 
+// What the font scan read besides the app version: the bundled binaries
+// folder (AllFonts.js holds absolute paths into it) and a fingerprint of each
+// font folder x2t is given. Set once at startup; empty until then, as in tests.
+static FONT_SOURCES: OnceLock<String> = OnceLock::new();
+
+pub fn set_font_sources(sources: String) {
+    let _ = FONT_SOURCES.set(sources);
+}
+
+// The marker a cache built by this process carries and a usable cache must
+// match: another version, another install or a change in the font folders
+// each make it differ, and the cache is rebuilt.
+pub fn expected_marker() -> String {
+    marker_text(app_version(), FONT_SOURCES.get().map(String::as_str).unwrap_or(""))
+}
+
+fn marker_text(version: &str, sources: &str) -> String {
+    format!("{}\n{}", version, sources)
+}
+
+// One line for the binaries folder, then one per font folder. The folder
+// limit is shared by all of them.
+pub fn font_sources_text(binaries_dir: &Path, font_dirs: &[PathBuf]) -> String {
+    let binaries = std::fs::canonicalize(binaries_dir).unwrap_or_else(|_| binaries_dir.to_path_buf());
+    let mut text = format!("binaries\t{}\n", binaries.display());
+    let mut budget = FINGERPRINT_MAX_DIRS;
+    for dir in font_dirs {
+        text.push_str(&font_dir_fingerprint(dir, &mut budget));
+        text.push('\n');
+    }
+    text
+}
+
+// Fonts sit in subfolders (a package puts each family in its own), and adding
+// or removing a file changes only the time of the folder that holds it. So
+// the fingerprint walks folders, never files, and keeps the newest time and
+// how many folders it saw. The walk is bounded for slow disks; when it stops
+// early the line says so, and the same tree still gives the same line.
+const FINGERPRINT_MAX_DEPTH: usize = 4;
+const FINGERPRINT_MAX_DIRS: usize = 2000;
+
+struct TreeScan {
+    newest: u128,
+    dirs: usize,
+    truncated: bool,
+}
+
+fn font_dir_fingerprint(dir: &Path, budget: &mut usize) -> String {
+    let Ok(meta) = std::fs::metadata(dir) else {
+        return format!("{}\tmissing", dir.display());
+    };
+    let mut scan = TreeScan {
+        newest: modified_nanos(&meta),
+        dirs: 1,
+        truncated: false,
+    };
+    let mut level = vec![dir.to_path_buf()];
+    for _ in 0..FINGERPRINT_MAX_DEPTH {
+        level = scan_level(&level, &mut scan, budget);
+    }
+    if level.iter().any(|deepest| !subfolders(deepest).is_empty()) {
+        scan.truncated = true;
+    }
+    let mut line = format!("{}\t{}\t{}", dir.display(), scan.newest, scan.dirs);
+    if scan.truncated {
+        line.push_str("\ttruncated");
+    }
+    line
+}
+
+// Adds the folders one level below `parents` to the scan, within the budget,
+// and returns them.
+fn scan_level(parents: &[PathBuf], scan: &mut TreeScan, budget: &mut usize) -> Vec<PathBuf> {
+    let mut next = Vec::new();
+    for parent in parents {
+        for (path, modified) in subfolders(parent) {
+            if *budget == 0 {
+                scan.truncated = true;
+                return next;
+            }
+            *budget -= 1;
+            scan.dirs += 1;
+            scan.newest = scan.newest.max(modified);
+            next.push(path);
+        }
+    }
+    next
+}
+
+// Sorted by name, so a cut at the limit falls in the same place every time.
+fn subfolders(dir: &Path) -> Vec<(PathBuf, u128)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(PathBuf, u128)> = entries.flatten().filter_map(subfolder).collect();
+    found.sort();
+    found
+}
+
+// The entry's own type, so a link to a folder is not one.
+fn subfolder(entry: std::fs::DirEntry) -> Option<(PathBuf, u128)> {
+    let kind = entry.file_type().ok()?;
+    if !kind.is_dir() {
+        return None;
+    }
+    let meta = entry.metadata().ok()?;
+    Some((entry.path(), modified_nanos(&meta)))
+}
+
+fn modified_nanos(meta: &std::fs::Metadata) -> u128 {
+    let Ok(modified) = meta.modified() else {
+        return 0;
+    };
+    modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0)
+}
+
 pub fn fonts_ready(root: &Path) -> bool {
-    fonts_ready_for(root, app_version())
+    fonts_ready_for(root, &expected_marker())
 }
 
 // x2t's scan always writes both files and the PDF export uses both, so a
 // cache missing either is a half-installed one and counts as missing. A cache
-// built by another version counts as missing too: the scan can change with
-// the bundled x2t and fonts.
-fn fonts_ready_for(root: &Path, version: &str) -> bool {
+// whose marker differs counts as missing too: the scan can change with the
+// bundled x2t and fonts, and with the fonts installed.
+fn fonts_ready_for(root: &Path, expected: &str) -> bool {
     let Ok(marker) = std::fs::read(root.join(FONTS_MARKER)) else {
         return false;
     };
-    if !marker_matches(&marker, version) {
+    if !marker_matches(&marker, expected) {
         return false;
     }
     let fontdata = fontdata_dir(root);
@@ -258,10 +377,10 @@ fn fonts_ready_for(root: &Path, version: &str) -> bool {
     !(cfg!(target_os = "windows") && has_extended_paths(&fontdata))
 }
 
-// Markers written before they held a version say "generated", which never
-// matches.
-fn marker_matches(contents: &[u8], version: &str) -> bool {
-    contents == version.as_bytes()
+// Markers written before they held a version say "generated", and those
+// that held only the version have no sources: neither ever matches.
+fn marker_matches(contents: &[u8], expected: &str) -> bool {
+    contents == expected.as_bytes()
 }
 
 fn is_nonempty(path: &Path) -> bool {
@@ -297,6 +416,13 @@ fn install_font_cache(staging: &Path, fontdata: &Path) -> std::io::Result<()> {
     }
     let _ = std::fs::remove_dir_all(staging);
     Ok(())
+}
+
+fn remove_marker(root: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(root.join(FONTS_MARKER)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -352,10 +478,14 @@ pub fn ensure_font_cache(
     }
     let staging = root.join(format!("{}{}", FONTS_STAGING_PREFIX, instance_id));
     let generated = std::fs::create_dir_all(&staging).is_ok() && generate(&staging);
-    let marker = app_version().as_bytes();
+    let marker = expected_marker();
+    // The marker goes before the files do: an instance whose fingerprint
+    // matches it reads the cache without the lock, and a rename failing
+    // midway must not leave a mixed cache marked valid.
     let installed = generated
+        && remove_marker(root).is_ok()
         && install_font_cache(&staging, &fontdata_dir(root)).is_ok()
-        && write_replacing(&root.join(FONTS_MARKER), marker, instance_id).is_ok();
+        && write_replacing(&root.join(FONTS_MARKER), marker.as_bytes(), instance_id).is_ok();
     let _ = std::fs::remove_dir_all(&staging);
     drop(lock);
     if installed {
@@ -363,6 +493,51 @@ pub fn ensure_font_cache(
     } else {
         FontCache::Failed
     }
+}
+
+// Removes the font cache earlier versions kept in the temp root, once the
+// cache lives elsewhere. A version still using it holds fonts.lock while it
+// builds the cache there, so a taken lock leaves it in place. So does any
+// other instance alive, which may be an earlier version reading the cache;
+// the next start removes it. fonts.lock itself stays: another start may
+// already have it open.
+pub fn remove_old_font_cache(temp_root: &Path, font_root: &Path, own_id: &str) -> bool {
+    if temp_root == font_root {
+        return false;
+    }
+    if another_instance_alive(temp_root, own_id) {
+        return false;
+    }
+    let Ok(lock) = take_lock(&temp_root.join(FONTS_LOCK)) else {
+        return false;
+    };
+    let _ = std::fs::remove_file(temp_root.join(FONTS_MARKER));
+    let _ = std::fs::remove_dir_all(fontdata_dir(temp_root));
+    if let Ok(entries) = std::fs::read_dir(temp_root) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(FONTS_STAGING_PREFIX) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    drop(lock);
+    true
+}
+
+// The same check the sweep of dead instances uses: a taken instance.lock.
+fn another_instance_alive(root: &Path, own_id: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(root.join(INSTANCES_DIR)) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name() == own_id {
+            continue;
+        }
+        if is_locked(&entry.path().join(INSTANCE_LOCK)) {
+            return true;
+        }
+    }
+    false
 }
 
 fn write_replacing(path: &Path, bytes: &[u8], tag: &str) -> std::io::Result<()> {
@@ -785,20 +960,107 @@ pub fn temp_root(identifier: &str) -> Result<RootChoice, String> {
 // Where Tauri's app_cache_dir lives, worked out before Tauri is up.
 #[cfg(target_os = "macos")]
 fn user_cache_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
-    Some(PathBuf::from(home).join("Library/Caches"))
+    macos_cache_dir(std::env::var_os("HOME"))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn user_cache_dir() -> Option<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
-        let xdg = PathBuf::from(xdg);
-        if xdg.is_absolute() {
-            return Some(xdg);
-        }
+    linux_cache_dir(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+}
+
+#[cfg(target_os = "windows")]
+fn user_cache_dir() -> Option<PathBuf> {
+    windows_cache_dir(std::env::var_os("LOCALAPPDATA"))
+}
+
+// The rules per platform, apart from the environment so every platform's can
+// be tested anywhere. Inside the Flatpak XDG_CACHE_HOME is the sandbox's own
+// cache folder.
+#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+fn linux_cache_dir(
+    xdg_cache_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let xdg = xdg_cache_home.map(PathBuf::from);
+    if let Some(xdg) = xdg.filter(|xdg| xdg.is_absolute()) {
+        return Some(xdg);
     }
-    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
+    let home = home.filter(|home| !home.is_empty())?;
     Some(PathBuf::from(home).join(".cache"))
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_cache_dir(home: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let home = home.filter(|home| !home.is_empty())?;
+    Some(PathBuf::from(home).join("Library/Caches"))
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_cache_dir(local_app_data: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let dir = local_app_data.filter(|dir| !dir.is_empty())?;
+    Some(PathBuf::from(dir))
+}
+
+// ---------------------------------------------------------------------------
+// Font cache root
+// ---------------------------------------------------------------------------
+
+const FONT_ROOT_DIR: &str = "fonts";
+
+// The font cache outlives the temp folder, which some systems empty on every
+// boot, so it goes in the user's cache folder.
+pub fn font_cache_path(user_cache: &Path, identifier: &str) -> PathBuf {
+    user_cache.join(identifier).join(FONT_ROOT_DIR)
+}
+
+// Where the font cache goes. AllFonts.js decides which absolute paths the
+// abs/ protocol serves, so the folder must be private to this user; when the
+// cache folder is missing or fails that check, the cache stays in the temp
+// root as before, so the app never runs without one.
+pub fn font_root(identifier: &str, temp_root: &Path) -> RootChoice {
+    let Some(user_cache) = user_cache_dir() else {
+        return font_root_fallback(temp_root, "no user cache folder".to_string());
+    };
+    let preferred = font_cache_path(&user_cache, identifier);
+    choose_font_root(&preferred, temp_root, ensure_font_dir)
+}
+
+pub fn choose_font_root(
+    preferred: &Path,
+    temp_root: &Path,
+    ensure: impl Fn(&Path) -> Result<(), String>,
+) -> RootChoice {
+    match ensure(preferred) {
+        Ok(()) => RootChoice {
+            path: preferred.to_path_buf(),
+            note: None,
+        },
+        Err(reason) => font_root_fallback(temp_root, format!("{}: {}", preferred.display(), reason)),
+    }
+}
+
+fn font_root_fallback(temp_root: &Path, reason: String) -> RootChoice {
+    RootChoice {
+        path: temp_root.to_path_buf(),
+        note: Some(reason),
+    }
+}
+
+#[cfg(unix)]
+fn ensure_font_dir(path: &Path) -> Result<(), String> {
+    ensure_private_dir(path, unsafe { libc::getuid() })
+}
+
+// %LOCALAPPDATA% is already private to the user; what is checked is that the
+// folder is a real one and not a link to somewhere else.
+#[cfg(target_os = "windows")]
+fn ensure_font_dir(path: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+    let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err("not a plain folder".to_string());
+    }
+    Ok(())
 }
 
 // Names tried per folder before moving on to the next one.

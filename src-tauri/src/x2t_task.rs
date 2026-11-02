@@ -3,6 +3,10 @@
 // and run x2t with exactly the app's code. Log lines go out through a `log`
 // parameter, without the prefix the app adds.
 
+// x2t is a console program; without this flag Windows opens a console window for it.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 // On Windows, resource_dir() and canonicalize() return \\?\C:\... paths. x2t
 // copies whatever spelling it is given into its font cache, and its PDF export
 // cannot open fonts listed under that prefix, so paths handed to x2t drop it.
@@ -536,6 +540,11 @@ fn run_x2t_to_pdf(
     );
     #[cfg(target_os = "macos")]
     cmd.env("DYLD_LIBRARY_PATH", &run_dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
 
     let result = cmd.output().map_err(|error| {
         let message = format!("Failed to spawn x2t: {}", error);
@@ -1020,7 +1029,25 @@ pub fn font_scan_command(
         .arg("-create-allfonts")
         .arg(fontdata_dir)
         .arg(binaries_dir.join("fonts"));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd
+}
+
+// Every font folder the scan reads: the bundled one, those passed to x2t and
+// the standard ones x2t scans on its own. A change in any of them changes
+// the font cache marker.
+pub fn font_scan_dirs(binaries_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut dirs = vec![strip_extended_prefix(binaries_dir).join("fonts")];
+    let roots = symlink_scan_roots();
+    dirs.extend(symlink_font_target_dirs(&roots));
+    dirs.extend(roots);
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
 
 // Runs x2t's font scan into `fontdata_dir` and reports whether it succeeded.

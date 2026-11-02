@@ -1,6 +1,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use crate::path_grants::{GrantKind, GrantedFile};
 use tauri::{Manager, State};
 
 pub use crate::x2t_task::{blank_template_for, detect_format, is_empty_file};
@@ -10,8 +11,12 @@ pub struct AppState {
     // This instance's own folder: everything that belongs to the open
     // document (temp_layout.rs).
     pub temp_dir: PathBuf,
-    // Shared by every instance: the font cache and the logs.
+    // Shared by every instance: the logs and the leftovers of other instances.
     pub temp_root: PathBuf,
+    // Shared by every instance: the font cache.
+    pub font_root: PathBuf,
+    // Whether that cache is built yet (fonts_state.rs).
+    pub fonts: std::sync::Arc<crate::fonts_state::FontsState>,
     pub instance: crate::temp_layout::Instance,
     // Number of the document open in this instance: part of its images'
     // addresses (temp_layout.rs, "Document images").
@@ -25,23 +30,25 @@ pub struct AppState {
     // Crash recovery session of the open document, if any (recovery.rs).
     pub recovery: Mutex<Option<crate::recovery::RecoverySession>>,
     // Path passed as a launch argument that the frontend has not opened yet.
-    pub pending_open: Mutex<Option<String>>,
+    pub pending_open: Mutex<Option<PathBuf>>,
+    // The files the webview may name by token (path_grants.rs).
+    pub grants: crate::path_grants::PathGrants,
     // Encoding, delimiter and line breaks detected when the open document came
     // from a CSV or TXT, so saving it back writes the file the way it was read.
     pub text_options: Mutex<Option<crate::text_import::TextOptions>>,
     // The PDF the last successful print wrote: the only file open_pdf_viewer
     // hands to the system viewer. Cleared when a print starts.
     pub last_print_pdf: Mutex<Option<PathBuf>>,
-    // Images the user chose in the insert dialog: the only absolute paths
-    // copy-to-media reads.
-    pub picked_images: Mutex<Vec<PathBuf>>,
     // Image files pasted from the clipboard that grant_pasted_image found on
-    // it: the other absolute paths copy-to-media reads.
+    // it: the only absolute paths copy-to-media reads.
     pub pasted_images: Mutex<Vec<PathBuf>>,
     // Where a recovered document was saved before the crash: offered by the
     // first Save As, never written to without asking.
     pub save_suggestion: Mutex<Option<PathBuf>>,
 }
+
+// How the bridge names an image chosen in the insert dialog to copy-to-media.
+pub const IMAGE_GRANT_PREFIX: &str = "eo-grant:";
 
 pub(crate) fn log_event(_state: &AppState, msg: &str) {
     println!("{}", msg);
@@ -244,9 +251,10 @@ pub fn stage_insert_media(
 pub async fn open_pdf(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-    path: String,
+    token: String,
 ) -> Result<String, String> {
-    let input = PathBuf::from(&path);
+    let input = pdf_to_open(&state.grants, &token)?;
+    let path = input.to_string_lossy().to_string();
     let file_name = input
         .file_name()
         .and_then(|name| name.to_str())
@@ -280,6 +288,12 @@ pub async fn open_pdf(
     super::recent::record(&app, &path);
 
     Ok(STANDARD.encode(&bytes))
+}
+
+// The PDF the webview chose to open, by the token the open dialog, the launch
+// argument or the recent list gave it.
+fn pdf_to_open(grants: &crate::path_grants::PathGrants, token: &str) -> Result<PathBuf, String> {
+    grants.resolve(token, GrantKind::Open)
 }
 
 // The PDF editor's changes always describe the file as it was opened, so
@@ -316,9 +330,10 @@ fn read_pdf(path: &Path) -> Result<Vec<u8>, String> {
 pub async fn open_file(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-    path: String,
+    token: String,
 ) -> Result<String, String> {
-    open_file_inner(app, state, path, true).await
+    let path = state.grants.resolve(&token, GrantKind::Open)?;
+    open_file_inner(app, state, path.to_string_lossy().to_string(), true).await
 }
 
 // Every frontend open path funnels through open_file, so the recent list is fed
@@ -437,7 +452,7 @@ async fn open_file_inner(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
         convert_options,
     )
     .await;
@@ -517,7 +532,7 @@ pub async fn save_file(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
         text_options,
     )
     .await?;
@@ -537,10 +552,11 @@ pub async fn save_file(
 pub async fn save_file_as(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-    path: String,
+    token: String,
 ) -> Result<String, String> {
-    let dest = PathBuf::from(&path);
+    let dest = state.grants.resolve(&token, GrantKind::Save)?;
     crate::save_target::check_writable_destination(&dest)?;
+    let path = dest.to_string_lossy().to_string();
     let input = state.temp_dir.join("Editor.bin");
     let format_from = 8192;
     let format_to = detect_format(&dest);
@@ -553,7 +569,7 @@ pub async fn save_file_as(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
         text_options,
     )
     .await?;
@@ -582,9 +598,9 @@ pub async fn save_pdf(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     data: String,
-    path: Option<String>,
+    token: Option<String>,
 ) -> Result<String, String> {
-    let result = save_pdf_inner(&app, &state, &data, path).await;
+    let result = save_pdf_inner(&app, &state, &data, token).await;
     if let Err(error) = &result {
         log_event(&state, &format!("[SAVE] pdf failed: {}", error));
     }
@@ -595,11 +611,11 @@ async fn save_pdf_inner(
     app: &tauri::AppHandle,
     state: &AppState,
     data: &str,
-    path: Option<String>,
+    token: Option<String>,
 ) -> Result<String, String> {
     let changes = decode_pdf_changes(data)?;
     let current = open_pdf_file(state)?;
-    let dest = path.map(PathBuf::from).unwrap_or_else(|| current.clone());
+    let dest = pdf_save_destination(&state.grants, token.as_deref(), &current)?;
     crate::protocol_limits::check_pdf_save_target(&dest)?;
     // Refused before x2t runs; write_beside_and_rename checks again.
     crate::save_target::check_writable_destination(&dest)?;
@@ -612,7 +628,7 @@ async fn save_pdf_inner(
         &work.source(),
         &work.output(),
         &state.temp_dir,
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
     )
     .await;
     finish_pdf_save(&work, applied, &dest)?;
@@ -627,6 +643,24 @@ async fn save_pdf_inner(
     }
     *state.modified.lock().unwrap() = false;
     Ok("ok".to_string())
+}
+
+// Save writes over the open PDF; Save As writes exactly the file its token
+// names, which the dialog confirmed. A name not ending in .pdf is refused, not
+// renamed: the renamed file was never confirmed and may already exist.
+fn pdf_save_destination(
+    grants: &crate::path_grants::PathGrants,
+    token: Option<&str>,
+    current: &Path,
+) -> Result<PathBuf, String> {
+    let Some(token) = token else {
+        return Ok(current.to_path_buf());
+    };
+    let chosen = grants.resolve(token, GrantKind::Save)?;
+    if !crate::protocol_limits::has_pdf_extension(&chosen) {
+        return Err("a PDF can only be saved to a name ending in .pdf".to_string());
+    }
+    Ok(chosen)
 }
 
 // Replaces `dest` only when x2t succeeded and wrote the changed PDF. The work
@@ -829,7 +863,7 @@ pub async fn print_document(
         8192,
         513,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
         None,
     )
     .await
@@ -870,7 +904,7 @@ async fn print_pdf(
         &work.source(),
         &work.output(),
         &state.temp_dir,
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
     )
     .await;
     finish_pdf_save(&work, applied, &pdf_path)?;
@@ -1033,59 +1067,24 @@ async fn send_to_printer(_app: tauri::AppHandle, _printer: &str, _pdf: &Path) ->
     Err("Printing to a named printer is only available on Windows".to_string())
 }
 
-// The insert image dialog. The choice is remembered so copy-to-media can tell
-// a path the user picked from any other.
+// The open document, as a token that reopens it. None until it is saved.
 #[tauri::command]
-pub async fn pick_image_files(
-    window: tauri::WebviewWindow,
-    state: State<'_, AppState>,
-    multiple: bool,
-) -> Result<Option<Vec<String>>, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let dialog = window
-        .dialog()
-        .file()
-        .set_parent(&window)
-        .add_filter("Images", &crate::protocol_limits::IMAGE_EXTENSIONS);
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        if multiple {
-            dialog.blocking_pick_files()
-        } else {
-            dialog.blocking_pick_file().map(|choice| vec![choice])
-        }
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    let Some(picked) = picked else {
-        return Ok(None);
-    };
-    let paths: Vec<PathBuf> = picked
-        .into_iter()
-        .filter_map(|choice| choice.into_path().ok())
-        .collect();
-    state.picked_images.lock().unwrap().extend(paths.iter().cloned());
-    Ok(Some(
-        paths
-            .iter()
-            .map(|path| path.to_string_lossy().to_string())
-            .collect(),
-    ))
+pub fn current_document(state: State<'_, AppState>) -> Option<GrantedFile> {
+    let path = state.current_file.lock().unwrap().clone()?;
+    Some(state.grants.grant(path, GrantKind::Open))
 }
 
+// Asked once by the frontend; "fonts-ready" carries the change after that.
 #[tauri::command]
-pub fn get_current_path(state: State<'_, AppState>) -> Option<String> {
-    state
-        .current_file
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|p| p.to_string_lossy().to_string())
+pub fn fonts_status(state: State<'_, AppState>) -> crate::fonts_state::FontsStatus {
+    state.fonts.status()
 }
 
 // Hands over the launch argument once: a page reload must not open it again.
 #[tauri::command]
-pub fn take_pending_open_file(state: State<'_, AppState>) -> Option<String> {
-    state.pending_open.lock().unwrap().take()
+pub fn take_pending_open_file(state: State<'_, AppState>) -> Option<GrantedFile> {
+    let path = state.pending_open.lock().unwrap().take()?;
+    Some(state.grants.grant(path, GrantKind::Open))
 }
 
 #[tauri::command]
@@ -1126,9 +1125,10 @@ pub async fn create_new(
 pub async fn convert_for_insert(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-    path: String,
+    token: String,
 ) -> Result<serde_json::Value, String> {
-    let input = PathBuf::from(&path);
+    let input = state.grants.resolve(&token, GrantKind::Insert)?;
+    let path = input.to_string_lossy().to_string();
     let insert_dir = state.temp_dir.join("insert_tmp");
     let _ = std::fs::create_dir_all(&insert_dir);
 
@@ -1144,7 +1144,7 @@ pub async fn convert_for_insert(
         format_from,
         format_to,
         &insert_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.temp_root),
+        &crate::temp_layout::fontdata_dir(&state.font_root),
         None,
     )
     .await?;
@@ -1180,10 +1180,20 @@ pub async fn convert_for_insert(
     }))
 }
 
+// A sync command runs on the main thread, so it never waits for the build:
+// the editor only asks once the status has settled (bridge.js), and an early
+// call gets this error and the bundled list (font-patches.js).
 #[tauri::command]
 pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
-    let path = crate::temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
-    std::fs::read_to_string(&path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
+    let path = crate::temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
+    generated_font_list(state.fonts.status(), &path)
+}
+
+fn generated_font_list(status: crate::fonts_state::FontsStatus, path: &Path) -> Result<String, String> {
+    if !crate::fonts_state::uses_generated_list(status) {
+        return Err(format!("The font cache is not usable: {:?}", status));
+    }
+    std::fs::read_to_string(path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
 }
 
 // Case-insensitive on Windows only, even though the default macOS filesystem is
@@ -1954,6 +1964,137 @@ mod tests {
         clear_document_temp(&instance);
         assert!(!opened_pdf(&instance).exists());
         assert!(!instance.join("pdf_save").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn expired_grant(grants: &crate::path_grants::PathGrants, kind: GrantKind) -> String {
+        let long_ago = std::time::Instant::now()
+            .checked_sub(crate::path_grants::GRANT_TTL * 2)
+            .expect("the clock goes back far enough");
+        grants
+            .grant_at(PathBuf::from("/home/u/old.pdf"), kind, long_ago)
+            .token
+    }
+
+    #[test]
+    fn opening_a_pdf_takes_only_an_open_token() {
+        let grants = crate::path_grants::PathGrants::default();
+        let open = grants.grant(PathBuf::from("/home/u/a.pdf"), GrantKind::Open);
+        assert_eq!(pdf_to_open(&grants, &open.token), Ok(PathBuf::from("/home/u/a.pdf")));
+
+        assert!(pdf_to_open(&grants, "0123456789abcdef0123456789abcdef").is_err());
+        assert!(pdf_to_open(&grants, "/home/u/a.pdf").is_err());
+        assert!(pdf_to_open(&grants, &expired_grant(&grants, GrantKind::Open)).is_err());
+        let save = grants.grant(PathBuf::from("/home/u/b.pdf"), GrantKind::Save);
+        assert!(pdf_to_open(&grants, &save.token).is_err());
+        let insert = grants.grant(PathBuf::from("/home/u/c.pdf"), GrantKind::Insert);
+        assert!(pdf_to_open(&grants, &insert.token).is_err());
+    }
+
+    #[test]
+    fn the_font_list_comes_from_the_cache_only_once_it_is_ready() {
+        use crate::fonts_state::FontsStatus;
+        let dir = std::env::temp_dir().join(format!("eo-font-list-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("AllFonts.js");
+        std::fs::write(&path, "old list").unwrap();
+
+        assert!(generated_font_list(FontsStatus::Pending, &path).is_err());
+        assert!(generated_font_list(FontsStatus::Failed, &path).is_err());
+        assert_eq!(generated_font_list(FontsStatus::Ready, &path), Ok("old list".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_a_pdf_as_takes_only_a_save_token() {
+        let grants = crate::path_grants::PathGrants::default();
+        let current = Path::new("/home/u/open.pdf");
+        let save = grants.grant(PathBuf::from("/home/u/copy.pdf"), GrantKind::Save);
+        assert_eq!(
+            pdf_save_destination(&grants, Some(&save.token), current),
+            Ok(PathBuf::from("/home/u/copy.pdf"))
+        );
+        assert_eq!(pdf_save_destination(&grants, None, current), Ok(current.to_path_buf()));
+
+        let unknown = Some("0123456789abcdef0123456789abcdef");
+        assert!(pdf_save_destination(&grants, unknown, current).is_err());
+        assert!(pdf_save_destination(&grants, Some("/home/u/copy.pdf"), current).is_err());
+        let expired = expired_grant(&grants, GrantKind::Save);
+        assert!(pdf_save_destination(&grants, Some(&expired), current).is_err());
+        let open = grants.grant(PathBuf::from("/home/u/other.pdf"), GrantKind::Open);
+        assert!(pdf_save_destination(&grants, Some(&open.token), current).is_err());
+    }
+
+    #[test]
+    fn a_pdf_saved_as_another_name_is_refused() {
+        let grants = crate::path_grants::PathGrants::default();
+        let current = Path::new("/home/u/open.pdf");
+        let save = grants.grant(PathBuf::from("/home/u/copy.docx"), GrantKind::Save);
+        assert!(pdf_save_destination(&grants, Some(&save.token), current).is_err());
+        let upper = grants.grant(PathBuf::from("/home/u/COPY.PDF"), GrantKind::Save);
+        assert_eq!(
+            pdf_save_destination(&grants, Some(&upper.token), current),
+            Ok(PathBuf::from("/home/u/COPY.PDF"))
+        );
+    }
+
+    // The parameters of a command, from its signature in this file.
+    fn command_parameters(name: &str) -> String {
+        let source = include_str!("file_ops.rs");
+        let start = source
+            .find(&format!("pub async fn {}(", name))
+            .or_else(|| source.find(&format!("pub fn {}(", name)))
+            .unwrap_or_else(|| panic!("no command {}", name));
+        let signature = &source[start..];
+        let end = signature.find(") ->").expect("a signature ends with its return type");
+        signature[..end].to_string()
+    }
+
+    #[test]
+    fn no_pdf_command_takes_a_path() {
+        for name in ["open_pdf", "save_pdf", "print_document", "open_pdf_viewer"] {
+            let parameters = command_parameters(name);
+            assert!(!parameters.contains("path"), "{}: {}", name, parameters);
+        }
+        assert!(command_parameters("open_pdf").contains("token: String"));
+        assert!(command_parameters("save_pdf").contains("token: Option<String>"));
+    }
+
+    // What save_pdf does once x2t has applied the changes, from the token on:
+    // the x2t step is stood in for by writing its output.
+    fn save_pdf_without_x2t(
+        grants: &crate::path_grants::PathGrants,
+        token: &str,
+        current: &Path,
+        work: &PdfSaveWork,
+    ) -> Result<PathBuf, String> {
+        let dest = pdf_save_destination(grants, Some(token), current)?;
+        crate::save_target::check_writable_destination(&dest)?;
+        std::fs::write(work.output(), b"%PDF-1.7 original + update").unwrap();
+        finish_pdf_save(work, Ok("ok".to_string()), &dest)?;
+        Ok(dest)
+    }
+
+    #[test]
+    fn a_pdf_save_token_writes_the_file_and_an_open_token_writes_nothing() {
+        let (root, original, work) = pdf_save_scratch();
+        let grants = crate::path_grants::PathGrants::default();
+        let copy = root.join("copy.pdf");
+
+        let save = grants.grant(copy.clone(), GrantKind::Save);
+        let written = save_pdf_without_x2t(&grants, &save.token, &original, &work).unwrap();
+        assert_eq!(written, copy);
+        assert_eq!(std::fs::read(&copy).unwrap(), b"%PDF-1.7 original + update");
+
+        let refused = root.join("refused.pdf");
+        let work = PdfSaveWork::new(&root.join("instance"));
+        work.stage(&original, b"%PDF\x01changes", &root.join("instance/media"))
+            .unwrap();
+        let open = grants.grant(refused.clone(), GrantKind::Open);
+        assert!(save_pdf_without_x2t(&grants, &open.token, &original, &work).is_err());
+        assert!(!refused.exists());
+        assert_eq!(std::fs::read(&original).unwrap(), b"%PDF-1.7 original");
+        work.clear();
         let _ = std::fs::remove_dir_all(&root);
     }
 }

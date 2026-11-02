@@ -18,7 +18,20 @@
       }
     ],
     "security": {
-      "csp": "default-src * 'unsafe-eval' 'unsafe-inline' data: blob: ascdesktop: ipc: http://ipc.localhost; script-src * 'unsafe-eval' 'unsafe-inline'; style-src * 'unsafe-inline'",
+      "csp": {
+        "default-src": ["'self'"],
+        "script-src": ["'self'", "'unsafe-eval'", "'wasm-unsafe-eval'", "'unsafe-inline'"],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "img-src": ["'self'", "data:", "blob:", "ascdesktop:", "http://ascdesktop.localhost"],
+        "font-src": ["'self'", "data:", "blob:", "ascdesktop:", "http://ascdesktop.localhost"],
+        "media-src": ["'self'", "data:", "blob:", "ascdesktop:", "http://ascdesktop.localhost"],
+        "connect-src": ["'self'", "data:", "blob:", "ascdesktop:", "http://ascdesktop.localhost", "ipc:", "http://ipc.localhost"],
+        "worker-src": ["'self'", "blob:"],
+        "frame-src": ["'self'", "blob:"],
+        "object-src": ["'none'"],
+        "base-uri": ["'self'"],
+        "form-action": ["'none'"]
+      },
       "dangerousDisableAssetCspModification": true
     }
   },

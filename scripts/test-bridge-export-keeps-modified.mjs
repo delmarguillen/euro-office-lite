@@ -17,7 +17,9 @@ async function modifiedBridge(dialogAnswer) {
   const bridge = await loadBridge({
     invoke: {
       write_editor_bin: () => 'ok',
-      get_current_path: () => '/docs/report.docx',
+      current_document: () => ({ token: 'open-token', name: 'report.docx' }),
+      // The backend's Save As dialog, answered with a name or cancelled.
+      pick_save_target: () => (dialogAnswer ? { token: 'save-token', name: dialogAnswer } : null),
       save_file_as: () => 'ok',
       recovery_mark_saved: () => null,
       set_window_title: () => null,
@@ -27,7 +29,6 @@ async function modifiedBridge(dialogAnswer) {
     },
   });
   bridge.sandbox.__TAURI__.dialog = {
-    save: () => Promise.resolve(dialogAnswer),
     message: () => Promise.resolve(),
   };
   const history = { index: 5, savedIndex: 2, lastSavedIndex: undefined };
@@ -59,7 +60,7 @@ function lastSent(sent) {
   return sent.length ? sent[sent.length - 1] : undefined;
 }
 
-let run = await modifiedBridge('/docs/report.pdf');
+let run = await modifiedBridge('report.pdf');
 run.startSave();
 await run.bridge.run(`AscDesktopEditor.LocalFileSave('saveas=true', '', null, ${PDF}, '')`);
 run.bridge.stopTimers();
@@ -85,7 +86,7 @@ check(results, 'a print leaves the document modified',
 check(results, '... and never sends modified = false',
   !run.sent.includes(false), run.sent.join());
 
-run = await modifiedBridge('/docs/report.docx');
+run = await modifiedBridge('report.docx');
 run.startSave();
 await run.bridge.run(`AscDesktopEditor.LocalFileSave('saveas=true', '', null, ${DOCX}, '')`);
 run.bridge.stopTimers();

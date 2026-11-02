@@ -12,7 +12,8 @@ async function setup(failures) {
   const bridge = await loadBridge({
     invoke: {
       write_editor_bin: () => 'ok',
-      get_current_path: () => 'C:/docs/report.docx',
+      current_document: () => ({ token: 'open-token', name: 'report.docx' }),
+      pick_save_target: () => ({ token: 'save-token', name: 'report.pdf' }),
       save_file_as: () => { throw failures.saveAs; },
       print_document: () => { throw failures.print; },
     },
@@ -20,7 +21,6 @@ async function setup(failures) {
   const messages = [];
   const endSaves = [];
   bridge.sandbox.__TAURI__.dialog = {
-    save: () => Promise.resolve('C:/docs/report.pdf'),
     message: (text, options) => { messages.push({ text, title: options && options.title }); return Promise.resolve(); },
   };
   bridge.sandbox.AscDesktopEditor._editorWindow = {
