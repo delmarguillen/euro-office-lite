@@ -2,9 +2,12 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 var ClipboardHelper = (function() {
+  // Names read_clipboard_image already saved into the document's media/.
+  var stagedImages = new Set();
   async function readNativeClipboardImage() {
     try {
       var result = await window.__TAURI__.core.invoke('read_clipboard_image');
+      if (result) stagedImages.add(result);
       return result || null;
     } catch(e) {
       window._eoLog('[EO] Clipboard image read failed: ' + (e.message || e));
@@ -100,8 +103,12 @@ var ClipboardHelper = (function() {
   function isLocalFilePath(path) {
     return path.charAt(0) === '/' || /^[A-Za-z]:[\\/]/.test(path);
   }
+  function isStagedImage(name) {
+    return stagedImages.has(name);
+  }
   return {
     readNativeClipboardImage: readNativeClipboardImage,
+    isStagedImage: isStagedImage,
     isLocalFilePath: isLocalFilePath,
     extractImageUriFromPaste: extractImageUriFromPaste,
     looksLikeImageFilePath: looksLikeImageFilePath,
@@ -2769,6 +2776,8 @@ window.AscDesktopEditor = {
       return 'eo-missing-' + Date.now() + '-' + (url.split('/').pop() || 'image');
     }
     if (url.indexOf(ASC_PROTO_BASE) === 0) return url;
+    // Already in media/: copy-to-media would look in insert_tmp/media/ and fail.
+    if (ClipboardHelper.isStagedImage(url)) return url;
     // Granted images and pasted paths are both copied by the backend.
     var protocol = (url.indexOf('http://') === 0 || url.indexOf('https://') === 0)
       ? 'download-to-media' : 'copy-to-media';
