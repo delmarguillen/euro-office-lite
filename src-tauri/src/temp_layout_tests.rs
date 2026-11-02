@@ -1387,3 +1387,56 @@ fn an_install_failing_midway_leaves_no_marker() {
     assert!(!root.join(FONTS_MARKER).exists());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// The Windows font folders x2t_task adds to the fingerprint (windows_font_dirs):
+// a font added to either, or the per-user folder created, changes the sources.
+fn windows_sources(windir: &Path, local: &Path) -> String {
+    font_sources_text(
+        Path::new("/no-binaries"),
+        &crate::x2t_task::windows_font_dirs(Some(windir), Some(local)),
+    )
+}
+
+#[test]
+fn a_font_added_to_the_system_folder_changes_the_sources() {
+    let root = scratch_root();
+    let (windir, local) = (root.join("Windows"), root.join("Local"));
+    std::fs::create_dir_all(windir.join("Fonts")).unwrap();
+    let before = windows_sources(&windir, &local);
+
+    tick();
+    std::fs::write(windir.join("Fonts").join("new.ttf"), b"x").unwrap();
+
+    assert_ne!(windows_sources(&windir, &local), before);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_font_added_to_the_user_folder_changes_the_sources() {
+    let root = scratch_root();
+    let (windir, local) = (root.join("Windows"), root.join("Local"));
+    let user_fonts = local.join("Microsoft").join("Windows").join("Fonts");
+    std::fs::create_dir_all(&user_fonts).unwrap();
+    let before = windows_sources(&windir, &local);
+
+    tick();
+    std::fs::write(user_fonts.join("new.ttf"), b"x").unwrap();
+
+    assert_ne!(windows_sources(&windir, &local), before);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Windows creates the per-user folder with the first per-user font.
+#[test]
+fn creating_the_missing_user_folder_changes_the_sources() {
+    let root = scratch_root();
+    let (windir, local) = (root.join("Windows"), root.join("Local"));
+    let before = windows_sources(&windir, &local);
+    assert!(before.contains("missing"));
+
+    std::fs::create_dir_all(local.join("Microsoft").join("Windows").join("Fonts")).unwrap();
+
+    assert_ne!(windows_sources(&windir, &local), before);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
