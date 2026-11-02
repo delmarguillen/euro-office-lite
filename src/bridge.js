@@ -584,6 +584,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
     saveError: 'Save error', saveErrorMsg: 'Could not save the file.\n\nTarget format not compatible with this document type.',
     saveDeniedMsg: 'Could not save the file.\n\nYou do not have permission to write there, or the file is read-only.',
+    saveLockedMsg: 'Could not save the file.\n\nIt may be open in another program.',
     pdfFontsErrorMsg: 'The PDF could not be created because the app could not prepare its fonts. Try again in a moment. If it keeps failing, restart Euro-Office Lite.',
     printError: 'Print failed', printErrorMsg: 'The document could not be printed. Please try again.',
     documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
@@ -962,13 +963,7 @@ async function _eoSavePdf(ref, isSaveAs) {
     await invoke('save_pdf', { data: _eoPdfChanges(ref), token: token });
   } catch (e) {
     window._eoLog('[SAVE] pdf failed: ' + ((e && e.message) || e));
-    await window.__TAURI__.dialog.message(
-      _eoSaveErrorText(e),
-      { title: _t('saveError'), kind: 'error' }
-    );
-    if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
-      ref.ew.DesktopOfflineAppDocumentEndSave(1);
-    }
+    await _eoFailSave(ref, e, wasModified);
     return;
   }
   if (target) _eoShowSavedName(target.name);
@@ -1321,6 +1316,18 @@ function _eoEndSaveKeepingModified(ref, wasModified) {
   _eoRestoreModified(wasModified);
 }
 
+// Ends a save that failed. The modified mark goes back before the error
+// dialog, not after it: sdkjs reported the document as saved when the save
+// began, and the title must not lose its mark while the dialog is open.
+async function _eoFailSave(ref, err, wasModified) {
+  _eoRestoreModified(wasModified);
+  await window.__TAURI__.dialog.message(
+    _eoSaveErrorText(err),
+    { title: _t('saveError'), kind: 'error' }
+  );
+  _eoEndSaveKeepingModified(ref, wasModified);
+}
+
 function _forceReload() {
   window.onbeforeunload = null;
   var iframes = document.querySelectorAll('iframe');
@@ -1507,6 +1514,11 @@ function _eoIsFontCacheError(error) {
 
 // The backend starts its error with this when it may not write the file: a
 // read-only file or a folder the user cannot write to.
+function _eoIsSaveLockedError(error) {
+  var text = (error && error.message) || String(error);
+  return text.indexOf('save-locked') === 0;
+}
+
 function _eoIsSaveDeniedError(error) {
   var text = (error && error.message) || String(error);
   return text.indexOf('save-denied') === 0;
@@ -1516,6 +1528,7 @@ function _eoIsSaveDeniedError(error) {
 function _eoSaveErrorText(error) {
   if (_eoIsFontCacheError(error)) return _t('pdfFontsErrorMsg');
   if (_eoIsSaveDeniedError(error)) return _t('saveDeniedMsg');
+  if (_eoIsSaveLockedError(error)) return _t('saveLockedMsg');
   return _t('saveErrorMsg');
 }
 
@@ -2629,13 +2642,7 @@ window.AscDesktopEditor = {
             }
           } catch(saveErr) {
             window._eoLog('[EO] SaveAs failed: ' + saveErr);
-            await window.__TAURI__.dialog.message(
-              _eoSaveErrorText(saveErr),
-              { title: _t('saveError'), kind: 'error' }
-            );
-            if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
-              ref.ew.DesktopOfflineAppDocumentEndSave(1);
-            }
+            await _eoFailSave(ref, saveErr, wasModified);
             return;
           }
         }
@@ -2654,13 +2661,7 @@ window.AscDesktopEditor = {
           // disk, and the editor's own "saved" indicator says nothing about it:
           // without this the document looks written and is not.
           window._eoLog('[EO] Save failed: ' + saveErr);
-          await window.__TAURI__.dialog.message(
-            _eoSaveErrorText(saveErr),
-            { title: _t('saveError'), kind: 'error' }
-          );
-          if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
-            ref.ew.DesktopOfflineAppDocumentEndSave(1);
-          }
+          await _eoFailSave(ref, saveErr, wasModified);
           return;
         }
       }

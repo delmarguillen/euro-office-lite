@@ -3,17 +3,29 @@
 
     function _installFrameDiagnostics(win) {
       try {
-        if (!win || win._eoDiagnosticsInstalled) return;
-        win._eoDiagnosticsInstalled = true;
+        if (!win || !win.document) return;
+        // Keyed on the document, like installPinchZoomGuard: the frame is first
+        // injected on its initial about:blank and then navigates to the editor.
+        // A window-keyed flag outlived that document and blocked reinstallation.
+        var doc = win.document;
+        if (doc.__eoDiagnosticsInstalled) return;
+        doc.__eoDiagnosticsInstalled = true;
+
+        // Drop the handlers of an earlier document so a reused window logs once.
+        if (win._eoFrameErrorHandler) {
+          win.removeEventListener('error', win._eoFrameErrorHandler, true);
+          win.removeEventListener('unhandledrejection', win._eoFrameRejectHandler);
+        }
+        win._eoFrameErrorHandler = function(event) {
+          _log('[IFRAME-ERROR]', window._eoDescribeErrorEvent(event));
+        };
+        win._eoFrameRejectHandler = function(event) {
+          _log('[IFRAME-REJECT]', event.reason || 'unknown');
+        };
 
         // Capture phase: resource load failures inside the frame do not bubble.
-        win.addEventListener('error', function(event) {
-          _log('[IFRAME-ERROR]', window._eoDescribeErrorEvent(event));
-        }, true);
-
-        win.addEventListener('unhandledrejection', function(event) {
-          _log('[IFRAME-REJECT]', event.reason || 'unknown');
-        });
+        win.addEventListener('error', win._eoFrameErrorHandler, true);
+        win.addEventListener('unhandledrejection', win._eoFrameRejectHandler);
 
         if (window._eoLogCspViolation) {
           win.addEventListener('securitypolicyviolation', window._eoLogCspViolation);

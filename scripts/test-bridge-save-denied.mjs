@@ -8,6 +8,7 @@ import { check, finish, loadBridge } from './bridge-test-harness.mjs';
 const results = [];
 const DENIED = 'save-denied: /home/user/docs/report.docx: the file is read-only';
 const OTHER = 'x2t conversion failed (exit code 80): ';
+const LOCKED = 'save-locked: C:\\Users\\me\\report.docx: The process cannot access the file because it is being used by another process. (os error 32)';
 
 async function setup(docType, failure) {
   const fail = () => { throw failure; };
@@ -68,6 +69,10 @@ for (const [name, docType, param] of cases) {
   env = await save(docType, param, new Error(DENIED));
   check(results, `${name} refused for permissions, thrown as an Error, says so too`,
     showsOnly(env, 'saveDeniedMsg'), JSON.stringify(env.messages));
+
+  env = await save(docType, param, LOCKED);
+  check(results, `${name} refused because another program has the file open says so`,
+    showsOnly(env, 'saveLockedMsg'), JSON.stringify(env.messages));
 
   env = await save(docType, param, OTHER);
   check(results, `${name} failing for another reason keeps the generic message`,
