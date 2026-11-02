@@ -1219,6 +1219,11 @@
       _openPath(file);
     });
 
+    document.querySelector('.btn[data-edit-pdf]').addEventListener('click', function() {
+      if (!window.AscDesktopEditor) return;
+      window._eoEditPdf();
+    });
+
     // Every opening goes through open_file or open_pdf, which is where the Rust
     // side records the recent files entry. `file` is { token, name } from the backend.
     async function _openPath(file, silent) {
