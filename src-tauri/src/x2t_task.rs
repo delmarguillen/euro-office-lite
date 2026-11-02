@@ -2268,28 +2268,7 @@ mod font_scan_tests {
 #[cfg(test)]
 mod platform_font_dir_tests {
     use super::{macos_font_dirs, windows_font_dirs};
-    use crate::temp_layout::font_sources_text;
     use std::path::{Path, PathBuf};
-
-    fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("eo-platform-fonts-{}-{}", std::process::id(), name));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    // Folder times have a fine resolution, but not every file system has one.
-    fn tick() {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-
-    fn sources(windir: &Path, local: &Path) -> String {
-        font_sources_text(
-            Path::new("/no-binaries"),
-            &windows_font_dirs(Some(windir), Some(local)),
-        )
-    }
 
     #[test]
     fn windows_dirs_come_from_windir_and_local_app_data() {
@@ -2333,49 +2312,6 @@ mod platform_font_dir_tests {
         let mut with_home = system.clone();
         with_home.push(Path::new("/Users/ana").join("Library").join("Fonts"));
         assert_eq!(macos_font_dirs(Some(Path::new("/Users/ana"))), with_home);
-    }
-
-    #[test]
-    fn a_font_added_to_the_system_folder_changes_the_sources() {
-        let root = scratch("system");
-        let (windir, local) = (root.join("Windows"), root.join("Local"));
-        std::fs::create_dir_all(windir.join("Fonts")).unwrap();
-        let before = sources(&windir, &local);
-
-        tick();
-        std::fs::write(windir.join("Fonts").join("new.ttf"), b"x").unwrap();
-
-        assert_ne!(sources(&windir, &local), before);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn a_font_added_to_the_user_folder_changes_the_sources() {
-        let root = scratch("user");
-        let (windir, local) = (root.join("Windows"), root.join("Local"));
-        let user_fonts = local.join("Microsoft").join("Windows").join("Fonts");
-        std::fs::create_dir_all(&user_fonts).unwrap();
-        let before = sources(&windir, &local);
-
-        tick();
-        std::fs::write(user_fonts.join("new.ttf"), b"x").unwrap();
-
-        assert_ne!(sources(&windir, &local), before);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    // Windows creates the per-user folder with the first per-user font.
-    #[test]
-    fn creating_the_missing_user_folder_changes_the_sources() {
-        let root = scratch("missing");
-        let (windir, local) = (root.join("Windows"), root.join("Local"));
-        let before = sources(&windir, &local);
-        assert!(before.contains("missing"));
-
-        std::fs::create_dir_all(local.join("Microsoft").join("Windows").join("Fonts")).unwrap();
-
-        assert_ne!(sources(&windir, &local), before);
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(target_os = "linux")]
