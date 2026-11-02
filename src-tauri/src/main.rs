@@ -17,6 +17,7 @@ mod recovery;
 mod save_target;
 mod temp_layout;
 mod text_import;
+mod window_state;
 mod x2t_task;
 
 use file_ops::AppState;
@@ -131,6 +132,48 @@ fn apply_title_bar(app: &tauri::App, mode: TitleBar) {
         "title bar mode={:?}{} realized_before_show={}",
         mode, note, realized_before_show
     ));
+}
+
+// GTK is already up here: tao started it to build the window.
+#[cfg(target_os = "linux")]
+fn on_wayland(window: &tauri::WebviewWindow) -> bool {
+    use gtk::prelude::*;
+    let Ok(gtk_window) = window.gtk_window() else {
+        return false;
+    };
+    gtk_window.display().backend().is_wayland()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn on_wayland(_window: &tauri::WebviewWindow) -> bool {
+    false
+}
+
+// The plugin skips main (see window_state::plugin), so this is the one place it
+// is restored, before setup shows it.
+fn restore_main_window(app: &tauri::App) {
+    use tauri_plugin_window_state::WindowExt;
+    let Some(window) = app.get_webview_window(window_state::MAIN_WINDOW) else {
+        log_startup("ERROR: restore: no main window");
+        return;
+    };
+    let flags = window_state::restored_flags(on_wayland(&window));
+    if let Err(e) = window.restore_state(flags) {
+        log_startup(&format!("ERROR: restore main window: {e}"));
+    }
+}
+
+// main is built hidden (see main) and restored when setup shows it. On Linux
+// the window is either built visible or shown by apply_title_bar.
+#[cfg(not(target_os = "linux"))]
+fn show_main_window(app: &tauri::App) {
+    let Some(window) = app.get_webview_window("main") else {
+        log_startup("ERROR: show: no main window");
+        return;
+    };
+    if let Err(e) = window.show() {
+        log_startup(&format!("ERROR: show main window: {e}"));
+    }
 }
 
 // The first of the places a bundled resource can live that holds it.
@@ -289,12 +332,18 @@ fn main() {
     // build it hidden and let setup apply the mode and show it.
     #[cfg(target_os = "linux")]
     let title_bar = wayland_title_bar(title_bar);
+    // Hidden also lets the window state plugin restore size and position before
+    // the window is on screen; setup shows it. Linux keeps the default mode
+    // visible: tao's Wayland header sits in a GTK event box whose input window,
+    // mapped in the same pass as the header, goes over its buttons and they
+    // stop taking clicks.
     #[cfg(target_os = "linux")]
-    if title_bar != TitleBar::Default {
-        for window in context.config_mut().app.windows.iter_mut() {
-            if window.label == "main" {
-                window.visible = false;
-            }
+    let build_hidden = title_bar != TitleBar::Default;
+    #[cfg(not(target_os = "linux"))]
+    let build_hidden = true;
+    for window in context.config_mut().app.windows.iter_mut() {
+        if window.label == "main" && build_hidden {
+            window.visible = false;
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -322,7 +371,8 @@ fn main() {
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init());
+        .plugin(tauri_plugin_shell::init())
+        .plugin(window_state::plugin());
 
     #[cfg(target_os = "windows")]
     {
@@ -714,9 +764,13 @@ fn main() {
             }
         })
         .setup(move |app| {
+            // Restored before it is shown, so a hidden window appears once.
+            restore_main_window(app);
             // First, so a hidden window is shown as early as the default one.
             #[cfg(target_os = "linux")]
             apply_title_bar(app, title_bar);
+            #[cfg(not(target_os = "linux"))]
+            show_main_window(app);
 
             let resource_dir = app.path().resource_dir().unwrap_or_default();
             let binaries_dir = resource_dir.join("binaries");
