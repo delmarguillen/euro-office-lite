@@ -12,9 +12,11 @@ pub const SAVE_DENIED_ERROR: &str = "save-denied";
 
 /// Start of the error a save returns when another program holds the
 /// destination open without sharing write access (Windows only).
+#[cfg(windows)]
 pub const SAVE_LOCKED_ERROR: &str = "save-locked";
 
 // Windows ERROR_SHARING_VIOLATION.
+#[cfg(windows)]
 const SHARING_VIOLATION: i32 = 32;
 
 static TEMP_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -32,8 +34,21 @@ pub fn check_writable_destination(dest: &Path) -> Result<(), String> {
     if metadata.is_dir() {
         return Ok(());
     }
-    // Opening for write without truncate or create leaves content and dates as
-    // they were. Only Windows refuses it for a file another program has open.
+    check_not_locked(dest)
+}
+
+// Only Windows refuses to open a file another program holds open. Elsewhere the
+// open finds no lock and fails on a file we may not write but may replace by
+// rename, so it is skipped.
+#[cfg(not(windows))]
+fn check_not_locked(_dest: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+// Opening for write without truncate or create leaves content and dates as
+// they were.
+#[cfg(windows)]
+fn check_not_locked(dest: &Path) -> Result<(), String> {
     let Err(error) = OpenOptions::new().write(true).open(dest) else {
         return Ok(());
     };
@@ -43,8 +58,9 @@ pub fn check_writable_destination(dest: &Path) -> Result<(), String> {
     Err(save_error(dest, error))
 }
 
+#[cfg(windows)]
 fn is_sharing_violation(error: &std::io::Error) -> bool {
-    cfg!(windows) && error.raw_os_error() == Some(SHARING_VIOLATION)
+    error.raw_os_error() == Some(SHARING_VIOLATION)
 }
 
 // Puts a copy of `from` at `dest` in one step: the copy is written next to
@@ -120,6 +136,7 @@ fn denied(dest: &Path, reason: &str) -> String {
     format!("{}: {}: {}", SAVE_DENIED_ERROR, dest.display(), reason)
 }
 
+#[cfg(windows)]
 fn locked(dest: &Path, reason: &str) -> String {
     format!("{}: {}: {}", SAVE_LOCKED_ERROR, dest.display(), reason)
 }
@@ -240,10 +257,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(windows)]
     #[test]
-    fn a_sharing_violation_is_a_locked_error_only_on_windows() {
+    fn a_sharing_violation_is_a_locked_error() {
         let error = std::io::Error::from_raw_os_error(SHARING_VIOLATION);
-        assert_eq!(is_sharing_violation(&error), cfg!(windows));
+        assert!(is_sharing_violation(&error));
         let message = locked(Path::new("doc.docx"), "in use");
         assert!(message.starts_with(SAVE_LOCKED_ERROR), "{}", message);
     }
@@ -327,6 +345,23 @@ mod tests {
 
         fn mode_of(path: &Path) -> u32 {
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+        }
+
+        // Mode 020: write bits set, so not read-only, but none for the owner.
+        // Before, opening it for write failed; replacing it by rename works.
+        #[test]
+        fn a_destination_the_owner_may_not_open_passes_the_check() {
+            let dir = test_dir("check-no-open");
+            let dest = dir.join("doc.docx");
+            std::fs::write(&dest, b"PK").unwrap();
+            set_mode(&dest, 0o020);
+            assert!(!std::fs::metadata(&dest).unwrap().permissions().readonly());
+
+            let result = check_writable_destination(&dest);
+
+            set_mode(&dest, 0o644);
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(result.is_ok(), "{:?}", result);
         }
 
         #[test]
