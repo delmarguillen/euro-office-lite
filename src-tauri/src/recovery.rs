@@ -19,7 +19,6 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 
 use crate::file_ops::{log_event, AppState};
@@ -97,8 +96,9 @@ pub struct RecoverySession {
     pub dir: PathBuf,
     // Held open for the whole life of the session. Dropping it is what makes
     // the folder look recoverable to the next process, so it is only dropped
-    // when the session ends.
-    pub lock: std::fs::File,
+    // when the session ends. Never read: the leading underscore says so, as in
+    // `_held` in converter.rs.
+    pub _lock: std::fs::File,
     // Changes already in the file when this session adopted it: 0 on a normal
     // open, n after a recovery. sdkjs numbers deleteIndex from the start of ITS
     // session, so every index it sends is read relative to this.
@@ -530,7 +530,7 @@ pub fn recovery_begin(
 
     *state.recovery.lock().unwrap() = Some(RecoverySession {
         dir,
-        lock,
+        _lock: lock,
         base: 0,
         entries: Vec::new(),
         saved_count: 0,
@@ -745,7 +745,7 @@ pub fn recovery_load(
 
     *state.recovery.lock().unwrap() = Some(RecoverySession {
         dir,
-        lock,
+        _lock: lock,
         base: changes.len(),
         entries,
         saved_count: info.as_ref().map(|info| info.saved_count).unwrap_or(0),
@@ -760,17 +760,6 @@ pub fn recovery_load(
         path,
         doc_type,
     })
-}
-
-// The path a Save As after a recovery starts from.
-#[tauri::command]
-pub fn get_save_suggestion(state: State<'_, AppState>) -> Option<String> {
-    state
-        .save_suggestion
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string())
 }
 
 // `id` absent means "all of them": the start screen offers a discard-all next

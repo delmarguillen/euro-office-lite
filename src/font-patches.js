@@ -171,7 +171,7 @@
         _systemFontsJs = js || '';
         return _systemFontsJs;
       }).catch(function(e) {
-        _log('[EO] get_system_fonts failed: ' + e.message);
+        _log('[EO] get_system_fonts failed: ' + (e.message || e));
         return '';
       });
       return _systemFontsPromise;

@@ -5,9 +5,12 @@ mod bridge;
 mod clipboard;
 mod converter;
 mod dictionaries;
+mod file_dialogs;
 mod file_ops;
+mod fonts_state;
 mod launch_args;
 mod note_separator;
+mod path_grants;
 mod protocol_limits;
 mod recent;
 mod recovery;
@@ -141,6 +144,12 @@ fn read_resource(app: &tauri::AppHandle, relative: &std::path::Path) -> Option<V
     candidates.iter().find_map(|p| std::fs::read(p).ok())
 }
 
+// The fonts the app ships, the ones the bundled AllFonts.js names.
+fn bundled_fonts_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    let resource_dir = app.path().resource_dir().unwrap_or_default();
+    x2t_task::strip_extended_prefix(&resource_dir.join("binaries")).join("fonts")
+}
+
 // x2t runs with a different working directory, so a relative launch argument
 // must be anchored to ours. A plain join, not canonicalize: that would resolve
 // symlinks and, on Windows, add the \\?\ prefix to the path kept in recents.
@@ -154,6 +163,30 @@ fn absolute_arg_path(arg: &str, cwd: &std::path::Path) -> Option<std::path::Path
     } else {
         None
     }
+}
+
+// What copy-to-media reads. An image chosen in the insert dialog comes as
+// "eo-grant:<token>/<name>". After a compare or a merge, sdkjs does not
+// register the url map convert_for_insert hands it and asks for the bare name
+// the inserted binary carries ("image1.png"): that resolves against
+// insert_tmp/media/, by file name only so a relative request cannot walk out
+// of it with a .. Staging is keyed on content, so the file already staged
+// there answers with the name it got at convert time.
+fn copy_source(state: &AppState, src_path: &str) -> Result<std::path::PathBuf, String> {
+    if let Some(granted) = src_path.strip_prefix(file_ops::IMAGE_GRANT_PREFIX) {
+        let token = granted.split('/').next().unwrap_or_default();
+        return state.grants.resolve(token, path_grants::GrantKind::Image);
+    }
+    let requested = std::path::Path::new(src_path);
+    if requested.is_absolute() {
+        let pasted = state.pasted_images.lock().unwrap();
+        if !protocol_limits::may_copy_absolute(requested, &pasted) {
+            return Err("not on the clipboard".to_string());
+        }
+        return Ok(requested.to_path_buf());
+    }
+    let name = requested.file_name().unwrap_or_default();
+    Ok(state.temp_dir.join("insert_tmp").join("media").join(name))
 }
 
 fn main() {
@@ -185,6 +218,8 @@ fn main() {
     };
     let temp_root = root_choice.path;
     std::fs::create_dir_all(&temp_root).ok();
+    let font_choice = temp_layout::font_root(&context.config().identifier, &temp_root);
+    let font_root = font_choice.path;
     let instance = start_instance(&temp_root);
     let temp_dir = instance.dir.clone();
     let instance_id = instance.id.clone();
@@ -205,6 +240,13 @@ fn main() {
         log_startup(&format!(
             "WARNING: temp folder {} is not the preferred one: {}",
             temp_root.display(),
+            note
+        ));
+    }
+    if let Some(note) = &font_choice.note {
+        log_startup(&format!(
+            "WARNING: font cache kept in the temp folder {}: {}",
+            font_root.display(),
             note
         ));
     }
@@ -260,17 +302,16 @@ fn main() {
         log_startup("title bar option ignored: it only applies on Linux Wayland");
     }
 
-    let file_to_open: Option<String> = {
+    let file_to_open: Option<std::path::PathBuf> = {
         // An empty base leaves a relative path untouched, which is what we can do
         // when the working directory is unreadable.
         let cwd = std::env::current_dir().unwrap_or_default();
         let path = launch
             .document
             .as_deref()
-            .and_then(|arg| absolute_arg_path(arg, &cwd))
-            .and_then(|path| path.into_os_string().into_string().ok());
+            .and_then(|arg| absolute_arg_path(arg, &cwd));
         if let Some(ref path) = path {
-            let file_name = std::path::Path::new(path)
+            let file_name = path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("unknown");
@@ -295,19 +336,23 @@ fn main() {
 
     builder = builder.on_menu_event(app_quit::on_menu_event);
 
+    let fonts = std::sync::Arc::new(fonts_state::FontsState::pending());
+
     builder.manage(AppState {
             current_file: Mutex::new(None),
             temp_dir,
             temp_root: temp_root.clone(),
+            font_root: font_root.clone(),
+            fonts: fonts.clone(),
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
             modified: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
             pending_open: Mutex::new(file_to_open),
+            grants: path_grants::PathGrants::default(),
             text_options: Mutex::new(None),
             last_print_pdf: Mutex::new(None),
-            picked_images: Mutex::new(Vec::new()),
             pasted_images: Mutex::new(Vec::new()),
             save_suggestion: Mutex::new(None),
         })
@@ -320,13 +365,17 @@ fn main() {
             file_ops::write_editor_bin,
             file_ops::print_document,
             file_ops::create_new,
-            file_ops::get_current_path,
-            file_ops::pick_image_files,
+            file_ops::current_document,
+            file_dialogs::pick_document,
+            file_dialogs::pick_files,
+            file_dialogs::pick_save_target,
+            file_dialogs::locate_linked_file,
             file_ops::take_pending_open_file,
             file_ops::open_pdf_viewer,
             file_ops::print_to_printer,
             file_ops::convert_for_insert,
             file_ops::get_system_fonts,
+            file_ops::fonts_status,
             bridge::set_window_title,
             bridge::set_document_modified,
             bridge::js_log,
@@ -346,7 +395,6 @@ fn main() {
             recovery::recovery_candidates,
             recovery::recovery_load,
             recovery::recovery_discard,
-            recovery::get_save_suggestion,
             dictionaries::list_user_dictionaries,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
@@ -456,20 +504,13 @@ fn main() {
                 // name it got at convert time instead of piling up a second copy.
                 // Only the file name, so a relative request cannot walk out of that
                 // directory with a ..
-                let insert_src = state
-                    .temp_dir
-                    .join("insert_tmp")
-                    .join("media")
-                    .join(std::path::Path::new(src_path).file_name().unwrap_or_default());
-                let requested = std::path::Path::new(src_path);
-                let src = if requested.is_absolute() {
-                    let picked = state.picked_images.lock().unwrap();
-                    let pasted = state.pasted_images.lock().unwrap();
-                    if !protocol_limits::may_copy_granted(requested, &picked, &pasted) {
+                let src = match copy_source(&state, src_path) {
+                    Ok(src) => src,
+                    Err(reason) => {
                         let shown: String = src_path.chars().take(200).collect();
                         file_ops::log_event(
                             &state,
-                            &format!("[COPY] refused {}: not picked nor on clipboard", shown),
+                            &format!("[COPY] refused {}: {}", shown, reason),
                         );
                         return tauri::http::Response::builder()
                             .status(403)
@@ -478,13 +519,10 @@ fn main() {
                             .body(b"Forbidden".to_vec())
                             .unwrap();
                     }
-                    requested
-                } else {
-                    insert_src.as_path()
                 };
                 // The reply is the name sdkjs will write into the document, which is not
                 // necessarily the source's: see stage_into_media for the collision rules.
-                if let Some(name) = file_ops::stage_into_media(&media_dir, src) {
+                if let Some(name) = file_ops::stage_into_media(&media_dir, &src) {
                     // no-store: a cached response would skip the actual copy after media/ is
                     // cleared on document switch, leaving a dangling reference
                     return tauri::http::Response::builder()
@@ -615,8 +653,10 @@ fn main() {
                     raw_abs_path
                 };
                 let state = ctx.app_handle().state::<AppState>();
-                let all_fonts = temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
-                if !protocol_limits::is_generated_font(&all_fonts, abs_path) {
+                let all_fonts = temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
+                let bundled_only = !fonts_state::uses_generated_list(state.fonts.status());
+                let bundled_fonts = bundled_fonts_dir(ctx.app_handle());
+                if !protocol_limits::may_serve_font(&all_fonts, abs_path, bundled_only, &bundled_fonts) {
                     return tauri::http::Response::builder()
                         .status(403)
                         .header(allow_origin.0, allow_origin.1)
@@ -626,10 +666,10 @@ fn main() {
                 std::fs::read(abs_path).ok()
             } else if decoded_path.ends_with("sdkjs/common/AllFonts.js") {
                 let state = ctx.app_handle().state::<AppState>();
-                let generated = temp_layout::fontdata_dir(&state.temp_root).join("AllFonts.js");
-                std::fs::read(&generated).ok().or_else(|| {
-                    read_resource(ctx.app_handle(), &relative)
-                })
+                let generated = temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
+                let from_cache = fonts_state::uses_generated_list(state.fonts.status());
+                let cached = if from_cache { std::fs::read(&generated).ok() } else { None };
+                cached.or_else(|| read_resource(ctx.app_handle(), &relative))
             } else {
                 read_resource(ctx.app_handle(), &relative)
             };
@@ -686,12 +726,21 @@ fn main() {
             }
 
             temp_layout::set_app_version(app.package_info().version.to_string());
-            run_font_generation(&temp_root, &instance_id, &binaries_dir);
+            temp_layout::set_font_sources(temp_layout::font_sources_text(
+                &binaries_dir,
+                &x2t_task::font_scan_dirs(&binaries_dir),
+            ));
+            start_font_generation(app.handle(), &fonts, &font_root, &instance_id, &binaries_dir);
 
             // Off the startup path: nothing on screen waits for it.
             let sweep_root = temp_root.clone();
+            let sweep_font_root = font_root.clone();
+            let sweep_id = instance_id.clone();
             let sweep_handle = app.handle().clone();
-            std::thread::spawn(move || sweep_leftovers(&sweep_handle, &sweep_root));
+            std::thread::spawn(move || {
+                sweep_leftovers(&sweep_handle, &sweep_root);
+                sweep_old_font_cache(&sweep_root, &sweep_font_root, &sweep_id);
+            });
 
             let handle = app.handle().clone();
             if let Some(window) = app.get_webview_window("main") {
@@ -819,23 +868,64 @@ fn sweep_leftovers(app: &tauri::AppHandle, root: &std::path::Path) {
     }
 }
 
+fn sweep_old_font_cache(temp_root: &std::path::Path, font_root: &std::path::Path, own_id: &str) {
+    if !temp_root.join(temp_layout::FONTS_MARKER).exists() {
+        return;
+    }
+    if temp_layout::remove_old_font_cache(temp_root, font_root, own_id) {
+        log_startup("Removed the font cache left in the temp folder by an earlier version");
+    }
+}
+
 // The font cache is shared by every instance and slow to build (about 30 s on
 // a Raspberry Pi), so an instance that starts while another is building it
 // waits for that run, up to this long, instead of building it again.
 const FONT_CACHE_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 const FONT_CACHE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-fn run_font_generation(
-    temp_root: &std::path::Path,
+// Off the startup path: the window paints while the cache is built, and the
+// frontend waits for "fonts-ready" before it opens the editor. A warm cache is
+// Ready before anything starts.
+fn start_font_generation(
+    app: &tauri::AppHandle,
+    fonts: &std::sync::Arc<fonts_state::FontsState>,
+    font_root: &std::path::Path,
     instance_id: &str,
     binaries_dir: &std::path::Path,
 ) {
-    let marker = temp_root.join(temp_layout::FONTS_MARKER);
-    if marker.exists() && !temp_layout::fonts_ready(temp_root) {
+    let cache_ready = temp_layout::fonts_ready(font_root);
+    let font_root = font_root.to_path_buf();
+    let instance_id = instance_id.to_string();
+    let binaries_dir = binaries_dir.to_path_buf();
+    let generate = move || run_font_generation(&font_root, &instance_id, &binaries_dir);
+    let handle = app.clone();
+    let on_settled = move |status: fonts_state::FontsStatus| {
+        log_startup(&format!("Font cache status: {:?}", status));
+        if status == fonts_state::FontsStatus::Ready {
+            protocol_limits::forget_font_list();
+        }
+        let _ = handle.emit(fonts_state::FONTS_READY_EVENT, status);
+    };
+    let started = fonts_state::start(fonts.clone(), cache_ready, generate, on_settled);
+    if !cache_ready && started.is_none() {
+        log_startup("ERROR: could not start the font cache thread");
+        fonts.finish(fonts_state::FontsStatus::Failed);
+        let _ = app.emit(fonts_state::FONTS_READY_EVENT, fonts_state::FontsStatus::Failed);
+    }
+}
+
+// Reports whether the cache is usable once it returns.
+fn run_font_generation(
+    font_root: &std::path::Path,
+    instance_id: &str,
+    binaries_dir: &std::path::Path,
+) -> bool {
+    let marker = font_root.join(temp_layout::FONTS_MARKER);
+    if marker.exists() && !temp_layout::fonts_ready(font_root) {
         log_startup("Marker exists but the font cache is missing or stale, regenerating");
     }
     let outcome = temp_layout::ensure_font_cache(
-        temp_root,
+        font_root,
         instance_id,
         |fontdata_dir: &std::path::Path| generate_fonts(fontdata_dir, binaries_dir),
         FONT_CACHE_WAIT,
@@ -850,6 +940,15 @@ fn run_font_generation(
         ),
         _ => {}
     }
+    // A failed run can leave files next to an old marker (converter.rs), so
+    // the outcome has to say the cache is good too.
+    let built = matches!(
+        outcome,
+        temp_layout::FontCache::Ready
+            | temp_layout::FontCache::Generated
+            | temp_layout::FontCache::GeneratedByOther
+    );
+    built && temp_layout::fonts_ready(font_root)
 }
 
 // The folder of the running executable: the last place x2t is looked for on
@@ -927,5 +1026,135 @@ mod arg_path_tests {
         std::fs::write(temp.0.join("-flag"), b"x").expect("write file");
 
         assert_eq!(absolute_arg_path("-flag", &temp.0), None);
+    }
+}
+
+// Builds the font cache with a real x2t, off the startup path. Ignored by
+// default: it needs x2t and its libraries in EO_X2T_BINARIES (the folder the
+// app ships as binaries/), as get-x2t-ci.sh unpacks them.
+// Run: EO_X2T_BINARIES=/path/binaries cargo test -- --ignored real_x2t
+#[cfg(test)]
+mod font_startup_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    #[ignore]
+    fn real_x2t_builds_the_cache_after_startup_returns() {
+        let Ok(binaries) = std::env::var("EO_X2T_BINARIES") else {
+            panic!("EO_X2T_BINARIES is not set");
+        };
+        let binaries_dir = std::path::PathBuf::from(binaries);
+        let font_root = std::env::temp_dir().join(format!("eo-real-x2t-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&font_root);
+        std::fs::create_dir_all(&font_root).unwrap();
+        temp_layout::set_font_sources(temp_layout::font_sources_text(
+            &binaries_dir,
+            &x2t_task::font_scan_dirs(&binaries_dir),
+        ));
+        assert!(!temp_layout::fonts_ready(&font_root), "the cache starts cold");
+
+        let fonts = std::sync::Arc::new(fonts_state::FontsState::pending());
+        let (root, dir) = (font_root.clone(), binaries_dir.clone());
+        let started = Instant::now();
+        let thread = fonts_state::start(
+            fonts.clone(),
+            temp_layout::fonts_ready(&font_root),
+            move || run_font_generation(&root, "real-x2t", &dir),
+            |_| {},
+        );
+        let startup = started.elapsed();
+
+        assert!(thread.is_some());
+        assert_eq!(fonts.status(), fonts_state::FontsStatus::Pending);
+        let status = fonts.wait_settled(Duration::from_secs(300));
+        let build = started.elapsed();
+        eprintln!("startup returned after {:?}, cache built after {:?}", startup, build);
+        assert_eq!(status, fonts_state::FontsStatus::Ready);
+        assert!(temp_layout::fonts_ready(&font_root));
+        assert!(startup < build / 10, "startup {:?} vs build {:?}", startup, build);
+        let _ = std::fs::remove_dir_all(&font_root);
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    fn permissions() -> Vec<String> {
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("capability JSON");
+        capability["permissions"]
+            .as_array()
+            .expect("permission list")
+            .iter()
+            .filter_map(|permission| permission.as_str())
+            .map(str::to_string)
+            .collect()
+    }
+
+    // The file dialogs open in the backend (file_dialogs.rs).
+    #[test]
+    fn the_webview_has_no_open_or_save_dialog() {
+        let permissions = permissions();
+        for refused in ["dialog:default", "dialog:allow-open", "dialog:allow-save"] {
+            assert!(!permissions.iter().any(|p| p == refused), "{refused}");
+        }
+    }
+
+    // x2t runs through the shell plugin from Rust, which needs no permission.
+    #[test]
+    fn the_webview_has_no_shell_permission() {
+        assert!(!permissions().iter().any(|p| p.starts_with("shell:")));
+    }
+}
+
+#[cfg(test)]
+mod csp_tests {
+    fn csp() -> serde_json::Value {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        config["app"]["security"]["csp"].clone()
+    }
+
+    fn sources(directive: &str) -> Vec<String> {
+        csp()[directive]
+            .as_array()
+            .unwrap_or_else(|| panic!("no {directive}"))
+            .iter()
+            .filter_map(|source| source.as_str())
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn the_network_stays_out_of_reach() {
+        for directive in [
+            "default-src",
+            "connect-src",
+            "img-src",
+            "font-src",
+            "frame-src",
+            "media-src",
+        ] {
+            for source in sources(directive) {
+                assert!(source != "*", "{directive} {source}");
+                assert!(!source.starts_with("https:"), "{directive} {source}");
+                let local =
+                    source == "http://ascdesktop.localhost" || source == "http://ipc.localhost";
+                assert!(
+                    !source.starts_with("http:") || local,
+                    "{directive} {source}"
+                );
+            }
+        }
+    }
+
+    // sdkjs compiles code at run time and the editors use inline styles.
+    #[test]
+    fn the_editor_keeps_eval_and_inline() {
+        let scripts = sources("script-src");
+        assert!(scripts.iter().any(|s| s == "'unsafe-eval'"));
+        assert!(scripts.iter().any(|s| s == "'unsafe-inline'"));
+        assert!(sources("style-src").iter().any(|s| s == "'unsafe-inline'"));
     }
 }

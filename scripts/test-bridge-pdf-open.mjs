@@ -1,4 +1,4 @@
-// Checks how the bridge opens a file by path: a .pdf is read by open_pdf and
+// Checks how the bridge opens a granted file: a .pdf is read by open_pdf and
 // reaches the PDF editor as the file itself (bSerFormat false, no crash
 // recovery), while a .docx still goes through open_file as an Editor.bin.
 //
@@ -11,12 +11,12 @@ const BIN_BYTES = 'DOCY;v5;0;';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function openPath(filePath) {
+async function openGranted(name) {
   const calls = [];
   const bridge = await loadBridge({
     invoke: {
-      open_pdf: (args) => { calls.push('open_pdf ' + args.path); return Buffer.from(PDF_BYTES, 'binary').toString('base64'); },
-      open_file: (args) => { calls.push('open_file ' + args.path); return Buffer.from(BIN_BYTES, 'binary').toString('base64'); },
+      open_pdf: (args) => { calls.push('open_pdf ' + args.token); return Buffer.from(PDF_BYTES, 'binary').toString('base64'); },
+      open_file: (args) => { calls.push('open_file ' + args.token); return Buffer.from(BIN_BYTES, 'binary').toString('base64'); },
       recovery_begin: () => { calls.push('recovery_begin'); return null; },
     },
   });
@@ -42,7 +42,7 @@ async function openPath(filePath) {
       window.AscDesktopEditor.LocalStartOpen();
     };
   `);
-  await bridge.run(`_eoOpenFromPath(${JSON.stringify(filePath)})`);
+  await bridge.run(`_eoOpenGranted(${JSON.stringify({ token: 'tok-' + name, name })})`);
   await sleep(150);
   bridge.stopTimers();
   const opened = bridge.sandbox.__opened[0];
@@ -54,18 +54,18 @@ async function openPath(filePath) {
   };
 }
 
-let result = await openPath('C:/docs/report.pdf');
-check(results, 'a .pdf is read by open_pdf', result.calls[0] === 'open_pdf C:/docs/report.pdf', result.calls.join());
+let result = await openGranted('report.pdf');
+check(results, 'a .pdf is read by open_pdf', result.calls[0] === 'open_pdf tok-report.pdf', result.calls.join());
 check(results, '... and goes to the PDF editor', result.editors.join() === 'pdf', result.editors.join());
 check(results, '... with the bytes of the file', result.data === PDF_BYTES, JSON.stringify(result.data));
 check(results, '... marked as not an Editor.bin', result.serFormat === false, String(result.serFormat));
 check(results, '... and without a recovery session', !result.calls.includes('recovery_begin'), result.calls.join());
 
-result = await openPath('/home/me/Report.PDF');
-check(results, 'the extension is matched in any case', result.calls[0] === 'open_pdf /home/me/Report.PDF', result.calls.join());
+result = await openGranted('Report.PDF');
+check(results, 'the extension is matched in any case', result.calls[0] === 'open_pdf tok-Report.PDF', result.calls.join());
 
-result = await openPath('C:/docs/report.docx');
-check(results, 'a .docx still goes through open_file', result.calls[0] === 'open_file C:/docs/report.docx', result.calls.join());
+result = await openGranted('report.docx');
+check(results, 'a .docx still goes through open_file', result.calls[0] === 'open_file tok-report.docx', result.calls.join());
 check(results, '... to the document editor', result.editors.join() === 'word', result.editors.join());
 check(results, '... as an Editor.bin', result.serFormat === true && result.data === BIN_BYTES, String(result.serFormat));
 check(results, '... with its recovery session', result.calls.includes('recovery_begin'), result.calls.join());
