@@ -942,7 +942,7 @@ async function _eoPickPdfTarget() {
 // Saves the open PDF, over itself or, for Save As, where the user picks. Ends
 // the editor's save the way the other editors do.
 async function _eoSavePdf(ref, isSaveAs) {
-  var wasModified = window.AscDesktopEditor._isModified;
+  var wasModified = _eoUnsavedChanges;
   var target = null;
   if (isSaveAs) {
     target = await _eoPickPdfTarget();
@@ -960,6 +960,7 @@ async function _eoSavePdf(ref, isSaveAs) {
     return;
   }
   if (target) _eoShowSavedName(target.name);
+  _eoMarkSavedChanges();
   if (ref.ew && ref.ew.DesktopOfflineAppDocumentEndSave) {
     ref.ew.DesktopOfflineAppDocumentEndSave(0);
   }
@@ -1283,15 +1284,31 @@ function _recoveryEnqueue(ref, recovery) {
 function _recoveryMarkModified(name) {
   try {
     window.AscDesktopEditor._isModified = true;
+    _eoMarkUnsavedChanges();
     invoke('set_document_modified', { modified: true }).catch(function(){});
     if (name) invoke('set_window_title', { name: name }).catch(function(){});
   } catch(e) {}
+}
+
+// Whether the document has changes no save has written yet. sdkjs calls
+// onDocumentModifiedChanged(false) when a save begins, before LocalFileSave,
+// so _isModified is already false when the save reads it. This flag ignores
+// that false: only a change sets it and only a save that ends well clears it.
+var _eoUnsavedChanges = false;
+
+function _eoMarkUnsavedChanges() {
+  _eoUnsavedChanges = true;
+}
+
+function _eoMarkSavedChanges() {
+  _eoUnsavedChanges = false;
 }
 
 // Puts the modified mark back, in the JS and in Rust, when something that
 // wrote no copy of the document over it reported it as saved.
 function _eoRestoreModified(wasModified) {
   if (!wasModified) return;
+  _eoMarkUnsavedChanges();
   if (window.AscDesktopEditor._isModified) return;
   window.AscDesktopEditor._isModified = true;
   invoke('set_document_modified', { modified: true }).catch(function(){});
@@ -2602,7 +2619,7 @@ window.AscDesktopEditor = {
       var current = await invoke('current_document');
       var currentName = current ? current.name : null;
       if (!isSaveAs && !current) isSaveAs = true;
-      var wasModified = window.AscDesktopEditor._isModified;
+      var wasModified = _eoUnsavedChanges;
       // A cancelled Save As or a PDF export leaves the open document where it
       // was, so it must not end as a save.
       var keepsDocument = false;
@@ -2663,6 +2680,7 @@ window.AscDesktopEditor = {
         _eoEndSaveKeepingModified(ref, wasModified);
         return;
       }
+      _eoMarkSavedChanges();
       if (ref.ew.DesktopOfflineAppDocumentEndSave) {
         ref.ew.DesktopOfflineAppDocumentEndSave(0);
       }
@@ -2796,6 +2814,7 @@ window.AscDesktopEditor = {
   LocalFileGetModified: function() { return window.AscDesktopEditor._isModified; },
   LocalFileSetModified: function(modified) {
     window.AscDesktopEditor._isModified = modified;
+    if (modified) _eoMarkUnsavedChanges();
     invoke('set_document_modified', { modified }).catch(function(){});
   },
 
@@ -2940,7 +2959,7 @@ window.AscDesktopEditor = {
 
     try {
       window.AscDesktopEditor._isPrinting = true;
-      var wasModified = window.AscDesktopEditor._isModified;
+      var wasModified = _eoUnsavedChanges;
       // The backend keeps the PDF it wrote; the two commands below take no path.
       if (window.AscDesktopEditor._currentDocType === 'pdf') {
         // A PDF prints as itself, with the editor's changes applied.
@@ -2982,6 +3001,7 @@ window.AscDesktopEditor = {
 
   onDocumentModifiedChanged: function(modified) {
     window.AscDesktopEditor._isModified = modified;
+    if (modified) _eoMarkUnsavedChanges();
     invoke('set_document_modified', { modified }).catch(function(){});
   },
   getViewportSettings: function() {
