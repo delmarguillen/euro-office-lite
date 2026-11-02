@@ -26,6 +26,9 @@ pub enum ImportError {
     BadName(String),
     // The file is empty, or is not a dictionary (an HTML page).
     NotADictionary(String),
+    // The spell checker has no folder for this language, or several and none
+    // is <lang>_<LANG>. Holds the language and the folders it could take.
+    UnknownLanguage { lang: String, options: Vec<String> },
     // The language is installed and replace was not asked for.
     Exists(String),
     Io(String),
@@ -38,6 +41,7 @@ impl ImportError {
             ImportError::NamesDiffer { .. } => "names-differ",
             ImportError::BadName(_) => "bad-name",
             ImportError::NotADictionary(_) => "not-a-dictionary",
+            ImportError::UnknownLanguage { .. } => "unknown-language",
             ImportError::Exists(_) => "exists",
             ImportError::Io(_) => "io",
         }
@@ -47,6 +51,10 @@ impl ImportError {
         match self {
             ImportError::NotAPair => "choose one .aff and one .dic file".to_string(),
             ImportError::NamesDiffer { aff, dic } => format!("{aff} and {dic}"),
+            ImportError::UnknownLanguage { lang, options } if options.is_empty() => lang.clone(),
+            ImportError::UnknownLanguage { lang, options } => {
+                format!("{lang} ({})", options.join(", "))
+            }
             ImportError::BadName(name)
             | ImportError::NotADictionary(name)
             | ImportError::Exists(name)
@@ -107,6 +115,33 @@ pub fn language_from_names(aff_name: &str, dic_name: &str) -> Result<String, Imp
         return Err(ImportError::BadName(aff_stem.to_string()));
     }
     Ok(aff_stem.to_string())
+}
+
+// The folder the spell checker reads this language from. `known` is its own
+// list of folder names, sent by the bridge. LibreOffice names its French
+// files fr.aff, but the checker only knows fr_FR, so a short code takes the
+// one known folder that starts with it, or <lang>_<LANG> among several.
+pub fn folder_for(lang: &str, known: &[String]) -> Result<String, ImportError> {
+    if known.iter().any(|code| code == lang) {
+        return Ok(lang.to_string());
+    }
+    let prefix = format!("{lang}_");
+    let options: Vec<String> = known
+        .iter()
+        .filter(|code| code.starts_with(&prefix))
+        .cloned()
+        .collect();
+    if let [only] = options.as_slice() {
+        return Ok(only.clone());
+    }
+    let main_region = format!("{lang}_{}", lang.to_ascii_uppercase());
+    if options.contains(&main_region) {
+        return Ok(main_region);
+    }
+    Err(ImportError::UnknownLanguage {
+        lang: lang.to_string(),
+        options,
+    })
 }
 
 fn file_name_of(path: &Path) -> String {
@@ -181,14 +216,20 @@ pub fn install(
     Ok(())
 }
 
-// Checks the chosen pair and installs it; returns the language.
-pub fn import_pair(dir: &Path, paths: &[PathBuf], replace: bool) -> Result<String, ImportError> {
+// Checks the chosen pair and installs it; returns the folder it went to.
+pub fn import_pair(
+    dir: &Path,
+    paths: &[PathBuf],
+    known: &[String],
+    replace: bool,
+) -> Result<String, ImportError> {
     let (aff, dic) = sort_picked(paths)?;
     let lang = language_from_names(&file_name_of(&aff), &file_name_of(&dic))?;
+    let folder = folder_for(&lang, known)?;
     check_file(&aff)?;
     check_file(&dic)?;
-    install(dir, &lang, &aff, &dic, replace)?;
-    Ok(lang)
+    install(dir, &folder, &aff, &dic, replace)?;
+    Ok(folder)
 }
 
 // The last pair chosen, kept in the backend so that "Replace" after an
@@ -216,12 +257,14 @@ async fn pick_pair(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<Vec
 
 // Without replace, opens the dialog. With replace, installs over the language
 // the previous call reported as existing, from the files chosen then.
-// Ok(None) means the user cancelled the dialog.
+// Ok(None) means the user cancelled the dialog. `known` is the spell checker's
+// list of language folder names, never a path.
 #[tauri::command]
 pub async fn import_dictionary(
     app: AppHandle,
     window: tauri::WebviewWindow,
     pending: State<'_, PendingImport>,
+    known: Vec<String>,
     replace: bool,
 ) -> Result<Option<String>, String> {
     let paths = if replace {
@@ -235,7 +278,7 @@ pub async fn import_dictionary(
     let Some(dir) = user_dir(&app) else {
         return Err(ImportError::Io("no app data folder".to_string()).to_string());
     };
-    match import_pair(&dir, &paths, replace) {
+    match import_pair(&dir, &paths, &known, replace) {
         Ok(lang) => Ok(Some(lang)),
         Err(error) => {
             if matches!(error, ImportError::Exists(_)) {
@@ -270,6 +313,16 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
         path
+    }
+
+    // A slice of the sdkjs table: several regions for en and pt, one for fr.
+    fn known() -> Vec<String> {
+        [
+            "ar", "en_GB", "en_US", "es_ES", "fr_FR", "pt_BR", "pt_PT", "de_AT", "de_CH",
+        ]
+        .iter()
+        .map(|code| code.to_string())
+        .collect()
     }
 
     fn lang(aff: &str, dic: &str) -> Result<String, ImportError> {
@@ -378,20 +431,24 @@ mod tests {
         let aff = write(&source, "es.aff.txt", b"SET UTF-8\n");
         let dic = write(&source, "es.dic", b"1\nhola\n");
 
-        let installed = import_pair(&dir, &[dic, aff], false);
+        let installed = import_pair(&dir, &[dic, aff], &known(), false);
 
-        assert_eq!(installed, Ok("es".to_string()));
+        assert_eq!(installed, Ok("es_ES".to_string()));
         assert_eq!(
-            std::fs::read(dir.join("es/es.aff")).unwrap(),
+            std::fs::read(dir.join("es_ES/es_ES.aff")).unwrap(),
             b"SET UTF-8\n"
         );
-        assert_eq!(std::fs::read(dir.join("es/es.dic")).unwrap(), b"1\nhola\n");
-        let mut names: Vec<String> = std::fs::read_dir(dir.join("es"))
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
+            b"1\nhola\n"
+        );
+        assert!(!dir.join("es").exists());
+        let mut names: Vec<String> = std::fs::read_dir(dir.join("es_ES"))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
             .collect();
         names.sort();
-        assert_eq!(names, vec!["es.aff", "es.dic"]);
+        assert_eq!(names, vec!["es_ES.aff", "es_ES.dic"]);
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
@@ -400,19 +457,28 @@ mod tests {
     fn an_installed_language_is_kept_unless_replace_is_asked() {
         let source = test_dir("source");
         let dir = test_dir("user");
-        std::fs::create_dir_all(dir.join("es")).unwrap();
-        std::fs::write(dir.join("es/es.dic"), b"1\nold\n").unwrap();
-        let aff = write(&source, "es.aff", b"SET UTF-8\n");
-        let dic = write(&source, "es.dic", b"1\nnew\n");
+        std::fs::create_dir_all(dir.join("es_ES")).unwrap();
+        std::fs::write(dir.join("es_ES/es_ES.dic"), b"1\nold\n").unwrap();
+        let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es_ES.dic", b"1\nnew\n");
         let paths = [aff, dic];
 
-        let refused = import_pair(&dir, &paths, false);
-        assert_eq!(refused, Err(ImportError::Exists("es".to_string())));
-        assert_eq!(std::fs::read(dir.join("es/es.dic")).unwrap(), b"1\nold\n");
-        assert!(!dir.join("es/es.aff").exists());
+        let refused = import_pair(&dir, &paths, &known(), false);
+        assert_eq!(refused, Err(ImportError::Exists("es_ES".to_string())));
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
+            b"1\nold\n"
+        );
+        assert!(!dir.join("es_ES/es_ES.aff").exists());
 
-        assert_eq!(import_pair(&dir, &paths, true), Ok("es".to_string()));
-        assert_eq!(std::fs::read(dir.join("es/es.dic")).unwrap(), b"1\nnew\n");
+        assert_eq!(
+            import_pair(&dir, &paths, &known(), true),
+            Ok("es_ES".to_string())
+        );
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
+            b"1\nnew\n"
+        );
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -424,13 +490,99 @@ mod tests {
         let aff = write(&source, "es.aff", b"<html><body>404</body></html>");
         let dic = write(&source, "es.dic", b"1\nhola\n");
 
-        let refused = import_pair(&dir, &[aff, dic], false);
+        let refused = import_pair(&dir, &[aff, dic], &known(), false);
 
         assert_eq!(
             refused,
             Err(ImportError::NotADictionary("es.aff".to_string()))
         );
         assert!(!dir.join("es").exists());
+        assert!(!dir.join("es_ES").exists());
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_known_code_keeps_its_folder() {
+        assert_eq!(folder_for("es_ES", &known()), Ok("es_ES".to_string()));
+        assert_eq!(folder_for("ar", &known()), Ok("ar".to_string()));
+    }
+
+    #[test]
+    fn a_short_code_with_one_region_takes_it() {
+        assert_eq!(folder_for("fr", &known()), Ok("fr_FR".to_string()));
+        assert_eq!(folder_for("es", &known()), Ok("es_ES".to_string()));
+    }
+
+    #[test]
+    fn a_short_code_with_several_regions_takes_its_main_one() {
+        assert_eq!(folder_for("pt", &known()), Ok("pt_PT".to_string()));
+    }
+
+    #[test]
+    fn several_regions_without_a_main_one_are_refused_with_the_options() {
+        assert_eq!(
+            folder_for("en", &known()),
+            Err(ImportError::UnknownLanguage {
+                lang: "en".to_string(),
+                options: vec!["en_GB".to_string(), "en_US".to_string()],
+            })
+        );
+        assert_eq!(
+            folder_for("de", &known()),
+            Err(ImportError::UnknownLanguage {
+                lang: "de".to_string(),
+                options: vec!["de_AT".to_string(), "de_CH".to_string()],
+            })
+        );
+    }
+
+    #[test]
+    fn a_code_the_checker_does_not_know_is_refused() {
+        assert_eq!(
+            folder_for("xx", &known()),
+            Err(ImportError::UnknownLanguage {
+                lang: "xx".to_string(),
+                options: vec![],
+            })
+        );
+        assert_eq!(
+            folder_for("fr_CA", &known()),
+            Err(ImportError::UnknownLanguage {
+                lang: "fr_CA".to_string(),
+                options: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn an_unknown_language_writes_nothing() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        let aff = write(&source, "xx.aff", b"SET UTF-8\n");
+        let dic = write(&source, "xx.dic", b"1\nhola\n");
+
+        let refused = import_pair(&dir, &[aff, dic], &known(), false);
+
+        assert!(matches!(refused, Err(ImportError::UnknownLanguage { .. })));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_short_code_installs_under_the_checker_folder() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        let aff = write(&source, "fr.aff", b"SET UTF-8\n");
+        let dic = write(&source, "fr.dic", b"1\nbonjour\n");
+
+        let installed = import_pair(&dir, &[aff, dic], &known(), false);
+
+        assert_eq!(installed, Ok("fr_FR".to_string()));
+        assert!(dir.join("fr_FR/fr_FR.aff").exists());
+        assert!(dir.join("fr_FR/fr_FR.dic").exists());
+        assert!(!dir.join("fr").exists());
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -444,6 +596,14 @@ mod tests {
         assert_eq!(
             ImportError::BadName("es v2".to_string()).to_string(),
             "dictionary-bad-name: es v2"
+        );
+        let unknown = ImportError::UnknownLanguage {
+            lang: "en".to_string(),
+            options: vec!["en_GB".to_string(), "en_US".to_string()],
+        };
+        assert_eq!(
+            unknown.to_string(),
+            "dictionary-unknown-language: en (en_GB, en_US)"
         );
     }
 }

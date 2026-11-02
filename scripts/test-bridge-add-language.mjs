@@ -7,6 +7,13 @@ import { check, finish, loadBridge } from './bridge-test-harness.mjs';
 
 const results = [];
 
+// The start of sdkjs's spell.js, where the language table is defined.
+const SPELL_JS = "window['AscCommon']['spellcheckGetLanguages']=function(){return "
+  + '{"1033":{"hyphen":true,"name":"en_US"},"1036":{"hyphen":true,"name":"fr_FR"},'
+  + '"2070":{"hyphen":true,"name":"pt_PT"},"1046":{"hyphen":true,"name":"pt_BR"},'
+  + '"2049":{"hyphen":false,"name":"ar"},"3073":{"hyphen":false,"name":"ar"}}};\n'
+  + "window['AscCommon'].spellcheckGetLanguages = window['AscCommon']['spellcheckGetLanguages'];\n";
+
 // answers: what import_dictionary does on each call, in order.
 async function setup(answers, confirmAnswer = true) {
   const imports = [];
@@ -22,6 +29,11 @@ async function setup(answers, confirmAnswer = true) {
       },
     },
   });
+  const fetched = [];
+  bridge.sandbox.fetch = (url) => {
+    fetched.push(url);
+    return Promise.resolve({ text: () => Promise.resolve(SPELL_JS) });
+  };
   const messages = [];
   const confirms = [];
   bridge.sandbox.__TAURI__.dialog = {
@@ -31,6 +43,7 @@ async function setup(answers, confirmAnswer = true) {
   return {
     bridge,
     imports,
+    fetched,
     messages,
     confirms,
     listCalls: () => listCalls,
@@ -42,6 +55,38 @@ async function addLanguage(env) {
   const lang = await env.bridge.run('_eoAddLanguage(false)');
   env.bridge.stopTimers();
   return lang;
+}
+
+{
+  const env = await setup(['fr_FR']);
+  await addLanguage(env);
+  const known = env.imports[0] && env.imports[0].known;
+  check(results, 'the import sends the checker codes read from spell.js',
+    JSON.stringify(known) === JSON.stringify(['ar', 'en_US', 'fr_FR', 'pt_BR', 'pt_PT']),
+    JSON.stringify(known));
+  check(results, 'the codes come from the sdkjs file',
+    env.fetched.length === 1 && env.fetched[0] === 'sdkjs/common/spell/spell.js', JSON.stringify(env.fetched));
+  check(results, 'the success message names the folder the backend chose',
+    env.messages[0].text === env.t('languageAdded').replace('{lang}', 'fr_FR'));
+}
+
+{
+  const env = await setup(['de_DE']);
+  env.bridge.sandbox.AscDesktopEditor._editorWindow = { AscCommon: {
+    spellcheckGetLanguages: () => ({ 1031: { name: 'de_DE' }, 3079: { name: 'de_AT' } }),
+  } };
+  await addLanguage(env);
+  check(results, 'with an editor open the codes come from its table',
+    JSON.stringify(env.imports[0].known) === JSON.stringify(['de_AT', 'de_DE']) && env.fetched.length === 0,
+    JSON.stringify(env.imports[0].known));
+}
+
+{
+  const env = await setup([new Error('dictionary-unknown-language: en (en_GB, en_US)')]);
+  await addLanguage(env);
+  check(results, 'an unknown language shows its message with the options',
+    env.messages.length === 1 && env.messages[0].kind === 'error'
+    && env.messages[0].text === env.t('languageUnknown').replace('{detail}', 'en (en_GB, en_US)'));
 }
 
 {
@@ -66,6 +111,8 @@ async function addLanguage(env) {
     && env.confirms[0] === env.t('languageExists').replace('{lang}', 'es'));
   check(results, 'the confirmed replace is sent with replace: true',
     env.imports.length === 2 && env.imports[1].replace === true && lang === 'es');
+  check(results, 'the replace sends the codes too',
+    Array.isArray(env.imports[1].known) && env.imports[1].known.includes('fr_FR'));
 }
 
 {

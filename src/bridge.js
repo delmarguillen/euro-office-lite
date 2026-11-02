@@ -551,12 +551,13 @@ var _UI_STRINGS = {
     noteSeparatorFailed: 'The note separator lines could not be changed.',
     addLanguage: 'Add spell check language…',
     addLanguageTitle: 'Add language',
-    languageAdded: 'The {lang} dictionary is installed. Open a document to check its spelling.',
-    languageAddedRestart: 'The {lang} dictionary is installed. Restart Euro-Office Lite to check its spelling: the spell checker loaded its languages when the first document opened.',
+    languageAdded: 'Installed as {lang}. Open a document to check its spelling.',
+    languageAddedRestart: 'Installed as {lang}. Restart Euro-Office Lite to check its spelling: the spell checker loaded its languages when the first document opened.',
     languageExists: 'A {lang} dictionary is already installed. Replace it with the files you chose?',
     languageNotAPair: 'Choose two files: one ending in .aff and one ending in .dic.',
     languageNamesDiffer: 'The two files are for different languages ({detail}). Choose an .aff and a .dic with the same name, for example es_ES.aff and es_ES.dic.',
     languageBadName: 'The file name "{detail}" is not a language code. Rename the files to a code such as fr_FR and try again.',
+    languageUnknown: 'The spell checker does not know the language code {detail}. Rename both files to a code it knows, such as fr_FR, and try again.',
     languageNotADictionary: '{detail} is not a hunspell dictionary file. It is empty, a web page or not a text file.',
     languageFailed: 'The dictionary could not be installed: {detail}',
     locateLinkedFile: 'Locate the linked file'
@@ -1470,8 +1471,45 @@ var _EO_IMPORT_MESSAGES = {
   'not-a-pair': 'languageNotAPair',
   'names-differ': 'languageNamesDiffer',
   'bad-name': 'languageBadName',
-  'not-a-dictionary': 'languageNotADictionary'
+  'not-a-dictionary': 'languageNotADictionary',
+  'unknown-language': 'languageUnknown'
 };
+
+// sdkjs defines its language table (AscCommon.spellcheckGetLanguages) in this
+// file. The start screen has no editor loaded, so the table is read from it.
+var _EO_SPELL_TABLE_URL = 'sdkjs/common/spell/spell.js';
+var _EO_SPELL_TABLE = /\['spellcheckGetLanguages'\]=function\(\)\{return (\{[\s\S]*?\})\};/;
+
+async function _eoSpellTable() {
+  var ew = window.AscDesktopEditor && window.AscDesktopEditor._editorWindow;
+  var common = ew && ew.AscCommon;
+  if (common && typeof common.spellcheckGetLanguages === 'function') {
+    return common.spellcheckGetLanguages();
+  }
+  var response = await fetch(_EO_SPELL_TABLE_URL);
+  var match = _EO_SPELL_TABLE.exec(await response.text());
+  if (!match) throw new Error('no language table in ' + _EO_SPELL_TABLE_URL);
+  return JSON.parse(match[1]);
+}
+
+// The folder names the spell checker offers languages for (fr_FR, en_US…).
+// The backend installs a dictionary under one of these. Codes, never paths.
+async function _eoKnownLanguages() {
+  var table;
+  try {
+    table = await _eoSpellTable();
+  } catch (e) {
+    window._eoLog('[SPELL] language table unreadable: ' + ((e && e.message) || e));
+    return [];
+  }
+  var known = [];
+  for (var lcid in table) {
+    var name = table[lcid] && table[lcid].name;
+    if (!name || known.indexOf(name) !== -1) continue;
+    known.push(name);
+  }
+  return known.sort();
+}
 
 function _eoImportError(error) {
   var text = (error && error.message) || String(error);
@@ -1487,9 +1525,10 @@ function _eoFill(key, values) {
 async function _eoAddLanguage(replace) {
   var dialog = window.__TAURI__.dialog;
   var title = _t('addLanguageTitle');
+  var known = await _eoKnownLanguages();
   var lang;
   try {
-    lang = await invoke('import_dictionary', { replace: !!replace });
+    lang = await invoke('import_dictionary', { known: known, replace: !!replace });
   } catch (e) {
     var error = _eoImportError(e);
     window._eoLog('[SPELL] import failed: ' + error.code + ': ' + error.detail);
