@@ -158,54 +158,6 @@ fn restore_main_window(app: &tauri::App) {
     if let Err(e) = window.restore_state(flags) {
         log_startup(&format!("ERROR: restore main window: {e}"));
     }
-    if flags.contains(tauri_plugin_window_state::StateFlags::POSITION) {
-        fit_main_window(&window);
-    }
-}
-
-fn to_rect(position: tauri::PhysicalPosition<i32>, size: tauri::PhysicalSize<u32>) -> window_state::Rect {
-    window_state::Rect {
-        x: position.x,
-        y: position.y,
-        width: size.width,
-        height: size.height,
-    }
-}
-
-// Keeps the restored window whole on one monitor's work area (taskbar and
-// panels excluded). The rect is the outer one: it holds the title bar, and
-// outer_position is what the plugin saves and set_position takes. set_size
-// takes the inner size, so the frame's width and height are taken off again.
-fn fit_main_window(window: &tauri::WebviewWindow) {
-    if let Err(e) = try_fit_main_window(window) {
-        log_startup(&format!("ERROR: fit main window: {e}"));
-    }
-}
-
-fn try_fit_main_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
-    if window.is_maximized()? {
-        return Ok(());
-    }
-    let outer_size = window.outer_size()?;
-    let inner_size = window.inner_size()?;
-    let current = to_rect(window.outer_position()?, outer_size);
-    let monitors: Vec<window_state::Rect> = window
-        .available_monitors()?
-        .iter()
-        .map(|m| to_rect(m.work_area().position, m.work_area().size))
-        .collect();
-    let Some(fitted) = window_state::fit_to_monitors(current, &monitors) else {
-        return Ok(());
-    };
-    let frame_width = outer_size.width.saturating_sub(inner_size.width);
-    let frame_height = outer_size.height.saturating_sub(inner_size.height);
-    window.set_size(tauri::PhysicalSize::new(
-        fitted.width.saturating_sub(frame_width),
-        fitted.height.saturating_sub(frame_height),
-    ))?;
-    window.set_position(tauri::PhysicalPosition::new(fitted.x, fitted.y))?;
-    log_startup(&format!("restore: window fitted to {fitted:?}"));
-    Ok(())
 }
 
 // main is built hidden (see main) and restored when setup shows it. On Linux
