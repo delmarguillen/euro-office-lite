@@ -3,8 +3,9 @@
 // layout list_user_dictionaries reads (dictionaries.rs).
 
 use crate::dictionaries::{is_dictionary_asset, is_folder_name, user_dir};
-use crate::save_target::write_beside_and_rename;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
@@ -31,6 +32,8 @@ pub enum ImportError {
     UnknownLanguage { lang: String, options: Vec<String> },
     // The language is installed and replace was not asked for.
     Exists(String),
+    // Reading or writing failed. Holds the language or the chosen file name,
+    // never a path: the error text goes to the webview.
     Io(String),
 }
 
@@ -225,7 +228,7 @@ pub fn check_content(name: &str, bytes: &[u8]) -> Result<(), ImportError> {
 
 fn check_file(path: &Path) -> Result<(), ImportError> {
     let name = file_name_of(path);
-    let bytes = std::fs::read(path).map_err(|e| ImportError::Io(format!("{name}: {e}")))?;
+    let bytes = std::fs::read(path).map_err(|e| io_error(&name, "read", path, e))?;
     check_content(&name, &bytes)
 }
 
@@ -234,8 +237,52 @@ fn is_installed(folder: &Path, lang: &str) -> bool {
     folder.join(format!("{lang}.aff")).exists() || folder.join(format!("{lang}.dic")).exists()
 }
 
-// Copies the pair to <dir>/<lang>/<lang>.aff and .dic. Each file is written
-// beside its destination and renamed over it (save_target.rs).
+// The webview gets the language only; the path and the OS error go to the
+// backend log.
+fn io_error(lang: &str, what: &str, path: &Path, error: std::io::Error) -> ImportError {
+    eprintln!("[dictionary] {what} {}: {error}", path.display());
+    ImportError::Io(lang.to_string())
+}
+
+static TEMP_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+// Hidden and unique to this process and call, in the destination folder so
+// the rename never crosses file systems.
+fn temp_path(folder: &Path, file_name: &str) -> PathBuf {
+    let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    folder.join(format!(".{file_name}.{}-{n}.tmp", std::process::id()))
+}
+
+// Copies `from` to a new temp file in `folder` and syncs it to disk.
+// create_new never opens an existing file or follows a link at that name.
+fn write_temp(
+    lang: &str,
+    from: &Path,
+    folder: &Path,
+    file_name: &str,
+) -> Result<PathBuf, ImportError> {
+    let tmp = temp_path(folder, file_name);
+    let result = copy_and_sync(from, &tmp);
+    let Err(error) = result else {
+        return Ok(tmp);
+    };
+    let _ = std::fs::remove_file(&tmp);
+    Err(io_error(lang, "write", &tmp, error))
+}
+
+fn copy_and_sync(from: &Path, tmp: &Path) -> std::io::Result<()> {
+    let mut source = File::open(from)?;
+    let mut file = OpenOptions::new().write(true).create_new(true).open(tmp)?;
+    std::io::copy(&mut source, &mut file)?;
+    file.sync_all()
+}
+
+// Copies the pair to <dir>/<lang>/<lang>.aff and .dic. Both files are first
+// written as temp files beside the destinations; only then are they renamed
+// over them, .dic first. A failure before the renames leaves the installed
+// pair as it was. If the .aff rename fails after the .dic one, a first
+// install removes the new .dic, so no lone half stays; a replace keeps the
+// new .dic with the old .aff, which hunspell still loads.
 pub fn install(
     dir: &Path,
     lang: &str,
@@ -247,9 +294,33 @@ pub fn install(
     if !replace && is_installed(&folder, lang) {
         return Err(ImportError::Exists(lang.to_string()));
     }
-    std::fs::create_dir_all(&folder).map_err(|e| ImportError::Io(e.to_string()))?;
-    write_beside_and_rename(aff, &folder.join(format!("{lang}.aff"))).map_err(ImportError::Io)?;
-    write_beside_and_rename(dic, &folder.join(format!("{lang}.dic"))).map_err(ImportError::Io)?;
+    std::fs::create_dir_all(&folder).map_err(|e| io_error(lang, "create", &folder, e))?;
+    let aff_name = format!("{lang}.aff");
+    let dic_name = format!("{lang}.dic");
+    let aff_dest = folder.join(&aff_name);
+    let dic_dest = folder.join(&dic_name);
+    let first_install = !is_installed(&folder, lang);
+
+    let aff_tmp = write_temp(lang, aff, &folder, &aff_name)?;
+    let dic_tmp = match write_temp(lang, dic, &folder, &dic_name) {
+        Ok(tmp) => tmp,
+        Err(error) => {
+            let _ = std::fs::remove_file(&aff_tmp);
+            return Err(error);
+        }
+    };
+    if let Err(error) = std::fs::rename(&dic_tmp, &dic_dest) {
+        let _ = std::fs::remove_file(&aff_tmp);
+        let _ = std::fs::remove_file(&dic_tmp);
+        return Err(io_error(lang, "rename", &dic_dest, error));
+    }
+    if let Err(error) = std::fs::rename(&aff_tmp, &aff_dest) {
+        let _ = std::fs::remove_file(&aff_tmp);
+        if first_install {
+            let _ = std::fs::remove_file(&dic_dest);
+        }
+        return Err(io_error(lang, "rename", &aff_dest, error));
+    }
     Ok(())
 }
 
@@ -329,7 +400,6 @@ pub async fn import_dictionary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
 
     static DIR_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -696,6 +766,88 @@ mod tests {
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn installed_es_es(dir: &Path) {
+        std::fs::create_dir_all(dir.join("es_ES")).unwrap();
+        std::fs::write(dir.join("es_ES/es_ES.aff"), b"SET old\n").unwrap();
+        std::fs::write(dir.join("es_ES/es_ES.dic"), b"1\nold\n").unwrap();
+    }
+
+    fn names_in(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_write_error_sent_to_the_webview_holds_no_path() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        installed_es_es(&dir);
+        let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
+        let missing = source.join("es_ES.dic");
+
+        let refused = install(&dir, "es_ES", &aff, &missing, true).unwrap_err();
+        let text = refused.to_string();
+
+        assert_eq!(text, "dictionary-io: es_ES");
+        assert!(!text.contains(&*source.to_string_lossy()));
+        assert!(!text.contains(&*dir.to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_second_write_keeps_the_installed_pair() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        installed_es_es(&dir);
+        let aff = write(&source, "es_ES.aff", b"SET new\n");
+        // A folder opens but cannot be read as a file.
+        let dic = source.join("es_ES.dic");
+        std::fs::create_dir(&dic).unwrap();
+
+        let refused = install(&dir, "es_ES", &aff, &dic, true);
+
+        assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.aff")).unwrap(),
+            b"SET old\n"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
+            b"1\nold\n"
+        );
+        assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_rename_keeps_the_installed_aff_and_no_temp_files() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        std::fs::create_dir_all(dir.join("es_ES")).unwrap();
+        std::fs::write(dir.join("es_ES/es_ES.aff"), b"SET old\n").unwrap();
+        // A file cannot be renamed over a non-empty folder.
+        std::fs::create_dir_all(dir.join("es_ES/es_ES.dic/inside")).unwrap();
+        let aff = write(&source, "es_ES.aff", b"SET new\n");
+        let dic = write(&source, "es_ES.dic", b"1\nnew\n");
+
+        let refused = install(&dir, "es_ES", &aff, &dic, true);
+
+        assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.aff")).unwrap(),
+            b"SET old\n"
+        );
+        assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
