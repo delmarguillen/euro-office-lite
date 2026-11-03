@@ -367,6 +367,7 @@ fn main() {
             file_ops::create_new,
             file_ops::current_document,
             file_dialogs::pick_document,
+            file_dialogs::pick_pdf,
             file_dialogs::pick_files,
             file_dialogs::pick_save_target,
             file_dialogs::locate_linked_file,

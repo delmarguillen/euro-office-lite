@@ -13,6 +13,9 @@ const OPEN_EXTENSIONS: [&str; 10] = [
     "docx", "xlsx", "pptx", "odt", "ods", "odp", "rtf", "txt", "csv", "pdf",
 ];
 
+// The start screen's Edit PDF.
+const PDF_EXTENSIONS: [&str; 1] = ["pdf"];
+
 // The formats Save As writes. A chosen name without one of them gets the
 // format asked for.
 const SAVE_EXTENSIONS: [&str; 13] = [
@@ -113,6 +116,24 @@ pub async fn pick_document(
 ) -> Result<Option<GrantedFile>, String> {
     let dialog = file_dialog(&window)
         .add_filter(documents, &OPEN_EXTENSIONS)
+        .add_filter(all, &ALL_FILES);
+    let Some(path) = pick_one(dialog).await? else {
+        return Ok(None);
+    };
+    Ok(Some(state.grants.grant(path, GrantKind::Open)))
+}
+
+// The start screen's Edit PDF: PDFs first, then everything. Whatever is
+// chosen is granted like Open's choice, so a non-PDF opens as Open would.
+#[tauri::command]
+pub async fn pick_pdf(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    pdf_label: String,
+    all: String,
+) -> Result<Option<GrantedFile>, String> {
+    let dialog = file_dialog(&window)
+        .add_filter(pdf_label, &PDF_EXTENSIONS)
         .add_filter(all, &ALL_FILES);
     let Some(path) = pick_one(dialog).await? else {
         return Ok(None);
@@ -312,4 +333,15 @@ mod tests {
         }
         assert!(grants.resolve(&picked.token, GrantKind::Insert).is_ok());
     }
+
+    #[test]
+    fn pdf_filter_lists_only_pdf() {
+        assert_eq!(PDF_EXTENSIONS, ["pdf"]);
+    }
+
+    #[test]
+    fn open_filter_also_accepts_pdf() {
+        assert!(OPEN_EXTENSIONS.contains(&"pdf"));
+    }
 }
+
