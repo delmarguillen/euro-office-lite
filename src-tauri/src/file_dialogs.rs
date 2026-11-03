@@ -266,6 +266,16 @@ pub fn with_save_extension(path: PathBuf, fallback_ext: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+// The native dialog asks before replacing the name it returns. A name the app
+// extended afterwards is another file the dialog never checked. A folder is
+// left to fail at save time.
+pub fn needs_replace_confirmation(chosen: &Path, final_path: &Path, exists: bool) -> bool {
+    if chosen == final_path {
+        return false;
+    }
+    exists
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,5 +353,44 @@ mod tests {
     fn open_filter_also_accepts_pdf() {
         assert!(OPEN_EXTENSIONS.contains(&"pdf"));
     }
-}
 
+    #[test]
+    fn an_extended_name_that_exists_asks_before_replacing() {
+        let chosen = PathBuf::from("/docs/Budget");
+        let final_path = with_save_extension(chosen.clone(), "docx");
+        assert_eq!(final_path, PathBuf::from("/docs/Budget.docx"));
+        assert!(needs_replace_confirmation(&chosen, &final_path, true));
+    }
+
+    #[test]
+    fn an_extended_name_that_does_not_exist_does_not_ask() {
+        let chosen = PathBuf::from("/docs/Budget");
+        let final_path = with_save_extension(chosen.clone(), "docx");
+        assert!(!needs_replace_confirmation(&chosen, &final_path, false));
+    }
+
+    #[test]
+    fn a_name_the_dialog_returned_unchanged_is_not_asked_again() {
+        let chosen = PathBuf::from("/docs/Budget.docx");
+        let final_path = with_save_extension(chosen.clone(), "docx");
+        assert_eq!(final_path, chosen);
+        assert!(!needs_replace_confirmation(&chosen, &final_path, true));
+    }
+
+    #[test]
+    fn an_upper_case_extension_keeps_the_name_and_is_not_asked_again() {
+        let chosen = PathBuf::from("/docs/Budget.DOCX");
+        let final_path = with_save_extension(chosen.clone(), "docx");
+        assert_eq!(final_path, chosen);
+        assert!(!needs_replace_confirmation(&chosen, &final_path, true));
+    }
+
+    // .dotx is not a format Save As writes, so the name gains .docx.
+    #[test]
+    fn an_unknown_extension_gains_the_format_and_asks_if_that_exists() {
+        let chosen = PathBuf::from("/docs/plantilla.dotx");
+        let final_path = with_save_extension(chosen.clone(), "docx");
+        assert_eq!(final_path, PathBuf::from("/docs/plantilla.dotx.docx"));
+        assert!(needs_replace_confirmation(&chosen, &final_path, true));
+    }
+}
