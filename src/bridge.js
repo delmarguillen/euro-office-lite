@@ -2479,6 +2479,14 @@ function _ensureCoreProps(ref) {
   }
 }
 
+// The window has no fullscreen permission in the webview; the backend command
+// sets it and restores the earlier maximized state on exit.
+function _eoSetPresentationFullscreen(on) {
+  invoke('set_presentation_fullscreen', { on: on }).catch(function(e) {
+    _eoLog('[presentation] fullscreen ' + on + ' failed:', e);
+  });
+}
+
 window.AscDesktopEditor = {
   IsLocalFile: () => true,
   GetEditorId: () => 'euro-office-lite',
@@ -3157,15 +3165,10 @@ window.AscDesktopEditor = {
   isBlockchainSupport: () => false,
   SpellCheck: function(json) { SpellCheckBridge.check(json); },
   SetFullscreen: function(fullscreen) {
-    var win = window.__TAURI__.window.getCurrentWindow();
-    var fs = !!fullscreen;
-    win.setFullscreen(fs).catch(function(){});
-    win.setAlwaysOnTop(fs).catch(function(){});
+    _eoSetPresentationFullscreen(!!fullscreen);
   },
   endReporter: function() {
-    var win = window.__TAURI__.window.getCurrentWindow();
-    win.setFullscreen(false).catch(function(){});
-    win.setAlwaysOnTop(false).catch(function(){});
+    _eoSetPresentationFullscreen(false);
   },
   // The slide editor relays pen strokes and presenter commands to a separate
   // presenter window through this call. There is no such window here, so
