@@ -43,6 +43,7 @@ const APP_COMMANDS: &[&str] = &[
     "list_user_dictionaries",
     "import_dictionary",
     "cancel_dictionary_import",
+    "set_presentation_fullscreen",
 ];
 
 fn main() {
