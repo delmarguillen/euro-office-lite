@@ -95,29 +95,48 @@ pub fn set_presentation_fullscreen(
     apply_fullscreen(&window, &state, on)
 }
 
+// The window is read before the lock and called after it: on Windows a
+// window call can send Resized synchronously, and its handler takes the lock.
 fn apply_fullscreen<W: PresentationWindow>(
     window: &W,
     state: &PresentationState,
     on: bool,
 ) -> Result<(), String> {
-    let mut inner = state.0.lock().unwrap();
     let fullscreen = window.is_fullscreen()?;
-    match next_step(inner.saved, on, fullscreen) {
+    let now = window.current()?;
+    let mut inner = state.0.lock().unwrap();
+    let before = inner.saved;
+    match next_step(before, on, fullscreen) {
         Step::Nothing => Ok(()),
         Step::Forget => {
             inner.saved = None;
             Ok(())
         }
         Step::Enter => {
-            let saved = window.current()?;
-            window.set_fullscreen(true)?;
-            inner.saved = Some(saved);
-            Ok(())
+            inner.saved = Some(now);
+            drop(inner);
+            let result = window.set_fullscreen(true);
+            undo_saved_on_error(state, &result, before);
+            result
         }
         Step::Exit { maximize } => {
             inner.saved = None;
-            leave_fullscreen(window, maximize)
+            drop(inner);
+            let result = leave_fullscreen(window, maximize);
+            undo_saved_on_error(state, &result, before);
+            result
         }
+    }
+}
+
+// The window call failed: put back the state it was taken with.
+fn undo_saved_on_error(
+    state: &PresentationState,
+    result: &Result<(), String>,
+    before: Option<Saved>,
+) {
+    if result.is_err() {
+        state.0.lock().unwrap().saved = before;
     }
 }
 
@@ -168,19 +187,29 @@ pub fn hold_close_for_restore(window: &WebviewWindow, state: &PresentationState)
 }
 
 fn hold_close<W: PresentationWindow>(window: &W, state: &PresentationState) -> bool {
-    let mut inner = state.0.lock().unwrap();
     let fullscreen = window.is_fullscreen().unwrap_or(false);
-    if close_step(inner.saved, fullscreen) == CloseStep::Proceed {
-        return false;
-    }
-    let Some(target) = inner.saved.take() else {
+    let Some(target) = take_saved_for_close(state, fullscreen) else {
         return false;
     };
+    // closing is set before the restore so a Resized sent during it can close.
     if leave_fullscreen(window, target.maximized).is_err() {
+        let mut inner = state.0.lock().unwrap();
+        inner.closing = None;
+        inner.saved = Some(target);
         return false;
     }
-    inner.closing = Some(target);
     true
+}
+
+// Moves the saved state to closing when the close has to wait for a restore.
+fn take_saved_for_close(state: &PresentationState, fullscreen: bool) -> Option<Saved> {
+    let mut inner = state.0.lock().unwrap();
+    if close_step(inner.saved, fullscreen) == CloseStep::Proceed {
+        return None;
+    }
+    let target = inner.saved.take()?;
+    inner.closing = Some(target);
+    Some(target)
 }
 
 // Called on the main window's Resized: closes a held window once restored.
@@ -189,8 +218,7 @@ pub fn close_if_restored(window: &WebviewWindow, state: &PresentationState) {
 }
 
 fn close_when_restored<W: PresentationWindow>(window: &W, state: &PresentationState) {
-    let inner = state.0.lock().unwrap();
-    let Some(target) = inner.closing else {
+    let Some(target) = state.0.lock().unwrap().closing else {
         return;
     };
     let fullscreen = window.is_fullscreen().unwrap_or(false);
@@ -200,7 +228,6 @@ fn close_when_restored<W: PresentationWindow>(window: &W, state: &PresentationSt
     if !is_restored(target, now, fullscreen) {
         return;
     }
-    drop(inner);
     finish_close(window, state);
 }
 
@@ -225,6 +252,8 @@ fn close_after_timeout(window: WebviewWindow) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::sync::TryLockError;
 
     fn normal(width: u32, height: u32) -> Saved {
         Saved {
@@ -345,6 +374,156 @@ mod tests {
         let mut now = normal(800, 600);
         now.maximized = true;
         assert!(!is_restored(normal(800, 600), now, false));
+    }
+
+    const MONITOR: PhysicalSize<u32> = PhysicalSize::new(1920, 1080);
+
+    // A window that raises Resized from inside set_fullscreen and maximize, as
+    // Windows does when SetWindowPlacement and ShowWindow send WM_SIZE.
+    struct FakeWindow<'a> {
+        state: &'a PresentationState,
+        normal: Saved,
+        now: Cell<Saved>,
+        fullscreen: Cell<bool>,
+        fail_set_fullscreen: bool,
+        resized_while_locked: Cell<bool>,
+        closed: Cell<bool>,
+    }
+
+    impl<'a> FakeWindow<'a> {
+        fn new(state: &'a PresentationState, normal: Saved) -> Self {
+            FakeWindow {
+                state,
+                normal,
+                now: Cell::new(normal),
+                fullscreen: Cell::new(false),
+                fail_set_fullscreen: false,
+                resized_while_locked: Cell::new(false),
+                closed: Cell::new(false),
+            }
+        }
+
+        // try_lock so a held lock fails the test instead of hanging it.
+        fn resized(&self) {
+            match self.state.0.try_lock() {
+                Err(TryLockError::WouldBlock) => self.resized_while_locked.set(true),
+                Err(TryLockError::Poisoned(_)) => panic!("presentation lock poisoned"),
+                Ok(guard) => {
+                    drop(guard);
+                    close_when_restored(self, self.state);
+                }
+            }
+        }
+    }
+
+    impl PresentationWindow for FakeWindow<'_> {
+        fn is_fullscreen(&self) -> Result<bool, String> {
+            Ok(self.fullscreen.get())
+        }
+
+        fn current(&self) -> Result<Saved, String> {
+            Ok(self.now.get())
+        }
+
+        fn set_fullscreen(&self, on: bool) -> Result<(), String> {
+            if self.fail_set_fullscreen {
+                return Err("set_fullscreen failed".into());
+            }
+            self.fullscreen.set(on);
+            let size = if on { MONITOR } else { self.normal.size };
+            self.now.set(Saved {
+                maximized: false,
+                size,
+            });
+            self.resized();
+            Ok(())
+        }
+
+        fn maximize(&self) -> Result<(), String> {
+            self.now.set(Saved {
+                maximized: true,
+                size: MONITOR,
+            });
+            self.resized();
+            Ok(())
+        }
+
+        fn close(&self) {
+            self.closed.set(true);
+        }
+    }
+
+    #[test]
+    fn entering_does_not_hold_the_lock_during_resized() {
+        let state = PresentationState::default();
+        let window = FakeWindow::new(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        assert!(!window.resized_while_locked.get());
+        assert_eq!(state.0.lock().unwrap().saved, Some(normal(800, 600)));
+    }
+
+    #[test]
+    fn exiting_does_not_hold_the_lock_during_resized() {
+        let state = PresentationState::default();
+        let window = FakeWindow::new(&state, maximized());
+        apply_fullscreen(&window, &state, true).unwrap();
+        apply_fullscreen(&window, &state, false).unwrap();
+        assert!(!window.resized_while_locked.get());
+        assert!(window.now.get().maximized);
+        assert_eq!(state.0.lock().unwrap().saved, None);
+    }
+
+    // The Resized sent from inside the restore closes the window right away.
+    #[test]
+    fn closing_does_not_hold_the_lock_during_resized() {
+        let state = PresentationState::default();
+        let window = FakeWindow::new(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        assert!(hold_close(&window, &state));
+        assert!(!window.resized_while_locked.get());
+        assert!(window.closed.get());
+        assert_eq!(state.0.lock().unwrap().closing, None);
+    }
+
+    #[test]
+    fn closing_maximized_waits_for_the_maximize() {
+        let state = PresentationState::default();
+        let window = FakeWindow::new(&state, maximized());
+        apply_fullscreen(&window, &state, true).unwrap();
+        assert!(hold_close(&window, &state));
+        assert!(!window.resized_while_locked.get());
+        assert!(window.closed.get());
+    }
+
+    #[test]
+    fn a_failed_enter_leaves_no_saved_state() {
+        let state = PresentationState::default();
+        let mut window = FakeWindow::new(&state, normal(800, 600));
+        window.fail_set_fullscreen = true;
+        assert!(apply_fullscreen(&window, &state, true).is_err());
+        assert_eq!(state.0.lock().unwrap().saved, None);
+    }
+
+    #[test]
+    fn a_failed_exit_keeps_the_saved_state() {
+        let state = PresentationState::default();
+        let mut window = FakeWindow::new(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        window.fail_set_fullscreen = true;
+        assert!(apply_fullscreen(&window, &state, false).is_err());
+        assert_eq!(state.0.lock().unwrap().saved, Some(normal(800, 600)));
+    }
+
+    #[test]
+    fn a_failed_close_restore_lets_the_close_proceed() {
+        let state = PresentationState::default();
+        let mut window = FakeWindow::new(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        window.fail_set_fullscreen = true;
+        assert!(!hold_close(&window, &state));
+        let inner = state.0.lock().unwrap();
+        assert_eq!(inner.saved, Some(normal(800, 600)));
+        assert_eq!(inner.closing, None);
     }
 
     #[test]
