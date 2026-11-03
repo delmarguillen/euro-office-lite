@@ -820,6 +820,7 @@ fn link_editor_resources(
 
 // x2t format ids, shared with the editors: web-apps uses the same numbers in
 // utils.defines.FileFormat to pick the icon and to filter the Open Recent list.
+// Values from core/Common/OfficeFileFormats.h at v10.0.0.169.
 pub fn detect_format(path: &std::path::Path) -> i32 {
     match path.extension().and_then(|e| e.to_str()) {
         Some("docx") => 65,
@@ -827,13 +828,28 @@ pub fn detect_format(path: &std::path::Path) -> i32 {
         Some("odt") => 67,
         Some("rtf") => 68,
         Some("txt") => 69,
+        Some("docm") => 75,
+        Some("dotx") => 76,
+        Some("dotm") => 77,
+        Some("fodt") => 78,
+        Some("ott") => 79,
         Some("xlsx") => 257,
         Some("xls") => 258,
         Some("ods") => 259,
         Some("csv") => 260,
+        Some("xlsm") => 261,
+        Some("xltx") => 262,
+        Some("xlsb") => 264,
+        Some("fods") => 265,
+        Some("ots") => 266,
         Some("pptx") => 129,
         Some("ppt") => 130,
         Some("odp") => 131,
+        Some("ppsx") => 132,
+        Some("pptm") => 133,
+        Some("potx") => 135,
+        Some("fodp") => 137,
+        Some("otp") => 138,
         Some("pdf") => 513,
         _ => 0,
     }
@@ -2055,6 +2071,19 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.pdf")), 513);
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.docx")), 65);
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.unknown")), 0);
+    }
+
+    #[test]
+    fn detect_format_knows_the_office_variants_the_open_dialog_offers() {
+        let cases = [
+            ("docm", 75), ("dotx", 76), ("dotm", 77), ("fodt", 78), ("ott", 79),
+            ("xlsm", 261), ("xltx", 262), ("xlsb", 264), ("fods", 265), ("ots", 266),
+            ("ppsx", 132), ("pptm", 133), ("potx", 135), ("fodp", 137), ("otp", 138),
+        ];
+        for (ext, code) in cases {
+            let path = std::path::PathBuf::from(format!("/tmp/a.{}", ext));
+            assert_eq!(detect_format(&path), code, "{}", ext);
+        }
     }
 
     #[test]
