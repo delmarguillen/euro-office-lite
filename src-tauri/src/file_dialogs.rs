@@ -5,7 +5,9 @@ use crate::file_ops::AppState;
 use crate::path_grants::{file_name, GrantKind, GrantedFile, PathGrants};
 use std::path::{Path, PathBuf};
 use tauri::State;
-use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
+use tauri_plugin_dialog::{
+    DialogExt, FileDialogBuilder, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind,
+};
 
 const ALL_FILES: [&str; 1] = ["*"];
 
@@ -220,11 +222,40 @@ pub async fn pick_save_target(
         }
         dialog = dialog.set_file_name(file_name(&start));
     }
-    let Some(path) = pick_save(dialog).await? else {
+    let Some(chosen) = pick_save(dialog).await? else {
         return Ok(None);
     };
-    let path = with_save_extension(path, &fallback_ext);
+    let path = with_save_extension(chosen.clone(), &fallback_ext);
+    if asks_before_replacing(&chosen, &path) && !confirm_replace(&window, &path).await? {
+        return Ok(None);
+    }
     Ok(Some(state.grants.grant(path, GrantKind::Save)))
+}
+
+// Asked from here, not from the webview: the answer decides the grant.
+async fn confirm_replace(window: &tauri::WebviewWindow, path: &Path) -> Result<bool, String> {
+    let dialog = replace_dialog(window, path);
+    tauri::async_runtime::spawn_blocking(move || dialog.blocking_show())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn replace_dialog(window: &tauri::WebviewWindow, path: &Path) -> MessageDialogBuilder<tauri::Wry> {
+    let buttons = MessageDialogButtons::OkCancelCustom("Replace".into(), "Cancel".into());
+    window
+        .dialog()
+        .message(replace_question(path))
+        .title("Replace file?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(buttons)
+        .parent(window)
+}
+
+fn replace_question(path: &Path) -> String {
+    format!(
+        "\"{}\" already exists. Do you want to replace it?",
+        file_name(path)
+    )
 }
 
 fn first_extension(filters: &[DialogFilter]) -> Option<String> {
@@ -267,13 +298,17 @@ pub fn with_save_extension(path: PathBuf, fallback_ext: &str) -> PathBuf {
 }
 
 // The native dialog asks before replacing the name it returns. A name the app
-// extended afterwards is another file the dialog never checked. A folder is
-// left to fail at save time.
+// extended afterwards is another file the dialog never checked.
 pub fn needs_replace_confirmation(chosen: &Path, final_path: &Path, exists: bool) -> bool {
     if chosen == final_path {
         return false;
     }
     exists
+}
+
+// Only a file is asked about: saving onto a folder fails later, as before.
+fn asks_before_replacing(chosen: &Path, final_path: &Path) -> bool {
+    needs_replace_confirmation(chosen, final_path, final_path.is_file())
 }
 
 #[cfg(test)]
@@ -392,5 +427,31 @@ mod tests {
         let final_path = with_save_extension(chosen.clone(), "docx");
         assert_eq!(final_path, PathBuf::from("/docs/plantilla.dotx.docx"));
         assert!(needs_replace_confirmation(&chosen, &final_path, true));
+    }
+
+    #[test]
+    fn the_question_names_the_file_and_not_its_folder() {
+        let question = replace_question(Path::new("/home/u/docs/Budget.docx"));
+        assert_eq!(
+            question,
+            "\"Budget.docx\" already exists. Do you want to replace it?"
+        );
+    }
+
+    #[test]
+    fn an_existing_file_asks_and_an_existing_folder_does_not() {
+        let dir = std::env::temp_dir().join(format!("eo-replace-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Report.docx")).unwrap();
+        std::fs::write(dir.join("Budget.docx"), b"kept").unwrap();
+
+        let budget = dir.join("Budget");
+        let budget_docx = with_save_extension(budget.clone(), "docx");
+        assert!(asks_before_replacing(&budget, &budget_docx));
+
+        let report = dir.join("Report");
+        let report_docx = with_save_extension(report.clone(), "docx");
+        assert!(!asks_before_replacing(&report, &report_docx));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
