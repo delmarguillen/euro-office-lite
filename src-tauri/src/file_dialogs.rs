@@ -9,8 +9,11 @@ use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 
 const ALL_FILES: [&str; 1] = ["*"];
 
-const OPEN_EXTENSIONS: [&str; 10] = [
-    "docx", "xlsx", "pptx", "odt", "ods", "odp", "rtf", "txt", "csv", "pdf",
+// Every one of them converts to Editor.bin with x2t 10.0.0.169.
+const OPEN_EXTENSIONS: [&str; 28] = [
+    "docx", "doc", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "txt",
+    "xlsx", "xls", "xlsm", "xltx", "xlsb", "ods", "ots", "fods", "csv",
+    "pptx", "ppt", "pptm", "ppsx", "potx", "odp", "otp", "fodp", "pdf",
 ];
 
 // The formats Save As writes. A chosen name without one of them gets the
@@ -263,6 +266,21 @@ mod tests {
             suggestion_with_ext(Path::new("/docs/report.docx"), None),
             PathBuf::from("/docs/report.docx")
         );
+    }
+
+    #[test]
+    fn the_open_filter_offers_the_legacy_and_variant_office_formats() {
+        let offered = [
+            "doc", "docm", "dotx", "dotm", "ott", "fodt", "xls", "xlsm", "xltx", "xlsb",
+            "ots", "fods", "ppt", "pptm", "ppsx", "potx", "otp", "fodp",
+        ];
+        for ext in offered {
+            assert!(OPEN_EXTENSIONS.contains(&ext), "{}", ext);
+        }
+        for ext in OPEN_EXTENSIONS {
+            let path = std::path::PathBuf::from(format!("/tmp/a.{}", ext));
+            assert_ne!(crate::x2t_task::detect_format(&path), 0, "{}", ext);
+        }
     }
 
     #[test]
