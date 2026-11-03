@@ -30,12 +30,17 @@
   Delete "${DIR}\LiberationSerif-Regular.ttf"
 !macroend
 
-!macro NSIS_HOOK_POSTINSTALL
+; The V8 caches DoctRenderer writes next to each sdkjs bundle.
+!macro EOL_DELETE_SDK_CACHES
   Delete "$INSTDIR\editors\sdkjs\word\sdk-all.cache"
   Delete "$INSTDIR\editors\sdkjs\cell\sdk-all.cache"
   Delete "$INSTDIR\editors\sdkjs\slide\sdk-all.cache"
   Delete "$INSTDIR\editors\sdkjs\pdf\sdk-all.cache"
   Delete "$INSTDIR\editors\sdkjs\visio\sdk-all.cache"
+!macroend
+
+!macro NSIS_HOOK_POSTINSTALL
+  !insertmacro EOL_DELETE_SDK_CACHES
   Delete "$INSTDIR\binaries\fontdata\AllFonts.js"
   Delete "$INSTDIR\binaries\fontdata\font_selection.bin"
   Delete "$INSTDIR\binaries\fontdata\fonts.log"
@@ -55,4 +60,27 @@
   ; A file that could not be deleted sets the error flag, and .onInstSuccess reads
   ; it for the /R restart option.
   ClearErrors
+!macroend
+
+; The uninstaller deletes only the files it installed. On Windows the app runs x2t
+; from binaries\ and writes there, next to x2t, a DoctRenderer.config and a copy
+; of font_selection.bin, plus one in binaries\fonts; DoctRenderer adds the
+; sdk-all.cache files. Delete them and remove the folders they kept alive, inner
+; ones first. Tauri runs this hook after its own RMDir "$INSTDIR". The app data
+; in %APPDATA% is left to the uninstaller's own checkbox.
+!macro NSIS_HOOK_POSTUNINSTALL
+  !insertmacro EOL_DELETE_SDK_CACHES
+  Delete "$INSTDIR\binaries\DoctRenderer.config"
+  Delete "$INSTDIR\binaries\font_selection.bin"
+  Delete "$INSTDIR\binaries\fonts\font_selection.bin"
+  RMDir "$INSTDIR\editors\sdkjs\word"
+  RMDir "$INSTDIR\editors\sdkjs\cell"
+  RMDir "$INSTDIR\editors\sdkjs\slide"
+  RMDir "$INSTDIR\editors\sdkjs\pdf"
+  RMDir "$INSTDIR\editors\sdkjs\visio"
+  RMDir "$INSTDIR\editors\sdkjs"
+  RMDir "$INSTDIR\editors"
+  RMDir "$INSTDIR\binaries\fonts"
+  RMDir "$INSTDIR\binaries"
+  RMDir "$INSTDIR"
 !macroend
