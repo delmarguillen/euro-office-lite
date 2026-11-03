@@ -5,6 +5,7 @@ mod bridge;
 mod clipboard;
 mod converter;
 mod dictionaries;
+mod dictionary_import;
 mod file_dialogs;
 mod file_ops;
 mod fonts_state;
@@ -388,7 +389,9 @@ fn main() {
 
     let fonts = std::sync::Arc::new(fonts_state::FontsState::pending());
 
-    builder.manage(AppState {
+    builder
+        .manage(dictionary_import::PendingImport::default())
+        .manage(AppState {
             current_file: Mutex::new(None),
             temp_dir,
             temp_root: temp_root.clone(),
@@ -447,6 +450,8 @@ fn main() {
             recovery::recovery_load,
             recovery::recovery_discard,
             dictionaries::list_user_dictionaries,
+            dictionary_import::import_dictionary,
+            dictionary_import::cancel_dictionary_import,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let allow_origin = protocol_limits::allow_origin();

@@ -47,6 +47,8 @@
     "allow-recovery-candidates",
     "allow-recovery-load",
     "allow-recovery-discard",
-    "allow-list-user-dictionaries"
+    "allow-list-user-dictionaries",
+    "allow-import-dictionary",
+    "allow-cancel-dictionary-import"
   ]
 }

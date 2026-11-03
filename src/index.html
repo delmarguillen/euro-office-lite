@@ -148,6 +148,7 @@
       font-size: 0.8rem; color: #a6adc8; cursor: pointer;
     }
     .recent-toggle input { accent-color: #89b4fa; cursor: pointer; }
+    .spell-languages { margin-top: 0.75rem; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -198,6 +199,11 @@
           <input type="checkbox" id="recent-remember">
           <span data-i18n="rememberRecent">Remember recent files</span>
         </label>
+      </div>
+
+      <div class="spell-languages">
+        <button type="button" class="recent-clear" id="add-language"
+                data-i18n="addLanguage">Add spell check language…</button>
       </div>
     </div>
   </div>
