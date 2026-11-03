@@ -52,14 +52,56 @@ fn next_step(saved: Option<Saved>, on: bool, fullscreen: bool) -> Step {
     }
 }
 
+// The window calls this module makes. WebviewWindow implements it; tests use a
+// fake that can raise Resized from inside a window call.
+trait PresentationWindow {
+    fn is_fullscreen(&self) -> Result<bool, String>;
+    fn current(&self) -> Result<Saved, String>;
+    fn set_fullscreen(&self, on: bool) -> Result<(), String>;
+    fn maximize(&self) -> Result<(), String>;
+    fn close(&self);
+}
+
+impl PresentationWindow for WebviewWindow {
+    fn is_fullscreen(&self) -> Result<bool, String> {
+        WebviewWindow::is_fullscreen(self).map_err(|e| e.to_string())
+    }
+
+    fn current(&self) -> Result<Saved, String> {
+        let maximized = self.is_maximized().map_err(|e| e.to_string())?;
+        let size = self.inner_size().map_err(|e| e.to_string())?;
+        Ok(Saved { maximized, size })
+    }
+
+    fn set_fullscreen(&self, on: bool) -> Result<(), String> {
+        WebviewWindow::set_fullscreen(self, on).map_err(|e| e.to_string())
+    }
+
+    fn maximize(&self) -> Result<(), String> {
+        WebviewWindow::maximize(self).map_err(|e| e.to_string())
+    }
+
+    fn close(&self) {
+        let _ = WebviewWindow::close(self);
+    }
+}
+
 #[tauri::command]
 pub fn set_presentation_fullscreen(
     window: WebviewWindow,
     state: tauri::State<'_, PresentationState>,
     on: bool,
 ) -> Result<(), String> {
+    apply_fullscreen(&window, &state, on)
+}
+
+fn apply_fullscreen<W: PresentationWindow>(
+    window: &W,
+    state: &PresentationState,
+    on: bool,
+) -> Result<(), String> {
     let mut inner = state.0.lock().unwrap();
-    let fullscreen = window.is_fullscreen().map_err(|e| e.to_string())?;
+    let fullscreen = window.is_fullscreen()?;
     match next_step(inner.saved, on, fullscreen) {
         Step::Nothing => Ok(()),
         Step::Forget => {
@@ -67,26 +109,19 @@ pub fn set_presentation_fullscreen(
             Ok(())
         }
         Step::Enter => {
-            let saved = current_window(&window).map_err(|e| e.to_string())?;
-            window.set_fullscreen(true).map_err(|e| e.to_string())?;
+            let saved = window.current()?;
+            window.set_fullscreen(true)?;
             inner.saved = Some(saved);
             Ok(())
         }
         Step::Exit { maximize } => {
             inner.saved = None;
-            leave_fullscreen(&window, maximize).map_err(|e| e.to_string())
+            leave_fullscreen(window, maximize)
         }
     }
 }
 
-fn current_window(window: &WebviewWindow) -> tauri::Result<Saved> {
-    Ok(Saved {
-        maximized: window.is_maximized()?,
-        size: window.inner_size()?,
-    })
-}
-
-fn leave_fullscreen(window: &WebviewWindow, maximize: bool) -> tauri::Result<()> {
+fn leave_fullscreen<W: PresentationWindow>(window: &W, maximize: bool) -> Result<(), String> {
     window.set_fullscreen(false)?;
     if maximize {
         window.maximize()?;
@@ -125,6 +160,14 @@ fn is_restored(target: Saved, now: Saved, fullscreen: bool) -> bool {
 // Called first on the main window's CloseRequested. Returns true when the
 // close was held to restore the window; the caller then does nothing else.
 pub fn hold_close_for_restore(window: &WebviewWindow, state: &PresentationState) -> bool {
+    if !hold_close(window, state) {
+        return false;
+    }
+    close_after_timeout(window.clone());
+    true
+}
+
+fn hold_close<W: PresentationWindow>(window: &W, state: &PresentationState) -> bool {
     let mut inner = state.0.lock().unwrap();
     let fullscreen = window.is_fullscreen().unwrap_or(false);
     if close_step(inner.saved, fullscreen) == CloseStep::Proceed {
@@ -137,19 +180,21 @@ pub fn hold_close_for_restore(window: &WebviewWindow, state: &PresentationState)
         return false;
     }
     inner.closing = Some(target);
-    drop(inner);
-    close_after_timeout(window.clone());
     true
 }
 
 // Called on the main window's Resized: closes a held window once restored.
 pub fn close_if_restored(window: &WebviewWindow, state: &PresentationState) {
+    close_when_restored(window, state);
+}
+
+fn close_when_restored<W: PresentationWindow>(window: &W, state: &PresentationState) {
     let inner = state.0.lock().unwrap();
     let Some(target) = inner.closing else {
         return;
     };
     let fullscreen = window.is_fullscreen().unwrap_or(false);
-    let Ok(now) = current_window(window) else {
+    let Ok(now) = window.current() else {
         return;
     };
     if !is_restored(target, now, fullscreen) {
@@ -159,10 +204,10 @@ pub fn close_if_restored(window: &WebviewWindow, state: &PresentationState) {
     finish_close(window, state);
 }
 
-fn finish_close(window: &WebviewWindow, state: &PresentationState) {
+fn finish_close<W: PresentationWindow>(window: &W, state: &PresentationState) {
     let held = state.0.lock().unwrap().closing.take();
     if held.is_some() {
-        let _ = window.close();
+        window.close();
     }
 }
 
