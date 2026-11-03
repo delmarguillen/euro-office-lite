@@ -362,6 +362,24 @@ pub fn install(
     Ok(())
 }
 
+// A checked pair and the folder it goes to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Resolved {
+    pub aff: PathBuf,
+    pub dic: PathBuf,
+    pub folder: String,
+}
+
+// Checks the chosen pair and picks its folder; writes nothing.
+pub fn resolve(paths: &[PathBuf], known: &[String]) -> Result<Resolved, ImportError> {
+    let (aff, dic) = sort_picked(paths)?;
+    let lang = language_from_names(&file_name_of(&aff), &file_name_of(&dic))?;
+    let folder = folder_for(&lang, known)?;
+    check_file(&aff)?;
+    check_file(&dic)?;
+    Ok(Resolved { aff, dic, folder })
+}
+
 // Checks the chosen pair and installs it; returns the folder it went to.
 pub fn import_pair(
     dir: &Path,
@@ -369,20 +387,54 @@ pub fn import_pair(
     known: &[String],
     replace: bool,
 ) -> Result<String, ImportError> {
-    let (aff, dic) = sort_picked(paths)?;
-    let lang = language_from_names(&file_name_of(&aff), &file_name_of(&dic))?;
-    let folder = folder_for(&lang, known)?;
-    check_file(&aff)?;
-    check_file(&dic)?;
-    install(dir, &folder, &aff, &dic, replace)?;
-    Ok(folder)
+    let resolved = resolve(paths, known)?;
+    install(dir, &resolved.folder, &resolved.aff, &resolved.dic, replace)?;
+    Ok(resolved.folder)
 }
 
-// The last pair chosen, kept in the backend so that "Replace" after an
-// "already installed" answer does not open the dialog a second time. The
+// A first import. On Exists, also returns what the user is asked to replace.
+pub fn start_import(
+    dir: &Path,
+    paths: &[PathBuf],
+    known: &[String],
+) -> (Result<String, ImportError>, Option<Resolved>) {
+    let resolved = match resolve(paths, known) {
+        Ok(resolved) => resolved,
+        Err(error) => return (Err(error), None),
+    };
+    match install(dir, &resolved.folder, &resolved.aff, &resolved.dic, false) {
+        Ok(()) => (Ok(resolved.folder), None),
+        Err(error @ ImportError::Exists(_)) => (Err(error), Some(resolved)),
+        Err(error) => (Err(error), None),
+    }
+}
+
+// Replaces exactly the folder the user confirmed, with the files chosen then.
+// It takes no language list, so a second call cannot point elsewhere. The
+// files are checked again: they may have changed while the question was up.
+pub fn finish_replace(dir: &Path, confirmed: &Resolved) -> Result<String, ImportError> {
+    check_file(&confirmed.aff)?;
+    check_file(&confirmed.dic)?;
+    install(dir, &confirmed.folder, &confirmed.aff, &confirmed.dic, true)?;
+    Ok(confirmed.folder.clone())
+}
+
+// The pair waiting for a "Replace?" answer, kept in the backend so the dialog
+// does not open a second time. It holds the folder resolved then. It is
+// dropped when used, when cancelled and when another import starts. The
 // webview never sees these paths.
 #[derive(Default)]
-pub struct PendingImport(Mutex<Vec<PathBuf>>);
+pub struct PendingImport(Mutex<Option<Resolved>>);
+
+impl PendingImport {
+    fn take(&self) -> Option<Resolved> {
+        self.0.lock().unwrap().take()
+    }
+
+    fn keep(&self, resolved: Option<Resolved>) {
+        *self.0.lock().unwrap() = resolved;
+    }
+}
 
 async fn pick_pair(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<Vec<PathBuf>, String> {
     let dialog = app
@@ -401,10 +453,11 @@ async fn pick_pair(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<Vec
     Ok(paths)
 }
 
-// Without replace, opens the dialog. With replace, installs over the language
-// the previous call reported as existing, from the files chosen then.
-// Ok(None) means the user cancelled the dialog. `known` is the spell checker's
-// list of language folder names, never a path.
+// Without replace, opens the dialog. With replace, installs over the folder
+// the previous call reported as existing, from the files chosen then; `known`
+// is ignored. Ok(None) means the user cancelled the dialog, or there was
+// nothing waiting to replace. `known` is the spell checker's list of
+// language folder names, never a path.
 #[tauri::command]
 pub async fn import_dictionary(
     app: AppHandle,
@@ -413,26 +466,31 @@ pub async fn import_dictionary(
     known: Vec<String>,
     replace: bool,
 ) -> Result<Option<String>, String> {
-    let paths = if replace {
-        std::mem::take(&mut *pending.0.lock().unwrap())
-    } else {
-        pick_pair(&app, &window).await?
-    };
-    if paths.is_empty() {
-        return Ok(None);
-    }
+    let waiting = pending.take();
     let Some(dir) = user_dir(&app) else {
         return Err(ImportError::Io("no app data folder".to_string()).to_string());
     };
-    match import_pair(&dir, &paths, &known, replace) {
-        Ok(lang) => Ok(Some(lang)),
-        Err(error) => {
-            if matches!(error, ImportError::Exists(_)) {
-                *pending.0.lock().unwrap() = paths;
-            }
-            Err(error.to_string())
-        }
+    if replace {
+        let Some(confirmed) = waiting else {
+            return Ok(None);
+        };
+        return finish_replace(&dir, &confirmed)
+            .map(Some)
+            .map_err(|error| error.to_string());
     }
+    let paths = pick_pair(&app, &window).await?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let (result, to_confirm) = start_import(&dir, &paths, &known);
+    pending.keep(to_confirm);
+    result.map(Some).map_err(|error| error.to_string())
+}
+
+// The user answered "No" to "Replace?".
+#[tauri::command]
+pub fn cancel_dictionary_import(pending: State<'_, PendingImport>) {
+    pending.take();
 }
 
 #[cfg(test)]
@@ -927,6 +985,48 @@ mod tests {
         for path in [&source, &dir, &outside] {
             let _ = std::fs::remove_dir_all(path);
         }
+    }
+
+    #[test]
+    fn a_replace_uses_the_folder_the_user_confirmed() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        std::fs::create_dir_all(dir.join("pt_PT")).unwrap();
+        std::fs::write(dir.join("pt_PT/pt_PT.dic"), b"1\nold\n").unwrap();
+        let aff = write(&source, "pt.aff", b"SET UTF-8\n");
+        let dic = write(&source, "pt.dic", b"1\nnovo\n");
+
+        let (result, to_confirm) = start_import(&dir, &[aff, dic], &known());
+        assert_eq!(result, Err(ImportError::Exists("pt_PT".to_string())));
+        let confirmed = to_confirm.unwrap();
+        assert_eq!(confirmed.folder, "pt_PT");
+
+        // The second call carries no language list, so a new one sent then
+        // (only pt_BR) cannot move the replace.
+        assert_eq!(finish_replace(&dir, &confirmed), Ok("pt_PT".to_string()));
+        assert_eq!(
+            std::fs::read(dir.join("pt_PT/pt_PT.dic")).unwrap(),
+            b"1\nnovo\n"
+        );
+        assert!(!dir.join("pt_BR").exists());
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_an_existing_language_waits_for_a_replace() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        let aff = write(&source, "fr.aff", b"SET UTF-8\n");
+        let dic = write(&source, "fr.dic", b"1\nbonjour\n");
+        let (result, to_confirm) = start_import(&dir, &[aff.clone(), dic.clone()], &known());
+        assert_eq!(result, Ok("fr_FR".to_string()));
+        assert_eq!(to_confirm, None);
+        let (result, to_confirm) = start_import(&dir, &[aff], &known());
+        assert_eq!(result, Err(ImportError::NotAPair));
+        assert_eq!(to_confirm, None);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
