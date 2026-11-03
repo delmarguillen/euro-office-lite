@@ -2,12 +2,30 @@
 // permission (core:window:default only grants getters), so sdkjs reaches the
 // window through this one command instead.
 use std::sync::Mutex;
-use tauri::WebviewWindow;
+use std::time::Duration;
+use tauri::{PhysicalSize, WebviewWindow};
 
-// Whether the window was maximized when the slideshow started; None while no
-// slideshow runs.
+// The window as it was when the slideshow started.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Saved {
+    maximized: bool,
+    size: PhysicalSize<u32>,
+}
+
 #[derive(Default)]
-pub struct PresentationState(Mutex<Option<bool>>);
+struct Inner {
+    // None while no slideshow runs.
+    saved: Option<Saved>,
+    // Set when a close arrived during the slideshow: the window is being
+    // restored to this and closes once it matches.
+    closing: Option<Saved>,
+}
+
+#[derive(Default)]
+pub struct PresentationState(Mutex<Inner>);
+
+// How long a close waits for the restore before closing anyway.
+const CLOSE_RESTORE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, PartialEq)]
 enum Step {
@@ -21,13 +39,13 @@ enum Step {
 // `fullscreen` is the window's current state. The system (macOS green button,
 // window manager key) can leave fullscreen without sdkjs knowing, so a saved
 // state is only trusted while the window is still fullscreen.
-fn next_step(saved: Option<bool>, on: bool, fullscreen: bool) -> Step {
+fn next_step(saved: Option<Saved>, on: bool, fullscreen: bool) -> Step {
     match (saved, on, fullscreen) {
         (None, true, _) => Step::Enter,
         (Some(_), true, false) => Step::Enter,
         (Some(_), true, true) => Step::Nothing,
-        (Some(was_maximized), false, true) => Step::Exit {
-            maximize: was_maximized,
+        (Some(saved), false, true) => Step::Exit {
+            maximize: saved.maximized,
         },
         (Some(_), false, false) => Step::Forget,
         (None, false, _) => Step::Nothing,
@@ -40,34 +58,142 @@ pub fn set_presentation_fullscreen(
     state: tauri::State<'_, PresentationState>,
     on: bool,
 ) -> Result<(), String> {
-    let mut saved = state.0.lock().unwrap();
+    let mut inner = state.0.lock().unwrap();
     let fullscreen = window.is_fullscreen().map_err(|e| e.to_string())?;
-    match next_step(*saved, on, fullscreen) {
+    match next_step(inner.saved, on, fullscreen) {
         Step::Nothing => Ok(()),
         Step::Forget => {
-            *saved = None;
+            inner.saved = None;
             Ok(())
         }
         Step::Enter => {
-            let was_maximized = window.is_maximized().map_err(|e| e.to_string())?;
+            let saved = current_window(&window).map_err(|e| e.to_string())?;
             window.set_fullscreen(true).map_err(|e| e.to_string())?;
-            *saved = Some(was_maximized);
+            inner.saved = Some(saved);
             Ok(())
         }
         Step::Exit { maximize } => {
-            *saved = None;
-            window.set_fullscreen(false).map_err(|e| e.to_string())?;
-            if maximize {
-                window.maximize().map_err(|e| e.to_string())?;
-            }
-            Ok(())
+            inner.saved = None;
+            leave_fullscreen(&window, maximize).map_err(|e| e.to_string())
         }
     }
+}
+
+fn current_window(window: &WebviewWindow) -> tauri::Result<Saved> {
+    Ok(Saved {
+        maximized: window.is_maximized()?,
+        size: window.inner_size()?,
+    })
+}
+
+fn leave_fullscreen(window: &WebviewWindow, maximize: bool) -> tauri::Result<()> {
+    window.set_fullscreen(false)?;
+    if maximize {
+        window.maximize()?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+enum CloseStep {
+    Proceed,
+    RestoreFirst,
+}
+
+// tauri-plugin-window-state saves size and position on CloseRequested unless
+// the window is maximized or minimized; fullscreen is not checked. A close
+// during the slideshow is held until the window is back to its saved state.
+fn close_step(saved: Option<Saved>, fullscreen: bool) -> CloseStep {
+    match (saved, fullscreen) {
+        (Some(_), true) => CloseStep::RestoreFirst,
+        _ => CloseStep::Proceed,
+    }
+}
+
+// macOS reports fullscreen off as soon as set_fullscreen(false) is called, so
+// the size is compared too: the restore is over when it is back.
+fn is_restored(target: Saved, now: Saved, fullscreen: bool) -> bool {
+    if fullscreen {
+        return false;
+    }
+    if target.maximized {
+        return now.maximized;
+    }
+    !now.maximized && now.size == target.size
+}
+
+// Called first on the main window's CloseRequested. Returns true when the
+// close was held to restore the window; the caller then does nothing else.
+pub fn hold_close_for_restore(window: &WebviewWindow, state: &PresentationState) -> bool {
+    let mut inner = state.0.lock().unwrap();
+    let fullscreen = window.is_fullscreen().unwrap_or(false);
+    if close_step(inner.saved, fullscreen) == CloseStep::Proceed {
+        return false;
+    }
+    let Some(target) = inner.saved.take() else {
+        return false;
+    };
+    if leave_fullscreen(window, target.maximized).is_err() {
+        return false;
+    }
+    inner.closing = Some(target);
+    drop(inner);
+    close_after_timeout(window.clone());
+    true
+}
+
+// Called on the main window's Resized: closes a held window once restored.
+pub fn close_if_restored(window: &WebviewWindow, state: &PresentationState) {
+    let inner = state.0.lock().unwrap();
+    let Some(target) = inner.closing else {
+        return;
+    };
+    let fullscreen = window.is_fullscreen().unwrap_or(false);
+    let Ok(now) = current_window(window) else {
+        return;
+    };
+    if !is_restored(target, now, fullscreen) {
+        return;
+    }
+    drop(inner);
+    finish_close(window, state);
+}
+
+fn finish_close(window: &WebviewWindow, state: &PresentationState) {
+    let held = state.0.lock().unwrap().closing.take();
+    if held.is_some() {
+        let _ = window.close();
+    }
+}
+
+// A window manager that ignores the restore (or a size it rounds) must not
+// leave the window open for good.
+fn close_after_timeout(window: WebviewWindow) {
+    std::thread::spawn(move || {
+        std::thread::sleep(CLOSE_RESTORE_TIMEOUT);
+        use tauri::Manager;
+        let state = window.state::<PresentationState>();
+        finish_close(&window, &state);
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn normal(width: u32, height: u32) -> Saved {
+        Saved {
+            maximized: false,
+            size: PhysicalSize::new(width, height),
+        }
+    }
+
+    fn maximized() -> Saved {
+        Saved {
+            maximized: true,
+            size: PhysicalSize::new(1920, 1040),
+        }
+    }
 
     #[test]
     fn entering_records_the_state() {
@@ -77,7 +203,7 @@ mod tests {
     #[test]
     fn exiting_restores_maximized() {
         assert_eq!(
-            next_step(Some(true), false, true),
+            next_step(Some(maximized()), false, true),
             Step::Exit { maximize: true }
         );
     }
@@ -85,7 +211,7 @@ mod tests {
     #[test]
     fn exiting_restores_normal() {
         assert_eq!(
-            next_step(Some(false), false, true),
+            next_step(Some(normal(800, 600)), false, true),
             Step::Exit { maximize: false }
         );
     }
@@ -93,7 +219,7 @@ mod tests {
     // A second enter must not overwrite the saved state with the fullscreen one.
     #[test]
     fn entering_twice_keeps_the_first_state() {
-        assert_eq!(next_step(Some(false), true, true), Step::Nothing);
+        assert_eq!(next_step(Some(normal(800, 600)), true, true), Step::Nothing);
     }
 
     // endReporter can follow SetFullscreen(false).
@@ -115,13 +241,70 @@ mod tests {
 
     #[test]
     fn entering_after_a_system_exit_enters_again() {
-        assert_eq!(next_step(Some(true), true, false), Step::Enter);
-        assert_eq!(next_step(Some(false), true, false), Step::Enter);
+        assert_eq!(next_step(Some(maximized()), true, false), Step::Enter);
+        assert_eq!(next_step(Some(normal(800, 600)), true, false), Step::Enter);
     }
 
     #[test]
     fn exiting_after_a_system_exit_leaves_the_window() {
-        assert_eq!(next_step(Some(true), false, false), Step::Forget);
-        assert_eq!(next_step(Some(false), false, false), Step::Forget);
+        assert_eq!(next_step(Some(maximized()), false, false), Step::Forget);
+        assert_eq!(
+            next_step(Some(normal(800, 600)), false, false),
+            Step::Forget
+        );
+    }
+
+    #[test]
+    fn closing_in_the_slideshow_restores_first() {
+        assert_eq!(
+            close_step(Some(normal(800, 600)), true),
+            CloseStep::RestoreFirst
+        );
+    }
+
+    #[test]
+    fn closing_without_a_slideshow_proceeds() {
+        assert_eq!(close_step(None, false), CloseStep::Proceed);
+        assert_eq!(close_step(None, true), CloseStep::Proceed);
+    }
+
+    // The system left fullscreen: the window already has its own size.
+    #[test]
+    fn closing_after_a_system_exit_proceeds() {
+        assert_eq!(
+            close_step(Some(normal(800, 600)), false),
+            CloseStep::Proceed
+        );
+    }
+
+    #[test]
+    fn still_fullscreen_is_not_restored() {
+        let target = normal(800, 600);
+        assert!(!is_restored(target, target, true));
+    }
+
+    #[test]
+    fn normal_is_restored_at_its_size() {
+        let target = normal(800, 600);
+        assert!(is_restored(target, normal(800, 600), false));
+    }
+
+    // macOS mid-animation: fullscreen already off, size still the monitor's.
+    #[test]
+    fn normal_at_another_size_is_not_restored() {
+        assert!(!is_restored(normal(800, 600), normal(1920, 1080), false));
+    }
+
+    #[test]
+    fn normal_target_but_maximized_is_not_restored() {
+        let mut now = normal(800, 600);
+        now.maximized = true;
+        assert!(!is_restored(normal(800, 600), now, false));
+    }
+
+    #[test]
+    fn maximized_is_restored_once_maximized() {
+        assert!(is_restored(maximized(), maximized(), false));
+        assert!(!is_restored(maximized(), normal(1920, 1080), false));
     }
 }
