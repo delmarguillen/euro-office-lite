@@ -18,6 +18,7 @@ const SPELL_JS = "window['AscCommon']['spellcheckGetLanguages']=function(){retur
 async function setup(answers, confirmAnswer = true) {
   const imports = [];
   let listCalls = 0;
+  let cancels = 0;
   const bridge = await loadBridge({
     invoke: {
       list_user_dictionaries: () => { listCalls += 1; return { valid: [], skipped: [] }; },
@@ -27,6 +28,7 @@ async function setup(answers, confirmAnswer = true) {
         if (answer instanceof Error) throw answer;
         return answer;
       },
+      cancel_dictionary_import: () => { cancels += 1; return null; },
     },
   });
   const fetched = [];
@@ -47,6 +49,7 @@ async function setup(answers, confirmAnswer = true) {
     messages,
     confirms,
     listCalls: () => listCalls,
+    cancels: () => cancels,
     t: (key) => bridge.run(`_t(${JSON.stringify(key)})`),
   };
 }
@@ -120,6 +123,21 @@ async function addLanguage(env) {
   const lang = await addLanguage(env);
   check(results, 'a declined replace installs nothing',
     lang === null && env.imports.length === 1 && env.messages.length === 0);
+  check(results, 'a declined replace tells the backend to drop the pair', env.cancels() === 1);
+}
+
+{
+  const env = await setup([new Error('dictionary-exists: es'), 'es']);
+  await addLanguage(env);
+  check(results, 'a confirmed replace does not cancel', env.cancels() === 0);
+}
+
+{
+  const env = await setup([new Error('dictionary-io: es_ES')]);
+  await addLanguage(env);
+  check(results, 'a write failure shows the generic message with the language only',
+    env.messages.length === 1
+    && env.messages[0].text === env.t('languageFailed').replace('{detail}', 'es_ES'));
 }
 
 {

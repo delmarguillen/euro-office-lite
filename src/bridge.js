@@ -1535,7 +1535,10 @@ async function _eoAddLanguage(replace) {
     if (error.code === 'exists') {
       var yes = await dialog.confirm(_eoFill('languageExists', { lang: error.detail }),
         { title: title, kind: 'warning' });
-      return yes ? _eoAddLanguage(true) : null;
+      if (yes) return _eoAddLanguage(true);
+      // The backend keeps the chosen pair until told: drop it.
+      await invoke('cancel_dictionary_import');
+      return null;
     }
     var key = _EO_IMPORT_MESSAGES[error.code] || 'languageFailed';
     await dialog.message(_eoFill(key, { detail: error.detail }), { title: title, kind: 'error' });
