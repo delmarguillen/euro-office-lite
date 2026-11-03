@@ -232,6 +232,17 @@ pub fn suggestion_with_ext(path: &Path, ext: Option<&str>) -> PathBuf {
     path.with_extension(ext)
 }
 
+// Whether Ctrl+S may write the open document back to its own path. Formats
+// outside SAVE_EXTENSIONS (a .dotx, an .xlsm, a .fodt) go through Save As:
+// the bridge never sends them here, and save_file refuses them.
+pub fn saves_in_place(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    SAVE_EXTENSIONS.contains(&ext.as_str())
+}
+
 // A name typed without a known extension gets the format's: x2t picks the
 // format from the extension.
 pub fn with_save_extension(path: PathBuf, fallback_ext: &str) -> PathBuf {
@@ -280,6 +291,16 @@ mod tests {
         for ext in OPEN_EXTENSIONS {
             let path = std::path::PathBuf::from(format!("/tmp/a.{}", ext));
             assert_ne!(crate::x2t_task::detect_format(&path), 0, "{}", ext);
+        }
+    }
+
+    #[test]
+    fn only_the_formats_save_as_writes_are_saved_in_place() {
+        for name in ["a.docx", "a.DOC", "a.xls", "a.ppt", "a.odt", "a.csv", "a.pdf"] {
+            assert!(saves_in_place(Path::new(name)), "{}", name);
+        }
+        for name in ["a.dotx", "a.docm", "a.xlsm", "a.xlsb", "a.pptm", "a.fodt", "a.ots", "a"] {
+            assert!(!saves_in_place(Path::new(name)), "{}", name);
         }
     }
 

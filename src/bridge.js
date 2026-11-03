@@ -1093,6 +1093,25 @@ function _eoDocTypeForPath(path) {
 }
 window._eoDocTypeForPath = _eoDocTypeForPath;
 
+// The formats Ctrl+S writes back to the same path: SAVE_EXTENSIONS in
+// src-tauri/src/file_dialogs.rs. Any other (a .dotx, an .xlsm, a .fodt) goes
+// through Save As, so a template or a macro file is never overwritten with
+// content of another format under its own name.
+var _EO_SAVE_IN_PLACE = [
+  'docx', 'doc', 'odt', 'rtf', 'txt', 'xlsx', 'xls', 'ods', 'csv', 'pptx', 'ppt', 'odp', 'pdf'
+];
+function _eoSavesInPlace(name) {
+  var ext = String(name || '').split('.').pop().toLowerCase();
+  return _EO_SAVE_IN_PLACE.indexOf(ext) !== -1;
+}
+
+// What Save As proposes for a document Ctrl+S cannot write back.
+function _eoFamilyFormat(docType) {
+  if (docType === 'cell') return 'xlsx';
+  if (docType === 'slide') return 'pptx';
+  return 'docx';
+}
+
 // Files reach the backend only as the tokens it handed out (path_grants.rs).
 // What the editor holds for a granted file is this name, which keeps the
 // file's extension for sdkjs and goes back to the bridge whenever the editor
@@ -2628,6 +2647,11 @@ window.AscDesktopEditor = {
       var current = await invoke('current_document');
       var currentName = current ? current.name : null;
       if (!isSaveAs && !current) isSaveAs = true;
+      var familyExt = null;
+      if (!isSaveAs && !_eoSavesInPlace(currentName)) {
+        isSaveAs = true;
+        familyExt = _eoFamilyFormat(docType);
+      }
       var wasModified = _eoUnsavedChanges;
       // A cancelled Save As or a PDF export leaves the open document where it
       // was, so it must not end as a save.
@@ -2640,7 +2664,7 @@ window.AscDesktopEditor = {
           257: 'xlsx', 258: 'xls', 259: 'ods', 260: 'csv',
           513: 'pdf'
         };
-        var requestedExt = formatExtensions[fileType] || null;
+        var requestedExt = formatExtensions[fileType] || familyExt;
 
         // The backend opens the dialog: where it starts after a recovery and
         // the extension the chosen name gets are decided there.
