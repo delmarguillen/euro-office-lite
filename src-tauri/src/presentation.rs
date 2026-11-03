@@ -14,15 +14,23 @@ enum Step {
     Nothing,
     Enter,
     Exit { maximize: bool },
+    // The system already left fullscreen: drop the state, leave the window.
+    Forget,
 }
 
-fn next_step(saved: Option<bool>, on: bool) -> Step {
-    match (saved, on) {
-        (None, true) => Step::Enter,
-        (Some(was_maximized), false) => Step::Exit {
+// `fullscreen` is the window's current state. The system (macOS green button,
+// window manager key) can leave fullscreen without sdkjs knowing, so a saved
+// state is only trusted while the window is still fullscreen.
+fn next_step(saved: Option<bool>, on: bool, fullscreen: bool) -> Step {
+    match (saved, on, fullscreen) {
+        (None, true, _) => Step::Enter,
+        (Some(_), true, false) => Step::Enter,
+        (Some(_), true, true) => Step::Nothing,
+        (Some(was_maximized), false, true) => Step::Exit {
             maximize: was_maximized,
         },
-        _ => Step::Nothing,
+        (Some(_), false, false) => Step::Forget,
+        (None, false, _) => Step::Nothing,
     }
 }
 
@@ -33,8 +41,13 @@ pub fn set_presentation_fullscreen(
     on: bool,
 ) -> Result<(), String> {
     let mut saved = state.0.lock().unwrap();
-    match next_step(*saved, on) {
+    let fullscreen = window.is_fullscreen().map_err(|e| e.to_string())?;
+    match next_step(*saved, on, fullscreen) {
         Step::Nothing => Ok(()),
+        Step::Forget => {
+            *saved = None;
+            Ok(())
+        }
         Step::Enter => {
             let was_maximized = window.is_maximized().map_err(|e| e.to_string())?;
             window.set_fullscreen(true).map_err(|e| e.to_string())?;
@@ -58,18 +71,21 @@ mod tests {
 
     #[test]
     fn entering_records_the_state() {
-        assert_eq!(next_step(None, true), Step::Enter);
+        assert_eq!(next_step(None, true, false), Step::Enter);
     }
 
     #[test]
     fn exiting_restores_maximized() {
-        assert_eq!(next_step(Some(true), false), Step::Exit { maximize: true });
+        assert_eq!(
+            next_step(Some(true), false, true),
+            Step::Exit { maximize: true }
+        );
     }
 
     #[test]
     fn exiting_restores_normal() {
         assert_eq!(
-            next_step(Some(false), false),
+            next_step(Some(false), false, true),
             Step::Exit { maximize: false }
         );
     }
@@ -77,12 +93,35 @@ mod tests {
     // A second enter must not overwrite the saved state with the fullscreen one.
     #[test]
     fn entering_twice_keeps_the_first_state() {
-        assert_eq!(next_step(Some(false), true), Step::Nothing);
+        assert_eq!(next_step(Some(false), true, true), Step::Nothing);
     }
 
     // endReporter can follow SetFullscreen(false).
     #[test]
     fn exiting_without_a_slideshow_does_nothing() {
-        assert_eq!(next_step(None, false), Step::Nothing);
+        assert_eq!(next_step(None, false, false), Step::Nothing);
+    }
+
+    // The user went fullscreen by the system before the slideshow.
+    #[test]
+    fn entering_while_already_fullscreen_enters() {
+        assert_eq!(next_step(None, true, true), Step::Enter);
+    }
+
+    #[test]
+    fn exiting_without_a_slideshow_in_system_fullscreen_does_nothing() {
+        assert_eq!(next_step(None, false, true), Step::Nothing);
+    }
+
+    #[test]
+    fn entering_after_a_system_exit_enters_again() {
+        assert_eq!(next_step(Some(true), true, false), Step::Enter);
+        assert_eq!(next_step(Some(false), true, false), Step::Enter);
+    }
+
+    #[test]
+    fn exiting_after_a_system_exit_leaves_the_window() {
+        assert_eq!(next_step(Some(true), false, false), Step::Forget);
+        assert_eq!(next_step(Some(false), false, false), Step::Forget);
     }
 }
