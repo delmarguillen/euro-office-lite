@@ -30,12 +30,17 @@
   Delete "${DIR}\LiberationSerif-Regular.ttf"
 !macroend
 
-!macro NSIS_HOOK_POSTINSTALL
+; The V8 caches DoctRenderer writes next to each sdkjs bundle.
+!macro EOL_DELETE_SDK_CACHES
   Delete "$INSTDIR\editors\sdkjs\word\sdk-all.cache"
   Delete "$INSTDIR\editors\sdkjs\cell\sdk-all.cache"
   Delete "$INSTDIR\editors\sdkjs\slide\sdk-all.cache"
   Delete "$INSTDIR\editors\sdkjs\pdf\sdk-all.cache"
   Delete "$INSTDIR\editors\sdkjs\visio\sdk-all.cache"
+!macroend
+
+!macro NSIS_HOOK_POSTINSTALL
+  !insertmacro EOL_DELETE_SDK_CACHES
   Delete "$INSTDIR\binaries\fontdata\AllFonts.js"
   Delete "$INSTDIR\binaries\fontdata\font_selection.bin"
   Delete "$INSTDIR\binaries\fontdata\fonts.log"
