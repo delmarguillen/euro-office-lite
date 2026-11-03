@@ -244,6 +244,38 @@ fn io_error(lang: &str, what: &str, path: &Path, error: std::io::Error) -> Impor
     ImportError::Io(lang.to_string())
 }
 
+// A symlink, or on Windows any reparse point (a junction too). Checked with
+// symlink_metadata, so the link itself is looked at, not what it points to.
+fn is_link(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    is_reparse_point(&metadata)
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_metadata: &std::fs::Metadata) -> bool {
+    false
+}
+
+fn refuse_link(lang: &str, path: &Path) -> Result<(), ImportError> {
+    if !is_link(path) {
+        return Ok(());
+    }
+    eprintln!("[dictionary] refused, a link: {}", path.display());
+    Err(ImportError::Io(lang.to_string()))
+}
+
 static TEMP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 // Hidden and unique to this process and call, in the destination folder so
@@ -294,11 +326,17 @@ pub fn install(
     if !replace && is_installed(&folder, lang) {
         return Err(ImportError::Exists(lang.to_string()));
     }
-    std::fs::create_dir_all(&folder).map_err(|e| io_error(lang, "create", &folder, e))?;
+    std::fs::create_dir_all(dir).map_err(|e| io_error(lang, "create", dir, e))?;
+    refuse_link(lang, &folder)?;
+    if !folder.exists() {
+        std::fs::create_dir(&folder).map_err(|e| io_error(lang, "create", &folder, e))?;
+    }
     let aff_name = format!("{lang}.aff");
     let dic_name = format!("{lang}.dic");
     let aff_dest = folder.join(&aff_name);
     let dic_dest = folder.join(&dic_name);
+    refuse_link(lang, &aff_dest)?;
+    refuse_link(lang, &dic_dest)?;
     let first_install = !is_installed(&folder, lang);
 
     let aff_tmp = write_temp(lang, aff, &folder, &aff_name)?;
@@ -848,6 +886,47 @@ mod tests {
         assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_folder_is_refused() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        let outside = test_dir("outside");
+        std::os::unix::fs::symlink(&outside, dir.join("es_ES")).unwrap();
+        let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es_ES.dic", b"1\nhola\n");
+
+        let refused = install(&dir, "es_ES", &aff, &dic, true);
+
+        assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        for path in [&source, &dir, &outside] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_file_is_refused() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        let outside = test_dir("outside");
+        let target = write(&outside, "target", b"kept\n");
+        std::fs::create_dir_all(dir.join("es_ES")).unwrap();
+        std::os::unix::fs::symlink(&target, dir.join("es_ES/es_ES.dic")).unwrap();
+        let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es_ES.dic", b"1\nhola\n");
+
+        let refused = install(&dir, "es_ES", &aff, &dic, true);
+
+        assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
+        assert_eq!(std::fs::read(&target).unwrap(), b"kept\n");
+        assert!(!dir.join("es_ES/es_ES.aff").exists());
+        for path in [&source, &dir, &outside] {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 
     #[test]
