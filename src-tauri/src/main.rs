@@ -11,6 +11,7 @@ mod fonts_state;
 mod launch_args;
 mod note_separator;
 mod path_grants;
+mod presentation;
 mod protocol_limits;
 mod recent;
 mod recovery;
@@ -406,6 +407,7 @@ fn main() {
             pasted_images: Mutex::new(Vec::new()),
             save_suggestion: Mutex::new(None),
         })
+        .manage(presentation::PresentationState::default())
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
             file_ops::open_pdf,
@@ -447,6 +449,7 @@ fn main() {
             recovery::recovery_load,
             recovery::recovery_discard,
             dictionaries::list_user_dictionaries,
+            presentation::set_presentation_fullscreen,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let allow_origin = protocol_limits::allow_origin();
@@ -1160,6 +1163,15 @@ mod capability_tests {
     #[test]
     fn the_webview_has_no_shell_permission() {
         assert!(!permissions().iter().any(|p| p.starts_with("shell:")));
+    }
+
+    // Fullscreen goes through set_presentation_fullscreen (presentation.rs).
+    #[test]
+    fn the_webview_has_no_window_write_permission() {
+        let permissions = permissions();
+        for refused in ["core:window:allow-set-fullscreen", "core:window:allow-set-always-on-top"] {
+            assert!(!permissions.iter().any(|p| p == refused), "{refused}");
+        }
     }
 }
 

@@ -41,6 +41,7 @@ const APP_COMMANDS: &[&str] = &[
     "recovery_load",
     "recovery_discard",
     "list_user_dictionaries",
+    "set_presentation_fullscreen",
 ];
 
 fn main() {
