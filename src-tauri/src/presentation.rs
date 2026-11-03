@@ -3,7 +3,7 @@
 // window through this one command instead.
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{PhysicalSize, WebviewWindow};
+use tauri::{Manager, PhysicalSize, WebviewWindow};
 
 // The window as it was when the slideshow started.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -12,20 +12,50 @@ struct Saved {
     size: PhysicalSize<u32>,
 }
 
+// What to do once the window is restored.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum End {
+    // Close the window again; the usual close flow (and its unsaved-changes
+    // confirmation) runs then.
+    Close,
+    // Exit the app; the user already confirmed or nothing was modified.
+    Exit,
+}
+
+// A restore in progress, from leaving fullscreen until is_restored or the
+// timeout. `id` tells a timeout which restore it belongs to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Restore {
+    target: Saved,
+    id: u64,
+}
+
 #[derive(Default)]
 struct Inner {
     // None while no slideshow runs.
     saved: Option<Saved>,
-    // Set when a close arrived during the slideshow: the window is being
-    // restored to this and closes once it matches.
-    closing: Option<Saved>,
+    restoring: Option<Restore>,
+    // What waits for the restore to end.
+    pending: Option<End>,
+    next_id: u64,
+}
+
+impl Inner {
+    fn start_restore(&mut self, target: Saved) -> u64 {
+        self.next_id += 1;
+        self.restoring = Some(Restore {
+            target,
+            id: self.next_id,
+        });
+        self.next_id
+    }
 }
 
 #[derive(Default)]
 pub struct PresentationState(Mutex<Inner>);
 
-// How long a close waits for the restore before closing anyway.
-const CLOSE_RESTORE_TIMEOUT: Duration = Duration::from_secs(2);
+// How long a restore may take before what waits for it runs anyway.
+const RESTORE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, PartialEq)]
 enum Step {
@@ -60,6 +90,7 @@ trait PresentationWindow {
     fn set_fullscreen(&self, on: bool) -> Result<(), String>;
     fn maximize(&self) -> Result<(), String>;
     fn close(&self);
+    fn exit(&self);
 }
 
 impl PresentationWindow for WebviewWindow {
@@ -84,6 +115,10 @@ impl PresentationWindow for WebviewWindow {
     fn close(&self) {
         let _ = WebviewWindow::close(self);
     }
+
+    fn exit(&self) {
+        self.app_handle().exit(0);
+    }
 }
 
 #[tauri::command]
@@ -92,52 +127,62 @@ pub fn set_presentation_fullscreen(
     state: tauri::State<'_, PresentationState>,
     on: bool,
 ) -> Result<(), String> {
-    apply_fullscreen(&window, &state, on)
+    let restore = apply_fullscreen(&window, &state, on)?;
+    end_restore_after_timeout(&window, restore);
+    Ok(())
 }
 
 // The window is read before the lock and called after it: on Windows a
 // window call can send Resized synchronously, and its handler takes the lock.
+// Returns the id of the restore it started, if any.
 fn apply_fullscreen<W: PresentationWindow>(
     window: &W,
     state: &PresentationState,
     on: bool,
-) -> Result<(), String> {
+) -> Result<Option<u64>, String> {
     let fullscreen = window.is_fullscreen()?;
     let now = window.current()?;
     let mut inner = state.0.lock().unwrap();
+    // A close or exit already waits for this restore.
+    if on && inner.pending.is_some() {
+        return Ok(None);
+    }
     let before = inner.saved;
     match next_step(before, on, fullscreen) {
-        Step::Nothing => Ok(()),
+        Step::Nothing => Ok(None),
         Step::Forget => {
             inner.saved = None;
-            Ok(())
+            Ok(None)
         }
         Step::Enter => {
             inner.saved = Some(now);
+            inner.restoring = None;
             drop(inner);
             let result = window.set_fullscreen(true);
-            undo_saved_on_error(state, &result, before);
-            result
+            if result.is_err() {
+                state.0.lock().unwrap().saved = before;
+            }
+            result.map(|_| None)
         }
         Step::Exit { maximize } => {
-            inner.saved = None;
+            let target = inner.saved.take().expect("Exit comes from a saved state");
+            let id = inner.start_restore(target);
             drop(inner);
             let result = leave_fullscreen(window, maximize);
-            undo_saved_on_error(state, &result, before);
-            result
+            if result.is_err() {
+                undo_restore(state, target);
+            }
+            result.map(|_| Some(id))
         }
     }
 }
 
-// The window call failed: put back the state it was taken with.
-fn undo_saved_on_error(
-    state: &PresentationState,
-    result: &Result<(), String>,
-    before: Option<Saved>,
-) {
-    if result.is_err() {
-        state.0.lock().unwrap().saved = before;
-    }
+// The window call failed: the slideshow is still on.
+fn undo_restore(state: &PresentationState, target: Saved) {
+    let mut inner = state.0.lock().unwrap();
+    inner.saved = Some(target);
+    inner.restoring = None;
+    inner.pending = None;
 }
 
 fn leave_fullscreen<W: PresentationWindow>(window: &W, maximize: bool) -> Result<(), String> {
@@ -164,6 +209,35 @@ fn close_step(saved: Option<Saved>, fullscreen: bool) -> CloseStep {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum EndStep {
+    // Nothing to restore: go on now.
+    Now,
+    // A restore is running: wait for it, without starting another.
+    Wait,
+    // The slideshow is on: leave fullscreen, then go on.
+    RestoreFirst,
+}
+
+// What a close or exit request does in the current state.
+fn end_step(restoring: bool, saved: Option<Saved>, fullscreen: bool) -> EndStep {
+    if restoring {
+        return EndStep::Wait;
+    }
+    match close_step(saved, fullscreen) {
+        CloseStep::RestoreFirst => EndStep::RestoreFirst,
+        CloseStep::Proceed => EndStep::Now,
+    }
+}
+
+// An exit outranks a close: the user confirmed quitting the app.
+fn merge_end(pending: Option<End>, request: End) -> End {
+    match (pending, request) {
+        (Some(End::Exit), _) => End::Exit,
+        (_, request) => request,
+    }
+}
+
 // macOS reports fullscreen off as soon as set_fullscreen(false) is called, so
 // the size is compared too: the restore is over when it is back.
 fn is_restored(target: Saved, now: Saved, fullscreen: bool) -> bool {
@@ -176,76 +250,120 @@ fn is_restored(target: Saved, now: Saved, fullscreen: bool) -> bool {
     !now.maximized && now.size == target.size
 }
 
+#[derive(Debug, PartialEq)]
+enum Requested {
+    // Nothing waits: the caller goes on as without a slideshow.
+    Now,
+    // The request waits for the restore; the caller does nothing else.
+    Held { started: Option<u64> },
+}
+
 // Called first on the main window's CloseRequested. Returns true when the
-// close was held to restore the window; the caller then does nothing else.
+// close is held for a restore; the caller then prevents it and does nothing
+// else.
 pub fn hold_close_for_restore(window: &WebviewWindow, state: &PresentationState) -> bool {
-    if !hold_close(window, state) {
-        return false;
+    match request_end(window, state, End::Close) {
+        Requested::Now => false,
+        Requested::Held { started } => {
+            end_restore_after_timeout(window, started);
+            true
+        }
     }
-    close_after_timeout(window.clone());
-    true
 }
 
-fn hold_close<W: PresentationWindow>(window: &W, state: &PresentationState) -> bool {
+// Every exit that skips CloseRequested (the Quit menu item, force_close)
+// comes here, so the window-state plugin saves the restored window on
+// RunEvent::Exit.
+pub fn exit_when_restored(window: &WebviewWindow, state: &PresentationState) {
+    match request_end(window, state, End::Exit) {
+        Requested::Now => window.exit(),
+        Requested::Held { started } => end_restore_after_timeout(window, started),
+    }
+}
+
+fn request_end<W: PresentationWindow>(
+    window: &W,
+    state: &PresentationState,
+    request: End,
+) -> Requested {
     let fullscreen = window.is_fullscreen().unwrap_or(false);
-    let Some(target) = take_saved_for_close(state, fullscreen) else {
-        return false;
-    };
-    // closing is set before the restore so a Resized sent during it can close.
-    if leave_fullscreen(window, target.maximized).is_err() {
-        let mut inner = state.0.lock().unwrap();
-        inner.closing = None;
-        inner.saved = Some(target);
-        return false;
-    }
-    true
-}
-
-// Moves the saved state to closing when the close has to wait for a restore.
-fn take_saved_for_close(state: &PresentationState, fullscreen: bool) -> Option<Saved> {
     let mut inner = state.0.lock().unwrap();
-    if close_step(inner.saved, fullscreen) == CloseStep::Proceed {
-        return None;
+    match end_step(inner.restoring.is_some(), inner.saved, fullscreen) {
+        EndStep::Now => Requested::Now,
+        EndStep::Wait => {
+            inner.pending = Some(merge_end(inner.pending, request));
+            Requested::Held { started: None }
+        }
+        EndStep::RestoreFirst => {
+            let target = inner
+                .saved
+                .take()
+                .expect("RestoreFirst comes from a saved state");
+            let id = inner.start_restore(target);
+            // Set before the restore so a Resized sent during it can end it.
+            inner.pending = Some(request);
+            drop(inner);
+            if leave_fullscreen(window, target.maximized).is_err() {
+                undo_restore(state, target);
+                return Requested::Now;
+            }
+            Requested::Held { started: Some(id) }
+        }
     }
-    let target = inner.saved.take()?;
-    inner.closing = Some(target);
-    Some(target)
 }
 
-// Called on the main window's Resized: closes a held window once restored.
-pub fn close_if_restored(window: &WebviewWindow, state: &PresentationState) {
-    close_when_restored(window, state);
+// Called on the main window's Resized: ends a restore once the window is back.
+pub fn on_resized(window: &WebviewWindow, state: &PresentationState) {
+    end_restore_if_restored(window, state);
 }
 
-fn close_when_restored<W: PresentationWindow>(window: &W, state: &PresentationState) {
-    let Some(target) = state.0.lock().unwrap().closing else {
+fn end_restore_if_restored<W: PresentationWindow>(window: &W, state: &PresentationState) {
+    let Some(restore) = state.0.lock().unwrap().restoring else {
         return;
     };
     let fullscreen = window.is_fullscreen().unwrap_or(false);
     let Ok(now) = window.current() else {
         return;
     };
-    if !is_restored(target, now, fullscreen) {
+    if !is_restored(restore.target, now, fullscreen) {
         return;
     }
-    finish_close(window, state);
+    end_restore(window, state, restore.id);
 }
 
-fn finish_close<W: PresentationWindow>(window: &W, state: &PresentationState) {
-    let held = state.0.lock().unwrap().closing.take();
-    if held.is_some() {
-        window.close();
+// Ends the restore `id` if it is still the current one and runs what waited.
+// The pending request is taken before it runs, so a close that later shows
+// the unsaved-changes confirmation leaves nothing armed if it is cancelled.
+fn end_restore<W: PresentationWindow>(window: &W, state: &PresentationState, id: u64) {
+    let pending = {
+        let mut inner = state.0.lock().unwrap();
+        let Some(restore) = inner.restoring else {
+            return;
+        };
+        if restore.id != id {
+            return;
+        }
+        inner.restoring = None;
+        inner.pending.take()
+    };
+    match pending {
+        Some(End::Close) => window.close(),
+        Some(End::Exit) => window.exit(),
+        None => {}
     }
 }
 
 // A window manager that ignores the restore (or a size it rounds) must not
-// leave the window open for good.
-fn close_after_timeout(window: WebviewWindow) {
+// leave the window open, or the app running, for good.
+fn end_restore_after_timeout(window: &WebviewWindow, id: Option<u64>) {
+    let Some(id) = id else {
+        return;
+    };
+    let window = window.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(CLOSE_RESTORE_TIMEOUT);
-        use tauri::Manager;
+        std::thread::sleep(RESTORE_TIMEOUT);
         let state = window.state::<PresentationState>();
-        finish_close(&window, &state);
+        end_restore(&window, &state, id);
     });
 }
 
@@ -376,18 +494,51 @@ mod tests {
         assert!(!is_restored(normal(800, 600), now, false));
     }
 
+    #[test]
+    fn a_request_without_a_slideshow_goes_on() {
+        assert_eq!(end_step(false, None, false), EndStep::Now);
+        assert_eq!(end_step(false, None, true), EndStep::Now);
+    }
+
+    #[test]
+    fn a_request_in_the_slideshow_restores_first() {
+        assert_eq!(
+            end_step(false, Some(normal(800, 600)), true),
+            EndStep::RestoreFirst
+        );
+    }
+
+    // saved is already gone once a restore runs.
+    #[test]
+    fn a_request_during_a_restore_waits() {
+        assert_eq!(end_step(true, None, false), EndStep::Wait);
+        assert_eq!(end_step(true, None, true), EndStep::Wait);
+    }
+
+    #[test]
+    fn an_exit_outranks_a_close() {
+        assert_eq!(merge_end(None, End::Close), End::Close);
+        assert_eq!(merge_end(Some(End::Close), End::Exit), End::Exit);
+        assert_eq!(merge_end(Some(End::Exit), End::Close), End::Exit);
+    }
+
     const MONITOR: PhysicalSize<u32> = PhysicalSize::new(1920, 1080);
 
     // A window that raises Resized from inside set_fullscreen and maximize, as
-    // Windows does when SetWindowPlacement and ShowWindow send WM_SIZE.
+    // Windows does when SetWindowPlacement and ShowWindow send WM_SIZE. With
+    // `slow`, leaving fullscreen keeps the monitor size until `finish_exit`,
+    // as the macOS animation does.
     struct FakeWindow<'a> {
         state: &'a PresentationState,
         normal: Saved,
         now: Cell<Saved>,
         fullscreen: Cell<bool>,
         fail_set_fullscreen: bool,
+        slow: bool,
         resized_while_locked: Cell<bool>,
-        closed: Cell<bool>,
+        closes: Cell<u32>,
+        exits: Cell<u32>,
+        set_fullscreen_calls: Cell<u32>,
     }
 
     impl<'a> FakeWindow<'a> {
@@ -398,9 +549,18 @@ mod tests {
                 now: Cell::new(normal),
                 fullscreen: Cell::new(false),
                 fail_set_fullscreen: false,
+                slow: false,
                 resized_while_locked: Cell::new(false),
-                closed: Cell::new(false),
+                closes: Cell::new(0),
+                exits: Cell::new(0),
+                set_fullscreen_calls: Cell::new(0),
             }
+        }
+
+        fn slow(state: &'a PresentationState, normal: Saved) -> Self {
+            let mut window = FakeWindow::new(state, normal);
+            window.slow = true;
+            window
         }
 
         // try_lock so a held lock fails the test instead of hanging it.
@@ -410,9 +570,26 @@ mod tests {
                 Err(TryLockError::Poisoned(_)) => panic!("presentation lock poisoned"),
                 Ok(guard) => {
                     drop(guard);
-                    close_when_restored(self, self.state);
+                    end_restore_if_restored(self, self.state);
                 }
             }
+        }
+
+        // The end of the macOS exit animation.
+        fn finish_exit(&self) {
+            self.now.set(self.normal);
+            self.resized();
+        }
+
+        // Mirrors main.rs: a CloseRequested that is not held closes the window.
+        fn close_requested(&self) {
+            if request_end(self, self.state, End::Close) == Requested::Now {
+                self.close();
+            }
+        }
+
+        fn current_restore(&self) -> u64 {
+            self.state.0.lock().unwrap().restoring.unwrap().id
         }
     }
 
@@ -429,8 +606,14 @@ mod tests {
             if self.fail_set_fullscreen {
                 return Err("set_fullscreen failed".into());
             }
+            self.set_fullscreen_calls
+                .set(self.set_fullscreen_calls.get() + 1);
             self.fullscreen.set(on);
-            let size = if on { MONITOR } else { self.normal.size };
+            let size = if on || self.slow {
+                MONITOR
+            } else {
+                self.normal.size
+            };
             self.now.set(Saved {
                 maximized: false,
                 size,
@@ -449,7 +632,11 @@ mod tests {
         }
 
         fn close(&self) {
-            self.closed.set(true);
+            self.closes.set(self.closes.get() + 1);
+        }
+
+        fn exit(&self) {
+            self.exits.set(self.exits.get() + 1);
         }
     }
 
@@ -470,7 +657,9 @@ mod tests {
         apply_fullscreen(&window, &state, false).unwrap();
         assert!(!window.resized_while_locked.get());
         assert!(window.now.get().maximized);
-        assert_eq!(state.0.lock().unwrap().saved, None);
+        let inner = state.0.lock().unwrap();
+        assert_eq!(inner.saved, None);
+        assert_eq!(inner.restoring, None);
     }
 
     // The Resized sent from inside the restore closes the window right away.
@@ -479,10 +668,10 @@ mod tests {
         let state = PresentationState::default();
         let window = FakeWindow::new(&state, normal(800, 600));
         apply_fullscreen(&window, &state, true).unwrap();
-        assert!(hold_close(&window, &state));
+        window.close_requested();
         assert!(!window.resized_while_locked.get());
-        assert!(window.closed.get());
-        assert_eq!(state.0.lock().unwrap().closing, None);
+        assert_eq!(window.closes.get(), 1);
+        assert_eq!(state.0.lock().unwrap().restoring, None);
     }
 
     #[test]
@@ -490,9 +679,9 @@ mod tests {
         let state = PresentationState::default();
         let window = FakeWindow::new(&state, maximized());
         apply_fullscreen(&window, &state, true).unwrap();
-        assert!(hold_close(&window, &state));
+        window.close_requested();
         assert!(!window.resized_while_locked.get());
-        assert!(window.closed.get());
+        assert_eq!(window.closes.get(), 1);
     }
 
     #[test]
@@ -511,7 +700,9 @@ mod tests {
         apply_fullscreen(&window, &state, true).unwrap();
         window.fail_set_fullscreen = true;
         assert!(apply_fullscreen(&window, &state, false).is_err());
-        assert_eq!(state.0.lock().unwrap().saved, Some(normal(800, 600)));
+        let inner = state.0.lock().unwrap();
+        assert_eq!(inner.saved, Some(normal(800, 600)));
+        assert_eq!(inner.restoring, None);
     }
 
     #[test]
@@ -520,10 +711,145 @@ mod tests {
         let mut window = FakeWindow::new(&state, normal(800, 600));
         apply_fullscreen(&window, &state, true).unwrap();
         window.fail_set_fullscreen = true;
-        assert!(!hold_close(&window, &state));
+        assert_eq!(request_end(&window, &state, End::Close), Requested::Now);
         let inner = state.0.lock().unwrap();
         assert_eq!(inner.saved, Some(normal(800, 600)));
-        assert_eq!(inner.closing, None);
+        assert_eq!(inner.restoring, None);
+        assert_eq!(inner.pending, None);
+    }
+
+    #[test]
+    fn two_closes_during_a_slow_restore_close_once_restored() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        window.close_requested();
+        window.close_requested();
+        assert_eq!(window.closes.get(), 0);
+        // The second close does not restart the restore.
+        assert_eq!(window.set_fullscreen_calls.get(), 2);
+        window.finish_exit();
+        assert_eq!(window.closes.get(), 1);
+    }
+
+    // The second close does not move the timeout either: it still ends the
+    // first restore.
+    #[test]
+    fn a_second_close_keeps_the_first_timeout() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        window.close_requested();
+        let id = window.current_restore();
+        window.close_requested();
+        end_restore(&window, &state, id);
+        assert_eq!(window.closes.get(), 1);
+    }
+
+    // After the restore the close runs the usual flow; a confirmation cancelled
+    // then must find nothing left to close later.
+    #[test]
+    fn a_cancelled_confirmation_leaves_no_close_armed() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        window.close_requested();
+        let id = window.current_restore();
+        window.finish_exit();
+        assert_eq!(window.closes.get(), 1);
+        // The re-sent close is not held: main.rs shows the confirmation.
+        assert_eq!(request_end(&window, &state, End::Close), Requested::Now);
+        // The user cancels. A late Resized or timeout does nothing.
+        window.resized();
+        end_restore(&window, &state, id);
+        assert_eq!(window.closes.get(), 1);
+        assert_eq!(state.0.lock().unwrap().pending, None);
+    }
+
+    #[test]
+    fn closing_right_after_the_slideshow_waits_for_the_exit() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        apply_fullscreen(&window, &state, false).unwrap();
+        // endReporter follows SetFullscreen(false).
+        apply_fullscreen(&window, &state, false).unwrap();
+        window.close_requested();
+        assert_eq!(window.closes.get(), 0);
+        window.finish_exit();
+        assert_eq!(window.closes.get(), 1);
+    }
+
+    #[test]
+    fn a_restore_without_a_close_ends_quietly() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        let id = apply_fullscreen(&window, &state, false).unwrap().unwrap();
+        end_restore(&window, &state, id);
+        assert_eq!(window.closes.get(), 0);
+        assert_eq!(state.0.lock().unwrap().restoring, None);
+    }
+
+    // A timeout from an earlier restore must not end a later one.
+    #[test]
+    fn an_old_timeout_does_not_end_a_new_restore() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        let old = apply_fullscreen(&window, &state, false).unwrap().unwrap();
+        window.finish_exit();
+        apply_fullscreen(&window, &state, true).unwrap();
+        window.close_requested();
+        end_restore(&window, &state, old);
+        assert_eq!(window.closes.get(), 0);
+        window.finish_exit();
+        assert_eq!(window.closes.get(), 1);
+    }
+
+    #[test]
+    fn quitting_in_the_slideshow_exits_once_restored() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        assert_ne!(request_end(&window, &state, End::Exit), Requested::Now);
+        assert_eq!(window.exits.get(), 0);
+        window.finish_exit();
+        assert_eq!(window.exits.get(), 1);
+        assert_eq!(window.closes.get(), 0);
+    }
+
+    // force_close after the confirmation, while a held close restores.
+    #[test]
+    fn discarding_during_a_held_close_exits_once_restored() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        window.close_requested();
+        assert_ne!(request_end(&window, &state, End::Exit), Requested::Now);
+        window.close_requested();
+        window.finish_exit();
+        assert_eq!(window.exits.get(), 1);
+        assert_eq!(window.closes.get(), 0);
+    }
+
+    #[test]
+    fn quitting_without_a_slideshow_exits_now() {
+        let state = PresentationState::default();
+        let window = FakeWindow::new(&state, normal(800, 600));
+        assert_eq!(request_end(&window, &state, End::Exit), Requested::Now);
+    }
+
+    #[test]
+    fn entering_while_a_close_waits_is_ignored() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        window.close_requested();
+        apply_fullscreen(&window, &state, true).unwrap();
+        assert_eq!(state.0.lock().unwrap().saved, None);
+        window.finish_exit();
+        assert_eq!(window.closes.get(), 1);
     }
 
     #[test]

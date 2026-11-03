@@ -884,7 +884,7 @@ fn main() {
                 window.on_window_event(move |event| {
                     let presentation = h.state::<presentation::PresentationState>();
                     if let tauri::WindowEvent::Resized(_) = event {
-                        presentation::close_if_restored(&presented, &presentation);
+                        presentation::on_resized(&presented, &presentation);
                     }
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         if presentation::hold_close_for_restore(&presented, &presentation) {
