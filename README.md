@@ -1,8 +1,8 @@
 # Euro-Office Lite
 
-Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~86 MB (Windows), ~119-125 MB (macOS), ~133 MB (Linux x64 .deb), ~130 MB (Linux arm64 .deb), ~89 MB (Flatpak). No cloud, no telemetry.
+Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~89 MB (Windows), ~123-129 MB (macOS), ~137 MB (Linux x64 .deb), ~133 MB (Linux arm64 .deb), ~92 MB (Flatpak). No cloud, no telemetry.
 
-Supports Word, Excel and PowerPoint documents, OpenDocument files, RTF, CSV and plain text, with native file operations and printing. Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
+Supports Word, Excel and PowerPoint documents, OpenDocument files, RTF, CSV and plain text, with native file operations and printing. PDF files open in a PDF editor where you can add comments, highlights and free text and save them. The window opens with the size and position it had when it was last closed (on Linux with Wayland, only whether it was maximized). Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
 
 > **Alpha**: This project is in early development. Core features work (create, open, edit, save, PDF export), but expect rough edges. Printing sends the document to a printer on Windows and opens it in the system PDF viewer on macOS and Linux.
 
@@ -119,9 +119,11 @@ The spell checker works with any language from the [Euro-Office dictionaries rep
 - **macOS**: `~/Library/Application Support/org.euro-office.lite/dictionaries/`
 - **Linux**: `~/.local/share/org.euro-office.lite/dictionaries/`
 
-Create the folder if it is not there yet, restart the app, and the language shows up in the language list with a dictionary indicator, checked like any other. Keep the folder name exactly as the repository spells it, because that name is how the app matches the folder to the language set on the text. A folder missing either file is ignored, and the reason is written to the log file listed below.
+The easiest way is the "Add spell check language…" option on the start screen: choose the .aff and .dic files of a Hunspell dictionary (for example from LibreOffice's dictionaries) and the app copies them into the right folder. If that language is already installed, it asks before replacing it.
 
-Only English and Spanish come preinstalled for now; every other language is added this way. The app downloads nothing: you fetch the dictionary with your browser and copy it in yourself.
+To copy the files by hand instead, create the folder if it is not there yet, restart the app, and the language shows up in the language list with a dictionary indicator, checked like any other. Keep the folder name exactly as the repository spells it, because that name is how the app matches the folder to the language set on the text. A folder missing either file is ignored, and the reason is written to the log file listed below.
+
+Only English and Spanish come preinstalled for now; every other language is added this way. The app downloads nothing: you fetch the dictionary with your browser and add it yourself.
 
 ## Log files
 
