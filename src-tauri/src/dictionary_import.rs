@@ -121,7 +121,14 @@ pub fn language_from_names(aff_name: &str, dic_name: &str) -> Result<String, Imp
 // list of folder names, sent by the bridge. LibreOffice names its French
 // files fr.aff, but the checker only knows fr_FR, so a short code takes the
 // one known folder that starts with it, or <lang>_<LANG> among several.
+// Entries of `known` that are not language folder names are ignored: the
+// webview sends the list, so it must not decide a path.
 pub fn folder_for(lang: &str, known: &[String]) -> Result<String, ImportError> {
+    let known: Vec<String> = known
+        .iter()
+        .filter(|code| is_language_folder(code))
+        .cloned()
+        .collect();
     if known.iter().any(|code| code == lang) {
         return Ok(lang.to_string());
     }
@@ -142,6 +149,36 @@ pub fn folder_for(lang: &str, known: &[String]) -> Result<String, ImportError> {
         lang: lang.to_string(),
         options,
     })
+}
+
+// The names sdkjs gives its spell checker folders: a lower-case language,
+// then region, script or variant parts (fr_FR, sr_Latn_RS, ca_ES_valencia).
+// Letters and underscores only, so never a separator, a dot or a drive.
+pub fn is_language_folder(name: &str) -> bool {
+    let mut parts = name.split('_');
+    let Some(language) = parts.next() else {
+        return false;
+    };
+    let language_ok =
+        (2..=3).contains(&language.len()) && language.bytes().all(|b| b.is_ascii_lowercase());
+    if !language_ok {
+        return false;
+    }
+    parts.all(|part| (2..=8).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_alphabetic()))
+}
+
+// <dir>/<folder>, only when `folder` is one plain path component.
+fn folder_path(dir: &Path, folder: &str) -> Result<PathBuf, ImportError> {
+    if !is_language_folder(folder) {
+        return Err(ImportError::BadName(folder.to_string()));
+    }
+    let mut components = Path::new(folder).components();
+    let single = matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none();
+    if !single {
+        return Err(ImportError::BadName(folder.to_string()));
+    }
+    Ok(dir.join(folder))
 }
 
 fn file_name_of(path: &Path) -> String {
@@ -206,7 +243,7 @@ pub fn install(
     dic: &Path,
     replace: bool,
 ) -> Result<(), ImportError> {
-    let folder = dir.join(lang);
+    let folder = folder_path(dir, lang)?;
     if !replace && is_installed(&folder, lang) {
         return Err(ImportError::Exists(lang.to_string()));
     }
@@ -585,6 +622,80 @@ mod tests {
         assert!(!dir.join("fr").exists());
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn language_folder_names_follow_sdkjs() {
+        for good in ["ar", "fr_FR", "sr_Latn_RS", "ca_ES_valencia", "kmr_TR"] {
+            assert!(is_language_folder(good), "{good}");
+        }
+        for bad in [
+            "",
+            "_",
+            "es_",
+            "ES",
+            "Es_ES",
+            "es-ES",
+            "es/ES",
+            "es\\ES",
+            "..",
+            "es_..",
+            "es_/../../outside/es_/..",
+            "c:",
+            "e",
+            "abcd_ES",
+        ] {
+            assert!(!is_language_folder(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_known_entry_that_is_a_path_is_ignored() {
+        let hostile: Vec<String> = [
+            "es_/../../outside/es_/..",
+            "es_ES/..",
+            "es_..\\..",
+            "",
+            "es_eS_/",
+            "ES_ES",
+        ]
+        .iter()
+        .map(|code| code.to_string())
+        .collect();
+        assert_eq!(
+            folder_for("es", &hostile),
+            Err(ImportError::UnknownLanguage {
+                lang: "es".to_string(),
+                options: vec![],
+            })
+        );
+
+        let source = test_dir("source");
+        let root = test_dir("user");
+        let dir = root.join("dictionaries");
+        let aff = write(&source, "es.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es.dic", b"1\nhola\n");
+        let refused = import_pair(&dir, &[aff, dic], &hostile, false);
+        assert!(matches!(refused, Err(ImportError::UnknownLanguage { .. })));
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn install_refuses_a_folder_that_is_not_a_language() {
+        let source = test_dir("source");
+        let root = test_dir("user");
+        let dir = root.join("dictionaries");
+        let aff = write(&source, "es.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es.dic", b"1\nhola\n");
+        for folder in ["../outside", "es_ES/..", ""] {
+            let refused = install(&dir, folder, &aff, &dic, false);
+            assert_eq!(refused, Err(ImportError::BadName(folder.to_string())));
+        }
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
