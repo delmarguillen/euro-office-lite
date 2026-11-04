@@ -886,8 +886,10 @@ const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
 const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
 // A container format must start like one; x2t would otherwise pick the format
-// from the content. OOXML is a ZIP, or a CFB when it has a password. ODF is
-// always a ZIP. Other extensions (doc, xls, rtf...) are left to x2t.
+// from the content. OOXML is a ZIP, or a CFB when it has a password; xlsb is
+// always a ZIP. ODF is always a ZIP, flat ODF an XML document. Word 97-2003,
+// Excel 97-2003 and PowerPoint 97-2003 are CFB. Other extensions (rtf, txt,
+// csv...) are left to x2t.
 pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return true;
@@ -898,9 +900,26 @@ pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
         "docx" | "docm" | "dotx" | "dotm" => is_zip || is_cfb,
         "xlsx" | "xlsm" | "xltx" | "xltm" => is_zip || is_cfb,
         "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => is_zip || is_cfb,
+        "xlsb" => is_zip,
         "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => is_zip,
+        "doc" | "xls" | "ppt" => is_cfb,
+        "fodt" | "fods" | "fodp" => starts_with_xml_declaration(head),
         _ => true,
     }
+}
+
+const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+const XML_DECLARATION: &[u8] = b"<?xml";
+
+// An XML document's first bytes: an optional UTF-8 BOM, optional whitespace,
+// then "<?xml".
+fn starts_with_xml_declaration(head: &[u8]) -> bool {
+    let without_bom = head.strip_prefix(UTF8_BOM).unwrap_or(head);
+    let first_non_space = without_bom
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(without_bom.len());
+    without_bom[first_non_space..].starts_with(XML_DECLARATION)
 }
 
 // x2t does not use fontconfig: it scans a fixed list of directories
@@ -2039,9 +2058,50 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
-    fn legacy_and_other_extensions_are_left_to_x2t() {
-        for name in ["/d/a.doc", "/d/a.xls", "/d/a.ppt", "/d/a.rtf", "/d/a.txt", "/d/a.csv", "/d/a"] {
+    fn text_formats_are_left_to_x2t() {
+        for name in ["/d/a.rtf", "/d/a.txt", "/d/a.csv", "/d/a"] {
             assert!(matches(name, HTML_HEAD), "{name}");
+        }
+    }
+
+    #[test]
+    fn legacy_binary_extensions_need_a_cfb() {
+        for name in ["/d/a.doc", "/d/a.xls", "/d/a.ppt", "/d/A.DOC"] {
+            assert!(matches(name, CFB_SIGNATURE), "{name}");
+            assert!(!matches(name, b"just some text\n"), "{name}");
+            assert!(!matches(name, HTML_HEAD), "{name}");
+            assert!(!matches(name, b"PK\x03\x04rest"), "{name}");
+            assert!(!matches(name, b""), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_text_file_renamed_to_doc_is_rejected() {
+        assert!(!matches("/d/fake.doc", b"Hello, this is plain text.\n"));
+    }
+
+    #[test]
+    fn xlsb_needs_a_zip() {
+        assert!(matches("/d/a.xlsb", b"PK\x03\x04rest"));
+        assert!(!matches("/d/a.xlsb", CFB_SIGNATURE));
+        assert!(!matches("/d/a.xlsb", b"just some text\n"));
+    }
+
+    #[test]
+    fn flat_odf_extensions_need_an_xml_declaration() {
+        let with_bom = b"\xEF\xBB\xBF<?xml version=\"1.0\"?>";
+        let with_space = b" \r\n\t<?xml version=\"1.0\"?>";
+        let with_bom_and_space = b"\xEF\xBB\xBF\n<?xml version=\"1.0\"?>";
+        for ext in ["fodt", "fods", "fodp", "FODT"] {
+            let name = format!("/d/a.{ext}");
+            assert!(matches(&name, b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"), "{ext}");
+            assert!(matches(&name, with_bom), "{ext}");
+            assert!(matches(&name, with_space), "{ext}");
+            assert!(matches(&name, with_bom_and_space), "{ext}");
+            assert!(!matches(&name, b"just some text\n"), "{ext}");
+            assert!(!matches(&name, b"PK\x03\x04rest"), "{ext}");
+            assert!(!matches(&name, b"\xEF\xBB\xBF"), "{ext}");
+            assert!(!matches(&name, b""), "{ext}");
         }
     }
 
