@@ -1227,6 +1227,11 @@
     // Every opening goes through open_file or open_pdf, which is where the Rust
     // side records the recent files entry. `file` is { token, name } from the backend.
     async function _openPath(file, silent) {
+      // Markdown has its own page (bridge.js, _eoOpenMarkdown).
+      if (window._eoIsMarkdownPath(file.name)) {
+        window._eoOpenMarkdown(file);
+        return true;
+      }
       window._eoShowOpening(window._eoOpeningFileText(file.name));
       try {
         var b64data = await window.__TAURI__.core.invoke(window._eoOpenCommandForPath(file.name), { token: file.token });

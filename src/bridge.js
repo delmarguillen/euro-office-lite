@@ -1212,6 +1212,32 @@ async function _eoOpenRecent(path) {
   window.AscDesktopEditor.LocalFileOpen({ token: match.token, name: match.name });
 }
 
+// Markdown opens in its own page (src/markdown/), never in an editor: x2t
+// does not write Markdown back faithfully. MARKDOWN_EXTENSIONS in
+// src-tauri/src/markdown.rs and src/markdown/markdown-text.js must match
+// (scripts/test-bridge-markdown.mjs checks it).
+var _EO_MARKDOWN_EXTENSIONS = ['md', 'markdown'];
+var EO_MARKDOWN_PAGE = 'markdown/markdown.html';
+
+function _eoIsMarkdownPath(name) {
+  var text = String(name || '');
+  if (text.indexOf('.') === -1) return false;
+  return _EO_MARKDOWN_EXTENSIONS.indexOf(text.split('.').pop().toLowerCase()) !== -1;
+}
+window._eoIsMarkdownPath = _eoIsMarkdownPath;
+
+// Read by the Markdown page (markdown.js, takePendingFile).
+function _eoSetPendingMarkdown(file) {
+  localStorage.setItem('eo-markdown-open', JSON.stringify({ token: file.token, name: file.name }));
+}
+
+// From the start screen, where no document is open.
+function _eoOpenMarkdown(file) {
+  _eoSetPendingMarkdown(file);
+  window.location.href = EO_MARKDOWN_PAGE;
+}
+window._eoOpenMarkdown = _eoOpenMarkdown;
+
 // A PDF is read as it is by open_pdf; everything else is converted by open_file.
 function _eoOpenCommandForPath(name) {
   return _eoDocTypeForPath(name) === 'pdf' ? 'open_pdf' : 'open_file';
@@ -1386,7 +1412,8 @@ async function _eoFailSave(ref, err, wasModified) {
   _eoEndSaveKeepingModified(ref, wasModified);
 }
 
-function _forceReload() {
+// `next`, when given, is the page to load instead of this one.
+function _forceReload(next) {
   window.onbeforeunload = null;
   var iframes = document.querySelectorAll('iframe');
   for (var i = 0; i < iframes.length; i++) iframes[i].remove();
@@ -1398,7 +1425,10 @@ function _forceReload() {
     .finally(function() {
       invoke('set_document_modified', { modified: false })
         .catch(function(){})
-        .finally(function() { window.location.reload(); });
+        .finally(function() {
+          if (next) window.location.href = next;
+          else window.location.reload();
+        });
     });
 }
 
@@ -2715,6 +2745,11 @@ window.AscDesktopEditor = {
         );
         if (!discard) return;
       }
+      if (_eoIsMarkdownPath(file.name)) {
+        _eoSetPendingMarkdown(file);
+        _forceReload(EO_MARKDOWN_PAGE);
+        return;
+      }
       _eoSetPendingOpen(file);
       _forceReload();
       return;
@@ -3390,6 +3425,10 @@ listen('confirm-close', async () => {
 });
 
 async function _eoOpenGranted(file) {
+  if (_eoIsMarkdownPath(file.name)) {
+    _eoOpenMarkdown(file);
+    return;
+  }
   var docType = _eoDocTypeForPath(file.name);
   _eoShowOpening(_eoOpeningFileText(file.name));
 
