@@ -1,7 +1,7 @@
 // Writing a saved file to where the user asked for it.
 
 use std::fs::{File, OpenOptions};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -68,11 +68,27 @@ fn is_sharing_violation(error: &std::io::Error) -> bool {
 // one. An existing `dest` keeps its permissions. On any failure `dest` is left
 // as it was and the copy is removed.
 pub fn write_beside_and_rename(from: &Path, dest: &Path) -> Result<(), String> {
+    replace_beside(dest, |file| {
+        let mut source = File::open(from)?;
+        std::io::copy(&mut source, file).map(|_| ())
+    })
+}
+
+// The same, for content already in memory.
+pub fn write_bytes_beside_and_rename(bytes: &[u8], dest: &Path) -> Result<(), String> {
+    replace_beside(dest, |file| file.write_all(bytes))
+}
+
+fn replace_beside(
+    dest: &Path,
+    write_content: impl FnOnce(&mut File) -> std::io::Result<()>,
+) -> Result<(), String> {
     check_writable_destination(dest)?;
     let target = resolved_target(dest);
     let tmp = temp_path_beside(&target);
     let file = create_temp(&tmp).map_err(|e| save_error(dest, e))?;
-    let result = fill_temp(file, from, &target).and_then(|_| std::fs::rename(&tmp, &target));
+    let result =
+        fill_temp(file, write_content, &target).and_then(|_| std::fs::rename(&tmp, &target));
     let Err(error) = result else {
         return Ok(());
     };
@@ -106,9 +122,12 @@ fn create_temp(tmp: &Path) -> std::io::Result<File> {
 }
 
 // The handle is dropped on return, before the rename.
-fn fill_temp(mut file: File, from: &Path, target: &Path) -> std::io::Result<()> {
-    let mut source = File::open(from)?;
-    std::io::copy(&mut source, &mut file)?;
+fn fill_temp(
+    mut file: File,
+    write_content: impl FnOnce(&mut File) -> std::io::Result<()>,
+    target: &Path,
+) -> std::io::Result<()> {
+    write_content(&mut file)?;
     keep_permissions(&file, target)?;
     file.sync_all()
 }
