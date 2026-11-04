@@ -2,8 +2,8 @@
 // permission (core:window:default only grants getters), so sdkjs reaches the
 // window through this one command instead.
 use std::sync::Mutex;
-use std::time::Duration;
-use tauri::{Emitter, Manager, PhysicalSize, WebviewWindow};
+use std::time::{Duration, Instant};
+use tauri::{Emitter, Manager, PhysicalSize, Webview, WebviewWindow};
 
 // The window as it was when the slideshow started.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -417,6 +417,94 @@ fn end_restore_after_timeout(window: &WebviewWindow, id: Option<u64>) {
         std::thread::sleep(RESTORE_TIMEOUT);
         let state = window.state::<PresentationState>();
         end_restore(&window, &state, id);
+    });
+}
+
+// Keyboard focus after native fullscreen (macOS). Leaving fullscreen, tao
+// restores the style mask in a block queued on the main queue, and that block
+// makes tao's own view first responder. wry moved that view out of the window,
+// so AppKit refuses and the window is left with no first responder: keys reach
+// nothing until a click. Once the resizes of the exit settle, the webview is
+// made first responder again. Any exit counts: slideshow, green button, keys.
+
+// Resized events up to this long after leaving fullscreen belong to the exit.
+const EXIT_RESIZES: Duration = Duration::from_secs(2);
+// Long enough for tao's queued block to run before the focus.
+const FOCUS_DELAY: Duration = Duration::from_millis(150);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Phase {
+    Windowed,
+    Fullscreen,
+    Leaving { since: Instant },
+}
+
+// What a Resized does: the next phase, and whether to focus the webview once
+// the resizes settle.
+fn phase_step(phase: Phase, fullscreen: bool, now: Instant) -> (Phase, bool) {
+    if fullscreen {
+        return (Phase::Fullscreen, false);
+    }
+    match phase {
+        Phase::Windowed => (Phase::Windowed, false),
+        Phase::Fullscreen => (Phase::Leaving { since: now }, true),
+        Phase::Leaving { since } if now.duration_since(since) < EXIT_RESIZES => (phase, true),
+        Phase::Leaving { .. } => (Phase::Windowed, false),
+    }
+}
+
+struct Refocus {
+    phase: Phase,
+    // The focus most recently asked for; an older one gives way to it.
+    latest: u64,
+}
+
+pub struct FullscreenFocus(Mutex<Refocus>);
+
+impl Default for FullscreenFocus {
+    fn default() -> Self {
+        FullscreenFocus(Mutex::new(Refocus {
+            phase: Phase::Windowed,
+            latest: 0,
+        }))
+    }
+}
+
+impl FullscreenFocus {
+    // Returns the ticket of a focus to run after FOCUS_DELAY, if any.
+    fn on_resized(&self, fullscreen: bool, now: Instant) -> Option<u64> {
+        let mut inner = self.0.lock().unwrap();
+        let (phase, focus) = phase_step(inner.phase, fullscreen, now);
+        inner.phase = phase;
+        if !focus {
+            return None;
+        }
+        inner.latest += 1;
+        Some(inner.latest)
+    }
+
+    fn is_latest(&self, ticket: u64) -> bool {
+        self.0.lock().unwrap().latest == ticket
+    }
+}
+
+// Called on the main window's Resized, on macOS only.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn refocus_after_fullscreen(window: &WebviewWindow, focus: &FullscreenFocus) {
+    let fullscreen = window.is_fullscreen().unwrap_or(false);
+    let Some(ticket) = focus.on_resized(fullscreen, Instant::now()) else {
+        return;
+    };
+    let window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(FOCUS_DELAY);
+        if !window.state::<FullscreenFocus>().is_latest(ticket) {
+            return;
+        }
+        let webview: &Webview = window.as_ref();
+        if let Err(e) = webview.set_focus() {
+            eprintln!("[presentation] focusing the webview failed: {e}");
+        }
     });
 }
 
@@ -986,5 +1074,83 @@ mod tests {
     fn maximized_is_restored_once_maximized() {
         assert!(is_restored(maximized(), maximized(), false));
         assert!(!is_restored(maximized(), normal(1920, 1080), false));
+    }
+
+    fn after(start: Instant, ms: u64) -> Instant {
+        start + Duration::from_millis(ms)
+    }
+
+    #[test]
+    fn resizing_a_window_never_in_fullscreen_does_not_focus() {
+        let focus = FullscreenFocus::default();
+        let start = Instant::now();
+        assert_eq!(focus.on_resized(false, start), None);
+        assert_eq!(focus.on_resized(false, after(start, 50)), None);
+    }
+
+    #[test]
+    fn resizing_in_fullscreen_does_not_focus() {
+        let focus = FullscreenFocus::default();
+        let start = Instant::now();
+        assert_eq!(focus.on_resized(true, start), None);
+        assert_eq!(focus.on_resized(true, after(start, 50)), None);
+    }
+
+    // Green button or keys: the window reports fullscreen until tao's
+    // windowDidExitFullScreen, whose Resized is the first one without it.
+    #[test]
+    fn a_system_exit_focuses_after_its_last_resize() {
+        let focus = FullscreenFocus::default();
+        let start = Instant::now();
+        focus.on_resized(true, start);
+        assert_eq!(focus.on_resized(true, after(start, 100)), None);
+        let ticket = focus.on_resized(false, after(start, 700)).unwrap();
+        assert!(focus.is_latest(ticket));
+    }
+
+    // set_fullscreen(false) turns fullscreen off at once, so every resize of
+    // the animation asks; only the last one, after tao's restore, focuses.
+    #[test]
+    fn a_slideshow_exit_focuses_once_its_resizes_settle() {
+        let focus = FullscreenFocus::default();
+        let start = Instant::now();
+        focus.on_resized(true, start);
+        let first = focus.on_resized(false, after(start, 10)).unwrap();
+        let middle = focus.on_resized(false, after(start, 300)).unwrap();
+        let last = focus.on_resized(false, after(start, 800)).unwrap();
+        assert!(!focus.is_latest(first));
+        assert!(!focus.is_latest(middle));
+        assert!(focus.is_latest(last));
+    }
+
+    // A maximized slideshow window is maximized again after the exit.
+    #[test]
+    fn the_maximize_after_an_exit_still_focuses() {
+        let focus = FullscreenFocus::default();
+        let start = Instant::now();
+        focus.on_resized(true, start);
+        focus.on_resized(false, after(start, 10));
+        assert!(focus.on_resized(false, after(start, 1200)).is_some());
+    }
+
+    #[test]
+    fn a_resize_long_after_the_exit_does_not_focus() {
+        let focus = FullscreenFocus::default();
+        let start = Instant::now();
+        focus.on_resized(true, start);
+        focus.on_resized(false, after(start, 10));
+        assert_eq!(focus.on_resized(false, after(start, 2500)), None);
+        assert_eq!(focus.on_resized(false, after(start, 2600)), None);
+    }
+
+    #[test]
+    fn every_exit_focuses_again() {
+        let focus = FullscreenFocus::default();
+        let start = Instant::now();
+        focus.on_resized(true, start);
+        focus.on_resized(false, after(start, 10));
+        focus.on_resized(false, after(start, 5000));
+        focus.on_resized(true, after(start, 6000));
+        assert!(focus.on_resized(false, after(start, 6500)).is_some());
     }
 }

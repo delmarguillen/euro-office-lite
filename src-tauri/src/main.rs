@@ -411,6 +411,7 @@ fn main() {
             save_suggestion: Mutex::new(None),
         })
         .manage(presentation::PresentationState::default())
+        .manage(presentation::FullscreenFocus::default())
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
             file_ops::open_pdf,
@@ -885,6 +886,11 @@ fn main() {
                     let presentation = h.state::<presentation::PresentationState>();
                     if let tauri::WindowEvent::Resized(_) = event {
                         presentation::on_resized(&presented, &presentation);
+                        #[cfg(target_os = "macos")]
+                        presentation::refocus_after_fullscreen(
+                            &presented,
+                            &h.state::<presentation::FullscreenFocus>(),
+                        );
                     }
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         if presentation::hold_close_for_restore(&presented, &presentation) {
