@@ -237,10 +237,16 @@ fn is_installed(folder: &Path, lang: &str) -> bool {
     folder.join(format!("{lang}.aff")).exists() || folder.join(format!("{lang}.dic")).exists()
 }
 
+// The app log (js-debug-<instance>.log), local to this machine, so it may
+// hold paths. stderr goes nowhere in the Windows GUI build.
+fn log(line: &str) {
+    crate::temp_layout::append_log(&format!("[dictionary] {line}"));
+}
+
 // The webview gets the language only; the path and the OS error go to the
-// backend log.
+// app log.
 fn io_error(lang: &str, what: &str, path: &Path, error: std::io::Error) -> ImportError {
-    eprintln!("[dictionary] {what} {}: {error}", path.display());
+    log(&format!("{what} {}: {error}", path.display()));
     ImportError::Io(lang.to_string())
 }
 
@@ -272,7 +278,7 @@ fn refuse_link(lang: &str, path: &Path) -> Result<(), ImportError> {
     if !is_link(path) {
         return Ok(());
     }
-    eprintln!("[dictionary] refused, a link: {}", path.display());
+    log(&format!("refused, a link: {}", path.display()));
     Err(ImportError::Io(lang.to_string()))
 }
 
