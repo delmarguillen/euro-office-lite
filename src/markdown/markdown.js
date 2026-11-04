@@ -283,6 +283,11 @@
       var data = bytesToBase64(Text.encode(text, format));
       var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
       savedText = text;
+      // Relative images now resolve against the new file's folder.
+      if (target) {
+        images.clear();
+        render();
+      }
       showName(name);
       await invoke('set_window_title', { name: name }).catch(function() {});
       // The new title carries no mark: report the state again even if unchanged.
