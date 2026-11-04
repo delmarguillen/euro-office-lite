@@ -16,6 +16,15 @@ const OPEN_EXTENSIONS: [&str; 28] = [
     "pptx", "ppt", "pptm", "ppsx", "potx", "odp", "otp", "fodp", "pdf",
 ];
 
+// Offered by the same Open filter, but read as text by the Markdown page
+// (markdown.rs), never converted.
+use crate::markdown::MARKDOWN_EXTENSIONS;
+
+// What the Open filter lists: the formats x2t converts, then Markdown.
+fn open_dialog_extensions() -> Vec<&'static str> {
+    OPEN_EXTENSIONS.iter().chain(MARKDOWN_EXTENSIONS.iter()).copied().collect()
+}
+
 // The start screen's Edit PDF.
 const PDF_EXTENSIONS: [&str; 1] = ["pdf"];
 
@@ -146,7 +155,7 @@ pub async fn pick_document(
     documents: String,
     all: String,
 ) -> Result<Option<GrantedFile>, String> {
-    let extensions = open_filter_extensions(&OPEN_EXTENSIONS);
+    let extensions = open_filter_extensions(&open_dialog_extensions());
     let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
     let dialog = file_dialog(&window)
         .add_filter(documents, &extensions)
@@ -304,13 +313,22 @@ pub fn with_save_extension(path: PathBuf, fallback_ext: &str) -> PathBuf {
         .extension()
         .map(|ext| ext.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    if SAVE_EXTENSIONS.contains(&ext.as_str()) {
+    if keeps_its_extension(&ext, fallback_ext) {
         return path;
     }
     let mut name = path.into_os_string();
     name.push(".");
     name.push(fallback_ext);
     PathBuf::from(name)
+}
+
+// A Markdown Save As keeps .md and .markdown, and only those: the page writes
+// text, never an office format. Every other Save As keeps the formats x2t writes.
+fn keeps_its_extension(ext: &str, fallback_ext: &str) -> bool {
+    if MARKDOWN_EXTENSIONS.contains(&fallback_ext) {
+        return MARKDOWN_EXTENSIONS.contains(&ext);
+    }
+    SAVE_EXTENSIONS.contains(&ext)
 }
 
 #[cfg(test)]
@@ -389,6 +407,35 @@ mod tests {
             with_save_extension(PathBuf::from("/docs/v1.2"), "docx"),
             PathBuf::from("/docs/v1.2.docx")
         );
+    }
+
+    #[test]
+    fn a_markdown_save_as_keeps_md_and_markdown_only() {
+        for name in ["/d/notes.md", "/d/notes.MD", "/d/notes.markdown"] {
+            assert_eq!(with_save_extension(PathBuf::from(name), "md"), PathBuf::from(name));
+        }
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/notes"), "md"),
+            PathBuf::from("/d/notes.md")
+        );
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/notes.docx"), "md"),
+            PathBuf::from("/d/notes.docx.md")
+        );
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/notes.md"), "docx"),
+            PathBuf::from("/d/notes.md.docx"),
+            "the other formats are as before"
+        );
+    }
+
+    #[test]
+    fn the_open_filter_also_offers_markdown() {
+        let offered = open_dialog_extensions();
+        for ext in ["md", "markdown", "docx", "pdf"] {
+            assert!(offered.contains(&ext), "{ext}");
+        }
+        assert_eq!(offered.len(), OPEN_EXTENSIONS.len() + 2);
     }
 
     #[test]
