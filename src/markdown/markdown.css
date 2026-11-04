@@ -1,0 +1,36 @@
+/* Same colours as the start screen (index.html). */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+
+body {
+  display: flex; flex-direction: column;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #1e1e2e; color: #cdd6f4;
+}
+
+.toolbar {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.45rem 0.75rem; border-bottom: 1px solid #45475a; background: #181825;
+}
+.toolbar button {
+  background: #313244; border: 1px solid #45475a; color: #cdd6f4;
+  padding: 0.35rem 0.8rem; border-radius: 6px; cursor: pointer;
+  font-family: inherit; font-size: 0.85rem;
+}
+.toolbar button:hover { background: #45475a; }
+.toolbar button[aria-pressed="true"] { border-color: #89b4fa; }
+.toolbar .name {
+  flex: 1 1 auto; min-width: 0; font-size: 0.9rem; color: #a6adc8;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.panes { flex: 1 1 auto; display: flex; min-height: 0; }
+.panes iframe { flex: 1 1 0; min-width: 0; border: 0; background: #1e1e2e; }
+.panes textarea {
+  flex: 1 1 0; min-width: 0; resize: none; border: 0;
+  border-right: 1px solid #45475a; outline: none;
+  padding: 1rem; background: #181825; color: #cdd6f4;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace;
+  font-size: 0.9rem; line-height: 1.5; tab-size: 4;
+}
+[hidden] { display: none !important; }

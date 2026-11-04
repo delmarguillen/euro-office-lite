@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- Stricter than the app's CSP (tauri.conf.json), which still applies:
+       a page only gets what both allow. No inline script, no eval, no
+       network; images only as data: URLs read through markdown_image. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src ipc: http://ipc.localhost; frame-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Euro-Office Lite</title>
+  <link rel="stylesheet" href="markdown.css">
+</head>
+<body>
+  <header class="toolbar">
+    <button type="button" id="md-close" data-i18n="close">Close</button>
+    <span class="name" id="md-name"></span>
+    <button type="button" id="md-edit" data-i18n="edit" aria-pressed="false">Edit</button>
+    <button type="button" id="md-save" data-i18n="save">Save</button>
+    <button type="button" id="md-save-as" data-i18n="saveAs">Save as…</button>
+  </header>
+  <main class="panes">
+    <textarea id="md-source" spellcheck="false" hidden></textarea>
+    <!-- No allow-scripts: nothing in the document runs. allow-same-origin
+         only lets this page fill the preview in place. -->
+    <iframe id="md-preview" sandbox="allow-same-origin" title="Preview"></iframe>
+  </main>
+  <script src="vendor/markdown-it.min.js"></script>
+  <script src="vendor/markdown-it-footnote.min.js"></script>
+  <script src="vendor/markdown-it-task-lists.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <script src="markdown-text.js"></script>
+  <script src="markdown.js"></script>
+</body>
+</html>
