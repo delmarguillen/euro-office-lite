@@ -822,7 +822,11 @@ fn link_editor_resources(
 // utils.defines.FileFormat to pick the icon and to filter the Open Recent list.
 // Values from core/Common/OfficeFileFormats.h at v10.0.0.169.
 pub fn detect_format(path: &std::path::Path) -> i32 {
-    match path.extension().and_then(|e| e.to_str()) {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+    match ext.as_deref() {
         Some("docx") => 65,
         Some("doc") => 66,
         Some("odt") => 67,
@@ -2263,6 +2267,13 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.pdf")), 513);
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.docx")), 65);
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.unknown")), 0);
+    }
+
+    #[test]
+    fn detect_format_ignores_the_case_of_the_extension() {
+        assert_eq!(detect_format(std::path::Path::new("/tmp/REPORT.DOCX")), 65);
+        assert_eq!(detect_format(std::path::Path::new("/tmp/Budget.Xls")), 258);
+        assert_eq!(detect_format(std::path::Path::new("/tmp/SLIDES.PDF")), 513);
     }
 
     #[test]
