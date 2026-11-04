@@ -323,12 +323,50 @@ fn copy_and_sync(from: &Path, tmp: &Path) -> std::io::Result<()> {
     file.sync_all()
 }
 
+// A second name for the installed file, in the same folder, so the rename
+// over it does not lose it. A hard link copies nothing; a file system
+// without hard links gets a copy.
+fn keep_old(lang: &str, dest: &Path, folder: &Path, file_name: &str) -> Result<Option<PathBuf>, ImportError> {
+    if !dest.exists() {
+        return Ok(None);
+    }
+    let backup = backup_path(folder, file_name);
+    if std::fs::hard_link(dest, &backup).is_ok() {
+        return Ok(Some(backup));
+    }
+    match copy_and_sync(dest, &backup) {
+        Ok(()) => Ok(Some(backup)),
+        Err(error) => {
+            let _ = std::fs::remove_file(&backup);
+            Err(io_error(lang, "back up", dest, error))
+        }
+    }
+}
+
+fn backup_path(folder: &Path, file_name: &str) -> PathBuf {
+    let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    folder.join(format!(".{file_name}.{}-{n}.bak", std::process::id()))
+}
+
+// Undoes the first rename: the kept file goes back, or, when there was none,
+// the new file goes away.
+fn put_back(backup: Option<&Path>, dest: &Path) {
+    let result = match backup {
+        Some(backup) => std::fs::rename(backup, dest),
+        None => std::fs::remove_file(dest),
+    };
+    if let Err(error) = result {
+        log(&format!("restore {}: {error}", dest.display()));
+    }
+}
+
 // Copies the pair to <dir>/<lang>/<lang>.aff and .dic. Both files are first
 // written as temp files beside the destinations; only then are they renamed
-// over them, .dic first. A failure before the renames leaves the installed
-// pair as it was. If the .aff rename fails after the .dic one, a first
-// install removes the new .dic, so no lone half stays; a replace keeps the
-// new .dic with the old .aff, which hunspell still loads.
+// over them, .dic first. Before the renames the installed .dic gets a second
+// name (.<lang>.dic.<pid>-<n>.bak). If the .aff rename fails, that .dic is
+// renamed back, so the folder holds the old pair again; a first install
+// removes the new .dic instead. If the app stops between the two renames,
+// the folder holds the new .dic, the old .aff and the old .dic as the .bak.
 pub fn install(
     dir: &Path,
     lang: &str,
@@ -351,7 +389,6 @@ pub fn install(
     let dic_dest = folder.join(&dic_name);
     refuse_link(lang, &aff_dest)?;
     refuse_link(lang, &dic_dest)?;
-    let first_install = !is_installed(&folder, lang);
 
     let aff_tmp = write_temp(lang, aff, &folder, &aff_name)?;
     let dic_tmp = match write_temp(lang, dic, &folder, &dic_name) {
@@ -361,17 +398,29 @@ pub fn install(
             return Err(error);
         }
     };
+    let dic_backup = match keep_old(lang, &dic_dest, &folder, &dic_name) {
+        Ok(backup) => backup,
+        Err(error) => {
+            let _ = std::fs::remove_file(&aff_tmp);
+            let _ = std::fs::remove_file(&dic_tmp);
+            return Err(error);
+        }
+    };
     if let Err(error) = std::fs::rename(&dic_tmp, &dic_dest) {
         let _ = std::fs::remove_file(&aff_tmp);
         let _ = std::fs::remove_file(&dic_tmp);
+        if let Some(backup) = &dic_backup {
+            let _ = std::fs::remove_file(backup);
+        }
         return Err(io_error(lang, "rename", &dic_dest, error));
     }
     if let Err(error) = std::fs::rename(&aff_tmp, &aff_dest) {
         let _ = std::fs::remove_file(&aff_tmp);
-        if first_install {
-            let _ = std::fs::remove_file(&dic_dest);
-        }
+        put_back(dic_backup.as_deref(), &dic_dest);
         return Err(io_error(lang, "rename", &aff_dest, error));
+    }
+    if let Some(backup) = &dic_backup {
+        let _ = std::fs::remove_file(backup);
     }
     Ok(())
 }
@@ -955,6 +1004,63 @@ mod tests {
             std::fs::read(dir.join("es_ES/es_ES.aff")).unwrap(),
             b"SET old\n"
         );
+        assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_second_rename_keeps_the_installed_pair() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        std::fs::create_dir_all(dir.join("es_ES")).unwrap();
+        std::fs::write(dir.join("es_ES/es_ES.dic"), b"1\nold\n").unwrap();
+        // The .dic rename works; the .aff one cannot go over a non-empty folder.
+        std::fs::create_dir_all(dir.join("es_ES/es_ES.aff/inside")).unwrap();
+        let aff = write(&source, "es_ES.aff", b"SET new\n");
+        let dic = write(&source, "es_ES.dic", b"1\nnew\n");
+
+        let refused = install(&dir, "es_ES", &aff, &dic, true);
+
+        assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
+            b"1\nold\n"
+        );
+        assert!(dir.join("es_ES/es_ES.aff/inside").is_dir());
+        assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_second_rename_on_a_first_install_leaves_no_half() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        std::fs::create_dir_all(dir.join("es_ES/es_ES.aff/inside")).unwrap();
+        let aff = write(&source, "es_ES.aff", b"SET new\n");
+        let dic = write(&source, "es_ES.dic", b"1\nnew\n");
+
+        let refused = install(&dir, "es_ES", &aff, &dic, true);
+
+        assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
+        assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff"]);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_replace_leaves_no_backup() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        installed_es_es(&dir);
+        let aff = write(&source, "es_ES.aff", b"SET new\n");
+        let dic = write(&source, "es_ES.dic", b"1\nnew\n");
+
+        assert_eq!(install(&dir, "es_ES", &aff, &dic, true), Ok(()));
+
+        assert_eq!(std::fs::read(dir.join("es_ES/es_ES.aff")).unwrap(), b"SET new\n");
+        assert_eq!(std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(), b"1\nnew\n");
         assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(&dir);
