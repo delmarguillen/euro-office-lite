@@ -32,6 +32,8 @@ pub enum ImportError {
     UnknownLanguage { lang: String, options: Vec<String> },
     // The language is installed and replace was not asked for.
     Exists(String),
+    // Another app window is installing this language right now.
+    Busy(String),
     // Reading or writing failed. Holds the language or the chosen file name,
     // never a path: the error text goes to the webview.
     Io(String),
@@ -46,6 +48,7 @@ impl ImportError {
             ImportError::NotADictionary(_) => "not-a-dictionary",
             ImportError::UnknownLanguage { .. } => "unknown-language",
             ImportError::Exists(_) => "exists",
+            ImportError::Busy(_) => "busy",
             ImportError::Io(_) => "io",
         }
     }
@@ -61,6 +64,7 @@ impl ImportError {
             ImportError::BadName(name)
             | ImportError::NotADictionary(name)
             | ImportError::Exists(name)
+            | ImportError::Busy(name)
             | ImportError::Io(name) => name.clone(),
         }
     }
@@ -290,6 +294,37 @@ fn open_dir(lang: &str, dir: &Path) -> Result<(), ImportError> {
     refuse_link(lang, dir)
 }
 
+// One lock per language, in dictionaries/, held from the "installed?" check
+// to the last rename. It is an OS lock (temp_layout::take_lock: flock, or a
+// share mode of 0 on Windows), which the OS drops when the process ends: a
+// lock file left by a crash is free, and only a running app holds one. The
+// empty file stays; list_user_dictionaries only reads folders.
+fn lock_path(dir: &Path, lang: &str) -> PathBuf {
+    dir.join(format!(".{lang}.install.lock"))
+}
+
+fn lock_install(dir: &Path, lang: &str) -> Result<File, ImportError> {
+    let path = lock_path(dir, lang);
+    refuse_link(lang, &path)?;
+    match crate::temp_layout::take_lock(&path) {
+        Ok(file) => Ok(file),
+        Err(error) if is_held_elsewhere(&error) => {
+            log(&format!("busy, locked by another process: {}", path.display()));
+            Err(ImportError::Busy(lang.to_string()))
+        }
+        Err(error) => Err(io_error(lang, "lock", &path, error)),
+    }
+}
+
+// flock answers EWOULDBLOCK; Windows answers ERROR_SHARING_VIOLATION (32)
+// to an open with a share mode of 0 while another handle is open.
+fn is_held_elsewhere(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+    cfg!(windows) && error.raw_os_error() == Some(32)
+}
+
 static TEMP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 // Hidden and unique to this process and call, in the destination folder so
@@ -375,10 +410,11 @@ pub fn install(
     replace: bool,
 ) -> Result<(), ImportError> {
     let folder = folder_path(dir, lang)?;
+    open_dir(lang, dir)?;
+    let _lock = lock_install(dir, lang)?;
     if !replace && is_installed(&folder, lang) {
         return Err(ImportError::Exists(lang.to_string()));
     }
-    open_dir(lang, dir)?;
     refuse_link(lang, &folder)?;
     if !folder.exists() {
         std::fs::create_dir(&folder).map_err(|e| io_error(lang, "create", &folder, e))?;
@@ -1064,6 +1100,51 @@ mod tests {
         assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_held_lock_stops_a_second_install() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es_ES.dic", b"1\nhola\n");
+        // Another app window, in the middle of its own install.
+        let held = crate::temp_layout::take_lock(&lock_path(&dir, "es_ES")).unwrap();
+
+        let refused = install(&dir, "es_ES", &aff, &dic, false);
+
+        assert_eq!(refused, Err(ImportError::Busy("es_ES".to_string())));
+        assert!(!dir.join("es_ES").exists());
+        drop(held);
+        assert_eq!(install(&dir, "es_ES", &aff, &dic, false), Ok(()));
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_lock_file_left_by_a_crash_does_not_block() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es_ES.dic", b"1\nhola\n");
+        std::fs::write(lock_path(&dir, "es_ES"), b"").unwrap();
+
+        assert_eq!(install(&dir, "es_ES", &aff, &dic, false), Ok(()));
+        assert!(dir.join("es_ES/es_ES.dic").exists());
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_lock_taken_elsewhere_is_busy() {
+        let would_block = std::io::Error::from(std::io::ErrorKind::WouldBlock);
+        assert!(is_held_elsewhere(&would_block));
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(!is_held_elsewhere(&denied));
+        assert_eq!(
+            ImportError::Busy("es_ES".to_string()).to_string(),
+            "dictionary-busy: es_ES"
+        );
     }
 
     #[cfg(unix)]
