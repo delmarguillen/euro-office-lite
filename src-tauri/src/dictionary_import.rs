@@ -282,6 +282,14 @@ fn refuse_link(lang: &str, path: &Path) -> Result<(), ImportError> {
     Err(ImportError::Io(lang.to_string()))
 }
 
+// dictionaries/ itself, checked before anything is created or written in
+// it. Checked again after create_dir_all, which follows a link at that name.
+fn open_dir(lang: &str, dir: &Path) -> Result<(), ImportError> {
+    refuse_link(lang, dir)?;
+    std::fs::create_dir_all(dir).map_err(|e| io_error(lang, "create", dir, e))?;
+    refuse_link(lang, dir)
+}
+
 static TEMP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 // Hidden and unique to this process and call, in the destination folder so
@@ -332,7 +340,7 @@ pub fn install(
     if !replace && is_installed(&folder, lang) {
         return Err(ImportError::Exists(lang.to_string()));
     }
-    std::fs::create_dir_all(dir).map_err(|e| io_error(lang, "create", dir, e))?;
+    open_dir(lang, dir)?;
     refuse_link(lang, &folder)?;
     if !folder.exists() {
         std::fs::create_dir(&folder).map_err(|e| io_error(lang, "create", &folder, e))?;
@@ -967,6 +975,26 @@ mod tests {
         assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
         assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
         for path in [&source, &dir, &outside] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_dictionaries_folder_is_refused() {
+        let source = test_dir("source");
+        let root = test_dir("user");
+        let outside = test_dir("outside");
+        let dir = root.join("dictionaries");
+        std::os::unix::fs::symlink(&outside, &dir).unwrap();
+        let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es_ES.dic", b"1\nhola\n");
+
+        let refused = install(&dir, "es_ES", &aff, &dic, true);
+
+        assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        for path in [&source, &root, &outside] {
             let _ = std::fs::remove_dir_all(path);
         }
     }
