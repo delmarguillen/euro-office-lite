@@ -49,6 +49,9 @@
     "allow-recovery-discard",
     "allow-list-user-dictionaries",
     "allow-import-dictionary",
-    "allow-cancel-dictionary-import"
+    "allow-cancel-dictionary-import",
+    "allow-read-markdown",
+    "allow-save-markdown",
+    "allow-markdown-image"
   ]
 }

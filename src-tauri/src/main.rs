@@ -10,6 +10,7 @@ mod file_dialogs;
 mod file_ops;
 mod fonts_state;
 mod launch_args;
+mod markdown;
 mod note_separator;
 mod path_grants;
 mod protocol_limits;
@@ -452,6 +453,9 @@ fn main() {
             dictionaries::list_user_dictionaries,
             dictionary_import::import_dictionary,
             dictionary_import::cancel_dictionary_import,
+            markdown::read_markdown,
+            markdown::save_markdown,
+            markdown::markdown_image,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let allow_origin = protocol_limits::allow_origin();

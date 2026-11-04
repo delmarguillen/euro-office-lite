@@ -43,6 +43,9 @@ const APP_COMMANDS: &[&str] = &[
     "list_user_dictionaries",
     "import_dictionary",
     "cancel_dictionary_import",
+    "read_markdown",
+    "save_markdown",
+    "markdown_image",
 ];
 
 fn main() {
