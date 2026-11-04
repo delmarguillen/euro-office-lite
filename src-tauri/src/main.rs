@@ -390,7 +390,6 @@ fn main() {
     let fonts = std::sync::Arc::new(fonts_state::FontsState::pending());
 
     builder
-        .manage(dictionary_import::PendingImport::default())
         .manage(AppState {
             current_file: Mutex::new(None),
             temp_dir,
@@ -451,7 +450,6 @@ fn main() {
             recovery::recovery_discard,
             dictionaries::list_user_dictionaries,
             dictionary_import::import_dictionary,
-            dictionary_import::cancel_dictionary_import,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let allow_origin = protocol_limits::allow_origin();

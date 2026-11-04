@@ -48,7 +48,6 @@
     "allow-recovery-load",
     "allow-recovery-discard",
     "allow-list-user-dictionaries",
-    "allow-import-dictionary",
-    "allow-cancel-dictionary-import"
+    "allow-import-dictionary"
   ]
 }

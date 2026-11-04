@@ -610,6 +610,8 @@ var _UI_STRINGS = {
     languageAdded: 'Installed as {lang}. Open a document to check its spelling.',
     languageAddedRestart: 'Installed as {lang}. Restart Euro-Office Lite to check its spelling: the spell checker loaded its languages when the first document opened.',
     languageExists: 'A {lang} dictionary is already installed. Replace it with the files you chose?',
+    languageReplace: 'Replace', languageKeep: 'Cancel',
+    languageBusy: 'Another Euro-Office Lite window is installing the {detail} dictionary. Wait for it to finish and try again.',
     languageNotAPair: 'Choose two files: one ending in .aff and one ending in .dic.',
     languageNamesDiffer: 'The two files are for different languages ({detail}). Choose an .aff and a .dic with the same name, for example es_ES.aff and es_ES.dic.',
     languageBadName: 'The file name "{detail}" is not a language code. Rename the files to a code such as fr_FR and try again.',
@@ -647,6 +649,10 @@ var _UI_STRINGS = {
     noteSeparatorAlready: 'El separador de notas ya se había quitado de este documento.',
     noteSeparatorAlreadyPresent: 'Este documento ya tiene sus líneas separadoras de notas.',
     noteSeparatorFailed: 'No se pudieron cambiar las líneas separadoras de notas.',
+    addLanguageTitle: 'Añadir idioma',
+    languageExists: 'Ya hay un diccionario {lang} instalado. ¿Reemplazarlo por los archivos elegidos?',
+    languageReplace: 'Reemplazar', languageKeep: 'Cancelar',
+    languageBusy: 'Otra ventana de Euro-Office Lite está instalando el diccionario {detail}. Espere a que termine y vuelva a intentarlo.',
     locateLinkedFile: 'Localiza el archivo vinculado'
   },
   fr: {
@@ -1556,7 +1562,8 @@ var _EO_IMPORT_MESSAGES = {
   'names-differ': 'languageNamesDiffer',
   'bad-name': 'languageBadName',
   'not-a-dictionary': 'languageNotADictionary',
-  'unknown-language': 'languageUnknown'
+  'unknown-language': 'languageUnknown',
+  'busy': 'languageBusy'
 };
 
 // sdkjs defines its language table (AscCommon.spellcheckGetLanguages) in this
@@ -1606,24 +1613,28 @@ function _eoFill(key, values) {
   return _t(key).replace(/\{(lang|detail)\}/g, function(_, name) { return values[name] || ''; });
 }
 
-async function _eoAddLanguage(replace) {
+// Over an installed language the backend asks "Replace?" itself, with a
+// native dialog; the bridge only sends the words, in the user's language.
+// "{lang}" stays in the text: the backend fills in the folder it chose.
+function _eoReplaceQuestion(title) {
+  return {
+    title: title,
+    text: _t('languageExists'),
+    replace: _t('languageReplace'),
+    cancel: _t('languageKeep')
+  };
+}
+
+async function _eoAddLanguage() {
   var dialog = window.__TAURI__.dialog;
   var title = _t('addLanguageTitle');
   var known = await _eoKnownLanguages();
   var lang;
   try {
-    lang = await invoke('import_dictionary', { known: known, replace: !!replace });
+    lang = await invoke('import_dictionary', { known: known, question: _eoReplaceQuestion(title) });
   } catch (e) {
     var error = _eoImportError(e);
     window._eoLog('[SPELL] import failed: ' + error.code + ': ' + error.detail);
-    if (error.code === 'exists') {
-      var yes = await dialog.confirm(_eoFill('languageExists', { lang: error.detail }),
-        { title: title, kind: 'warning' });
-      if (yes) return _eoAddLanguage(true);
-      // The backend keeps the chosen pair until told: drop it.
-      await invoke('cancel_dictionary_import');
-      return null;
-    }
     var key = _EO_IMPORT_MESSAGES[error.code] || 'languageFailed';
     await dialog.message(_eoFill(key, { detail: error.detail }), { title: title, kind: 'error' });
     return null;
