@@ -38,19 +38,29 @@ pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         QuitAction::Confirm => {
             let _ = app.emit("confirm-close", ());
         }
-        QuitAction::Exit => exit_after_restore(app),
+        QuitAction::Exit => quit_after_restore(app),
     }
 }
 
 // The slideshow window is restored first so the window-state plugin saves its
-// normal size on RunEvent::Exit.
-pub fn exit_after_restore(app: &AppHandle) {
+// normal size on RunEvent::Exit. A quit checks for changes again once
+// restored; a discard does not.
+fn quit_after_restore(app: &AppHandle) {
     let Some(window) = app.get_webview_window(crate::window_state::MAIN_WINDOW) else {
         app.exit(0);
         return;
     };
     let state = app.state::<crate::presentation::PresentationState>();
-    crate::presentation::exit_when_restored(&window, &state);
+    crate::presentation::quit_when_restored(&window, &state);
+}
+
+pub fn discard_after_restore(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(crate::window_state::MAIN_WINDOW) else {
+        app.exit(0);
+        return;
+    };
+    let state = app.state::<crate::presentation::PresentationState>();
+    crate::presentation::discard_when_restored(&window, &state);
 }
 
 // Tauri's default macOS menu with its last app-menu item (the stock Quit)

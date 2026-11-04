@@ -3,7 +3,7 @@
 // window through this one command instead.
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{Manager, PhysicalSize, WebviewWindow};
+use tauri::{Emitter, Manager, PhysicalSize, WebviewWindow};
 
 // The window as it was when the slideshow started.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,8 +18,30 @@ enum End {
     // Close the window again; the usual close flow (and its unsaved-changes
     // confirmation) runs then.
     Close,
-    // Exit the app; the user already confirmed or nothing was modified.
+    // The Quit menu item, with nothing modified when it was chosen. The
+    // document can change during the restore, so it is checked again.
+    Quit,
+    // force_close: the user already chose to discard the changes.
+    Discard,
+}
+
+// What runs once the restore is over.
+#[derive(Debug, PartialEq)]
+enum Finish {
+    Close,
+    Confirm,
     Exit,
+}
+
+fn finish(end: End, modified: bool) -> Finish {
+    match end {
+        End::Close => Finish::Close,
+        End::Discard => Finish::Exit,
+        End::Quit => match crate::app_quit::quit_action(modified) {
+            crate::app_quit::QuitAction::Confirm => Finish::Confirm,
+            crate::app_quit::QuitAction::Exit => Finish::Exit,
+        },
+    }
 }
 
 // A restore in progress, from leaving fullscreen until is_restored or the
@@ -91,6 +113,9 @@ trait PresentationWindow {
     fn maximize(&self) -> Result<(), String>;
     fn close(&self);
     fn exit(&self);
+    fn is_modified(&self) -> bool;
+    // Asks the webview to show the unsaved-changes confirmation.
+    fn confirm_close(&self);
 }
 
 impl PresentationWindow for WebviewWindow {
@@ -118,6 +143,16 @@ impl PresentationWindow for WebviewWindow {
 
     fn exit(&self) {
         self.app_handle().exit(0);
+    }
+
+    fn is_modified(&self) -> bool {
+        let state = self.state::<crate::file_ops::AppState>();
+        let modified = *state.modified.lock().unwrap();
+        modified
+    }
+
+    fn confirm_close(&self) {
+        let _ = self.app_handle().emit("confirm-close", ());
     }
 }
 
@@ -230,10 +265,13 @@ fn end_step(restoring: bool, saved: Option<Saved>, fullscreen: bool) -> EndStep 
     }
 }
 
-// An exit outranks a close: the user confirmed quitting the app.
+// A discard outranks everything: the user confirmed it. A quit outranks a
+// close: it checks for changes again too, then ends the app.
 fn merge_end(pending: Option<End>, request: End) -> End {
     match (pending, request) {
-        (Some(End::Exit), _) => End::Exit,
+        (Some(End::Discard), _) => End::Discard,
+        (_, End::Discard) => End::Discard,
+        (Some(End::Quit), _) => End::Quit,
         (_, request) => request,
     }
 }
@@ -271,11 +309,22 @@ pub fn hold_close_for_restore(window: &WebviewWindow, state: &PresentationState)
     }
 }
 
-// Every exit that skips CloseRequested (the Quit menu item, force_close)
-// comes here, so the window-state plugin saves the restored window on
-// RunEvent::Exit.
-pub fn exit_when_restored(window: &WebviewWindow, state: &PresentationState) {
-    match request_end(window, state, End::Exit) {
+// Every exit that skips CloseRequested comes through these two, so the
+// window-state plugin saves the restored window on RunEvent::Exit.
+
+// The Quit menu item, called only when nothing was modified.
+pub fn quit_when_restored(window: &WebviewWindow, state: &PresentationState) {
+    exit_when_restored(window, state, End::Quit);
+}
+
+// force_close, after the user chose to discard the changes.
+pub fn discard_when_restored(window: &WebviewWindow, state: &PresentationState) {
+    exit_when_restored(window, state, End::Discard);
+}
+
+// Requested::Now means nothing waited, so the caller's check still holds.
+fn exit_when_restored(window: &WebviewWindow, state: &PresentationState, end: End) {
+    match request_end(window, state, end) {
         Requested::Now => window.exit(),
         Requested::Held { started } => end_restore_after_timeout(window, started),
     }
@@ -334,6 +383,7 @@ fn end_restore_if_restored<W: PresentationWindow>(window: &W, state: &Presentati
 // Ends the restore `id` if it is still the current one and runs what waited.
 // The pending request is taken before it runs, so a close that later shows
 // the unsaved-changes confirmation leaves nothing armed if it is cancelled.
+// modified is read after the lock is released.
 fn end_restore<W: PresentationWindow>(window: &W, state: &PresentationState, id: u64) {
     let pending = {
         let mut inner = state.0.lock().unwrap();
@@ -346,10 +396,13 @@ fn end_restore<W: PresentationWindow>(window: &W, state: &PresentationState, id:
         inner.restoring = None;
         inner.pending.take()
     };
-    match pending {
-        Some(End::Close) => window.close(),
-        Some(End::Exit) => window.exit(),
-        None => {}
+    let Some(end) = pending else {
+        return;
+    };
+    match finish(end, window.is_modified()) {
+        Finish::Close => window.close(),
+        Finish::Confirm => window.confirm_close(),
+        Finish::Exit => window.exit(),
     }
 }
 
@@ -516,10 +569,37 @@ mod tests {
     }
 
     #[test]
-    fn an_exit_outranks_a_close() {
+    fn a_quit_outranks_a_close() {
         assert_eq!(merge_end(None, End::Close), End::Close);
-        assert_eq!(merge_end(Some(End::Close), End::Exit), End::Exit);
-        assert_eq!(merge_end(Some(End::Exit), End::Close), End::Exit);
+        assert_eq!(merge_end(Some(End::Close), End::Quit), End::Quit);
+        assert_eq!(merge_end(Some(End::Quit), End::Close), End::Quit);
+    }
+
+    #[test]
+    fn a_discard_outranks_a_quit_and_a_close() {
+        assert_eq!(merge_end(Some(End::Quit), End::Discard), End::Discard);
+        assert_eq!(merge_end(Some(End::Close), End::Discard), End::Discard);
+        assert_eq!(merge_end(Some(End::Discard), End::Quit), End::Discard);
+        assert_eq!(merge_end(Some(End::Discard), End::Close), End::Discard);
+    }
+
+    #[test]
+    fn a_quit_asks_if_the_document_changed() {
+        assert_eq!(finish(End::Quit, true), Finish::Confirm);
+        assert_eq!(finish(End::Quit, false), Finish::Exit);
+    }
+
+    #[test]
+    fn a_discard_never_asks() {
+        assert_eq!(finish(End::Discard, true), Finish::Exit);
+        assert_eq!(finish(End::Discard, false), Finish::Exit);
+    }
+
+    // main.rs asks then, from CloseRequested.
+    #[test]
+    fn a_close_closes() {
+        assert_eq!(finish(End::Close, true), Finish::Close);
+        assert_eq!(finish(End::Close, false), Finish::Close);
     }
 
     const MONITOR: PhysicalSize<u32> = PhysicalSize::new(1920, 1080);
@@ -538,6 +618,8 @@ mod tests {
         resized_while_locked: Cell<bool>,
         closes: Cell<u32>,
         exits: Cell<u32>,
+        confirms: Cell<u32>,
+        modified: Cell<bool>,
         set_fullscreen_calls: Cell<u32>,
     }
 
@@ -553,6 +635,8 @@ mod tests {
                 resized_while_locked: Cell::new(false),
                 closes: Cell::new(0),
                 exits: Cell::new(0),
+                confirms: Cell::new(0),
+                modified: Cell::new(false),
                 set_fullscreen_calls: Cell::new(0),
             }
         }
@@ -637,6 +721,14 @@ mod tests {
 
         fn exit(&self) {
             self.exits.set(self.exits.get() + 1);
+        }
+
+        fn is_modified(&self) -> bool {
+            self.modified.get()
+        }
+
+        fn confirm_close(&self) {
+            self.confirms.set(self.confirms.get() + 1);
         }
     }
 
@@ -812,11 +904,49 @@ mod tests {
         let state = PresentationState::default();
         let window = FakeWindow::slow(&state, normal(800, 600));
         apply_fullscreen(&window, &state, true).unwrap();
-        assert_ne!(request_end(&window, &state, End::Exit), Requested::Now);
+        assert_ne!(request_end(&window, &state, End::Quit), Requested::Now);
         assert_eq!(window.exits.get(), 0);
         window.finish_exit();
         assert_eq!(window.exits.get(), 1);
         assert_eq!(window.closes.get(), 0);
+    }
+
+    // Typing during the macOS exit animation, after an unmodified Quit.
+    #[test]
+    fn a_quit_asks_when_the_document_changes_during_the_restore() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        assert_ne!(request_end(&window, &state, End::Quit), Requested::Now);
+        window.modified.set(true);
+        window.finish_exit();
+        assert_eq!(window.exits.get(), 0);
+        assert_eq!(window.confirms.get(), 1);
+        assert_eq!(state.0.lock().unwrap().pending, None);
+    }
+
+    #[test]
+    fn a_quit_still_unmodified_exits_once_restored() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        request_end(&window, &state, End::Quit);
+        window.finish_exit();
+        assert_eq!(window.exits.get(), 1);
+        assert_eq!(window.confirms.get(), 0);
+    }
+
+    #[test]
+    fn a_discard_during_a_held_quit_exits_without_asking() {
+        let state = PresentationState::default();
+        let window = FakeWindow::slow(&state, normal(800, 600));
+        apply_fullscreen(&window, &state, true).unwrap();
+        request_end(&window, &state, End::Quit);
+        window.modified.set(true);
+        request_end(&window, &state, End::Discard);
+        window.finish_exit();
+        assert_eq!(window.exits.get(), 1);
+        assert_eq!(window.confirms.get(), 0);
     }
 
     // force_close after the confirmation, while a held close restores.
@@ -826,7 +956,7 @@ mod tests {
         let window = FakeWindow::slow(&state, normal(800, 600));
         apply_fullscreen(&window, &state, true).unwrap();
         window.close_requested();
-        assert_ne!(request_end(&window, &state, End::Exit), Requested::Now);
+        assert_ne!(request_end(&window, &state, End::Discard), Requested::Now);
         window.close_requested();
         window.finish_exit();
         assert_eq!(window.exits.get(), 1);
@@ -837,7 +967,7 @@ mod tests {
     fn quitting_without_a_slideshow_exits_now() {
         let state = PresentationState::default();
         let window = FakeWindow::new(&state, normal(800, 600));
-        assert_eq!(request_end(&window, &state, End::Exit), Requested::Now);
+        assert_eq!(request_end(&window, &state, End::Quit), Requested::Now);
     }
 
     #[test]
