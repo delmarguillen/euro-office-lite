@@ -80,6 +80,54 @@ pub fn write_beside_and_rename(from: &Path, dest: &Path) -> Result<(), String> {
     Err(save_error(dest, error))
 }
 
+// Runs `convert` on a file named like `dest` in `staging_dir`, then puts the
+// result at `dest` with write_beside_and_rename. x2t writes its output in place
+// with no temp file of its own, so pointing it at `dest` could leave the user's
+// file truncated. `reshape` runs on the staged file before it is placed. `dest`
+// changes only when `convert` succeeded and wrote a non-empty file, and
+// `staging_dir` is removed either way.
+pub async fn convert_and_place<Convert, Converted>(
+    staging_dir: &Path,
+    dest: &Path,
+    convert: Convert,
+    reshape: impl FnOnce(&Path),
+) -> Result<(), String>
+where
+    Convert: FnOnce(PathBuf) -> Converted,
+    Converted: std::future::Future<Output = Result<String, String>>,
+{
+    let staged = staged_path(staging_dir, dest)?;
+    let converted = convert(staged.clone()).await;
+    let placed = converted
+        .and_then(|_| check_not_empty(&staged))
+        .and_then(|_| {
+            reshape(&staged);
+            write_beside_and_rename(&staged, dest)
+        });
+    let _ = std::fs::remove_dir_all(staging_dir);
+    placed
+}
+
+// Same name and extension as `dest`: x2t and the text reshaping both go by
+// the extension. What a crashed save left in `staging_dir` is cleared first.
+fn staged_path(staging_dir: &Path, dest: &Path) -> Result<PathBuf, String> {
+    let Some(name) = dest.file_name() else {
+        return Err(format!("not a file name: {}", dest.display()));
+    };
+    let _ = std::fs::remove_dir_all(staging_dir);
+    std::fs::create_dir_all(staging_dir).map_err(|e| e.to_string())?;
+    Ok(staging_dir.join(name))
+}
+
+// x2t can exit 0 without writing anything.
+fn check_not_empty(staged: &Path) -> Result<(), String> {
+    let size = std::fs::metadata(staged).map(|m| m.len()).unwrap_or(0);
+    if size == 0 {
+        return Err("x2t did not write the document".to_string());
+    }
+    Ok(())
+}
+
 // A rename over a symlink would turn it into a regular file, so the file it
 // points to is the one replaced.
 fn resolved_target(dest: &Path) -> PathBuf {
@@ -445,6 +493,175 @@ mod tests {
             assert_eq!(std::fs::read(&real).unwrap(), b"%PDF-1.7 new");
             let _ = std::fs::remove_dir_all(&dir);
             let _ = std::fs::remove_dir_all(&source_dir);
+        }
+    }
+
+    // A fake x2t: `convert_and_place` hands it the path to write, as the save
+    // commands hand it to x2t.
+    mod convert_and_place {
+        use super::*;
+        use crate::text_import::{finish_saved_text, TextKind, TextOptions, ENCODING_WINDOWS_1252};
+
+        const OLD: &[u8] = b"PK\x03\x04 old document";
+        const NEW: &[u8] = b"PK\x03\x04 new document";
+
+        // A user folder holding `name` with OLD in it, and an empty instance
+        // folder.
+        fn user_and_instance(label: &str, name: &str) -> (PathBuf, PathBuf, PathBuf) {
+            let user = test_dir(&format!("{}-user", label));
+            let instance = test_dir(&format!("{}-instance", label));
+            let dest = user.join(name);
+            std::fs::write(&dest, OLD).unwrap();
+            (user, instance, dest)
+        }
+
+        fn run(
+            instance: &Path,
+            dest: &Path,
+            x2t: impl FnOnce(&Path) -> Result<String, String>,
+            reshape: impl FnOnce(&Path),
+        ) -> Result<(), String> {
+            let staging = instance.join("save_output");
+            let convert = |output: PathBuf| async move { x2t(&output) };
+            tauri::async_runtime::block_on(convert_and_place(&staging, dest, convert, reshape))
+        }
+
+        fn no_reshape(_: &Path) {}
+
+        fn half_then_crash(output: &Path) -> Result<String, String> {
+            std::fs::write(output, &NEW[..6]).unwrap();
+            Err("x2t conversion failed (exit code 1)".to_string())
+        }
+
+        fn nothing_but_exit_0(_: &Path) -> Result<String, String> {
+            Ok("ok".to_string())
+        }
+
+        fn writes_new(output: &Path) -> Result<String, String> {
+            std::fs::write(output, NEW).unwrap();
+            Ok("ok".to_string())
+        }
+
+        fn clean_up(dirs: &[&Path]) {
+            for dir in dirs {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+
+        #[test]
+        fn a_crash_halfway_leaves_dest_as_it_was() {
+            let (user, instance, dest) = user_and_instance("crash", "doc.docx");
+
+            let error = run(&instance, &dest, half_then_crash, no_reshape).unwrap_err();
+
+            assert!(error.contains("exit code 1"), "{}", error);
+            assert_eq!(std::fs::read(&dest).unwrap(), OLD);
+            assert_eq!(names_in(&user), vec!["doc.docx"]);
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
+        #[test]
+        fn exit_0_with_nothing_written_is_an_error_and_dest_is_unchanged() {
+            let (user, instance, dest) = user_and_instance("empty", "doc.xlsx");
+
+            let error = run(&instance, &dest, nothing_but_exit_0, no_reshape).unwrap_err();
+
+            assert!(error.contains("did not write"), "{}", error);
+            assert_eq!(std::fs::read(&dest).unwrap(), OLD);
+            assert_eq!(names_in(&user), vec!["doc.xlsx"]);
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
+        #[test]
+        fn x2t_never_writes_in_the_user_folder() {
+            let (user, instance, dest) = user_and_instance("where", "doc.pptx");
+            let mut written_to = PathBuf::new();
+
+            let x2t = |output: &Path| {
+                written_to = output.to_path_buf();
+                writes_new(output)
+            };
+            run(&instance, &dest, x2t, no_reshape).unwrap();
+
+            assert!(written_to.starts_with(&instance), "{:?}", written_to);
+            assert_eq!(written_to.file_name(), dest.file_name());
+            clean_up(&[&user, &instance]);
+        }
+
+        #[test]
+        fn a_good_run_replaces_dest_and_leaves_no_temp_file() {
+            let (user, instance, dest) = user_and_instance("good", "doc.odt");
+
+            run(&instance, &dest, writes_new, no_reshape).unwrap();
+
+            assert_eq!(std::fs::read(&dest).unwrap(), NEW);
+            assert_eq!(names_in(&user), vec!["doc.odt"]);
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
+        // What a save killed by a power cut left in the staging folder, x2t's
+        // asc… scratch folder among it, goes on the next save.
+        #[test]
+        fn leftovers_of_a_killed_save_are_cleared() {
+            let (user, instance, dest) = user_and_instance("leftover", "doc.pdf");
+            std::fs::create_dir_all(instance.join("save_output").join("ascwfVgtc")).unwrap();
+
+            run(&instance, &dest, writes_new, no_reshape).unwrap();
+
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_symlinked_dest_stays_a_symlink_to_the_new_content() {
+            let (user, instance, real) = user_and_instance("link", "real.docx");
+            let link = user.join("doc.docx");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+
+            run(&instance, &link, writes_new, no_reshape).unwrap();
+
+            let link_type = std::fs::symlink_metadata(&link).unwrap().file_type();
+            assert!(link_type.is_symlink());
+            assert_eq!(std::fs::read_link(&link).unwrap(), real);
+            assert_eq!(std::fs::read(&real).unwrap(), NEW);
+            assert_eq!(names_in(&user), vec!["doc.docx", "real.docx"]);
+            clean_up(&[&user, &instance]);
+        }
+
+        // x2t writes TXT as UTF-8 with a BOM; the original was windows-1252
+        // with CRLF. Re-encoding happens on the staged file, so `dest` goes
+        // from the old bytes to the finished ones in one rename.
+        #[test]
+        fn a_txt_is_re_encoded_before_it_is_placed() {
+            let (user, instance, dest) = user_and_instance("txt", "notes.txt");
+            let x2t = |output: &Path| {
+                std::fs::write(output, "\u{FEFF}caf\u{e9}\n".as_bytes()).unwrap();
+                Ok("ok".to_string())
+            };
+            let options = TextOptions {
+                encoding: ENCODING_WINDOWS_1252,
+                delimiter: None,
+                utf8_bom: false,
+                crlf: true,
+                trailing_breaks: 1,
+            };
+            let mut dest_while_reshaping = Vec::new();
+            let reshape = |staged: &Path| {
+                dest_while_reshaping = std::fs::read(&dest).unwrap();
+                finish_saved_text(staged, TextKind::Txt, options).unwrap();
+            };
+
+            run(&instance, &dest, x2t, reshape).unwrap();
+
+            assert_eq!(dest_while_reshaping, OLD);
+            assert_eq!(std::fs::read(&dest).unwrap(), b"caf\xE9\r\n");
+            assert_eq!(names_in(&user), vec!["notes.txt"]);
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
         }
     }
 }
