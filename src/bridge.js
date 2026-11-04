@@ -1104,12 +1104,12 @@ function _eoDocTypeForPath(path) {
 }
 window._eoDocTypeForPath = _eoDocTypeForPath;
 
-// The formats Ctrl+S writes back to the same path: SAVE_EXTENSIONS in
-// src-tauri/src/file_dialogs.rs. Any other (a .dotx, an .xlsm, a .fodt) goes
-// through Save As, so a template or a macro file is never overwritten with
-// content of another format under its own name.
+// The formats Ctrl+S writes back to the same path: SAVE_IN_PLACE_EXTENSIONS
+// in src-tauri/src/file_dialogs.rs. Any other (a .doc, a .dotx, an .xlsm, a
+// .fodt) goes through Save As, so a legacy, template or macro file is never
+// overwritten with content of another format under its own name.
 var _EO_SAVE_IN_PLACE = [
-  'docx', 'doc', 'odt', 'rtf', 'txt', 'xlsx', 'xls', 'ods', 'csv', 'pptx', 'ppt', 'odp', 'pdf'
+  'docx', 'odt', 'rtf', 'txt', 'xlsx', 'ods', 'csv', 'pptx', 'odp', 'pdf'
 ];
 function _eoSavesInPlace(name) {
   var ext = String(name || '').split('.').pop().toLowerCase();
@@ -2786,7 +2786,9 @@ window.AscDesktopEditor = {
           257: 'xlsx', 258: 'xls', 259: 'ods', 260: 'csv',
           513: 'pdf'
         };
-        var requestedExt = formatExtensions[fileType] || familyExt;
+        // Ctrl+S on a .doc arrives with the .doc format (66), which x2t 10
+        // does not write: the family's format wins over the document's own.
+        var requestedExt = familyExt || formatExtensions[fileType] || null;
 
         // The backend opens the dialog: where it starts after a recovery and
         // the extension the chosen name gets are decided there.

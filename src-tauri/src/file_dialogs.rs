@@ -25,6 +25,15 @@ const SAVE_EXTENSIONS: [&str; 13] = [
     "docx", "doc", "odt", "rtf", "txt", "xlsx", "xls", "ods", "csv", "pptx", "ppt", "odp", "pdf",
 ];
 
+// The formats Ctrl+S writes back to the document's own path. Its own list,
+// not SAVE_EXTENSIONS: x2t 10 refuses to write .doc and .ppt (exit 80/88)
+// and its .xls output is not checked against the original, so a .doc, .xls
+// or .ppt goes through Save As. _EO_SAVE_IN_PLACE in src/bridge.js must match
+// (scripts/test-bridge-save-unwritable-format.mjs checks it).
+const SAVE_IN_PLACE_EXTENSIONS: [&str; 10] = [
+    "docx", "odt", "rtf", "txt", "xlsx", "ods", "csv", "pptx", "odp", "pdf",
+];
+
 // One kind of the editor's OpenFilenameDialog.
 struct PickKind {
     filter_name: &'static str,
@@ -254,14 +263,14 @@ pub fn suggestion_with_ext(path: &Path, ext: Option<&str>) -> PathBuf {
 }
 
 // Whether Ctrl+S may write the open document back to its own path. Formats
-// outside SAVE_EXTENSIONS (a .dotx, an .xlsm, a .fodt) go through Save As:
-// the bridge never sends them here, and save_file refuses them.
+// outside SAVE_IN_PLACE_EXTENSIONS (a .doc, a .dotx, an .xlsm, a .fodt) go
+// through Save As: the bridge never sends them here, and save_file refuses them.
 pub fn saves_in_place(path: &Path) -> bool {
     let ext = path
         .extension()
         .map(|ext| ext.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    SAVE_EXTENSIONS.contains(&ext.as_str())
+    SAVE_IN_PLACE_EXTENSIONS.contains(&ext.as_str())
 }
 
 // A name typed without a known extension gets the format's: x2t picks the
@@ -317,11 +326,28 @@ mod tests {
 
     #[test]
     fn only_the_formats_save_as_writes_are_saved_in_place() {
-        for name in ["a.docx", "a.DOC", "a.xls", "a.ppt", "a.odt", "a.csv", "a.pdf"] {
+        for name in ["a.docx", "a.DOCX", "a.xlsx", "a.pptx", "a.odt", "a.csv", "a.pdf"] {
             assert!(saves_in_place(Path::new(name)), "{}", name);
         }
         for name in ["a.dotx", "a.docm", "a.xlsm", "a.xlsb", "a.pptm", "a.fodt", "a.ots", "a"] {
             assert!(!saves_in_place(Path::new(name)), "{}", name);
+        }
+    }
+
+    #[test]
+    fn legacy_binary_formats_go_through_save_as() {
+        for name in ["a.doc", "a.DOC", "a.xls", "a.ppt"] {
+            assert!(!saves_in_place(Path::new(name)), "{}", name);
+        }
+    }
+
+    #[test]
+    fn legacy_binary_formats_stay_save_as_targets() {
+        for ext in ["doc", "xls", "ppt"] {
+            assert!(SAVE_EXTENSIONS.contains(&ext), "{}", ext);
+        }
+        for ext in SAVE_IN_PLACE_EXTENSIONS {
+            assert!(SAVE_EXTENSIONS.contains(&ext), "{}", ext);
         }
     }
 
