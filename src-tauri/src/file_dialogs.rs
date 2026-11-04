@@ -34,6 +34,26 @@ const SAVE_IN_PLACE_EXTENSIONS: [&str; 10] = [
     "docx", "odt", "rtf", "txt", "xlsx", "ods", "csv", "pptx", "odp", "pdf",
 ];
 
+// The GTK file chooser rfd uses on Linux matches each "*.ext" pattern with
+// the case it is given, so REPORT.XLSM is hidden by an "xlsm" filter. Windows
+// and macOS dialogs ignore case. Mixed case (Report.Docx) is still hidden.
+fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
+    if cfg!(any(target_os = "windows", target_os = "macos")) {
+        return extensions.iter().map(|ext| ext.to_string()).collect();
+    }
+    with_upper_case(extensions)
+}
+
+// Each extension followed by its upper-case form.
+fn with_upper_case(extensions: &[&str]) -> Vec<String> {
+    let mut both = Vec::with_capacity(extensions.len() * 2);
+    for ext in extensions {
+        both.push(ext.to_string());
+        both.push(ext.to_uppercase());
+    }
+    both
+}
+
 // One kind of the editor's OpenFilenameDialog.
 struct PickKind {
     filter_name: &'static str,
@@ -126,8 +146,10 @@ pub async fn pick_document(
     documents: String,
     all: String,
 ) -> Result<Option<GrantedFile>, String> {
+    let extensions = open_filter_extensions(&OPEN_EXTENSIONS);
+    let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
     let dialog = file_dialog(&window)
-        .add_filter(documents, &OPEN_EXTENSIONS)
+        .add_filter(documents, &extensions)
         .add_filter(all, &ALL_FILES);
     let Some(path) = pick_one(dialog).await? else {
         return Ok(None);
@@ -144,8 +166,10 @@ pub async fn pick_pdf(
     pdf_label: String,
     all: String,
 ) -> Result<Option<GrantedFile>, String> {
+    let extensions = open_filter_extensions(&PDF_EXTENSIONS);
+    let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
     let dialog = file_dialog(&window)
-        .add_filter(pdf_label, &PDF_EXTENSIONS)
+        .add_filter(pdf_label, &extensions)
         .add_filter(all, &ALL_FILES);
     let Some(path) = pick_one(dialog).await? else {
         return Ok(None);
@@ -397,6 +421,28 @@ mod tests {
             assert!(grants.resolve(&shown, kind).is_err());
         }
         assert!(grants.resolve(&picked.token, GrantKind::Insert).is_ok());
+    }
+
+    #[test]
+    fn the_upper_case_form_follows_each_extension() {
+        assert_eq!(with_upper_case(&["xlsm", "pdf"]), ["xlsm", "XLSM", "pdf", "PDF"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_open_filters_show_upper_case_names() {
+        let documents = open_filter_extensions(&OPEN_EXTENSIONS);
+        for ext in ["xlsm", "XLSM", "docx", "DOCX", "fodt", "FODT"] {
+            assert!(documents.contains(&ext.to_string()), "{}", ext);
+        }
+        assert_eq!(documents.len(), OPEN_EXTENSIONS.len() * 2);
+        assert_eq!(open_filter_extensions(&PDF_EXTENSIONS), ["pdf", "PDF"]);
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn the_windows_and_macos_open_filters_are_not_doubled() {
+        assert_eq!(open_filter_extensions(&PDF_EXTENSIONS), ["pdf"]);
     }
 
     #[test]
