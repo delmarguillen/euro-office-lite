@@ -888,38 +888,94 @@ const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 // A container format must start like one; x2t would otherwise pick the format
 // from the content. OOXML is a ZIP, or a CFB when it has a password; xlsb is
 // always a ZIP. ODF is always a ZIP, flat ODF an XML document. Word 97-2003,
-// Excel 97-2003 and PowerPoint 97-2003 are CFB. Other extensions (rtf, txt,
-// csv...) are left to x2t.
+// Excel 97-2003 and PowerPoint 97-2003 are CFB; the legacy extensions also
+// take the other content x2t converts under them: see is_legacy_doc,
+// is_legacy_xls and is_legacy_ppt. HTML is never accepted, because x2t picks
+// the format from the content. Other extensions (rtf, txt, csv...) are left to
+// x2t.
 pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return true;
     };
-    let is_zip = head.starts_with(ZIP_SIGNATURE);
-    let is_cfb = head.starts_with(CFB_SIGNATURE);
+    let zip = is_zip(head);
+    let cfb = is_cfb(head);
     match ext.to_lowercase().as_str() {
-        "docx" | "docm" | "dotx" | "dotm" => is_zip || is_cfb,
-        "xlsx" | "xlsm" | "xltx" | "xltm" => is_zip || is_cfb,
-        "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => is_zip || is_cfb,
-        "xlsb" => is_zip,
-        "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => is_zip,
-        "doc" | "xls" | "ppt" => is_cfb,
+        "docx" | "docm" | "dotx" | "dotm" => zip || cfb,
+        "xlsx" | "xlsm" | "xltx" | "xltm" => zip || cfb,
+        "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => zip || cfb,
+        "xlsb" => zip,
+        "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => zip,
+        "doc" => is_legacy_doc(head),
+        "xls" => is_legacy_xls(head),
+        "ppt" => is_legacy_ppt(head),
         "fodt" | "fods" | "fodp" => starts_with_xml_declaration(head),
         _ => true,
     }
 }
 
+fn is_zip(head: &[u8]) -> bool {
+    head.starts_with(ZIP_SIGNATURE)
+}
+
+fn is_cfb(head: &[u8]) -> bool {
+    head.starts_with(CFB_SIGNATURE)
+}
+
+// .doc: Word 97-2003 (CFB), a DOCX renamed to .doc (ZIP) or an RTF saved as .doc.
+fn is_legacy_doc(head: &[u8]) -> bool {
+    is_cfb(head) || is_zip(head) || starts_with_rtf(head)
+}
+
+// .xls: Excel 97-2003 (CFB), an XLSX renamed to .xls (ZIP) or Excel 2003 XML.
+fn is_legacy_xls(head: &[u8]) -> bool {
+    is_cfb(head) || is_zip(head) || is_spreadsheet_ml(head)
+}
+
+// .ppt: PowerPoint 97-2003 (CFB) or a PPTX renamed to .ppt (ZIP).
+fn is_legacy_ppt(head: &[u8]) -> bool {
+    is_cfb(head) || is_zip(head)
+}
+
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 const XML_DECLARATION: &[u8] = b"<?xml";
+const RTF_START: &[u8] = b"{\\rtf";
+const SPREADSHEET_ML_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:office:spreadsheet";
+const SPREADSHEET_ML_PROGID: &[u8] = b"progid=\"Excel.Sheet\"";
 
-// An XML document's first bytes: an optional UTF-8 BOM, optional whitespace,
-// then "<?xml".
-fn starts_with_xml_declaration(head: &[u8]) -> bool {
+// The head without an optional UTF-8 BOM and the whitespace after it.
+fn skip_bom_and_space(head: &[u8]) -> &[u8] {
     let without_bom = head.strip_prefix(UTF8_BOM).unwrap_or(head);
     let first_non_space = without_bom
         .iter()
         .position(|byte| !byte.is_ascii_whitespace())
         .unwrap_or(without_bom.len());
-    without_bom[first_non_space..].starts_with(XML_DECLARATION)
+    &without_bom[first_non_space..]
+}
+
+// An XML document's first bytes: an optional UTF-8 BOM, optional whitespace,
+// then "<?xml".
+fn starts_with_xml_declaration(head: &[u8]) -> bool {
+    skip_bom_and_space(head).starts_with(XML_DECLARATION)
+}
+
+// An RTF document's first bytes: an optional UTF-8 BOM, optional whitespace,
+// then "{\rtf".
+fn starts_with_rtf(head: &[u8]) -> bool {
+    skip_bom_and_space(head).starts_with(RTF_START)
+}
+
+// Excel 2003 XML (SpreadsheetML): an XML document whose first bytes carry the
+// <?mso-application progid="Excel.Sheet"?> instruction or the SpreadsheetML
+// namespace on the root <Workbook>. Any other XML, XHTML included, is not.
+fn is_spreadsheet_ml(head: &[u8]) -> bool {
+    if !starts_with_xml_declaration(head) {
+        return false;
+    }
+    contains(head, SPREADSHEET_ML_PROGID) || contains(head, SPREADSHEET_ML_NAMESPACE)
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|window| window == needle)
 }
 
 // x2t does not use fontconfig: it scans a fixed list of directories
@@ -2065,14 +2121,90 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
-    fn legacy_binary_extensions_need_a_cfb() {
+    fn legacy_binary_extensions_accept_a_cfb_or_a_zip() {
         for name in ["/d/a.doc", "/d/a.xls", "/d/a.ppt", "/d/A.DOC"] {
             assert!(matches(name, CFB_SIGNATURE), "{name}");
+            assert!(matches(name, b"PK\x03\x04rest"), "{name}");
             assert!(!matches(name, b"just some text\n"), "{name}");
             assert!(!matches(name, HTML_HEAD), "{name}");
-            assert!(!matches(name, b"PK\x03\x04rest"), "{name}");
             assert!(!matches(name, b""), "{name}");
         }
+    }
+
+    #[test]
+    fn legacy_extensions_reject_html() {
+        let doctype = b"<!DOCTYPE html><html><body>";
+        let spaced = b"\xEF\xBB\xBF\n<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\">";
+        for name in ["/d/a.doc", "/d/a.xls", "/d/a.ppt"] {
+            assert!(!matches(name, HTML_HEAD), "{name}");
+            assert!(!matches(name, doctype), "{name}");
+            assert!(!matches(name, spaced), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_rtf_doc_is_accepted_with_or_without_a_bom() {
+        assert!(matches("/d/a.doc", b"{\\rtf1\\ansi\\deff0"));
+        assert!(matches("/d/a.doc", b"\xEF\xBB\xBF{\\rtf1\\ansi"));
+        assert!(matches("/d/a.doc", b"\xEF\xBB\xBF\r\n {\\rtf1\\ansi"));
+    }
+
+    #[test]
+    fn rtf_is_only_accepted_as_doc() {
+        assert!(!matches("/d/a.xls", b"{\\rtf1\\ansi"));
+        assert!(!matches("/d/a.ppt", b"{\\rtf1\\ansi"));
+    }
+
+    // The first bytes Excel 2003 writes for "XML Spreadsheet 2003".
+    const EXCEL_2003_XML_HEAD: &[u8] = b"<?xml version=\"1.0\"?>\r\n\
+<?mso-application progid=\"Excel.Sheet\"?>\r\n\
+<Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\"\r\n\
+ xmlns:o=\"urn:schemas-microsoft-com:office:office\"\r\n\
+ xmlns:x=\"urn:schemas-microsoft-com:office:excel\"\r\n\
+ xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\"\r\n\
+ xmlns:html=\"http://www.w3.org/TR/REC-html40\">\r\n";
+
+    #[test]
+    fn an_excel_2003_xml_xls_is_accepted() {
+        assert!(matches("/d/a.xls", EXCEL_2003_XML_HEAD));
+        assert!(matches("/d/A.XLS", EXCEL_2003_XML_HEAD));
+    }
+
+    #[test]
+    fn spreadsheet_ml_markers_fit_in_the_bytes_read_before_conversion() {
+        let head = &EXCEL_2003_XML_HEAD[..EXCEL_2003_XML_HEAD.len().min(256)];
+        assert!(matches("/d/a.xls", head));
+    }
+
+    #[test]
+    fn spreadsheet_ml_is_recognised_by_either_marker() {
+        let only_namespace = b"\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\">";
+        let only_progid = b"  <?xml version=\"1.0\"?><?mso-application progid=\"Excel.Sheet\"?><Workbook>";
+        assert!(matches("/d/a.xls", only_namespace));
+        assert!(matches("/d/a.xls", only_progid));
+    }
+
+    #[test]
+    fn spreadsheet_ml_is_only_accepted_as_xls() {
+        assert!(!matches("/d/a.doc", EXCEL_2003_XML_HEAD));
+        assert!(!matches("/d/a.ppt", EXCEL_2003_XML_HEAD));
+    }
+
+    #[test]
+    fn an_xml_xls_that_is_not_spreadsheet_ml_is_rejected() {
+        let xhtml = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\n\
+<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><img src=\"/etc/passwd\"/></body></html>";
+        let other_xml = b"<?xml version=\"1.0\"?><root/>";
+        assert!(!matches("/d/a.xls", xhtml));
+        assert!(!matches("/d/a.xls", other_xml));
+    }
+
+    #[test]
+    fn spreadsheet_ml_markers_without_an_xml_declaration_are_rejected() {
+        let html = b"<html><body>urn:schemas-microsoft-com:office:spreadsheet</body></html>";
+        assert!(!matches("/d/a.xls", html));
     }
 
     #[test]

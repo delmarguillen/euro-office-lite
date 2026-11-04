@@ -209,8 +209,9 @@ fn check_container_content(input: &str) -> Result<(), String> {
     Err(format!("This file is not a valid .{}", ext.to_lowercase()))
 }
 
-// Enough for the 8-byte CFB signature, and for a flat ODF's "<?xml" after a
-// BOM and some leading whitespace.
+// Enough for the 8-byte CFB signature, for a flat ODF's "<?xml" after a BOM
+// and some leading whitespace, and for the progid and namespace Excel 2003
+// writes in the first 127 bytes of an XML Spreadsheet.
 const HEAD_LEN: u64 = 256;
 
 fn read_head(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
