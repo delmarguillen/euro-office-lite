@@ -26,6 +26,10 @@ body {
 
 .panes { flex: 1 1 auto; display: flex; min-height: 0; }
 .panes iframe { flex: 1 1 0; min-width: 0; border: 0; background: #1e1e2e; }
+#md-editor {
+  flex: 1 1 0; min-width: 0; overflow: hidden;
+  border-right: 1px solid #45475a;
+}
 .panes textarea {
   flex: 1 1 0; min-width: 0; resize: none; border: 0;
   border-right: 1px solid #45475a; outline: none;

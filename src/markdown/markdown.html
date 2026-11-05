@@ -19,6 +19,9 @@
     <button type="button" id="md-save-as" data-i18n="saveAs">Save as…</button>
   </header>
   <main class="panes">
+    <!-- CodeMirror goes here once Edit is pressed (markdown.js,
+         loadCodeMirror); the textarea is used if it does not load. -->
+    <div id="md-editor" hidden></div>
     <textarea id="md-source" spellcheck="false" hidden></textarea>
     <!-- No allow-scripts: nothing in the document runs. allow-same-origin
          only lets this page fill the preview in place. -->

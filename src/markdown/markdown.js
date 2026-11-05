@@ -1,5 +1,6 @@
-// The Markdown page: a rendered preview of a .md, and a textarea beside it to
-// edit the text. Reached from the start screen, Open and Recents through
+// The Markdown page: a rendered preview of a .md, and an editor beside it for
+// the text: CodeMirror (vendor/codemirror.min.js), loaded the first time Edit
+// is pressed, or the textarea if it does not load. Reached from the start screen, Open and Recents through
 // bridge.js (_eoOpenMarkdown), which leaves the file's token under
 // PENDING_KEY. The file is read and written as bytes by markdown.rs; never
 // through x2t or the ONLYOFFICE editors.
@@ -22,6 +23,7 @@
   var SAVE_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }];
   var SAVE_DENIED_ERROR = 'save-denied';
   var TOO_LARGE_ERROR = 'markdown-too-large';
+  var CODEMIRROR_SCRIPT = 'vendor/codemirror.min.js';
 
   // ── Interface text. Same language choice as bridge.js (_detectLang). ──
   var STRINGS = {
@@ -85,6 +87,7 @@
 
   // ── Page elements ──
   var source = document.getElementById('md-source');
+  var editorHost = document.getElementById('md-editor');
   var frame = document.getElementById('md-preview');
   var nameLabel = document.getElementById('md-name');
   var editButton = document.getElementById('md-edit');
@@ -101,14 +104,23 @@
 
   // ── The open file ──
   // The file's own BOM and line end (EoMarkdownText.decode), and the text as
-  // last read or saved: the document is modified while the textarea differs.
+  // last read or saved: the document is modified while the editor differs.
   var format = { bom: false, eol: '\n' };
   var savedText = '';
   var reportedModified = false;
   var saving = false;
 
+  // Set once CodeMirror has taken over from the textarea.
+  var codeMirror = null;
+
+  // Both editors give the text with LF line ends.
+  function currentText() {
+    if (codeMirror) return codeMirror.getText();
+    return source.value;
+  }
+
   function isModified() {
-    return source.value !== savedText;
+    return currentText() !== savedText;
   }
 
   // set_document_modified gates the close warning in Rust and marks the title.
@@ -235,7 +247,7 @@
     clearTimeout(renderTimer);
     var frameDocument = frame.contentDocument;
     if (!frameDocument || !frameDocument.body) return;
-    frameDocument.body.replaceChildren(previewFragment(source.value));
+    frameDocument.body.replaceChildren(previewFragment(currentText()));
   }
 
   // The stylesheet is the page's own; the srcdoc document shares its base URL.
@@ -251,14 +263,77 @@
     });
   }
 
+  // ── Editor ──
+  // The script is added only when Edit is first pressed, so reading a file
+  // never downloads or runs CodeMirror. Resolves to false if it fails.
+  var codeMirrorLoading = null;
+
+  function loadCodeMirror() {
+    if (codeMirrorLoading) return codeMirrorLoading;
+    codeMirrorLoading = new Promise(function(resolve) {
+      var script = document.createElement('script');
+      script.src = CODEMIRROR_SCRIPT;
+      script.onload = function() { resolve(!!window.EoCodeMirror); };
+      script.onerror = function() { resolve(false); };
+      document.head.appendChild(script);
+    });
+    return codeMirrorLoading;
+  }
+
+  function onTextChanged() {
+    reportModified(false);
+    scheduleRender();
+  }
+
+  // CodeMirror starts from the textarea's text, which stays as it was. It
+  // refuses to start in a webview without adoptedStyleSheets (see the bundle's
+  // entry.mjs), and the textarea is used instead.
+  function startCodeMirror() {
+    try {
+      codeMirror = window.EoCodeMirror.createEditor({
+        host: editorHost,
+        text: source.value,
+        label: t('source'),
+        onChange: onTextChanged
+      });
+      return true;
+    } catch (error) {
+      log('CodeMirror failed: ' + errorText(error));
+      codeMirror = null;
+      return false;
+    }
+  }
+
+  async function prepareEditor() {
+    if (codeMirror) return;
+    if (!(await loadCodeMirror())) {
+      log('CodeMirror not loaded, using the textarea');
+      return;
+    }
+    startCodeMirror();
+  }
+
+  function focusEditor() {
+    if (codeMirror) {
+      codeMirror.focus();
+      return;
+    }
+    source.focus();
+  }
+
   // ── Edit, save, close ──
-  function setEditing(editing) {
-    document.body.classList.toggle('editing', editing);
-    source.hidden = !editing;
-    editButton.setAttribute('aria-pressed', editing ? 'true' : 'false');
-    editButton.dataset.i18n = editing ? 'preview' : 'edit';
+  var editing = false;
+
+  async function setEditing(on) {
+    editing = on;
+    if (on) await prepareEditor();
+    document.body.classList.toggle('editing', on);
+    editorHost.hidden = !(on && codeMirror);
+    source.hidden = !(on && !codeMirror);
+    editButton.setAttribute('aria-pressed', on ? 'true' : 'false');
+    editButton.dataset.i18n = on ? 'preview' : 'edit';
     editButton.textContent = t(editButton.dataset.i18n);
-    if (editing) source.focus();
+    if (on) focusEditor();
   }
 
   function saveErrorText(error) {
@@ -279,7 +354,7 @@
     try {
       var target = asNew ? await pickSaveTarget() : null;
       if (asNew && !target) return;
-      var text = source.value;
+      var text = currentText();
       var data = bytesToBase64(Text.encode(text, format));
       var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
       savedText = text;
@@ -388,12 +463,9 @@
     render();
   }
 
-  source.addEventListener('input', function() {
-    reportModified(false);
-    scheduleRender();
-  });
+  source.addEventListener('input', onTextChanged);
   document.addEventListener('keydown', onKeyDown, true);
-  editButton.addEventListener('click', function() { setEditing(source.hidden); });
+  editButton.addEventListener('click', function() { setEditing(!editing); });
   document.getElementById('md-save').addEventListener('click', function() { save(false); });
   document.getElementById('md-save-as').addEventListener('click', function() { save(true); });
   document.getElementById('md-close').addEventListener('click', closeDocument);
