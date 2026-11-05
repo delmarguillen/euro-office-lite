@@ -1315,7 +1315,7 @@
     // Offered on the start screen rather than through a startup dialog: a modal
     // in front of someone who just wanted to open a file taxes the ordinary
     // case, and the folder is not going anywhere.
-    var RECOVER_ICONS = { word: 'W', cell: 'X', slide: 'P' };
+    var RECOVER_ICONS = { word: 'W', cell: 'X', slide: 'P', markdown: 'MD' };
 
     function _formatRecoverDate(ms) {
       try {
@@ -1327,10 +1327,15 @@
       }
     }
 
-    function _recoverDocument(id) {
+    function _recoverDocument(candidate) {
+      // Markdown reopens in its own page, not in an editor.
+      if (candidate.docType === 'markdown') {
+        window._eoRecoverMarkdown(candidate.id);
+        return;
+      }
       // No session to end here: the start screen has no document open, so a
       // plain reload is the whole job.
-      localStorage.setItem('eo-pending-recover-id', id);
+      localStorage.setItem('eo-pending-recover-id', candidate.id);
       window.location.reload();
     }
 
@@ -1361,7 +1366,7 @@
         date.textContent = _formatRecoverDate(candidate.modifiedMs);
         row.appendChild(date);
 
-        [['recover', function() { _recoverDocument(candidate.id); }],
+        [['recover', function() { _recoverDocument(candidate); }],
          ['discard', function() {
             window.__TAURI__.core.invoke('recovery_discard', { id: candidate.id })
               .then(_refreshRecoverList)

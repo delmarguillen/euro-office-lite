@@ -1245,6 +1245,14 @@ function _eoNewMarkdown() {
 }
 window._eoNewMarkdown = _eoNewMarkdown;
 
+// The start screen's Recover for a Markdown document (recovery.rs, "Markdown
+// sessions"): the page loads it by its folder's id.
+function _eoRecoverMarkdown(id) {
+  localStorage.setItem('eo-markdown-open', JSON.stringify({ recover: id }));
+  window.location.href = EO_MARKDOWN_PAGE;
+}
+window._eoRecoverMarkdown = _eoRecoverMarkdown;
+
 // A PDF is read as it is by open_pdf; everything else is converted by open_file.
 function _eoOpenCommandForPath(name) {
   return _eoDocTypeForPath(name) === 'pdf' ? 'open_pdf' : 'open_file';

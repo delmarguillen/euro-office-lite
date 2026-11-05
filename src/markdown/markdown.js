@@ -22,6 +22,8 @@
   var OPEN_IN_EDITOR_KEY = 'eo-pending-open';
   var START_PAGE = '../index.html';
   var RENDER_DELAY_MS = 250;
+  // While modified, the text is copied for crash recovery at most this often.
+  var RECOVERY_DELAY_MS = 3000;
   var SAVE_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }];
   var EXPORT_FILTERS = [{ name: 'HTML', extensions: ['html', 'htm'] }];
   var PREVIEW_STYLESHEET = 'markdown-preview.css';
@@ -41,6 +43,7 @@
       unsavedChanges: 'Unsaved changes',
       unsavedDiscardClose: 'The current document has unsaved changes. Discard them and close?',
       openFailed: 'Could not open file',
+      recoverFailedMsg: 'The recovered document could not be opened. It is still offered on the start screen.',
       openErrorMsg: 'The file could not be opened.',
       tooLargeMsg: 'The file is larger than 10 MB and cannot be opened as text.',
       notUtf8Msg: 'The file is not UTF-8 text. Opening it here could change it when saved.',
@@ -61,6 +64,7 @@
       unsavedChanges: 'Cambios sin guardar',
       unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Descartarlos y cerrar?',
       openFailed: 'No se pudo abrir el archivo',
+      recoverFailedMsg: 'No se pudo abrir el documento recuperado. Se sigue ofreciendo en la pantalla de inicio.',
       openErrorMsg: 'No se pudo abrir el archivo.',
       tooLargeMsg: 'El archivo ocupa más de 10 MB y no se puede abrir como texto.',
       notUtf8Msg: 'El archivo no es texto UTF-8. Abrirlo aquí podría cambiarlo al guardar.',
@@ -121,6 +125,7 @@
   // ── The open file ──
   // The file's own BOM and line end (EoMarkdownText.decode), and the text as
   // last read or saved: the document is modified while the editor differs.
+  // savedText is null for recovered text, which is modified until it is saved.
   var format = NEW_FORMAT;
   var savedText = '';
   // False for a new document until its first save, which goes through Save As.
@@ -307,6 +312,51 @@
   function onTextChanged() {
     reportModified(false);
     scheduleRender();
+    scheduleRecoveryCopy();
+  }
+
+  // ── Crash recovery ──
+  // While the document is modified, markdown_recovery_write keeps a copy of
+  // the bytes Save would write in the app's recovery folder (recovery.rs).
+  // Writes go one after another, and Save waits for the last one: a copy
+  // written after a save would be offered for text that is already saved.
+  // The backend drops the copy after a successful save and at exit; this page
+  // drops it with recovery_end when the user discards the changes.
+  var recoveryTimer = null;
+  var recoveryWrite = Promise.resolve();
+  var recoveryStopped = false;
+
+  function scheduleRecoveryCopy() {
+    if (recoveryTimer || recoveryStopped) return;
+    recoveryTimer = setTimeout(writeRecoveryCopy, RECOVERY_DELAY_MS);
+  }
+
+  function writeRecoveryCopy() {
+    recoveryTimer = null;
+    if (recoveryStopped || !isModified()) return;
+    if (saving) {
+      scheduleRecoveryCopy();
+      return;
+    }
+    var data = bytesToBase64(Text.encode(currentText(), format));
+    recoveryWrite = recoveryWrite.then(function() {
+      return invoke('markdown_recovery_write', { data: data });
+    }).catch(function(error) {
+      log('recovery copy failed: ' + errorText(error));
+    });
+  }
+
+  // No copy after this; resolves once the last one is written.
+  function stopRecoveryCopies() {
+    recoveryStopped = true;
+    clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+    return recoveryWrite;
+  }
+
+  async function discardRecoveryCopy() {
+    await stopRecoveryCopies();
+    await invoke('recovery_end', { discard: true }).catch(function() {});
   }
 
   // CodeMirror starts from the textarea's text, which stays as it was. It
@@ -367,13 +417,14 @@
     return t('saveErrorMsg');
   }
 
-  // A new document offers NEW_NAME; the backend decides the folder, as for a
-  // new document in the editors.
+  // A document with no file yet offers its name (NEW_NAME for a new one).
+  // The backend decides the folder: for a recovered document, where it was
+  // saved before; otherwise as for a new document in the editors.
   async function pickSaveTarget() {
     return invoke('pick_save_target', {
       filters: SAVE_FILTERS,
       requestedExt: 'md',
-      suggestedName: hasFile ? null : NEW_NAME
+      suggestedName: hasFile ? null : currentName
     });
   }
 
@@ -388,6 +439,7 @@
       if (asNew && !target) return;
       var text = currentText();
       var data = bytesToBase64(Text.encode(text, format));
+      await recoveryWrite;
       var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
       savedText = text;
       hasFile = true;
@@ -421,6 +473,7 @@
 
   async function closeDocument() {
     if (!(await confirmDiscard())) return;
+    await discardRecoveryCopy();
     await leaveToStart();
   }
 
@@ -432,6 +485,8 @@
     closeDialogOpen = true;
     try {
       if (!(await confirmDiscard())) return;
+      // The exit itself drops the copy (main.rs, RunEvent::Exit).
+      await stopRecoveryCopies();
       await invoke('force_close');
     } finally {
       closeDialogOpen = false;
@@ -444,6 +499,7 @@
     if (!(await confirmDiscard())) return;
     var file = await invoke('pick_document', { documents: t('documents'), all: t('all') });
     if (!file || !file.token) return;
+    await discardRecoveryCopy();
     await invoke('set_document_modified', { modified: false }).catch(function() {});
     var entry = JSON.stringify({ token: file.token, name: file.name });
     if (Text.isMarkdownPath(file.name)) {
@@ -553,14 +609,15 @@
   }
 
   // ── Opening ──
-  // { token, name } for a file, { new: true } for New Markdown, or null.
+  // { token, name } for a file, { new: true } for New Markdown, { recover: id }
+  // for a document offered on the start screen, or null.
   function takePending() {
     var pending = null;
     try {
       pending = JSON.parse(localStorage.getItem(PENDING_KEY) || 'null');
       localStorage.removeItem(PENDING_KEY);
     } catch (e) {}
-    if (pending && (pending.token || pending.new)) return pending;
+    if (pending && (pending.token || pending.new || pending.recover)) return pending;
     return null;
   }
 
@@ -596,12 +653,41 @@
     await setEditing(true);
   }
 
+  // The folder stays where it was if this fails: the start screen offers it
+  // again, and nothing here discards it.
+  async function startRecovered(framed, id) {
+    var recovered;
+    var decoded;
+    try {
+      recovered = await invoke('markdown_recovery_load', { id: id });
+      decoded = Text.decode(base64ToBytes(recovered.data));
+    } catch (error) {
+      log('recover failed: ' + errorText(error));
+      await tauri.dialog.message(t('recoverFailedMsg'), { title: t('openFailed'), kind: 'error' });
+      await leaveToStart();
+      return;
+    }
+    format = { bom: decoded.bom, eol: decoded.eol };
+    source.value = decoded.text;
+    savedText = null;
+    showName(recovered.name);
+    invoke('set_window_title', { name: recovered.name }).catch(function() {});
+    await reportModified(true);
+    await framed;
+    render();
+    await setEditing(true);
+  }
+
   async function start() {
     applyStrings();
     var framed = prepareFrame();
     var pending = takePending();
     if (pending && pending.new) {
       await startNew(framed);
+      return;
+    }
+    if (pending && pending.recover) {
+      await startRecovered(framed, pending.recover);
       return;
     }
     var file;
