@@ -51,6 +51,7 @@
     "allow-import-dictionary",
     "allow-cancel-dictionary-import",
     "allow-read-markdown",
+    "allow-new-markdown",
     "allow-save-markdown",
     "allow-markdown-image"
   ]

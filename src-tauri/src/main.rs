@@ -454,6 +454,7 @@ fn main() {
             dictionary_import::import_dictionary,
             dictionary_import::cancel_dictionary_import,
             markdown::read_markdown,
+            markdown::new_markdown,
             markdown::save_markdown,
             markdown::markdown_image,
         ])

@@ -102,14 +102,15 @@ fn open_markdown_file(current: Option<PathBuf>) -> Result<PathBuf, String> {
 
 // Save writes over the open file; Save As writes exactly the file its token
 // names. A name not ending in .md or .markdown is refused, not renamed: the
-// renamed file was never confirmed in the dialog and may already exist.
+// renamed file was never confirmed in the dialog and may already exist. A new
+// document (no open file) can only be saved with a token.
 fn markdown_save_destination(
     grants: &PathGrants,
     token: Option<&str>,
-    current: &Path,
+    current: Option<PathBuf>,
 ) -> Result<PathBuf, String> {
     let Some(token) = token else {
-        return Ok(current.to_path_buf());
+        return open_markdown_file(current);
     };
     let chosen = grants.resolve(token, GrantKind::Save)?;
     if !is_markdown(&chosen) {
@@ -167,6 +168,17 @@ pub struct MarkdownImage {
     data: String,
 }
 
+// What the backend knows of the open document, for a Markdown file (`path`)
+// or a new Markdown document (None), as an open in the editors resets it.
+fn start_markdown_document(state: &AppState, path: Option<PathBuf>) {
+    crate::recovery::end_session(state, true);
+    *state.pending_recent.lock().unwrap() = None;
+    *state.current_file.lock().unwrap() = path;
+    *state.save_suggestion.lock().unwrap() = None;
+    *state.modified.lock().unwrap() = false;
+    *state.text_options.lock().unwrap() = None;
+}
+
 // Opens the Markdown file an Open token names: it becomes the open document
 // (the close warning, Save, Recents) and its bytes go to the page in base64.
 #[tauri::command]
@@ -179,11 +191,7 @@ pub async fn read_markdown(
         log_event(&state, &format!("[OPEN] markdown failed: {}", error));
         error
     })?;
-    crate::recovery::end_session(&state, true);
-    *state.pending_recent.lock().unwrap() = None;
-    *state.current_file.lock().unwrap() = Some(path.clone());
-    *state.modified.lock().unwrap() = false;
-    *state.text_options.lock().unwrap() = None;
+    start_markdown_document(&state, Some(path.clone()));
     crate::recent::record(&app, &path.to_string_lossy());
     log_event(
         &state,
@@ -195,6 +203,15 @@ pub async fn read_markdown(
     })
 }
 
+// New Markdown on the start screen: a document with no file yet. Its first
+// save goes through Save As (save_markdown with a token).
+#[tauri::command]
+pub async fn new_markdown(state: State<'_, AppState>) -> Result<(), String> {
+    start_markdown_document(&state, None);
+    log_event(&state, "[OPEN] new markdown");
+    Ok(())
+}
+
 // Writes `data` (base64) as it is: over the open Markdown file, or to the file
 // a Save token names. Returns the saved file's name.
 #[tauri::command]
@@ -204,15 +221,15 @@ pub async fn save_markdown(
     data: String,
     token: Option<String>,
 ) -> Result<String, String> {
-    let current = open_markdown_file(state.current_file.lock().unwrap().clone())?;
-    let dest = markdown_save_destination(&state.grants, token.as_deref(), &current)?;
+    let current = state.current_file.lock().unwrap().clone();
+    let dest = markdown_save_destination(&state.grants, token.as_deref(), current.clone())?;
     let written = decode_markdown_data(&data)
         .and_then(|bytes| crate::save_target::write_bytes_beside_and_rename(&bytes, &dest));
     if let Err(error) = written {
         log_event(&state, &format!("[SAVE] markdown failed: {}", error));
         return Err(error);
     }
-    if dest != current {
+    if current.as_ref() != Some(&dest) {
         *state.current_file.lock().unwrap() = Some(dest.clone());
         crate::recent::record(&app, &dest.to_string_lossy());
     }
@@ -374,28 +391,42 @@ mod tests {
 
     #[test]
     fn save_goes_over_the_open_file_and_save_as_to_the_save_token() {
-        let current = PathBuf::from("/home/u/notes.md");
+        let current = Some(PathBuf::from("/home/u/notes.md"));
         let grants = PathGrants::default();
         assert_eq!(
-            markdown_save_destination(&grants, None, &current),
-            Ok(current.clone())
+            markdown_save_destination(&grants, None, current.clone()),
+            Ok(PathBuf::from("/home/u/notes.md"))
         );
         let chosen = grants.grant(PathBuf::from("/home/u/copy.markdown"), GrantKind::Save);
         assert_eq!(
-            markdown_save_destination(&grants, Some(&chosen.token), &current),
+            markdown_save_destination(&grants, Some(&chosen.token), current),
             Ok(PathBuf::from("/home/u/copy.markdown"))
         );
     }
 
     #[test]
     fn save_as_refuses_open_tokens_and_other_extensions() {
-        let current = PathBuf::from("/home/u/notes.md");
+        let current = || Some(PathBuf::from("/home/u/notes.md"));
         let grants = PathGrants::default();
         let open = grants.grant(PathBuf::from("/home/u/other.md"), GrantKind::Open);
-        assert!(markdown_save_destination(&grants, Some(&open.token), &current).is_err());
+        assert!(markdown_save_destination(&grants, Some(&open.token), current()).is_err());
         let docx = grants.grant(PathBuf::from("/home/u/notes.docx"), GrantKind::Save);
-        assert!(markdown_save_destination(&grants, Some(&docx.token), &current).is_err());
-        assert!(markdown_save_destination(&grants, Some("/home/u/x.md"), &current).is_err());
+        assert!(markdown_save_destination(&grants, Some(&docx.token), current()).is_err());
+        assert!(markdown_save_destination(&grants, Some("/home/u/x.md"), current()).is_err());
+    }
+
+    #[test]
+    fn a_new_document_is_saved_only_with_a_save_token() {
+        let grants = PathGrants::default();
+        assert!(markdown_save_destination(&grants, None, None).is_err());
+        let chosen = grants.grant(PathBuf::from("/home/u/Untitled.md"), GrantKind::Save);
+        assert_eq!(
+            markdown_save_destination(&grants, Some(&chosen.token), None),
+            Ok(PathBuf::from("/home/u/Untitled.md"))
+        );
+        let open = grants.grant(PathBuf::from("/home/u/other.md"), GrantKind::Open);
+        assert!(markdown_save_destination(&grants, Some(&open.token), None).is_err());
+        assert!(markdown_save_destination(&grants, Some("0123456789abcdef"), None).is_err());
     }
 
     #[test]
