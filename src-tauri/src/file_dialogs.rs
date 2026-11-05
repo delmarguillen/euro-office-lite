@@ -314,9 +314,18 @@ pub fn needs_replace_confirmation(chosen: &Path, final_path: &Path, exists: bool
     exists
 }
 
-// Only a file is asked about: saving onto a folder fails later, as before.
+// Whether the final path holds something the save would replace. The link
+// itself is read, not followed: a link counts even when broken. A folder does
+// not count: saving onto it fails later, as before.
+fn replace_target_exists(final_path: &Path) -> bool {
+    let Ok(metadata) = std::fs::symlink_metadata(final_path) else {
+        return false;
+    };
+    !metadata.is_dir()
+}
+
 fn asks_before_replacing(chosen: &Path, final_path: &Path) -> bool {
-    needs_replace_confirmation(chosen, final_path, final_path.is_file())
+    needs_replace_confirmation(chosen, final_path, replace_target_exists(final_path))
 }
 
 #[cfg(test)]
@@ -503,5 +512,51 @@ mod tests {
     #[test]
     fn without_a_document_or_a_suggestion_there_is_no_start() {
         assert_eq!(save_start_path(None, None, Some("pdf")), None);
+    }
+
+    fn temp_dir_for(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("eo-{test}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_link_on_the_extended_name_asks_before_replacing() {
+        let dir = temp_dir_for("broken-link");
+        let link = dir.join("Budget.pdf");
+        std::os::unix::fs::symlink(dir.join("missing.pdf"), &link).unwrap();
+        assert!(!link.exists());
+
+        let chosen = dir.join("Budget");
+        let final_path = with_save_extension(chosen.clone(), "pdf");
+        assert_eq!(final_path, link);
+        assert!(asks_before_replacing(&chosen, &final_path));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_file_counts_as_existing() {
+        let dir = temp_dir_for("file-link");
+        std::fs::write(dir.join("target.pdf"), b"kept").unwrap();
+        let link = dir.join("Budget.pdf");
+        std::os::unix::fs::symlink(dir.join("target.pdf"), &link).unwrap();
+        assert!(replace_target_exists(&link));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_counts_as_existing_and_a_folder_or_nothing_does_not() {
+        let dir = temp_dir_for("exists");
+        std::fs::write(dir.join("Budget.pdf"), b"kept").unwrap();
+        std::fs::create_dir_all(dir.join("Report.pdf")).unwrap();
+
+        assert!(replace_target_exists(&dir.join("Budget.pdf")));
+        assert!(!replace_target_exists(&dir.join("Report.pdf")));
+        assert!(!replace_target_exists(&dir.join("Missing.pdf")));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
