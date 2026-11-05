@@ -63,6 +63,18 @@ function tryRun(bridge, code) {
   check(results, 'the button calls _eoNewMarkdown', /data-new-markdown[\s\S]{0,120}_eoNewMarkdown\(\)/.test(patches));
 }
 
+// ── Recovering a Markdown document ──
+{
+  const { bridge } = await routingBridge();
+  tryRun(bridge, "_eoRecoverMarkdown('1700000000000-42')");
+  const pending = bridge.sandbox.localStorage.getItem('eo-markdown-open');
+  check(results, 'Recover sends a Markdown document to its page', bridge.sandbox.location.href === 'markdown/markdown.html');
+  check(results, 'Recover leaves the folder id for the page', pending === JSON.stringify({ recover: '1700000000000-42' }), String(pending));
+  const patches = await readFile(path.join(projectRoot, 'src', 'editor-patches.js'), 'utf8');
+  check(results, 'the start screen routes a Markdown candidate to _eoRecoverMarkdown',
+    /candidate\.docType === 'markdown'[\s\S]{0,80}_eoRecoverMarkdown\(candidate\.id\)/.test(patches));
+}
+
 // ── Routing ──
 {
   const { bridge } = await routingBridge();

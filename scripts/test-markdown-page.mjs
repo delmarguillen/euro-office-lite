@@ -53,7 +53,9 @@ function installFakeTauri(fake) {
   localStorage.setItem('eo-ui-lang', fake.lang || 'en');
   if (!sessionStorage.getItem('opened')) {
     sessionStorage.setItem('opened', '1');
-    const pending = fake.isNew ? { new: true } : { token: 'tok-open', name: fake.name };
+    let pending = { token: 'tok-open', name: fake.name };
+    if (fake.isNew) pending = { new: true };
+    if (fake.recoverId) pending = { recover: fake.recoverId };
     localStorage.setItem('eo-markdown-open', JSON.stringify(pending));
   }
   const handlers = {
@@ -67,6 +69,10 @@ function installFakeTauri(fake) {
       ? { token: 'tok-html', name: 'notes.html' }
       : { token: 'tok-save', name: 'copy.md' }),
     export_markdown_html: () => 'notes.html',
+    markdown_recovery_load: (args) => {
+      if (fake.recoverError || args.id !== fake.recoverId) throw new Error(fake.recoverError || 'No Markdown recovery session');
+      return { data: fake.data, name: fake.name };
+    },
     markdown_image: (args) => {
       const image = (fake.images || {})[args.src];
       if (!image) throw new Error('the image is outside the document\'s folder');
@@ -137,7 +143,9 @@ async function openPage(fake, options = {}) {
   });
   await page.addInitScript(installFakeTauri, fake);
   await page.goto(base);
-  const first = fake.isNew ? 'new_markdown' : 'read_markdown';
+  let first = 'read_markdown';
+  if (fake.isNew) first = 'new_markdown';
+  if (fake.recoverId) first = 'markdown_recovery_load';
   await page.waitForFunction((command) => window.__calls.some((call) => call.command === command), first);
   await page.waitForTimeout(400);
   const calls = () => page.evaluate(() => window.__calls);
@@ -497,6 +505,72 @@ for (const [label, raw, eol] of [
   const exported = (await calls()).filter((call) => call.command === 'export_markdown_html');
   const html = exported.length ? Buffer.from(exported[0].args.data, 'base64').toString('utf8') : '';
   check(results, 'without a heading the title is the file name', html.includes('<title>plain</title>'));
+  await context.close();
+}
+
+// ── Crash recovery ──
+const RECOVERY_WAIT_MS = 3600;
+const commandsNamed = async (calls, name) => (await calls()).filter((call) => call.command === name);
+
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('\uFEFF# One\r\n') });
+  await page.waitForTimeout(RECOVERY_WAIT_MS);
+  check(results, 'an unmodified document is not copied', (await commandsNamed(calls, 'markdown_recovery_write')).length === 0);
+  await startEditing(page);
+  await page.keyboard.press('Control+End');
+  for (const key of 'two words') await page.keyboard.type(key);
+  await page.waitForTimeout(RECOVERY_WAIT_MS);
+  const writes = await commandsNamed(calls, 'markdown_recovery_write');
+  check(results, 'a modified document is copied once after a pause, not on every key', writes.length === 1, String(writes.length));
+  check(results, 'the copy is the bytes Save would write (BOM, CRLF)', writes.length === 1
+    && Buffer.from(writes[0].args.data, 'base64').toString('binary') === Buffer.from('\uFEFF# One\r\ntwo words', 'utf8').toString('binary'));
+  await page.keyboard.type('!');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(RECOVERY_WAIT_MS);
+  const names = (await calls()).map((call) => call.command);
+  const lastSave = names.lastIndexOf('save_markdown');
+  check(results, 'no copy is written after a save of the same text', lastSave > 0 && names.indexOf('markdown_recovery_write', lastSave) === -1);
+  check(results, 'saving does not discard through the page (the backend drops the copy)', !names.includes('recovery_end'));
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('text\n') });
+  await startEditing(page);
+  await page.keyboard.type('x');
+  await page.click('#md-close');
+  await page.waitForTimeout(100);
+  check(results, 'refusing to close keeps the copy', (await commandsNamed(calls, 'recovery_end')).length === 0);
+  await page.evaluate(() => { window.__confirmAnswer = true; });
+  await page.click('#md-close');
+  await page.waitForURL('**/index.html');
+  const ended = await commandsNamed(calls, 'recovery_end');
+  check(results, 'closing and discarding drops the copy', ended.length === 1 && ended[0].args.discard === true);
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('\uFEFF# Draft\r\n\r\nlost text'), recoverId: '1700000000000-42' });
+  await page.waitForSelector('#md-editor .cm-content:focus');
+  const text = await page.evaluate(() => document.getElementById('md-editor').shadowRoot.querySelector('.cm-content').textContent);
+  check(results, 'a recovered document reopens in the Markdown page with its text', text.includes('lost text') && (await page.textContent('#md-name')) === 'notes.md');
+  const modified = await commandsNamed(calls, 'set_document_modified');
+  check(results, 'a recovered document is marked modified', modified.length > 0 && modified[modified.length - 1].args.modified === true);
+  check(results, 'recovering reads no file and writes none', !(await calls()).some((call) => ['read_markdown', 'save_markdown'].includes(call.command)));
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(200);
+  const picked = await commandsNamed(calls, 'pick_save_target');
+  const saved = await savedCalls(calls);
+  check(results, 'the first save of a recovered document goes through Save As', picked.length === 1 && picked[0].args.suggestedName === 'notes.md'
+    && saved.length === 1 && saved[0].args.token === 'tok-save');
+  check(results, 'a recovered document is saved with its BOM and CRLF', saved.length === 1
+    && saved[0].args.data === utf8('\uFEFF# Draft\r\n\r\nlost text'));
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: '', recoverId: '1-1', recoverError: 'locked' });
+  await page.waitForURL('**/index.html');
+  const names = (await calls()).map((call) => call.command);
+  check(results, 'a recovery that cannot be loaded says so and discards nothing', names.includes('dialog.message')
+    && !names.includes('recovery_end') && !names.includes('recovery_discard'));
   await context.close();
 }
 
