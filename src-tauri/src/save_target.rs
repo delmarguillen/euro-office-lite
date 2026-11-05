@@ -1,9 +1,11 @@
 // Writing a saved file to where the user asked for it.
 
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 /// Start of the error a save returns when it may not write the destination (a
 /// read-only file, or a folder it cannot write to), so the frontend can say why
@@ -85,7 +87,7 @@ pub fn write_beside_and_rename(from: &Path, dest: &Path) -> Result<(), String> {
 // with no temp file of its own, so pointing it at `dest` could leave the user's
 // file truncated. `reshape` runs on the staged file before it is placed. `dest`
 // changes only when `convert` succeeded and wrote the file (non-empty, unless
-// may_be_empty), and `staging_dir` is removed either way.
+// may_be_empty). Each save stages in a subfolder of its own, removed either way.
 pub async fn convert_and_place<Convert, Converted>(
     staging_dir: &Path,
     dest: &Path,
@@ -96,27 +98,20 @@ where
     Convert: FnOnce(PathBuf) -> Converted,
     Converted: std::future::Future<Output = Result<String, String>>,
 {
-    let staged = staged_path(staging_dir, dest)?;
+    let Some(name) = dest.file_name() else {
+        return Err(format!("not a file name: {}", dest.display()));
+    };
+    let folder = StagingFolder::claim(staging_dir)?;
+    // Same name and extension as `dest`: x2t and the text reshaping both go by
+    // the extension.
+    let staged = folder.dir.join(name);
     let converted = convert(staged.clone()).await;
-    let placed = converted
+    converted
         .and_then(|_| check_written(&staged))
         .and_then(|_| {
             reshape(&staged);
             write_beside_and_rename(&staged, dest)
-        });
-    let _ = std::fs::remove_dir_all(staging_dir);
-    placed
-}
-
-// Same name and extension as `dest`: x2t and the text reshaping both go by
-// the extension. What a crashed save left in `staging_dir` is cleared first.
-fn staged_path(staging_dir: &Path, dest: &Path) -> Result<PathBuf, String> {
-    let Some(name) = dest.file_name() else {
-        return Err(format!("not a file name: {}", dest.display()));
-    };
-    let _ = std::fs::remove_dir_all(staging_dir);
-    std::fs::create_dir_all(staging_dir).map_err(|e| e.to_string())?;
-    Ok(staging_dir.join(name))
+        })
 }
 
 // x2t can exit 0 without writing anything.
@@ -134,6 +129,60 @@ fn check_written(staged: &Path) -> Result<(), String> {
 // example windows-1252) is 0 bytes. Every other format has a header.
 fn may_be_empty(path: &Path) -> bool {
     crate::text_import::TextKind::for_path(path).is_some()
+}
+
+// Saves running per staging folder. The staging folder sits in this process's
+// own instance folder, so a count of zero means no save is using it.
+static SAVES_IN_PROGRESS: Mutex<BTreeMap<PathBuf, u32>> = Mutex::new(BTreeMap::new());
+
+static STAGING_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+// One save's subfolder of the staging folder.
+struct StagingFolder {
+    root: PathBuf,
+    dir: PathBuf,
+}
+
+impl StagingFolder {
+    // Leftovers of a killed save are cleared only when no other save is in
+    // progress, under the lock, so no save makes its subfolder meanwhile.
+    fn claim(root: &Path) -> Result<StagingFolder, String> {
+        let mut in_progress = saves_in_progress();
+        let count = in_progress.entry(root.to_path_buf()).or_insert(0);
+        if *count == 0 {
+            let _ = std::fs::remove_dir_all(root);
+        }
+        let n = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = root.join(n.to_string());
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        *count += 1;
+        Ok(StagingFolder {
+            root: root.to_path_buf(),
+            dir,
+        })
+    }
+}
+
+// Also runs when the save's future is dropped before it finishes.
+impl Drop for StagingFolder {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+        let mut in_progress = saves_in_progress();
+        let Some(count) = in_progress.get_mut(&self.root) else {
+            return;
+        };
+        *count -= 1;
+        if *count > 0 {
+            return;
+        }
+        in_progress.remove(&self.root);
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+// A panic while the lock was held leaves the counts as they were.
+fn saves_in_progress() -> MutexGuard<'static, BTreeMap<PathBuf, u32>> {
+    SAVES_IN_PROGRESS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 // A rename over a symlink would turn it into a regular file, so the file it
@@ -664,14 +713,78 @@ mod tests {
         }
 
         // What a save killed by a power cut left in the staging folder, x2t's
-        // asc… scratch folder among it, goes on the next save.
+        // asc… scratch folder and another save's subfolder among it, goes on
+        // the next save.
         #[test]
         fn leftovers_of_a_killed_save_are_cleared() {
             let (user, instance, dest) = user_and_instance("leftover", "doc.pdf");
-            std::fs::create_dir_all(instance.join("save_output").join("ascwfVgtc")).unwrap();
+            let staging = instance.join("save_output");
+            std::fs::create_dir_all(staging.join("ascwfVgtc")).unwrap();
+            std::fs::create_dir_all(staging.join("7")).unwrap();
+            std::fs::write(staging.join("7").join("doc.pdf"), &NEW[..6]).unwrap();
 
             run(&instance, &dest, writes_new, no_reshape).unwrap();
 
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
+        // The second save starts after the first one's x2t wrote its output,
+        // and the first one's x2t returns only once the second one's started.
+        #[test]
+        fn two_saves_at_once_both_place_their_own_output() {
+            use std::sync::{Arc, Barrier};
+            let (user_a, instance, dest_a) = user_and_instance("both-a", "a.docx");
+            let user_b = test_dir("both-b-user");
+            let dest_b = user_b.join("b.docx");
+            let first_written = Arc::new(Barrier::new(2));
+            let second_started = Arc::new(Barrier::new(2));
+
+            let first = {
+                let (instance, dest) = (instance.clone(), dest_a.clone());
+                let (written, started) = (first_written.clone(), second_started.clone());
+                std::thread::spawn(move || {
+                    let x2t = |output: &Path| {
+                        std::fs::write(output, b"PK first").unwrap();
+                        written.wait();
+                        started.wait();
+                        Ok("ok".to_string())
+                    };
+                    run(&instance, &dest, x2t, no_reshape)
+                })
+            };
+            first_written.wait();
+            let x2t = |output: &Path| {
+                second_started.wait();
+                std::fs::write(output, b"PK second").unwrap();
+                Ok("ok".to_string())
+            };
+            let second = run(&instance, &dest_b, x2t, no_reshape);
+            let first = first.join().unwrap();
+
+            assert_eq!(first, Ok(()));
+            assert_eq!(second, Ok(()));
+            assert_eq!(std::fs::read(&dest_a).unwrap(), b"PK first");
+            assert_eq!(std::fs::read(&dest_b).unwrap(), b"PK second");
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user_a, &user_b, &instance]);
+        }
+
+        // A save that starts while another is running leaves the other's
+        // subfolder alone, and the last one to finish removes the staging
+        // folder.
+        #[test]
+        fn a_save_in_progress_keeps_its_subfolder() {
+            let (user, instance, dest) = user_and_instance("in-progress", "doc.docx");
+            let staging = instance.join("save_output");
+            let running = StagingFolder::claim(&staging).unwrap();
+            let running_output = running.dir.join("doc.docx");
+            std::fs::write(&running_output, b"PK running").unwrap();
+
+            run(&instance, &dest, writes_new, no_reshape).unwrap();
+
+            assert_eq!(std::fs::read(&running_output).unwrap(), b"PK running");
+            drop(running);
             assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
             clean_up(&[&user, &instance]);
         }
