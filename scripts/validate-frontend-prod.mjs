@@ -30,6 +30,7 @@ const required = [
   'markdown/markdown-text.js',
   'markdown/vendor/markdown-it.min.js',
   'markdown/vendor/purify.min.js',
+  'markdown/vendor/codemirror.min.js',
   'web-apps/vendor/xregexp/xregexp-all-min.js',
   'sdkjs/vendor/polyfill.js',
   'sdkjs/common/AllFonts.js',

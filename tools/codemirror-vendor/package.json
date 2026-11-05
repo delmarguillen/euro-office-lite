@@ -1,0 +1,18 @@
+{
+  "name": "eo-codemirror-vendor",
+  "private": true,
+  "description": "Builds src/markdown/vendor/codemirror.min.js. Run scripts/vendor-codemirror.sh.",
+  "license": "MIT",
+  "dependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/lang-markdown": "6.5.2",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/search": "6.7.2",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
+    "@lezer/highlight": "1.2.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
