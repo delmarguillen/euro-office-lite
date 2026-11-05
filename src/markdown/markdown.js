@@ -18,6 +18,8 @@
 
   // Written by _eoOpenMarkdown in bridge.js.
   var PENDING_KEY = 'eo-markdown-open';
+  // Read by the start screen to open a document in the editors (editor-patches.js).
+  var OPEN_IN_EDITOR_KEY = 'eo-pending-open';
   var START_PAGE = '../index.html';
   var RENDER_DELAY_MS = 250;
   var SAVE_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }];
@@ -41,7 +43,8 @@
       saveDeniedMsg: 'The file could not be saved.\n\nYou do not have permission to write to that location, or the file is read-only.',
       saveTooLargeMsg: 'The text is larger than 10 MB and cannot be saved.',
       remoteImageBlocked: 'Remote image not loaded',
-      imageNotShown: 'Image not shown'
+      imageNotShown: 'Image not shown',
+      documents: 'Documents', all: 'All'
     },
     es: {
       close: 'Cerrar', edit: 'Editar', preview: 'Vista previa', save: 'Guardar', saveAs: 'Guardar como…',
@@ -57,7 +60,8 @@
       saveDeniedMsg: 'No se pudo guardar el archivo.\n\nNo tienes permiso para escribir en esa ubicación o el archivo es de solo lectura.',
       saveTooLargeMsg: 'El texto ocupa más de 10 MB y no se puede guardar.',
       remoteImageBlocked: 'Imagen remota no cargada',
-      imageNotShown: 'Imagen no mostrada'
+      imageNotShown: 'Imagen no mostrada',
+      documents: 'Documentos', all: 'Todos'
     }
   };
 
@@ -405,11 +409,40 @@
     }
   });
 
+  // Another document: Markdown reloads this page, anything else opens in
+  // the editors from the start screen (editor-patches.js, eo-pending-open).
+  async function openAnother() {
+    if (!(await confirmDiscard())) return;
+    var file = await invoke('pick_document', { documents: t('documents'), all: t('all') });
+    if (!file || !file.token) return;
+    await invoke('set_document_modified', { modified: false }).catch(function() {});
+    var entry = JSON.stringify({ token: file.token, name: file.name });
+    if (Text.isMarkdownPath(file.name)) {
+      localStorage.setItem(PENDING_KEY, entry);
+      window.location.reload();
+      return;
+    }
+    localStorage.setItem(OPEN_IN_EDITOR_KEY, entry);
+    window.location.href = START_PAGE;
+  }
+
+  // Ctrl+S, Ctrl+Shift+S, Ctrl+O and Ctrl+W, wherever the focus is: this
+  // listens on the document in the capture phase, before CodeMirror's keymap.
+  // Ctrl+Q is the app menu's (app_quit.rs).
+  var SHORTCUTS = {
+    s: function(e) { save(e.shiftKey); },
+    o: function() { openAnother(); },
+    w: function() { closeDocument(); }
+  };
+
   function onKeyDown(e) {
-    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's') return;
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    var action = SHORTCUTS[e.key.toLowerCase()];
+    if (!action) return;
+    if (e.key.toLowerCase() !== 's' && e.shiftKey) return;
     e.preventDefault();
     e.stopPropagation();
-    save(e.shiftKey);
+    action(e);
   }
 
   // ── Opening ──
