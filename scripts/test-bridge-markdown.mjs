@@ -50,6 +50,19 @@ function tryRun(bridge, code) {
   }
 }
 
+// ── New Markdown ──
+{
+  const { bridge } = await routingBridge();
+  tryRun(bridge, '_eoNewMarkdown()');
+  const pending = bridge.sandbox.localStorage.getItem('eo-markdown-open');
+  check(results, 'New Markdown goes to the Markdown page', bridge.sandbox.location.href === 'markdown/markdown.html');
+  check(results, 'New Markdown leaves a new document for the page', pending === JSON.stringify({ new: true }), String(pending));
+  const html = await readFile(path.join(projectRoot, 'src', 'index.html'), 'utf8');
+  const patches = await readFile(path.join(projectRoot, 'src', 'editor-patches.js'), 'utf8');
+  check(results, 'the start screen has a New Markdown button next to the others', /data-type="slide"[\s\S]*?data-new-markdown/.test(html));
+  check(results, 'the button calls _eoNewMarkdown', /data-new-markdown[\s\S]{0,120}_eoNewMarkdown\(\)/.test(patches));
+}
+
 // ── Routing ──
 {
   const { bridge } = await routingBridge();

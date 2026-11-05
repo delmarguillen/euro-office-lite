@@ -53,7 +53,8 @@ function installFakeTauri(fake) {
   localStorage.setItem('eo-ui-lang', fake.lang || 'en');
   if (!sessionStorage.getItem('opened')) {
     sessionStorage.setItem('opened', '1');
-    localStorage.setItem('eo-markdown-open', JSON.stringify({ token: 'tok-open', name: fake.name }));
+    const pending = fake.isNew ? { new: true } : { token: 'tok-open', name: fake.name };
+    localStorage.setItem('eo-markdown-open', JSON.stringify(pending));
   }
   const handlers = {
     read_markdown: (args) => {
@@ -133,7 +134,8 @@ async function openPage(fake, options = {}) {
   });
   await page.addInitScript(installFakeTauri, fake);
   await page.goto(base);
-  await page.waitForFunction(() => window.__calls.some((call) => call.command === 'read_markdown'));
+  const first = fake.isNew ? 'new_markdown' : 'read_markdown';
+  await page.waitForFunction((command) => window.__calls.some((call) => call.command === command), first);
   await page.waitForTimeout(400);
   const calls = () => page.evaluate(() => window.__calls);
   const preview = () => page.evaluate(() => document.getElementById('md-preview').contentDocument.body.innerHTML);
@@ -409,6 +411,45 @@ for (const [label, raw, eol] of [
   await page.waitForTimeout(200);
   const saved = await savedCalls(calls);
   check(results, 'the textarea fallback saves', saved.length === 1 && Buffer.from(saved[0].args.data, 'base64').toString() === 'one\r\ntwo');
+  await context.close();
+}
+
+// ── New Markdown ──
+{
+  const { context, page, calls, scripts } = await openPage({ isNew: true });
+  await page.waitForSelector('#md-editor .cm-content:focus');
+  const name = await page.textContent('#md-name');
+  check(results, 'New Markdown opens empty in Edit, in CodeMirror', name === 'Untitled.md' && loadsCodeMirror(scripts)
+    && (await page.getAttribute('#md-edit', 'aria-pressed')) === 'true');
+  check(results, 'New Markdown reads no file', !(await calls()).some((call) => call.command === 'read_markdown'));
+  await page.keyboard.type('# New\n\nText');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(200);
+  const picked = (await calls()).filter((call) => call.command === 'pick_save_target');
+  check(results, 'the first Ctrl+S asks where, offering Untitled.md', picked.length === 1 && picked[0].args.suggestedName === 'Untitled.md');
+  let saved = await savedCalls(calls);
+  check(results, 'the first save writes LF without BOM to the dialog\'s token', saved.length === 1 && saved[0].args.token === 'tok-save'
+    && Buffer.from(saved[0].args.data, 'base64').toString('binary') === '# New\n\nText');
+  check(results, 'after the first save the name is the saved file\'s', (await page.textContent('#md-name')) === 'copy.md');
+  await page.keyboard.type('!');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(200);
+  saved = await savedCalls(calls);
+  const pickedAgain = (await calls()).filter((call) => call.command === 'pick_save_target');
+  check(results, 'later saves go over the file without a dialog', saved.length === 2 && saved[1].args.token === null && pickedAgain.length === 1);
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ isNew: true, lang: 'es' });
+  await page.waitForSelector('#md-editor .cm-content:focus');
+  await page.keyboard.type('x');
+  await page.evaluate(() => window.__listeners['confirm-close'].forEach((handler) => handler({})));
+  await page.waitForTimeout(100);
+  const confirm = (await calls()).find((call) => call.command === 'dialog.confirm');
+  check(results, 'closing a never saved document asks first (Spanish)', confirm && confirm.args.text.includes('cambios sin guardar')
+    && !(await calls()).some((call) => call.command === 'force_close'));
+  const labels = await page.evaluate(() => [...document.querySelectorAll('.toolbar button')].map((b) => b.textContent));
+  check(results, 'New Markdown\'s toolbar is in Spanish', labels.join('|') === 'Cerrar|Vista previa|Guardar|Guardar como…', labels.join('|'));
   await context.close();
 }
 
