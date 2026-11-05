@@ -23,6 +23,8 @@
   var START_PAGE = '../index.html';
   var RENDER_DELAY_MS = 250;
   var SAVE_FILTERS = [{ name: 'Markdown', extensions: ['md', 'markdown'] }];
+  var EXPORT_FILTERS = [{ name: 'HTML', extensions: ['html', 'htm'] }];
+  var PREVIEW_STYLESHEET = 'markdown-preview.css';
   var SAVE_DENIED_ERROR = 'save-denied';
   var TOO_LARGE_ERROR = 'markdown-too-large';
   var CODEMIRROR_SCRIPT = 'vendor/codemirror.min.js';
@@ -48,7 +50,10 @@
       saveTooLargeMsg: 'The text is larger than 10 MB and cannot be saved.',
       remoteImageBlocked: 'Remote image not loaded',
       imageNotShown: 'Image not shown',
-      documents: 'Documents', all: 'All'
+      documents: 'Documents', all: 'All',
+      exportHtml: 'Export as HTML',
+      exportError: 'Export error',
+      exportErrorMsg: 'The HTML file could not be written.'
     },
     es: {
       close: 'Cerrar', edit: 'Editar', preview: 'Vista previa', save: 'Guardar', saveAs: 'Guardar como…',
@@ -65,7 +70,10 @@
       saveTooLargeMsg: 'El texto ocupa más de 10 MB y no se puede guardar.',
       remoteImageBlocked: 'Imagen remota no cargada',
       imageNotShown: 'Imagen no mostrada',
-      documents: 'Documentos', all: 'Todos'
+      documents: 'Documentos', all: 'Todos',
+      exportHtml: 'Exportar como HTML',
+      exportError: 'Error al exportar',
+      exportErrorMsg: 'No se pudo escribir el archivo HTML.'
     }
   };
 
@@ -238,8 +246,14 @@
     images.set(path, loading);
   }
 
+  // The document's HTML after DOMPurify, images still as written. Shared by
+  // the preview and Export as HTML.
+  function sanitizedFragment(text) {
+    return window.DOMPurify.sanitize(markdown.render(text), PURIFY_CONFIG);
+  }
+
   function previewFragment(text) {
-    var fragment = window.DOMPurify.sanitize(markdown.render(text), PURIFY_CONFIG);
+    var fragment = sanitizedFragment(text);
     var imgs = fragment.querySelectorAll('img');
     for (var i = 0; i < imgs.length; i++) placeImage(imgs[i]);
     return fragment;
@@ -460,6 +474,84 @@
     action(e);
   }
 
+  // ── Export as HTML ──
+  // A file that stands alone: the sanitized HTML of the preview, its
+  // stylesheet in a <style>, no script. Local images keep the reference
+  // written in the document (relative to the .md); remote and refused ones
+  // become the preview's placeholder.
+  var exporting = false;
+
+  function exportFragment(text) {
+    var fragment = sanitizedFragment(text);
+    var imgs = fragment.querySelectorAll('img');
+    for (var i = 0; i < imgs.length; i++) {
+      var found = Text.classifyImageSource(imgs[i].getAttribute('src'));
+      if (found.kind !== 'local') imageFailed(imgs[i], found.kind);
+    }
+    return fragment;
+  }
+
+  // The preview's stylesheet as text, from the frame that already loaded it:
+  // the page's CSP does not let it fetch the file.
+  function previewStyles() {
+    var sheets = frame.contentDocument.styleSheets;
+    for (var i = 0; i < sheets.length; i++) {
+      if (!sheets[i].href || !sheets[i].href.endsWith(PREVIEW_STYLESHEET)) continue;
+      return Array.prototype.map.call(sheets[i].cssRules, function(rule) { return rule.cssText; }).join('\n');
+    }
+    throw new Error('the preview stylesheet is not loaded');
+  }
+
+  function baseName(name) {
+    return name.replace(/\.(md|markdown)$/i, '');
+  }
+
+  function exportTitle(fragment) {
+    var heading = fragment.querySelector('h1, h2, h3, h4, h5, h6');
+    var text = heading ? heading.textContent.trim() : '';
+    return text || baseName(currentName);
+  }
+
+  // The exported file's text. Built in a document of its own, which loads
+  // and runs nothing; the CSP <meta> is one more stop for scripts.
+  function exportHtmlText(text) {
+    var fragment = exportFragment(text);
+    var doc = document.implementation.createHTMLDocument(exportTitle(fragment));
+    var charset = doc.createElement('meta');
+    charset.setAttribute('charset', 'utf-8');
+    doc.head.prepend(charset);
+    var policy = doc.createElement('meta');
+    policy.setAttribute('http-equiv', 'Content-Security-Policy');
+    policy.setAttribute('content', "script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'");
+    charset.after(policy);
+    var style = doc.createElement('style');
+    style.textContent = previewStyles();
+    doc.head.appendChild(style);
+    doc.body.className = 'markdown-body';
+    doc.body.appendChild(doc.importNode(fragment, true));
+    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML + '\n';
+  }
+
+  async function exportHtml() {
+    if (exporting) return;
+    exporting = true;
+    try {
+      var target = await invoke('pick_save_target', {
+        filters: EXPORT_FILTERS,
+        requestedExt: 'html',
+        suggestedName: baseName(currentName) + '.html'
+      });
+      if (!target) return;
+      var html = new TextEncoder().encode(exportHtmlText(currentText()));
+      await invoke('export_markdown_html', { data: bytesToBase64(html), token: target.token });
+    } catch (error) {
+      log('export failed: ' + errorText(error));
+      await tauri.dialog.message(t('exportErrorMsg'), { title: t('exportError'), kind: 'error' });
+    } finally {
+      exporting = false;
+    }
+  }
+
   // ── Opening ──
   // { token, name } for a file, { new: true } for New Markdown, or null.
   function takePending() {
@@ -478,7 +570,10 @@
     return t('openErrorMsg');
   }
 
+  var currentName = '';
+
   function showName(name) {
+    currentName = name;
     nameLabel.textContent = name;
     nameLabel.title = name;
   }
@@ -534,6 +629,7 @@
   document.getElementById('md-save').addEventListener('click', function() { save(false); });
   document.getElementById('md-save-as').addEventListener('click', function() { save(true); });
   document.getElementById('md-close').addEventListener('click', closeDocument);
+  document.getElementById('md-export').addEventListener('click', exportHtml);
 
   start();
 })();
