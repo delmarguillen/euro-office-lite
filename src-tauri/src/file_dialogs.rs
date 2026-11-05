@@ -262,14 +262,22 @@ fn first_extension(filters: &[DialogFilter]) -> Option<String> {
     filters.first()?.extensions.first().cloned()
 }
 
-// After a recovery there is no open file, only where the document was saved
-// before: the dialog starts there, in the format asked for.
 fn save_start(state: &AppState, requested_ext: Option<&str>) -> Option<PathBuf> {
-    if state.current_file.lock().unwrap().is_some() {
-        return None;
-    }
-    let suggestion = state.save_suggestion.lock().unwrap().clone()?;
-    Some(suggestion_with_ext(&suggestion, requested_ext))
+    let current = state.current_file.lock().unwrap().clone();
+    let suggestion = state.save_suggestion.lock().unwrap().clone();
+    save_start_path(current.as_deref(), suggestion.as_deref(), requested_ext)
+}
+
+// Where the dialog starts and the name it offers, in the format asked for: the
+// open document, else where a recovered document was saved before. Only a
+// starting point: the grant still comes from the path the user picks.
+fn save_start_path(
+    current: Option<&Path>,
+    suggestion: Option<&Path>,
+    requested_ext: Option<&str>,
+) -> Option<PathBuf> {
+    let start = current.or(suggestion)?;
+    Some(suggestion_with_ext(start, requested_ext))
 }
 
 // The path with its file name's extension replaced by `ext`, or added when the
@@ -453,5 +461,47 @@ mod tests {
         assert!(!asks_before_replacing(&report, &report_docx));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_open_document_starts_in_its_folder_with_the_format_asked_for() {
+        let current = Path::new("/home/u/Docs/Budget.docx");
+        assert_eq!(
+            save_start_path(Some(current), None, Some("pdf")),
+            Some(PathBuf::from("/home/u/Docs/Budget.pdf"))
+        );
+    }
+
+    #[test]
+    fn an_open_document_without_a_format_starts_on_its_own_name() {
+        let current = Path::new("/home/u/Docs/Budget.docx");
+        assert_eq!(
+            save_start_path(Some(current), None, None),
+            Some(PathBuf::from("/home/u/Docs/Budget.docx"))
+        );
+    }
+
+    #[test]
+    fn an_open_document_wins_over_a_recovery_suggestion() {
+        let current = Path::new("/home/u/Docs/Budget.docx");
+        let suggestion = Path::new("/old/report.docx");
+        assert_eq!(
+            save_start_path(Some(current), Some(suggestion), Some("pdf")),
+            Some(PathBuf::from("/home/u/Docs/Budget.pdf"))
+        );
+    }
+
+    #[test]
+    fn after_a_recovery_the_suggestion_starts_in_the_format_asked_for() {
+        let suggestion = Path::new("/old/report.docx");
+        assert_eq!(
+            save_start_path(None, Some(suggestion), Some("pdf")),
+            Some(PathBuf::from("/old/report.pdf"))
+        );
+    }
+
+    #[test]
+    fn without_a_document_or_a_suggestion_there_is_no_start() {
+        assert_eq!(save_start_path(None, None, Some("pdf")), None);
     }
 }
