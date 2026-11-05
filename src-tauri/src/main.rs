@@ -456,6 +456,8 @@ fn main() {
             markdown::read_markdown,
             markdown::new_markdown,
             markdown::export_markdown_html,
+            markdown::markdown_recovery_write,
+            markdown::markdown_recovery_load,
             markdown::save_markdown,
             markdown::markdown_image,
         ])

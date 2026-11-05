@@ -253,6 +253,8 @@ pub async fn save_markdown(
         crate::recent::record(&app, &dest.to_string_lossy());
     }
     *state.modified.lock().unwrap() = false;
+    // The text is in the file now: its recovery copy goes.
+    crate::recovery::end_session(&state, true);
     log_event(&state, "[SAVE] markdown success");
     Ok(file_name(&dest))
 }
@@ -281,6 +283,71 @@ pub async fn export_markdown_html(
             Err(error)
         }
     }
+}
+
+// The recovery copy of the page's text while it is modified: `data` is
+// base64 of the bytes Save would write. The first call starts the session
+// (recovery.rs, "Markdown sessions"); later ones replace the copy. Ended by
+// save_markdown, by recovery_end when the page discards, and at exit.
+#[tauri::command]
+pub async fn markdown_recovery_write(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    data: String,
+) -> Result<(), String> {
+    let bytes = decode_markdown_data(&data)?;
+    let root = crate::recovery::recover_root(&app)?;
+    let current = state.current_file.lock().unwrap().clone();
+    let version = app.package_info().version.to_string();
+    let written = {
+        let mut live = state.recovery.lock().unwrap();
+        if live.as_ref().is_some_and(|session| !session.markdown) {
+            return Err("an editor's recovery session is live".to_string());
+        }
+        if live.is_none() {
+            let session = crate::recovery::begin_markdown_session(
+                &root,
+                current.as_deref(),
+                &version,
+                &state.instance.id,
+            )?;
+            *live = Some(session);
+        }
+        let session = live.as_ref().expect("a session was just started");
+        crate::recovery::write_markdown_copy(session, &bytes)
+    };
+    if let Err(error) = &written {
+        log_event(&state, &format!("[RECOVER] markdown copy failed: {}", error));
+    }
+    written
+}
+
+// Reopens a Markdown document offered on the start screen. The folder
+// becomes this process's session, so the copy stays until the user saves or
+// discards. Nothing is tied to the file it came from: the first save goes
+// through Save As, which starts at that file (save_suggestion).
+#[tauri::command]
+pub async fn markdown_recovery_load(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<MarkdownFile, String> {
+    let root = crate::recovery::recover_root(&app)?;
+    let dir = crate::recovery::markdown_recovery_dir(&root, &id)?;
+    let bytes = read_limited(&crate::recovery::markdown_text_path(&dir), MARKDOWN_MAX_BYTES)?;
+    let (session, saved_path) = crate::recovery::adopt_markdown_session(&dir)?;
+    start_markdown_document(&state, None);
+    let name = crate::recovery::recovered_name(&dir).unwrap_or_else(|| id.clone());
+    *state.save_suggestion.lock().unwrap() = saved_path.map(PathBuf::from);
+    *state.recovery.lock().unwrap() = Some(session);
+    log_event(
+        &state,
+        &format!("[RECOVER] markdown load session={} bytes={}", id, bytes.len()),
+    );
+    Ok(MarkdownFile {
+        data: STANDARD.encode(&bytes),
+        name,
+    })
 }
 
 // An image of the open Markdown file, as a data: URL's parts. `src` is the

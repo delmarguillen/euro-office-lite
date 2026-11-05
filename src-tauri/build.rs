@@ -46,6 +46,8 @@ const APP_COMMANDS: &[&str] = &[
     "read_markdown",
     "new_markdown",
     "export_markdown_html",
+    "markdown_recovery_write",
+    "markdown_recovery_load",
     "save_markdown",
     "markdown_image",
 ];
