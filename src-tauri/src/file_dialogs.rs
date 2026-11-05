@@ -249,6 +249,7 @@ pub async fn pick_save_target(
     state: State<'_, AppState>,
     filters: Vec<DialogFilter>,
     requested_ext: Option<String>,
+    suggested_name: Option<String>,
 ) -> Result<Option<GrantedFile>, String> {
     let fallback_ext = requested_ext
         .clone()
@@ -264,12 +265,25 @@ pub async fn pick_save_target(
             dialog = dialog.set_directory(dir);
         }
         dialog = dialog.set_file_name(file_name(&start));
+    } else if let Some(name) = suggested_name.as_deref().and_then(plain_file_name) {
+        dialog = dialog.set_file_name(name);
     }
     let Some(path) = pick_save(dialog).await? else {
         return Ok(None);
     };
     let path = with_save_extension(path, &fallback_ext);
     Ok(Some(state.grants.grant(path, GrantKind::Save)))
+}
+
+// A name the dialog may show for a document with no file yet (Untitled.md):
+// a file name only, never a path, so it cannot pick the dialog's folder.
+// ':' is refused for a Windows drive ("C:name").
+fn plain_file_name(name: &str) -> Option<&str> {
+    let has_separator = name.contains(['/', '\\', ':', '\0']);
+    if name.is_empty() || name == "." || name == ".." || has_separator {
+        return None;
+    }
+    Some(name)
 }
 
 fn first_extension(filters: &[DialogFilter]) -> Option<String> {
@@ -334,6 +348,14 @@ fn keeps_its_extension(ext: &str, fallback_ext: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_plain_file_name_is_suggested() {
+        assert_eq!(plain_file_name("Untitled.md"), Some("Untitled.md"));
+        for name in ["", ".", "..", "../x.md", "/tmp/x.md", "a\\b.md", "C:x.md", "a\0.md"] {
+            assert_eq!(plain_file_name(name), None, "{name:?}");
+        }
+    }
 
     #[test]
     fn the_suggestion_takes_the_extension_asked_for() {
