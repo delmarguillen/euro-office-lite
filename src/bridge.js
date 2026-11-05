@@ -576,7 +576,7 @@ var _SUPPORTED_LANGS = [
 
 var _UI_STRINGS = {
   en: {
-    document: 'Document', spreadsheet: 'Spreadsheet', presentation: 'Presentation',
+    document: 'Document', spreadsheet: 'Spreadsheet', presentation: 'Presentation', markdown: 'Markdown',
     export: 'Export',
     openFile: 'Open file', editPdf: 'Edit PDF', newDocument: 'New document', newSpreadsheet: 'New spreadsheet',
     newPresentation: 'New presentation', unsavedChanges: 'Unsaved changes',
@@ -619,7 +619,7 @@ var _UI_STRINGS = {
     locateLinkedFile: 'Locate the linked file'
   },
   es: {
-    document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación',
+    document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación', markdown: 'Markdown',
     export: 'Exportar',
     openFile: 'Abrir archivo', editPdf: 'Editar PDF', newDocument: 'Nuevo documento', newSpreadsheet: 'Nueva hoja de cálculo',
     newPresentation: 'Nueva presentación', unsavedChanges: 'Cambios sin guardar',
@@ -1237,6 +1237,13 @@ function _eoOpenMarkdown(file) {
   window.location.href = EO_MARKDOWN_PAGE;
 }
 window._eoOpenMarkdown = _eoOpenMarkdown;
+
+// The start screen's New Markdown: the page starts an empty document.
+function _eoNewMarkdown() {
+  localStorage.setItem('eo-markdown-open', JSON.stringify({ new: true }));
+  window.location.href = EO_MARKDOWN_PAGE;
+}
+window._eoNewMarkdown = _eoNewMarkdown;
 
 // A PDF is read as it is by open_pdf; everything else is converted by open_file.
 function _eoOpenCommandForPath(name) {

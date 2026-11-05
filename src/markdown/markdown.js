@@ -26,6 +26,10 @@
   var SAVE_DENIED_ERROR = 'save-denied';
   var TOO_LARGE_ERROR = 'markdown-too-large';
   var CODEMIRROR_SCRIPT = 'vendor/codemirror.min.js';
+  // A new document's name until its first save, and what Save As offers.
+  var NEW_NAME = 'Untitled.md';
+  // A new document is written with LF and no BOM.
+  var NEW_FORMAT = { bom: false, eol: '\n' };
 
   // ── Interface text. Same language choice as bridge.js (_detectLang). ──
   var STRINGS = {
@@ -109,8 +113,10 @@
   // ── The open file ──
   // The file's own BOM and line end (EoMarkdownText.decode), and the text as
   // last read or saved: the document is modified while the editor differs.
-  var format = { bom: false, eol: '\n' };
+  var format = NEW_FORMAT;
   var savedText = '';
+  // False for a new document until its first save, which goes through Save As.
+  var hasFile = false;
   var reportedModified = false;
   var saving = false;
 
@@ -347,14 +353,22 @@
     return t('saveErrorMsg');
   }
 
+  // A new document offers NEW_NAME; the backend decides the folder, as for a
+  // new document in the editors.
   async function pickSaveTarget() {
-    return invoke('pick_save_target', { filters: SAVE_FILTERS, requestedExt: 'md' });
+    return invoke('pick_save_target', {
+      filters: SAVE_FILTERS,
+      requestedExt: 'md',
+      suggestedName: hasFile ? null : NEW_NAME
+    });
   }
 
-  // Save writes over the open file; Save As (asNew) where the user picks.
+  // Save writes over the open file; Save As (asNew) where the user picks. A
+  // new document's first Save is a Save As.
   async function save(asNew) {
     if (saving) return;
     saving = true;
+    if (!hasFile) asNew = true;
     try {
       var target = asNew ? await pickSaveTarget() : null;
       if (asNew && !target) return;
@@ -362,6 +376,7 @@
       var data = bytesToBase64(Text.encode(text, format));
       var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
       savedText = text;
+      hasFile = true;
       // Relative images now resolve against the new file's folder.
       if (target) {
         images.clear();
@@ -446,13 +461,15 @@
   }
 
   // ── Opening ──
-  function takePendingFile() {
+  // { token, name } for a file, { new: true } for New Markdown, or null.
+  function takePending() {
     var pending = null;
     try {
       pending = JSON.parse(localStorage.getItem(PENDING_KEY) || 'null');
       localStorage.removeItem(PENDING_KEY);
     } catch (e) {}
-    return pending && pending.token ? pending : null;
+    if (pending && (pending.token || pending.new)) return pending;
+    return null;
   }
 
   function openErrorText(error) {
@@ -467,20 +484,34 @@
   }
 
   // A reload of this page reopens the open document through current_document.
-  async function readFile() {
-    var file = takePendingFile() || await invoke('current_document').catch(function() { return null; });
+  async function readFile(pending) {
+    var file = pending || await invoke('current_document').catch(function() { return null; });
     if (!file) throw new Error('no file to open');
     var opened = await invoke('read_markdown', { token: file.token });
     var decoded = Text.decode(base64ToBytes(opened.data));
     return { name: opened.name, decoded: decoded };
   }
 
+  async function startNew(framed) {
+    await invoke('new_markdown').catch(function(error) { log('new failed: ' + errorText(error)); });
+    showName(NEW_NAME);
+    invoke('set_window_title', { name: NEW_NAME }).catch(function() {});
+    await framed;
+    render();
+    await setEditing(true);
+  }
+
   async function start() {
     applyStrings();
     var framed = prepareFrame();
+    var pending = takePending();
+    if (pending && pending.new) {
+      await startNew(framed);
+      return;
+    }
     var file;
     try {
-      file = await readFile();
+      file = await readFile(pending);
     } catch (error) {
       log('open failed: ' + errorText(error));
       await tauri.dialog.message(openErrorText(error), { title: t('openFailed'), kind: 'error' });
@@ -488,6 +519,7 @@
       return;
     }
     format = { bom: file.decoded.bom, eol: file.decoded.eol };
+    hasFile = true;
     source.value = file.decoded.text;
     savedText = source.value;
     showName(file.name);

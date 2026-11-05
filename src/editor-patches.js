@@ -1219,6 +1219,10 @@
       _openPath(file);
     });
 
+    document.querySelector('.btn[data-new-markdown]').addEventListener('click', function() {
+      window._eoNewMarkdown();
+    });
+
     document.querySelector('.btn[data-edit-pdf]').addEventListener('click', function() {
       if (!window.AscDesktopEditor) return;
       window._eoEditPdf();
