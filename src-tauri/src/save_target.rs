@@ -84,8 +84,8 @@ pub fn write_beside_and_rename(from: &Path, dest: &Path) -> Result<(), String> {
 // result at `dest` with write_beside_and_rename. x2t writes its output in place
 // with no temp file of its own, so pointing it at `dest` could leave the user's
 // file truncated. `reshape` runs on the staged file before it is placed. `dest`
-// changes only when `convert` succeeded and wrote a non-empty file, and
-// `staging_dir` is removed either way.
+// changes only when `convert` succeeded and wrote the file (non-empty, unless
+// may_be_empty), and `staging_dir` is removed either way.
 pub async fn convert_and_place<Convert, Converted>(
     staging_dir: &Path,
     dest: &Path,
@@ -99,7 +99,7 @@ where
     let staged = staged_path(staging_dir, dest)?;
     let converted = convert(staged.clone()).await;
     let placed = converted
-        .and_then(|_| check_not_empty(&staged))
+        .and_then(|_| check_written(&staged))
         .and_then(|_| {
             reshape(&staged);
             write_beside_and_rename(&staged, dest)
@@ -120,12 +120,20 @@ fn staged_path(staging_dir: &Path, dest: &Path) -> Result<PathBuf, String> {
 }
 
 // x2t can exit 0 without writing anything.
-fn check_not_empty(staged: &Path) -> Result<(), String> {
-    let size = std::fs::metadata(staged).map(|m| m.len()).unwrap_or(0);
-    if size == 0 {
+fn check_written(staged: &Path) -> Result<(), String> {
+    let Ok(metadata) = std::fs::metadata(staged) else {
+        return Err("x2t did not write the document".to_string());
+    };
+    if metadata.len() == 0 && !may_be_empty(staged) {
         return Err("x2t did not write the document".to_string());
     }
     Ok(())
+}
+
+// An empty document saved as TXT or CSV in an encoding without a BOM (for
+// example windows-1252) is 0 bytes. Every other format has a header.
+fn may_be_empty(path: &Path) -> bool {
+    crate::text_import::TextKind::for_path(path).is_some()
 }
 
 // A rename over a symlink would turn it into a regular file, so the file it
@@ -599,6 +607,59 @@ mod tests {
             assert_eq!(std::fs::read(&dest).unwrap(), NEW);
             assert_eq!(names_in(&user), vec!["doc.odt"]);
             assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
+        fn writes_0_bytes(output: &Path) -> Result<String, String> {
+            std::fs::write(output, b"").unwrap();
+            Ok("ok".to_string())
+        }
+
+        // An empty document in windows-1252 is 0 bytes.
+        #[test]
+        fn an_empty_txt_is_placed() {
+            let (user, instance, dest) = user_and_instance("empty-txt", "notes.txt");
+
+            run(&instance, &dest, writes_0_bytes, no_reshape).unwrap();
+
+            assert_eq!(std::fs::read(&dest).unwrap(), b"");
+            assert_eq!(names_in(&user), vec!["notes.txt"]);
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
+        #[test]
+        fn an_empty_csv_is_placed() {
+            let (user, instance, dest) = user_and_instance("empty-csv", "table.CSV");
+
+            run(&instance, &dest, writes_0_bytes, no_reshape).unwrap();
+
+            assert_eq!(std::fs::read(&dest).unwrap(), b"");
+            assert_eq!(names_in(&user), vec!["table.CSV"]);
+            clean_up(&[&user, &instance]);
+        }
+
+        #[test]
+        fn an_empty_docx_is_an_error_and_dest_is_unchanged() {
+            let (user, instance, dest) = user_and_instance("empty-docx", "doc.docx");
+
+            let error = run(&instance, &dest, writes_0_bytes, no_reshape).unwrap_err();
+
+            assert!(error.contains("did not write"), "{}", error);
+            assert_eq!(std::fs::read(&dest).unwrap(), OLD);
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
+        // A TXT that was never written at all is still an error.
+        #[test]
+        fn a_txt_x2t_did_not_write_is_an_error() {
+            let (user, instance, dest) = user_and_instance("missing-txt", "notes.txt");
+
+            let error = run(&instance, &dest, nothing_but_exit_0, no_reshape).unwrap_err();
+
+            assert!(error.contains("did not write"), "{}", error);
+            assert_eq!(std::fs::read(&dest).unwrap(), OLD);
             clean_up(&[&user, &instance]);
         }
 
