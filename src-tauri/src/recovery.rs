@@ -109,6 +109,9 @@ pub struct RecoverySession {
     pub saved_count: usize,
     // The size cap is reported once, not on every batch.
     pub capped: bool,
+    // A Markdown page session (see "Markdown sessions" below): no Editor.bin
+    // and no changes, only the text.
+    pub markdown: bool,
 }
 
 pub fn changes_path(dir: &Path) -> PathBuf {
@@ -324,6 +327,17 @@ pub fn scan_candidates(
             continue;
         }
 
+        if is_markdown_folder(&dir) {
+            match markdown_candidate(&dir) {
+                Some(candidate) => candidates.push(candidate),
+                // No text was ever written: nothing of the user's is here.
+                None => {
+                    let _ = std::fs::remove_dir_all(&dir);
+                }
+            }
+            continue;
+        }
+
         let changes_file = changes_path(&dir);
         let raw = std::fs::read(&changes_file).unwrap_or_default();
         let changes = parse_changes_tolerant(&raw);
@@ -435,7 +449,14 @@ fn read_doc_info(dir: &Path) -> Option<DocInfo> {
 // Ends whatever session is live. The lock is dropped before the folder goes:
 // on Windows the file cannot be removed while this process still holds it open.
 pub(crate) fn end_session(state: &AppState, discard: bool) -> Option<PathBuf> {
-    let session = state.recovery.lock().unwrap().take()?;
+    end_live_session(&state.recovery, discard)
+}
+
+pub fn end_live_session(
+    live: &std::sync::Mutex<Option<RecoverySession>>,
+    discard: bool,
+) -> Option<PathBuf> {
+    let session = live.lock().unwrap().take()?;
     let dir = session.dir.clone();
     drop(session);
     if discard {
@@ -470,6 +491,128 @@ pub fn session_location(current: Option<&Path>) -> SessionLocation {
 // is only offered as the suggestion.
 pub fn recovered_paths(saved: Option<&str>) -> (Option<PathBuf>, Option<PathBuf>) {
     (None, saved.map(PathBuf::from))
+}
+
+// ---------------------------------------------------------------------------
+// Markdown sessions
+// ---------------------------------------------------------------------------
+//
+// The Markdown page (markdown.rs) has no Editor.bin and no changes. Its
+// folder holds the bytes Save would write (BOM and line ends included),
+// replaced whole while the document is modified, next to the same rec.lock
+// and a doc.info whose doc_type is "markdown". The scan offers such a folder
+// whenever it holds text, whatever its age: only the user discards it.
+
+pub const MARKDOWN_DOC_TYPE: &str = "markdown";
+const MARKDOWN_TEXT_FILE: &str = "document.md";
+// The name a document with no file yet is offered under.
+const MARKDOWN_NEW_NAME: &str = "Untitled.md";
+
+pub fn markdown_text_path(dir: &Path) -> PathBuf {
+    dir.join(MARKDOWN_TEXT_FILE)
+}
+
+// doc.info is written before the text, so a folder with text has it too;
+// the text alone is enough to tell, should doc.info be unreadable.
+pub fn is_markdown_folder(dir: &Path) -> bool {
+    if markdown_text_path(dir).exists() {
+        return true;
+    }
+    read_doc_info(dir).is_some_and(|info| info.doc_type == MARKDOWN_DOC_TYPE)
+}
+
+fn markdown_candidate(dir: &Path) -> Option<Candidate> {
+    let text = markdown_text_path(dir);
+    if !text.is_file() {
+        return None;
+    }
+    let id = dir.file_name()?.to_string_lossy().to_string();
+    let info = read_doc_info(dir);
+    Some(Candidate {
+        name: info
+            .as_ref()
+            .map(|info| info.name.clone())
+            .unwrap_or_else(|| id.clone()),
+        path: info.and_then(|info| info.path),
+        doc_type: MARKDOWN_DOC_TYPE.to_string(),
+        changes: 0,
+        modified_ms: file_mtime_ms(&text),
+        id,
+    })
+}
+
+// The name doc.info gives the document.
+pub fn recovered_name(dir: &Path) -> Option<String> {
+    read_doc_info(dir).map(|info| info.name)
+}
+
+// A new folder under `root` for the Markdown document at `current` (None
+// for a document not saved yet), locked for as long as the session lives.
+pub fn begin_markdown_session(
+    root: &Path,
+    current: Option<&Path>,
+    app_version: &str,
+    instance: &str,
+) -> Result<RecoverySession, String> {
+    let id = format!("{}-{}", now_ms(), std::process::id());
+    let dir = root.join(&id);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let lock = take_lock(&dir.join(LOCK_FILE)).map_err(|e| e.to_string())?;
+    let name = current
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| MARKDOWN_NEW_NAME.to_string());
+    write_doc_info(
+        &dir,
+        &DocInfo {
+            path: current.map(|path| path.to_string_lossy().to_string()),
+            format: None,
+            name,
+            doc_type: MARKDOWN_DOC_TYPE.to_string(),
+            app_version: app_version.to_string(),
+            saved_count: 0,
+            created_ms: now_ms(),
+            instance: Some(instance.to_string()),
+        },
+    )?;
+    Ok(markdown_session(dir, lock))
+}
+
+fn markdown_session(dir: PathBuf, lock: std::fs::File) -> RecoverySession {
+    RecoverySession {
+        dir,
+        _lock: lock,
+        base: 0,
+        entries: Vec::new(),
+        saved_count: 0,
+        capped: false,
+        markdown: true,
+    }
+}
+
+// Replaced in one step: a crash mid-write leaves the previous copy.
+pub fn write_markdown_copy(session: &RecoverySession, bytes: &[u8]) -> Result<(), String> {
+    crate::save_target::write_bytes_beside_and_rename(bytes, &markdown_text_path(&session.dir))
+}
+
+// The Markdown folder `id` names under `root`, refused unless it is one.
+pub fn markdown_recovery_dir(root: &Path, id: &str) -> Result<PathBuf, String> {
+    if !is_valid_session_id(id) {
+        return Err(format!("Not a recovery session id: {}", id));
+    }
+    let dir = root.join(id);
+    if !dir.is_dir() || !markdown_text_path(&dir).is_file() {
+        return Err(format!("No Markdown recovery session named {}", id));
+    }
+    Ok(dir)
+}
+
+// Takes over a folder found by the scan, as recovery_load does for the
+// editors. Fails, leaving the folder as it is, while another process holds it.
+pub fn adopt_markdown_session(dir: &Path) -> Result<(RecoverySession, Option<String>), String> {
+    let lock = take_lock(&dir.join(LOCK_FILE)).map_err(|e| e.to_string())?;
+    let path = read_doc_info(dir).and_then(|info| info.path);
+    Ok((markdown_session(dir.to_path_buf(), lock), path))
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +678,7 @@ pub fn recovery_begin(
         entries: Vec::new(),
         saved_count: 0,
         capped: false,
+        markdown: false,
     });
 
     Ok(id)
@@ -682,6 +826,10 @@ pub fn recovery_load(
     if !dir.is_dir() {
         return Err(format!("No recovery session named {}", id));
     }
+    // The Markdown page loads its own (markdown_recovery_load).
+    if is_markdown_folder(&dir) {
+        return Err(format!("Recovery session {} is a Markdown document", id));
+    }
 
     end_session(&state, true);
 
@@ -750,6 +898,7 @@ pub fn recovery_load(
         entries,
         saved_count: info.as_ref().map(|info| info.saved_count).unwrap_or(0),
         capped: false,
+        markdown: false,
     });
 
     Ok(LoadedSession {
@@ -1253,5 +1402,123 @@ mod tests {
             (None, Some(PathBuf::from("/home/u/Docs/report.docx")))
         );
         assert_eq!(recovered_paths(None), (None, None));
+    }
+
+    // --- Markdown sessions ------------------------------------------------
+
+    fn markdown_session_in(root: &Path, current: Option<&Path>) -> RecoverySession {
+        begin_markdown_session(root, current, "0.0.0", "1-1").unwrap()
+    }
+
+    #[test]
+    fn a_markdown_session_writes_doc_info_and_replaces_its_copy() {
+        let root = scratch();
+        let session = markdown_session_in(&root, Some(Path::new("/home/u/notes.md")));
+        assert!(session.markdown);
+        let info = read_doc_info(&session.dir).unwrap();
+        assert_eq!(info.doc_type, MARKDOWN_DOC_TYPE);
+        assert_eq!(info.name, "notes.md");
+        assert_eq!(info.path.as_deref(), Some("/home/u/notes.md"));
+        write_markdown_copy(&session, b"\xEF\xBB\xBF# one\r\n").unwrap();
+        write_markdown_copy(&session, b"\xEF\xBB\xBF# two\r\n").unwrap();
+        assert_eq!(std::fs::read(markdown_text_path(&session.dir)).unwrap(), b"\xEF\xBB\xBF# two\r\n");
+        let names: Vec<_> = std::fs::read_dir(&session.dir).unwrap().flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(names.len(), 3, "rec.lock, doc.info and the copy, no temporary file: {names:?}");
+    }
+
+    #[test]
+    fn a_new_markdown_document_is_named_untitled() {
+        let root = scratch();
+        let session = markdown_session_in(&root, None);
+        let info = read_doc_info(&session.dir).unwrap();
+        assert_eq!(info.name, "Untitled.md");
+        assert_eq!(info.path, None);
+    }
+
+    #[test]
+    fn a_crashed_markdown_session_is_offered_and_kept() {
+        let root = scratch();
+        let session = markdown_session_in(&root, Some(Path::new("/home/u/notes.md")));
+        write_markdown_copy(&session, b"text").unwrap();
+        let dir = session.dir.clone();
+        // A live process: neither offered nor touched.
+        let live = scan_candidates(&root, now(), |path| is_locked(path));
+        assert!(live.is_empty());
+        assert!(dir.is_dir());
+        // The process dies: the OS drops the lock.
+        drop(session);
+        let offered = scan_candidates(&root, now(), |path| is_locked(path));
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].doc_type, MARKDOWN_DOC_TYPE);
+        assert_eq!(offered[0].name, "notes.md");
+        assert_eq!(offered[0].path.as_deref(), Some("/home/u/notes.md"));
+        // Offering it does not remove it: it is offered again next time.
+        assert_eq!(scan_unlocked(&root).len(), 1);
+        assert!(markdown_text_path(&dir).is_file());
+    }
+
+    #[test]
+    fn an_old_markdown_copy_is_still_offered_not_deleted() {
+        let root = scratch();
+        let session = markdown_session_in(&root, None);
+        write_markdown_copy(&session, b"").unwrap();
+        let dir = session.dir.clone();
+        drop(session);
+        let much_later = now() + MAX_AGE_MS * 10;
+        let offered = scan_candidates(&root, much_later, |_| false);
+        assert_eq!(offered.len(), 1, "an empty text is still the user's text");
+        assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn a_markdown_folder_without_text_has_nothing_to_offer() {
+        let root = scratch();
+        let session = markdown_session_in(&root, None);
+        let dir = session.dir.clone();
+        drop(session);
+        assert!(scan_unlocked(&root).is_empty());
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn saving_or_discarding_ends_the_markdown_session_and_removes_the_copy() {
+        let root = scratch();
+        let live = std::sync::Mutex::new(Some(markdown_session_in(&root, None)));
+        let dir = live.lock().unwrap().as_ref().unwrap().dir.clone();
+        write_markdown_copy(live.lock().unwrap().as_ref().unwrap(), b"x").unwrap();
+        assert_eq!(end_live_session(&live, true), Some(dir.clone()));
+        assert!(!dir.exists());
+        assert!(live.lock().unwrap().is_none());
+        assert_eq!(end_live_session(&live, true), None);
+    }
+
+    #[test]
+    fn a_markdown_copy_is_loaded_only_by_its_own_id() {
+        let root = scratch();
+        let session = markdown_session_in(&root, Some(Path::new("/home/u/notes.md")));
+        write_markdown_copy(&session, b"text").unwrap();
+        let id = session.dir.file_name().unwrap().to_string_lossy().to_string();
+        // Held by a live process: found, but not adopted, and left as it is.
+        let dir = markdown_recovery_dir(&root, &id).unwrap();
+        assert!(adopt_markdown_session(&dir).is_err());
+        drop(session);
+        let (adopted, path) = adopt_markdown_session(&dir).unwrap();
+        assert!(adopted.markdown);
+        assert_eq!(path.as_deref(), Some("/home/u/notes.md"));
+        assert_eq!(recovered_name(&dir).as_deref(), Some("notes.md"));
+        for bad in ["../x", "", "abc", "1-2/..", "999-999"] {
+            assert!(markdown_recovery_dir(&root, bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_editor_folder_is_not_a_markdown_folder() {
+        let root = scratch();
+        let dir = root.join("1-2");
+        std::fs::create_dir_all(dir.join("changes")).unwrap();
+        std::fs::write(dir.join(BIN_FILE), b"DOCYxxxx").unwrap();
+        assert!(!is_markdown_folder(&dir));
+        assert!(markdown_recovery_dir(&root, "1-2").is_err());
     }
 }
