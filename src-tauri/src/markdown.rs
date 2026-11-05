@@ -19,6 +19,12 @@ pub const MARKDOWN_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 pub const MARKDOWN_IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
+// The exported HTML of a document up to MARKDOWN_MAX_BYTES: the markup and the
+// page's stylesheet, images left as references.
+pub const HTML_EXPORT_MAX_BYTES: u64 = 4 * MARKDOWN_MAX_BYTES;
+
+pub const HTML_EXTENSIONS: [&str; 2] = ["html", "htm"];
+
 // Start of the error for a file over MARKDOWN_MAX_BYTES, so the page can say why.
 pub const TOO_LARGE_ERROR: &str = "markdown-too-large";
 
@@ -119,16 +125,29 @@ fn markdown_save_destination(
     Ok(chosen)
 }
 
-fn decode_markdown_data(data: &str) -> Result<Vec<u8>, String> {
-    let max = MARKDOWN_MAX_BYTES as usize;
-    if crate::protocol_limits::check_base64_size("Markdown text", data, max).is_err() {
-        return Err(too_large(MARKDOWN_MAX_BYTES));
+fn decode_limited(label: &str, data: &str, max: u64) -> Result<Vec<u8>, String> {
+    if crate::protocol_limits::check_base64_size(label, data, max as usize).is_err() {
+        return Err(too_large(max));
     }
     let bytes = STANDARD.decode(data).map_err(|e| e.to_string())?;
-    if bytes.len() > max {
-        return Err(too_large(MARKDOWN_MAX_BYTES));
+    if bytes.len() as u64 > max {
+        return Err(too_large(max));
     }
     Ok(bytes)
+}
+
+fn decode_markdown_data(data: &str) -> Result<Vec<u8>, String> {
+    decode_limited("Markdown text", data, MARKDOWN_MAX_BYTES)
+}
+
+// Export as HTML writes exactly the file a Save token names, ending in .html
+// or .htm (pick_save_target adds .html to a name without an extension).
+fn html_export_destination(grants: &PathGrants, token: &str) -> Result<PathBuf, String> {
+    let chosen = grants.resolve(token, GrantKind::Save)?;
+    if !HTML_EXTENSIONS.contains(&lower_extension(&chosen).as_str()) {
+        return Err("HTML can only be exported to a name ending in .html or .htm".to_string());
+    }
+    Ok(chosen)
 }
 
 // The file an image reference `src` names, relative to the folder of
@@ -236,6 +255,32 @@ pub async fn save_markdown(
     *state.modified.lock().unwrap() = false;
     log_event(&state, "[SAVE] markdown success");
     Ok(file_name(&dest))
+}
+
+// Writes the page's exported HTML (base64 of the UTF-8 text) to the file a
+// Save token names. The open document, its modified state and Recents stay
+// as they are. Returns the written file's name.
+#[tauri::command]
+pub async fn export_markdown_html(
+    state: State<'_, AppState>,
+    data: String,
+    token: String,
+) -> Result<String, String> {
+    let written = html_export_destination(&state.grants, &token).and_then(|dest| {
+        let bytes = decode_limited("Exported HTML", &data, HTML_EXPORT_MAX_BYTES)?;
+        crate::save_target::write_bytes_beside_and_rename(&bytes, &dest)?;
+        Ok(dest)
+    });
+    match written {
+        Ok(dest) => {
+            log_event(&state, "[EXPORT] markdown html success");
+            Ok(file_name(&dest))
+        }
+        Err(error) => {
+            log_event(&state, &format!("[EXPORT] markdown html failed: {}", error));
+            Err(error)
+        }
+    }
 }
 
 // An image of the open Markdown file, as a data: URL's parts. `src` is the
@@ -427,6 +472,47 @@ mod tests {
         let open = grants.grant(PathBuf::from("/home/u/other.md"), GrantKind::Open);
         assert!(markdown_save_destination(&grants, Some(&open.token), None).is_err());
         assert!(markdown_save_destination(&grants, Some("0123456789abcdef"), None).is_err());
+    }
+
+    #[test]
+    fn html_is_exported_only_to_the_html_file_a_save_token_names() {
+        let grants = PathGrants::default();
+        for name in ["/home/u/notes.html", "/home/u/notes.HTM"] {
+            let chosen = grants.grant(PathBuf::from(name), GrantKind::Save);
+            assert_eq!(html_export_destination(&grants, &chosen.token), Ok(PathBuf::from(name)));
+        }
+        for kind in [GrantKind::Open, GrantKind::Insert, GrantKind::Image] {
+            let other = grants.grant(PathBuf::from("/home/u/notes.html"), kind);
+            assert!(html_export_destination(&grants, &other.token).is_err(), "{kind:?}");
+        }
+        let markdown = grants.grant(PathBuf::from("/home/u/notes.md"), GrantKind::Save);
+        assert!(html_export_destination(&grants, &markdown.token).is_err());
+        assert!(html_export_destination(&grants, "0123456789abcdef0123456789abcdef").is_err());
+        assert!(html_export_destination(&grants, "/home/u/notes.html").is_err());
+    }
+
+    #[test]
+    fn exported_html_over_its_limit_is_not_written() {
+        let max = HTML_EXPORT_MAX_BYTES as usize;
+        // check_base64_size estimates from whole groups of three bytes.
+        let near_limit = max - max % 3;
+        let at_limit = STANDARD.encode(vec![b'a'; near_limit]);
+        assert_eq!(decode_limited("HTML", &at_limit, HTML_EXPORT_MAX_BYTES).unwrap().len(), near_limit);
+        let over = STANDARD.encode(vec![b'a'; max + 3]);
+        let error = decode_limited("HTML", &over, HTML_EXPORT_MAX_BYTES).unwrap_err();
+        assert!(error.starts_with(TOO_LARGE_ERROR), "{error}");
+    }
+
+    #[test]
+    fn exporting_writes_the_html_in_one_step() {
+        let dir = test_dir("export");
+        let dest = file_with(&dir, "notes.html", b"old");
+        let html = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head></html>".as_bytes();
+        let bytes = decode_limited("HTML", &STANDARD.encode(html), HTML_EXPORT_MAX_BYTES).unwrap();
+        crate::save_target::write_bytes_beside_and_rename(&bytes, &dest).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), html);
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        assert_eq!(names.len(), 1, "no temporary file is left behind");
     }
 
     #[test]

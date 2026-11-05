@@ -45,6 +45,7 @@ const APP_COMMANDS: &[&str] = &[
     "cancel_dictionary_import",
     "read_markdown",
     "new_markdown",
+    "export_markdown_html",
     "save_markdown",
     "markdown_image",
 ];
