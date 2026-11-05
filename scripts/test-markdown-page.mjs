@@ -69,6 +69,7 @@ function installFakeTauri(fake) {
       return image;
     },
     current_document: () => null,
+    pick_document: () => window.__pickDocument || null,
   };
   window.__TAURI__ = {
     core: {
@@ -105,14 +106,24 @@ const server = await serveSource();
 const base = `http://127.0.0.1:${server.address().port}/markdown/markdown.html`;
 const browser = await chromium.launch();
 
-// A fresh page with `fake` as the backend. Requests leaving 127.0.0.1 and CSP
-// reports are collected.
-async function openPage(fake) {
+// A fresh page with `fake` as the backend. Requests leaving 127.0.0.1, every
+// script requested and CSP reports are collected. `options.blockCodeMirror`
+// answers 404 for the editor's bundle; `options.noAdoptedStyles` plays an
+// older webview without adoptedStyleSheets.
+async function openPage(fake, options = {}) {
   const context = await browser.newContext();
   const page = await context.newPage();
   const outside = [];
   const csp = [];
+  const scripts = [];
+  if (options.blockCodeMirror) {
+    await page.route('**/codemirror.min.js', (route) => route.fulfill({ status: 404, body: '' }));
+  }
+  if (options.noAdoptedStyles) {
+    await page.addInitScript(() => { delete ShadowRoot.prototype.adoptedStyleSheets; });
+  }
   page.on('request', (request) => {
+    if (request.resourceType() === 'script') scripts.push(request.url());
     if (!request.url().startsWith('http://127.0.0.1') && !request.url().startsWith('data:')) {
       outside.push(request.url());
     }
@@ -126,7 +137,7 @@ async function openPage(fake) {
   await page.waitForTimeout(400);
   const calls = () => page.evaluate(() => window.__calls);
   const preview = () => page.evaluate(() => document.getElementById('md-preview').contentDocument.body.innerHTML);
-  return { context, page, outside, csp, calls, preview };
+  return { context, page, outside, csp, scripts, calls, preview };
 }
 
 const b64 = (text) => Buffer.from(text, 'binary').toString('base64');
@@ -235,11 +246,11 @@ for (const [label, raw] of [
 // ── Editing ──
 {
   const { context, page, calls, preview } = await openPage({ name: 'notes.md', data: b64('# One\r\n') });
-  const hidden = () => page.evaluate(() => document.getElementById('md-source').hidden);
+  const hidden = () => page.evaluate(() => document.getElementById('md-editor').hidden);
   check(results, 'the page opens on the preview alone', await hidden());
   await page.click('#md-edit');
-  check(results, 'Edit shows the textarea', !(await hidden()));
-  await page.focus('#md-source');
+  await page.waitForSelector('#md-editor .cm-content:focus');
+  check(results, 'Edit shows the editor', !(await hidden()));
   await page.keyboard.press('Control+End');
   await page.keyboard.type('\nTwo **bold**');
   await page.waitForTimeout(500);
@@ -259,11 +270,153 @@ for (const [label, raw] of [
   await context.close();
 }
 
+// ── CodeMirror ──
+const loadsCodeMirror = (scripts) => scripts.some((url) => url.endsWith('/codemirror.min.js'));
+
+async function startEditing(page) {
+  await page.click('#md-edit');
+  await page.waitForSelector('#md-editor .cm-content:focus');
+}
+
+const savedCalls = async (calls) => (await calls()).filter((call) => call.command === 'save_markdown');
+
+{
+  const { context, page, scripts } = await openPage({ name: 'notes.md', data: utf8('# Title\n') });
+  const loaded = await page.evaluate(() => typeof window.EoCodeMirror);
+  check(results, 'reading a file does not load CodeMirror', !loadsCodeMirror(scripts) && loaded === 'undefined');
+  await startEditing(page);
+  check(results, 'Edit loads CodeMirror', loadsCodeMirror(scripts));
+  await context.close();
+}
+
+// Load, change a line, undo, save: the same bytes. Then change it for real:
+// only that line differs, in the file's own line end.
+for (const [label, raw, eol] of [
+  ['LF', '# Title\n\n\tTabbed  \ntrailing   \n', '\n'],
+  ['CRLF', '# Title\r\n\r\n\tTabbed  \r\ntrailing   \r\n', '\r\n'],
+  ['BOM', '\uFEFF# Título\r\n\r\n\tñ \t\r\nend', '\r\n'],
+]) {
+  const original = utf8(raw);
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: original });
+  await startEditing(page);
+  await page.keyboard.press('Control+Home');
+  await page.keyboard.press('End');
+  await page.keyboard.type(' edited');
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(200);
+  let saved = await savedCalls(calls);
+  check(results, `CodeMirror ${label}: edit, undo, save gives the same bytes`, saved.length === 1 && saved[0].args.data === original);
+  await page.keyboard.type(' edited');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(200);
+  saved = await savedCalls(calls);
+  const lines = raw.split(eol);
+  lines[0] += ' edited';
+  const expected = utf8(lines.join(eol));
+  check(results, `CodeMirror ${label}: an edit changes only its line, tabs and trailing spaces kept`, saved.length === 2 && saved[1].args.data === expected,
+    saved.length === 2 ? JSON.stringify(Buffer.from(saved[1].args.data, 'base64').toString('utf8')) : '');
+  await context.close();
+}
+
+{
+  const text = '# Title\n\n<img src="x.png" onerror="window.__pwned = 1">\n\n<script>window.__pwned = 2</script>\n\n<b>bold</b>\n';
+  const { context, page, csp } = await openPage({ name: 'notes.md', data: utf8(text) });
+  await page.evaluate(() => {
+    window.__violations = [];
+    document.addEventListener('securitypolicyviolation', (e) => window.__violations.push(e.violatedDirective + ' ' + e.sourceFile));
+  });
+  await startEditing(page);
+  await page.keyboard.type('x');
+  await page.waitForTimeout(400);
+  // CodeMirror lives in #md-editor's shadow root (entry.mjs, shadowFor).
+  const editorDom = await page.evaluate(() => {
+    const shadow = document.getElementById('md-editor').shadowRoot;
+    return {
+      elements: shadow.querySelectorAll('.cm-content img, .cm-content script, .cm-content b').length,
+      text: shadow.querySelector('.cm-content').textContent,
+      pwned: window.__pwned,
+      adopted: shadow.adoptedStyleSheets.length,
+      styleElements: document.querySelectorAll('style').length + shadow.querySelectorAll('style').length,
+      violations: window.__violations,
+    };
+  });
+  check(results, 'CodeMirror shows HTML in the document as text', editorDom.elements === 0 && editorDom.text.includes('<script>') && editorDom.pwned === undefined);
+  check(results, 'CodeMirror styles go through adoptedStyleSheets, no <style>', editorDom.adopted > 0 && editorDom.styleElements === 0);
+  const styleCsp = csp.filter((line) => !/Applying inline style/.test(line));
+  check(results, 'CodeMirror breaks no CSP rule', editorDom.violations.length === 0 && styleCsp.length === 0, editorDom.violations.concat(styleCsp).join(' | '));
+  await page.keyboard.press('Control+f');
+  await page.waitForSelector('.cm-search input[name=search]');
+  check(results, 'Ctrl+F opens search and replace', await page.isVisible('.cm-search input[name=replace]'));
+  await context.close();
+}
+
+// The app's shortcuts with the focus in CodeMirror.
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('text\n') });
+  await startEditing(page);
+  await page.keyboard.press('Control+s');
+  await page.keyboard.press('Control+Shift+S');
+  await page.waitForTimeout(200);
+  const saved = await savedCalls(calls);
+  check(results, 'Ctrl+S and Ctrl+Shift+S save from CodeMirror', saved.length === 2 && saved[0].args.token === null && saved[1].args.token === 'tok-save');
+  await page.focus('#md-editor .cm-content');
+  await page.keyboard.press('Control+o');
+  await page.waitForTimeout(100);
+  const names = (await calls()).map((call) => call.command);
+  check(results, 'Ctrl+O opens the file dialog from CodeMirror', names.includes('pick_document'));
+  await page.focus('#md-editor .cm-content');
+  await page.keyboard.type('x');
+  await page.keyboard.press('Control+w');
+  await page.waitForTimeout(100);
+  check(results, 'Ctrl+W asks before closing a modified document', (await calls()).some((call) => call.command === 'dialog.confirm') && !page.url().endsWith('/index.html'));
+  await page.evaluate(() => { window.__confirmAnswer = true; });
+  await page.focus('#md-editor .cm-content');
+  await page.keyboard.press('Control+w');
+  await page.waitForURL('**/index.html');
+  check(results, 'Ctrl+W closes to the start screen', page.url().endsWith('/index.html'));
+  await context.close();
+}
+
+{
+  const { context, page } = await openPage({ name: 'notes.md', data: utf8('one\n') });
+  await page.evaluate(() => { window.__pickDocument = { token: 'tok-other', name: 'report.docx' }; });
+  await page.keyboard.press('Control+o');
+  await page.waitForURL('**/index.html');
+  const pending = await page.evaluate(() => localStorage.getItem('eo-pending-open'));
+  check(results, 'Ctrl+O hands another format to the editors', pending === JSON.stringify({ token: 'tok-other', name: 'report.docx' }));
+  await context.close();
+}
+
+{
+  const { context, page } = await openPage({ name: 'notes.md', data: utf8('one\n') }, { noAdoptedStyles: true });
+  await page.click('#md-edit');
+  await page.waitForSelector('#md-source:focus');
+  check(results, 'without adoptedStyleSheets the textarea is used', await page.evaluate(() => document.getElementById('md-editor').hidden));
+  await context.close();
+}
+
+// Without CodeMirror, the textarea edits and saves as before.
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('one\r\n') }, { blockCodeMirror: true });
+  await page.click('#md-edit');
+  await page.waitForSelector('#md-source:focus');
+  const editorHidden = await page.evaluate(() => document.getElementById('md-editor').hidden);
+  check(results, 'a missing CodeMirror falls back to the textarea', editorHidden);
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('two');
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(200);
+  const saved = await savedCalls(calls);
+  check(results, 'the textarea fallback saves', saved.length === 1 && Buffer.from(saved[0].args.data, 'base64').toString() === 'one\r\ntwo');
+  await context.close();
+}
+
 // ── Closing with changes ──
 {
   const { context, page, calls } = await openPage({ name: 'notes.md', data: b64('text\n') });
   await page.click('#md-edit');
-  await page.focus('#md-source');
+  await page.waitForSelector('#md-editor .cm-content:focus');
   await page.keyboard.type('x');
   await page.evaluate(() => window.__listeners['confirm-close'].forEach((handler) => handler({})));
   await page.waitForTimeout(100);
