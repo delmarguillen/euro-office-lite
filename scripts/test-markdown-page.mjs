@@ -63,7 +63,10 @@ function installFakeTauri(fake) {
       return { data: fake.data, name: fake.name };
     },
     save_markdown: (args) => (args.token ? 'copy.md' : fake.name),
-    pick_save_target: () => ({ token: 'tok-save', name: 'copy.md' }),
+    pick_save_target: (args) => (args.requestedExt === 'html'
+      ? { token: 'tok-html', name: 'notes.html' }
+      : { token: 'tok-save', name: 'copy.md' }),
+    export_markdown_html: () => 'notes.html',
     markdown_image: (args) => {
       const image = (fake.images || {})[args.src];
       if (!image) throw new Error('the image is outside the document\'s folder');
@@ -449,7 +452,51 @@ for (const [label, raw, eol] of [
   check(results, 'closing a never saved document asks first (Spanish)', confirm && confirm.args.text.includes('cambios sin guardar')
     && !(await calls()).some((call) => call.command === 'force_close'));
   const labels = await page.evaluate(() => [...document.querySelectorAll('.toolbar button')].map((b) => b.textContent));
-  check(results, 'New Markdown\'s toolbar is in Spanish', labels.join('|') === 'Cerrar|Vista previa|Guardar|Guardar como…', labels.join('|'));
+  check(results, 'New Markdown\'s toolbar is in Spanish', labels.join('|') === 'Cerrar|Vista previa|Guardar|Guardar como…|Exportar como HTML', labels.join('|'));
+  await context.close();
+}
+
+// ── Export as HTML ──
+{
+  const text = [
+    'Intro before any heading',
+    '## The <em>first</em> heading',
+    '<script>window.parent.__pwned = 1</script>',
+    '<img src="x.png" onerror="window.parent.__pwned = 2">',
+    '<a href="javascript:alert(1)">js</a> [md](javascript:alert(2))',
+    '<svg onload="alert(3)"></svg>',
+    '![local](img/a%20b.png) ![remote](https://example.com/r.png) ![up](../secret.png)',
+    '| a |\n|:-:|\n| 1 |',
+  ].join('\n\n');
+  const { context, page, calls, outside } = await openPage({ name: 'evil.md', data: utf8(text) });
+  await page.click('#md-export');
+  await page.waitForTimeout(300);
+  const picked = (await calls()).filter((call) => call.command === 'pick_save_target').pop();
+  check(results, 'Export asks where, offering the document\'s name as .html', picked && picked.args.suggestedName === 'evil.html' && picked.args.requestedExt === 'html');
+  const exported = (await calls()).filter((call) => call.command === 'export_markdown_html');
+  check(results, 'Export writes to the dialog\'s token', exported.length === 1 && exported[0].args.token === 'tok-html');
+  const html = exported.length ? Buffer.from(exported[0].args.data, 'base64').toString('utf8') : '';
+  check(results, 'the exported HTML has no <script>', !/<script/i.test(html));
+  check(results, 'the exported HTML has no on* attribute', !/\son[a-z]+\s*=/i.test(html), (html.match(/\son[a-z]+\s*=[^>]*/i) || [''])[0]);
+  check(results, 'the exported HTML has no javascript: address', !/(href|src)\s*=\s*["']?\s*javascript:/i.test(html));
+  check(results, 'the exported HTML starts with a doctype, utf-8 and a CSP for scripts', html.startsWith('<!DOCTYPE html>')
+    && html.includes('<meta charset="utf-8">') && html.includes("script-src 'none'"));
+  check(results, 'the title is the first heading', html.includes('<title>The first heading</title>'));
+  check(results, 'the stylesheet is inside the file', /<style>[\s\S]*max-width: 860px[\s\S]*eo-align-center[\s\S]*<\/style>/.test(html) && !html.includes('<link'));
+  check(results, 'a local image keeps its reference as written', html.includes('src="img/a%20b.png"'));
+  check(results, 'remote and refused images become placeholders', html.includes('Remote image not loaded: remote') && html.includes('Image not shown: up')
+    && !html.includes('example.com/r.png') && !html.includes('secret.png'));
+  check(results, 'exporting leaves the document as it was', !(await calls()).some((call) => call.command === 'save_markdown' || call.command === 'set_document_modified'));
+  check(results, 'exporting requests nothing outside the app', outside.length === 0, outside.join(' '));
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'plain.md', data: utf8('no heading here\n') });
+  await page.click('#md-export');
+  await page.waitForTimeout(300);
+  const exported = (await calls()).filter((call) => call.command === 'export_markdown_html');
+  const html = exported.length ? Buffer.from(exported[0].args.data, 'base64').toString('utf8') : '';
+  check(results, 'without a heading the title is the file name', html.includes('<title>plain</title>'));
   await context.close();
 }
 
@@ -492,7 +539,7 @@ for (const [label, raw, eol] of [
 {
   const { context, page } = await openPage({ name: 'notes.md', data: b64('x'), lang: 'es' });
   const labels = await page.evaluate(() => [...document.querySelectorAll('.toolbar button')].map((b) => b.textContent));
-  check(results, 'the toolbar is in Spanish', labels.join('|') === 'Cerrar|Editar|Guardar|Guardar como…', labels.join('|'));
+  check(results, 'the toolbar is in Spanish', labels.join('|') === 'Cerrar|Editar|Guardar|Guardar como…|Exportar como HTML', labels.join('|'));
   await context.close();
 }
 
