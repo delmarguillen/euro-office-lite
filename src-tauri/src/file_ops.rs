@@ -45,6 +45,9 @@ pub struct AppState {
     // Where a recovered document was saved before the crash: offered by the
     // first Save As, never written to without asking.
     pub save_suggestion: Mutex<Option<PathBuf>>,
+    // The title bar options this process was started with, for the processes
+    // it starts (new_window.rs).
+    pub title_bar_args: Vec<&'static str>,
 }
 
 // How the bridge names an image chosen in the insert dialog to copy-to-media.

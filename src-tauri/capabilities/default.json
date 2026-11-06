@@ -23,6 +23,7 @@
     "allow-pick-save-target",
     "allow-locate-linked-file",
     "allow-take-pending-open-file",
+    "allow-open-in-new-window",
     "allow-open-pdf-viewer",
     "allow-print-to-printer",
     "allow-convert-for-insert",
