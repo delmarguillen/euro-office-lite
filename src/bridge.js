@@ -1029,6 +1029,7 @@ function _eoShowOpening(text) {
   var overlay = document.getElementById('opening');
   if (!overlay) return;
   document.getElementById('opening-text').textContent = text || '';
+  _eoCloseSettings(false);
   if (overlay.classList.contains('active')) return;
   overlay.classList.add('active');
   // The overlay already catches clicks; inert also stops a focused button
@@ -1649,6 +1650,97 @@ async function _eoAddLanguage(replace) {
   return lang;
 }
 window._eoAddLanguage = _eoAddLanguage;
+
+// ── Start screen settings panel ──
+// The gear in the top right corner opens a small panel with the interface
+// language, "Add spell check language…" and the recent files switch.
+
+function _eoSettingsParts() {
+  var toggle = document.getElementById('settings-toggle');
+  var panel = document.getElementById('settings-panel');
+  if (!toggle || !panel) return null;
+  return { toggle: toggle, panel: panel };
+}
+
+function _eoSettingsIsOpen() {
+  var parts = _eoSettingsParts();
+  return !!parts && !parts.panel.hidden;
+}
+
+function _eoOpenSettings() {
+  var parts = _eoSettingsParts();
+  if (!parts) return;
+  parts.panel.hidden = false;
+  parts.toggle.setAttribute('aria-expanded', 'true');
+  var first = parts.panel.querySelector('select, button, input');
+  if (first) first.focus();
+}
+
+// returnFocus: false when the start screen is going away (a document opens).
+function _eoCloseSettings(returnFocus) {
+  var parts = _eoSettingsParts();
+  if (!parts || parts.panel.hidden) return;
+  parts.panel.hidden = true;
+  parts.toggle.setAttribute('aria-expanded', 'false');
+  if (returnFocus) parts.toggle.focus();
+}
+
+function _eoOnSettingsToggleClick() {
+  if (_eoSettingsIsOpen()) {
+    _eoCloseSettings(true);
+    return;
+  }
+  _eoOpenSettings();
+}
+
+function _eoOnSettingsKeydown(event) {
+  if (event.key !== 'Escape') return;
+  if (!_eoSettingsIsOpen()) return;
+  event.preventDefault();
+  _eoCloseSettings(true);
+}
+
+function _eoOnSettingsOutsideClick(event) {
+  var parts = _eoSettingsParts();
+  if (!parts || parts.panel.hidden) return;
+  if (parts.panel.contains(event.target)) return;
+  if (parts.toggle.contains(event.target)) return;
+  // Focus goes back to the gear only when the click left it nowhere useful:
+  // a click on another button keeps the focus on that button.
+  var focused = document.activeElement;
+  var lost = !focused || focused === document.body || parts.panel.contains(focused);
+  _eoCloseSettings(lost);
+}
+
+// options.onLanguageChange: runs after the UI language is stored.
+// options.onRecentChange: runs after the recent files switch is stored.
+function _eoInitStartSettings(options) {
+  var parts = _eoSettingsParts();
+  if (!parts) return;
+  options = options || {};
+
+  parts.toggle.addEventListener('click', _eoOnSettingsToggleClick);
+  document.addEventListener('keydown', _eoOnSettingsKeydown);
+  document.addEventListener('click', _eoOnSettingsOutsideClick);
+
+  document.getElementById('lang-select').addEventListener('change', function() {
+    window._eoSetLang(this.value);
+    if (options.onLanguageChange) options.onLanguageChange();
+  });
+
+  document.getElementById('add-language').addEventListener('click', function() {
+    window._eoAddLanguage(false);
+  });
+
+  document.getElementById('recent-remember').addEventListener('change', function() {
+    var done = options.onRecentChange || function() {};
+    invoke('set_recent_files_enabled', { enabled: this.checked })
+      .then(done)
+      .catch(function(e) { window._eoLog('[EO] Recent files toggle failed: ' + (e.message || e)); });
+  });
+}
+window._eoInitStartSettings = _eoInitStartSettings;
+window._eoCloseSettings = _eoCloseSettings;
 
 // The backend starts its error with this when it may not write the file: a
 // read-only file or a folder the user cannot write to.
