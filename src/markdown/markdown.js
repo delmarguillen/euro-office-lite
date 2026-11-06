@@ -635,7 +635,8 @@
     nameLabel.title = name;
   }
 
-  // A reload of this page reopens the open document through current_document.
+  // A reload of this page without a recovery copy reopens the open document
+  // through current_document.
   async function readFile(pending) {
     var file = pending || await invoke('current_document').catch(function() { return null; });
     if (!file) throw new Error('no file to open');
@@ -678,6 +679,35 @@
     await setEditing(true);
   }
 
+  // A reload (F5, devtools) while the document had a recovery copy: the
+  // copy comes back marked modified and stays offered until saved or
+  // discarded (markdown_recovery_reload). False when there is no copy.
+  async function startReloaded(framed) {
+    var reloaded = await invoke('markdown_recovery_reload').catch(function(error) {
+      log('reload copy failed: ' + errorText(error));
+      return null;
+    });
+    if (!reloaded) return false;
+    var decoded;
+    try {
+      decoded = Text.decode(base64ToBytes(reloaded.data));
+    } catch (error) {
+      log('reload copy unreadable: ' + errorText(error));
+      return false;
+    }
+    format = { bom: decoded.bom, eol: decoded.eol };
+    hasFile = reloaded.hasFile;
+    source.value = decoded.text;
+    savedText = null;
+    showName(reloaded.name);
+    invoke('set_window_title', { name: reloaded.name }).catch(function() {});
+    await reportModified(true);
+    await framed;
+    render();
+    await setEditing(true);
+    return true;
+  }
+
   async function start() {
     applyStrings();
     var framed = prepareFrame();
@@ -690,6 +720,7 @@
       await startRecovered(framed, pending.recover);
       return;
     }
+    if (!pending && await startReloaded(framed)) return;
     var file;
     try {
       file = await readFile(pending);

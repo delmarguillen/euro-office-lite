@@ -55,6 +55,7 @@
     "allow-export-markdown-html",
     "allow-markdown-recovery-write",
     "allow-markdown-recovery-load",
+    "allow-markdown-recovery-reload",
     "allow-save-markdown",
     "allow-markdown-image"
   ]

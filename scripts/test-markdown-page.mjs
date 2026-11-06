@@ -58,13 +58,26 @@ function installFakeTauri(fake) {
     if (fake.recoverId) pending = { recover: fake.recoverId };
     localStorage.setItem('eo-markdown-open', JSON.stringify(pending));
   }
+  // The file on disk and the recovery copy outlive a reload, as in the backend.
+  const stored = (key) => sessionStorage.getItem(key);
   const handlers = {
     read_markdown: (args) => {
       if (args.token !== 'tok-open') throw new Error('Unknown or expired file token');
       if (fake.readError) throw fake.readError;
-      return { data: fake.data, name: fake.name };
+      // Opening a file ends the recovery session (start_markdown_document).
+      sessionStorage.removeItem('copy');
+      return { data: stored('disk') || fake.data, name: fake.name };
     },
-    save_markdown: (args) => (args.token ? 'copy.md' : fake.name),
+    save_markdown: (args) => {
+      sessionStorage.setItem('disk', args.data);
+      sessionStorage.removeItem('copy');
+      return args.token ? 'copy.md' : fake.name;
+    },
+    markdown_recovery_write: (args) => { sessionStorage.setItem('copy', args.data); },
+    markdown_recovery_reload: () => (stored('copy')
+      ? { data: stored('copy'), name: fake.name, hasFile: !fake.isNew && !fake.recoverId }
+      : null),
+    recovery_end: () => { sessionStorage.removeItem('copy'); },
     pick_save_target: (args) => (args.requestedExt === 'html'
       ? { token: 'tok-html', name: 'notes.html' }
       : { token: 'tok-save', name: 'copy.md' }),
@@ -78,7 +91,7 @@ function installFakeTauri(fake) {
       if (!image) throw new Error('the image is outside the document\'s folder');
       return image;
     },
-    current_document: () => null,
+    current_document: () => (fake.isNew || fake.recoverId ? null : { token: 'tok-open', name: fake.name }),
     pick_document: () => window.__pickDocument || null,
   };
   window.__TAURI__ = {
@@ -571,6 +584,47 @@ const commandsNamed = async (calls, name) => (await calls()).filter((call) => ca
   const names = (await calls()).map((call) => call.command);
   check(results, 'a recovery that cannot be loaded says so and discards nothing', names.includes('dialog.message')
     && !names.includes('recovery_end') && !names.includes('recovery_discard'));
+  await context.close();
+}
+
+// ── Reloading the page ──
+const editorText = (page) => page.evaluate(() => {
+  const host = document.getElementById('md-editor');
+  const content = host.shadowRoot && host.shadowRoot.querySelector('.cm-content');
+  if (content && !host.hidden) return content.textContent;
+  return document.getElementById('md-source').value;
+});
+
+async function reloadPage(page) {
+  await page.reload();
+  await page.waitForTimeout(1000);
+}
+
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('# One\n') });
+  await startEditing(page);
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('two words');
+  await page.waitForTimeout(RECOVERY_WAIT_MS);
+  const before = (await calls()).length;
+  await reloadPage(page);
+  check(results, 'a reload with unsaved changes keeps the text', (await editorText(page)).includes('two words'), await editorText(page));
+  const modified = (await calls()).slice(before).filter((call) => call.command === 'set_document_modified');
+  check(results, 'a reloaded document is still marked modified', modified.length > 0 && modified[modified.length - 1].args.modified === true);
+  const copy = await page.evaluate(() => sessionStorage.getItem('copy'));
+  check(results, 'a reload keeps the recovery copy', copy !== null);
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(200);
+  const saved = await savedCalls(calls);
+  check(results, 'after a reload, Save writes over the open file', saved.length === 1 && saved[0].args.token === null
+    && Buffer.from(saved[0].args.data, 'base64').toString('utf8') === '# One\ntwo words');
+  await reloadPage(page);
+  const left = await page.evaluate(() => sessionStorage.getItem('copy'));
+  check(results, 'a save then a reload leaves no recovery copy', left === null);
+  check(results, 'a save then a reload shows the saved file, unmodified', (await page.textContent('#md-name')) === 'notes.md'
+    && !(await page.evaluate(() => document.body.classList.contains('editing'))));
+  const last = (await commandsNamed(calls, 'set_document_modified')).pop();
+  check(results, 'the saved file reopens unmodified', last && last.args.modified === false);
   await context.close();
 }
 

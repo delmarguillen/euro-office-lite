@@ -368,6 +368,57 @@ pub async fn markdown_recovery_load(
     })
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloadedMarkdown {
+    data: String,
+    name: String,
+    has_file: bool,
+}
+
+// The text file of the live Markdown session, when it holds a copy.
+fn live_markdown_copy(session: Option<&crate::recovery::RecoverySession>) -> Option<PathBuf> {
+    let session = session?;
+    if !session.markdown {
+        return None;
+    }
+    let text = crate::recovery::markdown_text_path(&session.dir);
+    if !text.is_file() {
+        return None;
+    }
+    Some(text)
+}
+
+// A reload of the page (F5, devtools) while the document has a recovery
+// copy: the copy comes back and the session stays, so the open file, its
+// save suggestion and the copy are as they were. None when there is no copy;
+// the page then opens the file as before (read_markdown).
+#[tauri::command]
+pub async fn markdown_recovery_reload(
+    state: State<'_, AppState>,
+) -> Result<Option<ReloadedMarkdown>, String> {
+    let copy = live_markdown_copy(state.recovery.lock().unwrap().as_ref());
+    let Some(copy) = copy else {
+        return Ok(None);
+    };
+    let bytes = read_limited(&copy, MARKDOWN_MAX_BYTES)?;
+    let current = state.current_file.lock().unwrap().clone();
+    let name = match &current {
+        Some(path) => file_name(path),
+        None => crate::recovery::recovered_name(copy.parent().unwrap_or(&copy))
+            .unwrap_or_else(|| "Untitled.md".to_string()),
+    };
+    log_event(
+        &state,
+        &format!("[RECOVER] markdown reload bytes={}", bytes.len()),
+    );
+    Ok(Some(ReloadedMarkdown {
+        data: STANDARD.encode(&bytes),
+        name,
+        has_file: current.is_some(),
+    }))
+}
+
 // An image of the Markdown document, as a data: URL's parts. `src` is the
 // reference written in the document, resolved by markdown_image_path against
 // image_reference_document.
@@ -608,6 +659,19 @@ mod tests {
         assert!(open_markdown_file(None).is_err());
         assert!(open_markdown_file(Some(PathBuf::from("/home/u/report.docx"))).is_err());
         assert!(open_markdown_file(Some(PathBuf::from("/home/u/notes.MD"))).is_ok());
+    }
+
+    #[test]
+    fn a_reload_finds_the_live_markdown_copy_only() {
+        let root = test_dir("reload");
+        assert_eq!(live_markdown_copy(None), None);
+        let session = crate::recovery::begin_markdown_session(&root, None, "0.0.0", "1-1").unwrap();
+        assert_eq!(live_markdown_copy(Some(&session)), None, "no text written yet");
+        crate::recovery::write_markdown_copy(&session, b"# draft\n").unwrap();
+        let copy = live_markdown_copy(Some(&session)).unwrap();
+        assert_eq!(std::fs::read(&copy).unwrap(), b"# draft\n");
+        let editor = crate::recovery::RecoverySession { markdown: false, ..session };
+        assert_eq!(live_markdown_copy(Some(&editor)), None, "an editor's session");
     }
 
     #[test]
