@@ -106,6 +106,24 @@ fn open_markdown_file(current: Option<PathBuf>) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+// The document relative images are read against: the open file, or for a
+// recovered document (no open file yet) the file it was last saved as.
+fn image_reference_document(
+    current: Option<PathBuf>,
+    suggestion: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    if current.is_some() {
+        return open_markdown_file(current);
+    }
+    let Some(suggested) = suggestion else {
+        return Err("No file is currently open".to_string());
+    };
+    if !is_markdown(&suggested) {
+        return Err("The suggested file is not a Markdown file".to_string());
+    }
+    Ok(suggested)
+}
+
 // Save writes over the open file; Save As writes exactly the file its token
 // names. A name not ending in .md or .markdown is refused, not renamed: the
 // renamed file was never confirmed in the dialog and may already exist. A new
@@ -350,14 +368,17 @@ pub async fn markdown_recovery_load(
     })
 }
 
-// An image of the open Markdown file, as a data: URL's parts. `src` is the
-// reference written in the document, resolved by markdown_image_path.
+// An image of the Markdown document, as a data: URL's parts. `src` is the
+// reference written in the document, resolved by markdown_image_path against
+// image_reference_document.
 #[tauri::command]
 pub async fn markdown_image(
     state: State<'_, AppState>,
     src: String,
 ) -> Result<MarkdownImage, String> {
-    let document = open_markdown_file(state.current_file.lock().unwrap().clone())?;
+    let current = state.current_file.lock().unwrap().clone();
+    let suggestion = state.save_suggestion.lock().unwrap().clone();
+    let document = image_reference_document(current, suggestion)?;
     let path = markdown_image_path(&document, &src)?;
     let Some(mime) = image_mime(&path) else {
         return Err("not an image type the preview shows".to_string());
@@ -587,6 +608,56 @@ mod tests {
         assert!(open_markdown_file(None).is_err());
         assert!(open_markdown_file(Some(PathBuf::from("/home/u/report.docx"))).is_err());
         assert!(open_markdown_file(Some(PathBuf::from("/home/u/notes.MD"))).is_ok());
+    }
+
+    #[test]
+    fn images_are_read_against_the_open_file_first() {
+        let current = Some(PathBuf::from("/home/u/notes.md"));
+        let suggestion = Some(PathBuf::from("/home/old/draft.md"));
+        assert_eq!(
+            image_reference_document(current, suggestion),
+            Ok(PathBuf::from("/home/u/notes.md"))
+        );
+    }
+
+    #[test]
+    fn a_recovered_document_reads_images_against_its_markdown_suggestion() {
+        let suggestion = Some(PathBuf::from("/home/old/draft.MD"));
+        assert_eq!(
+            image_reference_document(None, suggestion),
+            Ok(PathBuf::from("/home/old/draft.MD"))
+        );
+    }
+
+    #[test]
+    fn a_suggestion_that_is_not_markdown_is_refused() {
+        let suggestion = Some(PathBuf::from("/home/old/report.docx"));
+        assert!(image_reference_document(None, suggestion).is_err());
+    }
+
+    #[test]
+    fn a_new_document_has_no_image_folder() {
+        assert!(image_reference_document(None, None).is_err());
+    }
+
+    #[test]
+    fn a_recovered_document_finds_images_beside_its_suggestion() {
+        let dir = test_dir("recovered-images");
+        let image = file_with(&dir, "a.png", b"png");
+        let suggested = dir.join("draft.md");
+        let document = image_reference_document(None, Some(suggested)).unwrap();
+        let canonical = std::fs::canonicalize(&image).unwrap();
+        assert_eq!(markdown_image_path(&document, "a.png"), Ok(canonical));
+        assert!(markdown_image_path(&document, "../a.png").is_err());
+    }
+
+    #[test]
+    fn a_suggestion_whose_folder_is_gone_finds_no_image() {
+        let dir = test_dir("gone");
+        let suggested = dir.join("draft.md");
+        std::fs::remove_dir_all(&dir).unwrap();
+        let document = image_reference_document(None, Some(suggested)).unwrap();
+        assert!(markdown_image_path(&document, "a.png").is_err());
     }
 
     #[test]
