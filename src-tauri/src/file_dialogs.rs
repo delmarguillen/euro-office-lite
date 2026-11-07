@@ -5,7 +5,9 @@ use crate::file_ops::AppState;
 use crate::path_grants::{file_name, GrantKind, GrantedFile, PathGrants};
 use std::path::{Path, PathBuf};
 use tauri::State;
-use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
+use tauri_plugin_dialog::{
+    DialogExt, FileDialogBuilder, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind,
+};
 
 const ALL_FILES: [&str; 1] = ["*"];
 
@@ -220,25 +222,62 @@ pub async fn pick_save_target(
         }
         dialog = dialog.set_file_name(file_name(&start));
     }
-    let Some(path) = pick_save(dialog).await? else {
+    let Some(chosen) = pick_save(dialog).await? else {
         return Ok(None);
     };
-    let path = with_save_extension(path, &fallback_ext);
+    let path = with_save_extension(chosen.clone(), &fallback_ext);
+    if asks_before_replacing(&chosen, &path) && !confirm_replace(&window, &path).await? {
+        return Ok(None);
+    }
     Ok(Some(state.grants.grant(path, GrantKind::Save)))
+}
+
+// Asked from here, not from the webview: the answer decides the grant.
+async fn confirm_replace(window: &tauri::WebviewWindow, path: &Path) -> Result<bool, String> {
+    let dialog = replace_dialog(window, path);
+    tauri::async_runtime::spawn_blocking(move || dialog.blocking_show())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn replace_dialog(window: &tauri::WebviewWindow, path: &Path) -> MessageDialogBuilder<tauri::Wry> {
+    let buttons = MessageDialogButtons::OkCancelCustom("Replace".into(), "Cancel".into());
+    window
+        .dialog()
+        .message(replace_question(path))
+        .title("Replace file?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(buttons)
+        .parent(window)
+}
+
+fn replace_question(path: &Path) -> String {
+    format!(
+        "\"{}\" already exists. Do you want to replace it?",
+        file_name(path)
+    )
 }
 
 fn first_extension(filters: &[DialogFilter]) -> Option<String> {
     filters.first()?.extensions.first().cloned()
 }
 
-// After a recovery there is no open file, only where the document was saved
-// before: the dialog starts there, in the format asked for.
 fn save_start(state: &AppState, requested_ext: Option<&str>) -> Option<PathBuf> {
-    if state.current_file.lock().unwrap().is_some() {
-        return None;
-    }
-    let suggestion = state.save_suggestion.lock().unwrap().clone()?;
-    Some(suggestion_with_ext(&suggestion, requested_ext))
+    let current = state.current_file.lock().unwrap().clone();
+    let suggestion = state.save_suggestion.lock().unwrap().clone();
+    save_start_path(current.as_deref(), suggestion.as_deref(), requested_ext)
+}
+
+// Where the dialog starts and the name it offers, in the format asked for: the
+// open document, else where a recovered document was saved before. Only a
+// starting point: the grant still comes from the path the user picks.
+fn save_start_path(
+    current: Option<&Path>,
+    suggestion: Option<&Path>,
+    requested_ext: Option<&str>,
+) -> Option<PathBuf> {
+    let start = current.or(suggestion)?;
+    Some(suggestion_with_ext(start, requested_ext))
 }
 
 // The path with its file name's extension replaced by `ext`, or added when the
@@ -264,6 +303,29 @@ pub fn with_save_extension(path: PathBuf, fallback_ext: &str) -> PathBuf {
     name.push(".");
     name.push(fallback_ext);
     PathBuf::from(name)
+}
+
+// The native dialog asks before replacing the name it returns. A name the app
+// extended afterwards is another file the dialog never checked.
+pub fn needs_replace_confirmation(chosen: &Path, final_path: &Path, exists: bool) -> bool {
+    if chosen == final_path {
+        return false;
+    }
+    exists
+}
+
+// Whether the final path holds something the save would replace. The link
+// itself is read, not followed: a link counts even when broken. A folder does
+// not count: saving onto it fails later, as before.
+fn replace_target_exists(final_path: &Path) -> bool {
+    let Ok(metadata) = std::fs::symlink_metadata(final_path) else {
+        return false;
+    };
+    !metadata.is_dir()
+}
+
+fn asks_before_replacing(chosen: &Path, final_path: &Path) -> bool {
+    needs_replace_confirmation(chosen, final_path, replace_target_exists(final_path))
 }
 
 #[cfg(test)]
@@ -343,5 +405,158 @@ mod tests {
     fn open_filter_also_accepts_pdf() {
         assert!(OPEN_EXTENSIONS.contains(&"pdf"));
     }
-}
 
+    #[test]
+    fn an_extended_name_that_exists_asks_before_replacing() {
+        let chosen = PathBuf::from("/docs/Budget");
+        let final_path = with_save_extension(chosen.clone(), "docx");
+        assert_eq!(final_path, PathBuf::from("/docs/Budget.docx"));
+        assert!(needs_replace_confirmation(&chosen, &final_path, true));
+    }
+
+    #[test]
+    fn an_extended_name_that_does_not_exist_does_not_ask() {
+        let chosen = PathBuf::from("/docs/Budget");
+        let final_path = with_save_extension(chosen.clone(), "docx");
+        assert!(!needs_replace_confirmation(&chosen, &final_path, false));
+    }
+
+    #[test]
+    fn a_name_the_dialog_returned_unchanged_is_not_asked_again() {
+        let chosen = PathBuf::from("/docs/Budget.docx");
+        let final_path = with_save_extension(chosen.clone(), "docx");
+        assert_eq!(final_path, chosen);
+        assert!(!needs_replace_confirmation(&chosen, &final_path, true));
+    }
+
+    #[test]
+    fn an_upper_case_extension_keeps_the_name_and_is_not_asked_again() {
+        let chosen = PathBuf::from("/docs/Budget.DOCX");
+        let final_path = with_save_extension(chosen.clone(), "docx");
+        assert_eq!(final_path, chosen);
+        assert!(!needs_replace_confirmation(&chosen, &final_path, true));
+    }
+
+    // .dotx is not a format Save As writes, so the name gains .docx.
+    #[test]
+    fn an_unknown_extension_gains_the_format_and_asks_if_that_exists() {
+        let chosen = PathBuf::from("/docs/plantilla.dotx");
+        let final_path = with_save_extension(chosen.clone(), "docx");
+        assert_eq!(final_path, PathBuf::from("/docs/plantilla.dotx.docx"));
+        assert!(needs_replace_confirmation(&chosen, &final_path, true));
+    }
+
+    #[test]
+    fn the_question_names_the_file_and_not_its_folder() {
+        let question = replace_question(Path::new("/home/u/docs/Budget.docx"));
+        assert_eq!(
+            question,
+            "\"Budget.docx\" already exists. Do you want to replace it?"
+        );
+    }
+
+    #[test]
+    fn an_existing_file_asks_and_an_existing_folder_does_not() {
+        let dir = std::env::temp_dir().join(format!("eo-replace-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Report.docx")).unwrap();
+        std::fs::write(dir.join("Budget.docx"), b"kept").unwrap();
+
+        let budget = dir.join("Budget");
+        let budget_docx = with_save_extension(budget.clone(), "docx");
+        assert!(asks_before_replacing(&budget, &budget_docx));
+
+        let report = dir.join("Report");
+        let report_docx = with_save_extension(report.clone(), "docx");
+        assert!(!asks_before_replacing(&report, &report_docx));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_open_document_starts_in_its_folder_with_the_format_asked_for() {
+        let current = Path::new("/home/u/Docs/Budget.docx");
+        assert_eq!(
+            save_start_path(Some(current), None, Some("pdf")),
+            Some(PathBuf::from("/home/u/Docs/Budget.pdf"))
+        );
+    }
+
+    #[test]
+    fn an_open_document_without_a_format_starts_on_its_own_name() {
+        let current = Path::new("/home/u/Docs/Budget.docx");
+        assert_eq!(
+            save_start_path(Some(current), None, None),
+            Some(PathBuf::from("/home/u/Docs/Budget.docx"))
+        );
+    }
+
+    #[test]
+    fn an_open_document_wins_over_a_recovery_suggestion() {
+        let current = Path::new("/home/u/Docs/Budget.docx");
+        let suggestion = Path::new("/old/report.docx");
+        assert_eq!(
+            save_start_path(Some(current), Some(suggestion), Some("pdf")),
+            Some(PathBuf::from("/home/u/Docs/Budget.pdf"))
+        );
+    }
+
+    #[test]
+    fn after_a_recovery_the_suggestion_starts_in_the_format_asked_for() {
+        let suggestion = Path::new("/old/report.docx");
+        assert_eq!(
+            save_start_path(None, Some(suggestion), Some("pdf")),
+            Some(PathBuf::from("/old/report.pdf"))
+        );
+    }
+
+    #[test]
+    fn without_a_document_or_a_suggestion_there_is_no_start() {
+        assert_eq!(save_start_path(None, None, Some("pdf")), None);
+    }
+
+    fn temp_dir_for(test: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("eo-{test}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_broken_link_on_the_extended_name_asks_before_replacing() {
+        let dir = temp_dir_for("broken-link");
+        let link = dir.join("Budget.pdf");
+        std::os::unix::fs::symlink(dir.join("missing.pdf"), &link).unwrap();
+        assert!(!link.exists());
+
+        let chosen = dir.join("Budget");
+        let final_path = with_save_extension(chosen.clone(), "pdf");
+        assert_eq!(final_path, link);
+        assert!(asks_before_replacing(&chosen, &final_path));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_file_counts_as_existing() {
+        let dir = temp_dir_for("file-link");
+        std::fs::write(dir.join("target.pdf"), b"kept").unwrap();
+        let link = dir.join("Budget.pdf");
+        std::os::unix::fs::symlink(dir.join("target.pdf"), &link).unwrap();
+        assert!(replace_target_exists(&link));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_counts_as_existing_and_a_folder_or_nothing_does_not() {
+        let dir = temp_dir_for("exists");
+        std::fs::write(dir.join("Budget.pdf"), b"kept").unwrap();
+        std::fs::create_dir_all(dir.join("Report.pdf")).unwrap();
+
+        assert!(replace_target_exists(&dir.join("Budget.pdf")));
+        assert!(!replace_target_exists(&dir.join("Report.pdf")));
+        assert!(!replace_target_exists(&dir.join("Missing.pdf")));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

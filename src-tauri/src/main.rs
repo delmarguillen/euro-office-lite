@@ -10,8 +10,10 @@ mod file_dialogs;
 mod file_ops;
 mod fonts_state;
 mod launch_args;
+mod new_window;
 mod note_separator;
 mod path_grants;
+mod presentation;
 mod protocol_limits;
 mod recent;
 mod recovery;
@@ -407,7 +409,10 @@ fn main() {
             last_print_pdf: Mutex::new(None),
             pasted_images: Mutex::new(Vec::new()),
             save_suggestion: Mutex::new(None),
+            title_bar_args: launch_args::title_bar_options(&launch),
         })
+        .manage(presentation::PresentationState::default())
+        .manage(presentation::FullscreenFocus::default())
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
             file_ops::open_pdf,
@@ -418,12 +423,14 @@ fn main() {
             file_ops::print_document,
             file_ops::create_new,
             file_ops::current_document,
+            file_ops::close_document,
             file_dialogs::pick_document,
             file_dialogs::pick_pdf,
             file_dialogs::pick_files,
             file_dialogs::pick_save_target,
             file_dialogs::locate_linked_file,
             file_ops::take_pending_open_file,
+            new_window::open_in_new_window,
             file_ops::open_pdf_viewer,
             file_ops::print_to_printer,
             file_ops::convert_for_insert,
@@ -450,6 +457,7 @@ fn main() {
             recovery::recovery_discard,
             dictionaries::list_user_dictionaries,
             dictionary_import::import_dictionary,
+            presentation::set_presentation_fullscreen,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let allow_origin = protocol_limits::allow_origin();
@@ -875,8 +883,22 @@ fn main() {
                 }
 
                 let h = handle.clone();
+                let presented = window.clone();
                 window.on_window_event(move |event| {
+                    let presentation = h.state::<presentation::PresentationState>();
+                    if let tauri::WindowEvent::Resized(_) = event {
+                        presentation::on_resized(&presented, &presentation);
+                        #[cfg(target_os = "macos")]
+                        presentation::refocus_after_fullscreen(
+                            &presented,
+                            &h.state::<presentation::FullscreenFocus>(),
+                        );
+                    }
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        if presentation::hold_close_for_restore(&presented, &presentation) {
+                            api.prevent_close();
+                            return;
+                        }
                         let state = h.state::<AppState>();
                         let modified = *state.modified.lock().unwrap();
                         if modified {
@@ -1163,6 +1185,15 @@ mod capability_tests {
     #[test]
     fn the_webview_has_no_shell_permission() {
         assert!(!permissions().iter().any(|p| p.starts_with("shell:")));
+    }
+
+    // Fullscreen goes through set_presentation_fullscreen (presentation.rs).
+    #[test]
+    fn the_webview_has_no_window_write_permission() {
+        let permissions = permissions();
+        for refused in ["core:window:allow-set-fullscreen", "core:window:allow-set-always-on-top"] {
+            assert!(!permissions.iter().any(|p| p == refused), "{refused}");
+        }
     }
 }
 

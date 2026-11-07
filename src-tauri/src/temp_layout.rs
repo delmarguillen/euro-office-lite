@@ -16,6 +16,9 @@ use std::sync::{Mutex, OnceLock};
 
 pub const INSTANCES_DIR: &str = "instances";
 const INSTANCE_LOCK: &str = "instance.lock";
+// The canonical path of the file an instance has open, for the other
+// instances to read. Absent while it has none.
+const OPEN_DOCUMENT: &str = "open-document";
 const FONTDATA_DIR: &str = "fontdata";
 pub const FONTS_MARKER: &str = ".fonts_generated";
 // What the marker holds when the app version was never set, as in tests. It
@@ -534,6 +537,68 @@ fn another_instance_alive(root: &Path, own_id: &str) -> bool {
             continue;
         }
         if is_locked(&entry.path().join(INSTANCE_LOCK)) {
+            return true;
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// The file each instance has open
+// ---------------------------------------------------------------------------
+
+fn canonical_or_given(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+// Written whole and renamed into place, so a reader never sees half a path.
+pub fn publish_open_document(dir: &Path, document: Option<&Path>) -> std::io::Result<()> {
+    let target = dir.join(OPEN_DOCUMENT);
+    let Some(document) = document else {
+        return match std::fs::remove_file(&target) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+    };
+    let canonical = canonical_or_given(document);
+    let Some(text) = canonical.to_str() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "the path is not valid Unicode",
+        ));
+    };
+    write_replacing(&target, text.as_bytes(), "write")
+}
+
+// The file another instance has published, resolved again now. None when
+// there is nothing readable or the file no longer exists.
+fn published_document(instance: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(instance.join(OPEN_DOCUMENT)).ok()?;
+    if text.is_empty() {
+        return None;
+    }
+    PathBuf::from(text).canonicalize().ok()
+}
+
+// Whether a live instance other than `own_id` has `document` open. Any doubt
+// (an unreadable folder, a file that cannot be resolved) answers no: this
+// check must never stop a file from opening because of an error.
+pub fn open_in_another_instance(root: &Path, own_id: &str, document: &Path) -> bool {
+    let Ok(wanted) = document.canonicalize() else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(root.join(INSTANCES_DIR)) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name() == own_id {
+            continue;
+        }
+        let instance = entry.path();
+        if !is_locked(&instance.join(INSTANCE_LOCK)) {
+            continue;
+        }
+        if published_document(&instance).as_deref() == Some(wanted.as_path()) {
             return true;
         }
     }

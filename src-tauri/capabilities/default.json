@@ -17,12 +17,14 @@
     "allow-print-document",
     "allow-create-new",
     "allow-current-document",
+    "allow-close-document",
     "allow-pick-document",
     "allow-pick-pdf",
     "allow-pick-files",
     "allow-pick-save-target",
     "allow-locate-linked-file",
     "allow-take-pending-open-file",
+    "allow-open-in-new-window",
     "allow-open-pdf-viewer",
     "allow-print-to-printer",
     "allow-convert-for-insert",
@@ -48,6 +50,7 @@
     "allow-recovery-load",
     "allow-recovery-discard",
     "allow-list-user-dictionaries",
-    "allow-import-dictionary"
+    "allow-import-dictionary",
+    "allow-set-presentation-fullscreen"
   ]
 }
