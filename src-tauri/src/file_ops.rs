@@ -29,8 +29,9 @@ pub struct AppState {
     pub pending_recent: Mutex<Option<PathBuf>>,
     // Crash recovery session of the open document, if any (recovery.rs).
     pub recovery: Mutex<Option<crate::recovery::RecoverySession>>,
-    // Path passed as a launch argument that the frontend has not opened yet.
-    pub pending_open: Mutex<Option<PathBuf>>,
+    // Files the frontend has not opened yet: the launch argument and, on
+    // macOS, the files the system hands over later (pending_open.rs).
+    pub pending_open: crate::pending_open::PendingOpens,
     // The files the webview may name by token (path_grants.rs).
     pub grants: crate::path_grants::PathGrants,
     // Encoding, delimiter and line breaks detected when the open document came
@@ -1107,10 +1108,10 @@ pub fn fonts_status(state: State<'_, AppState>) -> crate::fonts_state::FontsStat
     state.fonts.status()
 }
 
-// Hands over the launch argument once: a page reload must not open it again.
+// Hands over the next waiting file once: a page reload must not open it again.
 #[tauri::command]
 pub fn take_pending_open_file(state: State<'_, AppState>) -> Option<GrantedFile> {
-    let path = state.pending_open.lock().unwrap().take()?;
+    let path = state.pending_open.take()?;
     Some(state.grants.grant(path, GrantKind::Open))
 }
 

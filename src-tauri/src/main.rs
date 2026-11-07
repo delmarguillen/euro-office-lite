@@ -13,6 +13,7 @@ mod launch_args;
 mod new_window;
 mod note_separator;
 mod path_grants;
+mod pending_open;
 mod protocol_limits;
 mod recent;
 mod recovery;
@@ -403,7 +404,7 @@ fn main() {
             modified: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
-            pending_open: Mutex::new(file_to_open),
+            pending_open: pending_open::PendingOpens::with_launch_file(file_to_open),
             grants: path_grants::PathGrants::default(),
             text_options: Mutex::new(None),
             last_print_pdf: Mutex::new(None),
