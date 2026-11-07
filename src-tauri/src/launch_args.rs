@@ -3,11 +3,14 @@
 
 pub const SYSTEM_TITLE_BAR: &str = "--system-title-bar";
 pub const NO_TITLE_BAR: &str = "--no-title-bar";
+// Added by open_in_new_window: this process is a second window, so it opens
+// offset from the restored position instead of on top of the first one.
+pub const NEW_WINDOW: &str = "--new-window";
 
 // The same choice for a launcher that cannot add options: "system" or "none".
 pub const TITLE_BAR_ENV: &str = "EURO_OFFICE_LITE_TITLE_BAR";
 
-const KNOWN_OPTIONS: [&str; 2] = [SYSTEM_TITLE_BAR, NO_TITLE_BAR];
+const KNOWN_OPTIONS: [&str; 3] = [SYSTEM_TITLE_BAR, NO_TITLE_BAR, NEW_WINDOW];
 
 // Where the window's title bar comes from. Only Linux Wayland acts on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +31,7 @@ pub struct LaunchArgs {
     pub document: Option<String>,
     pub system_title_bar: bool,
     pub no_title_bar: bool,
+    pub new_window: bool,
 }
 
 // `args` leaves out the program name. Known options are taken wherever they
@@ -41,6 +45,7 @@ where
         if KNOWN_OPTIONS.contains(&arg.as_str()) {
             parsed.system_title_bar |= arg == SYSTEM_TITLE_BAR;
             parsed.no_title_bar |= arg == NO_TITLE_BAR;
+            parsed.new_window |= arg == NEW_WINDOW;
             continue;
         }
         if parsed.document.is_none() {
@@ -197,6 +202,25 @@ mod tests {
         assert!(!parsed.system_title_bar && parsed.no_title_bar);
         let parsed = parse(&[SYSTEM_TITLE_BAR, SYSTEM_TITLE_BAR]);
         assert!(parsed.system_title_bar && !parsed.no_title_bar);
+    }
+
+    #[test]
+    fn new_window_is_an_option_not_the_document() {
+        let parsed = parse(&[NEW_WINDOW, "a.docx"]);
+        assert!(parsed.new_window);
+        assert_eq!(parsed.document, Some("a.docx".to_string()));
+        let parsed = parse(&["a.docx", NEW_WINDOW]);
+        assert!(parsed.new_window);
+        assert_eq!(parsed.document, Some("a.docx".to_string()));
+        assert_eq!(document(&[NEW_WINDOW]), None);
+        assert!(!parse(&["a.docx"]).new_window);
+    }
+
+    #[test]
+    fn new_window_is_not_a_title_bar_option() {
+        let parsed = parse(&[NEW_WINDOW, SYSTEM_TITLE_BAR, "a.docx"]);
+        assert_eq!(title_bar_options(&parsed), vec![SYSTEM_TITLE_BAR]);
+        assert_eq!(resolve_title_bar(&parsed, None).0, TitleBar::System);
     }
 
     // Matching is exact: anything else is not one of our options.
