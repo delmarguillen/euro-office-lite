@@ -658,6 +658,15 @@ async function reloadPage(page) {
   await context.close();
 }
 {
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: '', readError: 'open-elsewhere', lang: 'es' });
+  await page.waitForURL('**/index.html');
+  const message = (await calls()).find((call) => call.command === 'dialog.message');
+  check(results, 'a file open in another window gets the warning the editors show',
+    message && message.args.text.includes('otra ventana') && message.args.options.kind === 'warning',
+    message && message.args.text);
+  await context.close();
+}
+{
   const { context, page, calls } = await openPage({ name: 'latin1.md', data: b64('caf\xE9\n'), lang: 'es' });
   await page.waitForURL('**/index.html');
   const message = (await calls()).find((call) => call.command === 'dialog.message');

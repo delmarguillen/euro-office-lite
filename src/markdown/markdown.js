@@ -29,6 +29,8 @@
   var PREVIEW_STYLESHEET = 'markdown-preview.css';
   var SAVE_DENIED_ERROR = 'save-denied';
   var TOO_LARGE_ERROR = 'markdown-too-large';
+  // The file is open in another window (new_window.rs, OPEN_ELSEWHERE).
+  var OPEN_ELSEWHERE_ERROR = 'open-elsewhere';
   var CODEMIRROR_SCRIPT = 'vendor/codemirror.min.js';
   // A new document's name until its first save, and what Save As offers.
   var NEW_NAME = 'Untitled.md';
@@ -45,6 +47,7 @@
       openFailed: 'Could not open file',
       recoverFailedMsg: 'The recovered document could not be opened. It is still offered on the start screen.',
       openErrorMsg: 'The file could not be opened.',
+      openElsewhereMsg: 'This file is already open in another window. Use that window to work on it.',
       tooLargeMsg: 'The file is larger than 10 MB and cannot be opened as text.',
       notUtf8Msg: 'The file is not UTF-8 text. Opening it here could change it when saved.',
       saveError: 'Save error',
@@ -66,6 +69,7 @@
       openFailed: 'No se pudo abrir el archivo',
       recoverFailedMsg: 'No se pudo abrir el documento recuperado. Se sigue ofreciendo en la pantalla de inicio.',
       openErrorMsg: 'No se pudo abrir el archivo.',
+      openElsewhereMsg: 'Este archivo ya está abierto en otra ventana. Usa esa ventana para trabajar con él.',
       tooLargeMsg: 'El archivo ocupa más de 10 MB y no se puede abrir como texto.',
       notUtf8Msg: 'El archivo no es texto UTF-8. Abrirlo aquí podría cambiarlo al guardar.',
       saveError: 'Error al guardar',
@@ -621,6 +625,18 @@
     return null;
   }
 
+  function isOpenElsewhere(error) {
+    return errorText(error) === OPEN_ELSEWHERE_ERROR;
+  }
+
+  // The same warning bridge.js shows (_eoShowOpenElsewhere).
+  function showOpenFailed(error) {
+    if (isOpenElsewhere(error)) {
+      return tauri.dialog.message(t('openElsewhereMsg'), { title: t('openFailed'), kind: 'warning' });
+    }
+    return tauri.dialog.message(openErrorText(error), { title: t('openFailed'), kind: 'error' });
+  }
+
   function openErrorText(error) {
     if (error && error.code === 'not-utf8') return t('notUtf8Msg');
     if (errorText(error).indexOf(TOO_LARGE_ERROR) === 0) return t('tooLargeMsg');
@@ -726,7 +742,7 @@
       file = await readFile(pending);
     } catch (error) {
       log('open failed: ' + errorText(error));
-      await tauri.dialog.message(openErrorText(error), { title: t('openFailed'), kind: 'error' });
+      await showOpenFailed(error);
       await leaveToStart();
       return;
     }
