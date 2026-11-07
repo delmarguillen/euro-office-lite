@@ -210,10 +210,17 @@ pub struct MarkdownImage {
 fn start_markdown_document(state: &AppState, path: Option<PathBuf>) {
     crate::recovery::end_session(state, true);
     *state.pending_recent.lock().unwrap() = None;
-    *state.current_file.lock().unwrap() = path;
+    crate::file_ops::set_current_file(state, path);
     *state.save_suggestion.lock().unwrap() = None;
     *state.modified.lock().unwrap() = false;
     *state.text_options.lock().unwrap() = None;
+}
+
+// The Markdown file an Open token names becomes the open document.
+fn open_markdown(state: &AppState, token: &str) -> Result<(PathBuf, Vec<u8>), String> {
+    let (path, bytes) = read_markdown_file(&state.grants, token)?;
+    start_markdown_document(state, Some(path.clone()));
+    Ok((path, bytes))
 }
 
 // Opens the Markdown file an Open token names: it becomes the open document
@@ -224,11 +231,10 @@ pub async fn read_markdown(
     state: State<'_, AppState>,
     token: String,
 ) -> Result<MarkdownFile, String> {
-    let (path, bytes) = read_markdown_file(&state.grants, &token).map_err(|error| {
+    let (path, bytes) = open_markdown(&state, &token).map_err(|error| {
         log_event(&state, &format!("[OPEN] markdown failed: {}", error));
         error
     })?;
-    start_markdown_document(&state, Some(path.clone()));
     crate::recent::record(&app, &path.to_string_lossy());
     log_event(
         &state,
@@ -249,8 +255,38 @@ pub async fn new_markdown(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+struct SavedMarkdown {
+    path: PathBuf,
+    // The save went to another file, which is now the open document.
+    new_file: bool,
+}
+
 // Writes `data` (base64) as it is: over the open Markdown file, or to the file
-// a Save token names. Returns the saved file's name.
+// a Save token names.
+fn store_markdown(
+    state: &AppState,
+    data: &str,
+    token: Option<&str>,
+) -> Result<SavedMarkdown, String> {
+    let current = state.current_file.lock().unwrap().clone();
+    let dest = markdown_save_destination(&state.grants, token, current.clone())?;
+    let written = decode_markdown_data(data)
+        .and_then(|bytes| crate::save_target::write_bytes_beside_and_rename(&bytes, &dest));
+    if let Err(error) = written {
+        log_event(state, &format!("[SAVE] markdown failed: {}", error));
+        return Err(error);
+    }
+    let new_file = current.as_ref() != Some(&dest);
+    if new_file {
+        crate::file_ops::set_current_file(state, Some(dest.clone()));
+    }
+    *state.modified.lock().unwrap() = false;
+    // The text is in the file now: its recovery copy goes.
+    crate::recovery::end_session(state, true);
+    Ok(SavedMarkdown { path: dest, new_file })
+}
+
+// Save and Save As of the Markdown page. Returns the saved file's name.
 #[tauri::command]
 pub async fn save_markdown(
     app: tauri::AppHandle,
@@ -258,23 +294,12 @@ pub async fn save_markdown(
     data: String,
     token: Option<String>,
 ) -> Result<String, String> {
-    let current = state.current_file.lock().unwrap().clone();
-    let dest = markdown_save_destination(&state.grants, token.as_deref(), current.clone())?;
-    let written = decode_markdown_data(&data)
-        .and_then(|bytes| crate::save_target::write_bytes_beside_and_rename(&bytes, &dest));
-    if let Err(error) = written {
-        log_event(&state, &format!("[SAVE] markdown failed: {}", error));
-        return Err(error);
+    let saved = store_markdown(&state, &data, token.as_deref())?;
+    if saved.new_file {
+        crate::recent::record(&app, &saved.path.to_string_lossy());
     }
-    if current.as_ref() != Some(&dest) {
-        *state.current_file.lock().unwrap() = Some(dest.clone());
-        crate::recent::record(&app, &dest.to_string_lossy());
-    }
-    *state.modified.lock().unwrap() = false;
-    // The text is in the file now: its recovery copy goes.
-    crate::recovery::end_session(&state, true);
     log_event(&state, "[SAVE] markdown success");
-    Ok(file_name(&dest))
+    Ok(file_name(&saved.path))
 }
 
 // Writes the page's exported HTML (base64 of the UTF-8 text) to the file a
@@ -467,6 +492,74 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
         path
+    }
+
+    // The state of a window whose instance folder is under `root`, built as
+    // main.rs builds it. Each `pid` is another window.
+    fn window_state(root: &Path, pid: u32) -> AppState {
+        let instance = crate::temp_layout::begin_instance(root, 1000, pid).unwrap();
+        AppState {
+            current_file: std::sync::Mutex::new(None),
+            temp_dir: instance.dir.clone(),
+            temp_root: root.to_path_buf(),
+            font_root: root.to_path_buf(),
+            fonts: std::sync::Arc::new(crate::fonts_state::FontsState::pending()),
+            instance,
+            doc_seq: std::sync::atomic::AtomicU64::new(1),
+            modified: std::sync::Mutex::new(false),
+            pending_recent: std::sync::Mutex::new(None),
+            recovery: std::sync::Mutex::new(None),
+            pending_open: std::sync::Mutex::new(None),
+            grants: PathGrants::default(),
+            text_options: std::sync::Mutex::new(None),
+            last_print_pdf: std::sync::Mutex::new(None),
+            pasted_images: std::sync::Mutex::new(Vec::new()),
+            save_suggestion: std::sync::Mutex::new(None),
+            title_bar_args: Vec::new(),
+        }
+    }
+
+    // Whether the window `state` belongs to is seen by the others as having `file` open.
+    fn published(state: &AppState, file: &Path) -> bool {
+        crate::temp_layout::open_in_another_instance(&state.temp_root, "someone-else", file)
+    }
+
+    const TEXT_B64: &str = "dGV4dAo="; // "text\n"
+
+    #[test]
+    fn opening_publishes_the_file_to_the_other_windows() {
+        let dir = test_dir("open-publish");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        open_markdown(&state, &token).unwrap();
+        assert!(published(&state, &file));
+        assert_eq!(*state.current_file.lock().unwrap(), Some(file));
+    }
+
+    #[test]
+    fn a_new_document_publishes_no_file() {
+        let dir = test_dir("new-publish");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let state = window_state(&dir, 1);
+        crate::file_ops::set_current_file(&state, Some(file.clone()));
+        start_markdown_document(&state, None);
+        assert!(!published(&state, &file));
+    }
+
+    #[test]
+    fn save_as_publishes_the_new_file_and_stops_publishing_the_old_one() {
+        let dir = test_dir("save-publish");
+        let old = file_with(&dir, "notes.md", b"text\n");
+        let state = window_state(&dir, 1);
+        let open = state.grants.grant(old.clone(), GrantKind::Open).token;
+        open_markdown(&state, &open).unwrap();
+        let copy = dir.join("copy.md");
+        let save = state.grants.grant(copy.clone(), GrantKind::Save).token;
+        let saved = store_markdown(&state, TEXT_B64, Some(&save)).unwrap();
+        assert!(saved.new_file);
+        assert!(published(&state, &copy));
+        assert!(!published(&state, &old));
     }
 
     #[test]
