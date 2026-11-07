@@ -475,6 +475,9 @@
 
   async function leaveToStart() {
     await invoke('set_document_modified', { modified: false }).catch(function() {});
+    // As bridge.js's _forceReload: the process outlives the page, and without
+    // this the other windows would still be told the file is open here.
+    await invoke('close_document').catch(function() {});
     window.location.href = START_PAGE;
   }
 

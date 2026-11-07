@@ -650,6 +650,24 @@ async function reloadPage(page) {
   await context.close();
 }
 
+// Every way back to the start screen tells the backend the document is closed
+// first, so another window may open the file.
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('one\n') });
+  await page.click('#md-close');
+  await page.waitForURL('**/index.html');
+  const names = (await calls()).map((call) => call.command);
+  check(results, 'Close closes the document before leaving', names.includes('close_document'), names.join(' '));
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: '', readError: 'open-elsewhere' });
+  await page.waitForURL('**/index.html');
+  const names = (await calls()).map((call) => call.command);
+  check(results, 'a refused open leaves no document open', names.includes('close_document'), names.join(' '));
+  await context.close();
+}
+
 // ── Errors and language ──
 {
   const { context, page, calls } = await openPage({ name: 'big.md', data: '', readError: 'markdown-too-large: the file is larger than 10485760 bytes' });
