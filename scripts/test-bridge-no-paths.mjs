@@ -33,6 +33,7 @@ async function setup(extra = {}) {
       take_pending_open_file: recorded('take_pending_open_file',
         { token: 'tok-launch', name: 'launch.docx' }),
       open_file: recorded('open_file', 'Ymlu'),
+      open_in_new_window: recorded('open_in_new_window', 'opened'),
       write_editor_bin: recorded('write_editor_bin', 'ok'),
       current_document: recorded('current_document', { token: 'tok-current', name: 'report.docx' }),
       pick_save_target: recorded('pick_save_target', { token: 'tok-save', name: 'copy.docx' }),
@@ -167,17 +168,19 @@ check(results, 'an inserted image is copied by token',
   copyUrl.endsWith('copy-to-media/eo-grant:tok-images/a.png'), copyUrl);
 run.bridge.stopTimers();
 
-// Reopening from the editor's recent list. The launch argument opens first,
-// after the font wait, so it settles before an editor counts as mounted.
+// Opening from the editor's recent list, which with a document open goes to a
+// new window. The launch argument opens first, after the font wait, so it
+// settles before an editor counts as mounted.
 run = await setup();
 await settle();
 run.bridge.sandbox.AscDesktopEditor._currentDocType = 'word';
 run.bridge.sandbox.location = { reload: () => {} };
 run.bridge.run(`AscDesktopEditor.execCommand('open:recent', ${JSON.stringify(JSON.stringify({ id: 0, path: HOME + 'recent.docx' }))})`);
 await settle();
-const pending = run.bridge.sandbox.localStorage.getItem('eo-pending-open');
-check(results, 'a recent entry is reopened by its token', pending === JSON.stringify({ token: 'tok-recent', name: 'recent.docx' }),
-  String(pending));
+const newWindow = argsOf(run.calls, 'open_in_new_window');
+check(results, 'a recent entry is opened by its token',
+  newWindow.length === 1 && JSON.stringify(newWindow[0]) === JSON.stringify({ token: 'tok-recent' }),
+  JSON.stringify(newWindow));
 run.bridge.stopTimers();
 
 // A PDF given as the launch argument.

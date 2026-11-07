@@ -1440,3 +1440,169 @@ fn creating_the_missing_user_folder_changes_the_sources() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+
+// ---------------------------------------------------------------------------
+// The file each instance has open
+// ---------------------------------------------------------------------------
+
+fn document_in(root: &Path, name: &str) -> PathBuf {
+    let path = root.join(name);
+    std::fs::write(&path, b"x").unwrap();
+    path
+}
+
+#[test]
+fn a_live_instance_with_the_same_file_has_it_open() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&file)).unwrap();
+
+    assert!(open_in_another_instance(&root, &own.id, &file));
+}
+
+#[test]
+fn a_live_instance_with_another_file_does_not() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let different = document_in(&root, "b.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&different)).unwrap();
+
+    assert!(!open_in_another_instance(&root, &own.id, &file));
+}
+
+#[test]
+fn a_dead_instance_does_not_count() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let dead = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&dead.dir, Some(&file)).unwrap();
+    // A crash: the lock goes with the process, the folder stays.
+    dead.lock.lock().unwrap().take();
+
+    assert!(!open_in_another_instance(&root, &own.id, &file));
+}
+
+#[test]
+fn an_instance_folder_without_a_lock_file_does_not_count() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let unlocked = unlocked_instance(&root, 1000, 2);
+    publish_open_document(&unlocked.dir, Some(&file)).unwrap();
+
+    assert!(!open_in_another_instance(&root, &own.id, &file));
+}
+
+#[test]
+fn an_empty_or_garbage_open_document_does_not_count() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let empty = begin_instance(&root, 1000, 2).unwrap();
+    let garbage = begin_instance(&root, 1000, 3).unwrap();
+    let binary = begin_instance(&root, 1000, 4).unwrap();
+    std::fs::write(empty.dir.join(OPEN_DOCUMENT), b"").unwrap();
+    std::fs::write(garbage.dir.join(OPEN_DOCUMENT), b"not a path\n\0").unwrap();
+    std::fs::write(binary.dir.join(OPEN_DOCUMENT), [0xff, 0xfe, 0x00, 0x41]).unwrap();
+
+    assert!(!open_in_another_instance(&root, &own.id, &file));
+}
+
+#[test]
+fn the_same_file_by_another_spelling_is_open() {
+    let root = scratch_root();
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    let file = document_in(&root, "a.docx");
+    let roundabout = root.join("sub").join("..").join("a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&roundabout)).unwrap();
+
+    assert!(open_in_another_instance(&root, &own.id, &file));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_same_file_through_a_link_is_open() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let link = root.join("link.docx");
+    std::os::unix::fs::symlink(&file, &link).unwrap();
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&file)).unwrap();
+
+    assert!(open_in_another_instance(&root, &own.id, &link));
+}
+
+#[test]
+fn the_own_instance_does_not_count() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    publish_open_document(&own.dir, Some(&file)).unwrap();
+
+    assert!(!open_in_another_instance(&root, &own.id, &file));
+}
+
+#[test]
+fn a_file_that_does_not_exist_is_not_open() {
+    let root = scratch_root();
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    let gone = root.join("gone.docx");
+    publish_open_document(&other.dir, Some(&gone)).unwrap();
+
+    assert!(!open_in_another_instance(&root, &own.id, &gone));
+}
+
+#[test]
+fn publishing_writes_the_canonical_path_and_none_removes_it() {
+    let root = scratch_root();
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    let file = document_in(&root, "a.docx");
+    let instance = begin_instance(&root, 1000, 1).unwrap();
+    let published = instance.dir.join(OPEN_DOCUMENT);
+
+    publish_open_document(&instance.dir, Some(&root.join("sub").join("..").join("a.docx"))).unwrap();
+    let text = std::fs::read_to_string(&published).unwrap();
+    assert_eq!(PathBuf::from(text), file.canonicalize().unwrap());
+    let leftovers: Vec<_> = std::fs::read_dir(&instance.dir)
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().contains("tmp"))
+        .collect();
+    assert!(leftovers.is_empty());
+
+    publish_open_document(&instance.dir, None).unwrap();
+    assert!(!published.exists());
+    // Nothing to remove is not an error.
+    publish_open_document(&instance.dir, None).unwrap();
+}
+
+#[test]
+fn publishing_replaces_the_previous_file() {
+    let root = scratch_root();
+    let first = document_in(&root, "a.docx");
+    let second = document_in(&root, "b.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+
+    publish_open_document(&other.dir, Some(&first)).unwrap();
+    publish_open_document(&other.dir, Some(&second)).unwrap();
+
+    assert!(!open_in_another_instance(&root, &own.id, &first));
+    assert!(open_in_another_instance(&root, &own.id, &second));
+}
+
+#[test]
+fn publishing_into_a_missing_folder_is_an_error_not_a_panic() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    assert!(publish_open_document(&root.join("missing"), Some(&file)).is_err());
+}

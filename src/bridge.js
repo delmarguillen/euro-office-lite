@@ -580,10 +580,12 @@ var _UI_STRINGS = {
     export: 'Export',
     openFile: 'Open file', editPdf: 'Edit PDF', newDocument: 'New document', newSpreadsheet: 'New spreadsheet',
     newPresentation: 'New presentation', unsavedChanges: 'Unsaved changes',
-    unsavedDiscardOpen: 'The current document has unsaved changes. Do you want to discard them and open another file?',
+    openNewWindowFailedMsg: 'The file could not be opened in a new window. The current document has not changed.',
+    openElsewhereMsg: 'This file is already open in another window. Use that window to work on it.',
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
     saveError: 'Save error', saveErrorMsg: 'Could not save the file.\n\nTarget format not compatible with this document type.',
     saveDeniedMsg: 'Could not save the file.\n\nYou do not have permission to write there, or the file is read-only.',
+    saveElsewhereMsg: 'Could not save the file.\n\nThe file is open in another window. Nothing has been saved.',
     saveLockedMsg: 'Could not save the file.\n\nIt may be open in another program.',
     pdfFontsErrorMsg: 'The PDF could not be created because the app could not prepare its fonts. Try again in a moment. If it keeps failing, restart Euro-Office Lite.',
     printError: 'Print failed', printErrorMsg: 'The document could not be printed. Please try again.',
@@ -623,10 +625,12 @@ var _UI_STRINGS = {
     export: 'Exportar',
     openFile: 'Abrir archivo', editPdf: 'Editar PDF', newDocument: 'Nuevo documento', newSpreadsheet: 'Nueva hoja de cálculo',
     newPresentation: 'Nueva presentación', unsavedChanges: 'Cambios sin guardar',
-    unsavedDiscardOpen: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y abrir otro archivo?',
+    openNewWindowFailedMsg: 'No se pudo abrir el archivo en una ventana nueva. El documento actual no ha cambiado.',
+    openElsewhereMsg: 'Este archivo ya está abierto en otra ventana. Usa esa ventana para trabajar con él.',
     unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
     saveError: 'Error al guardar', saveErrorMsg: 'No se pudo guardar el archivo.\n\nFormato de destino no compatible con este tipo de documento.',
     saveDeniedMsg: 'No se pudo guardar el archivo.\n\nNo tiene permiso para escribir en esa ubicación, o el archivo es de solo lectura.',
+    saveElsewhereMsg: 'No se pudo guardar el archivo.\n\nEl archivo está abierto en otra ventana. No se ha guardado nada.',
     pdfFontsErrorMsg: 'No se pudo crear el PDF porque la aplicación no pudo preparar sus fuentes. Inténtelo de nuevo en un momento. Si sigue fallando, reinicie Euro-Office Lite.',
     printError: 'Error al imprimir', printErrorMsg: 'No se pudo imprimir el documento. Inténtelo de nuevo.',
     documents: 'Documentos', all: 'Todos', plainText: 'Texto plano', user: 'Usuario', language: 'Idioma',
@@ -654,10 +658,12 @@ var _UI_STRINGS = {
     export: 'Exporter',
     openFile: 'Ouvrir un fichier', editPdf: 'Modifier un PDF', newDocument: 'Nouveau document', newSpreadsheet: 'Nouvelle feuille de calcul',
     newPresentation: 'Nouvelle présentation', unsavedChanges: 'Modifications non enregistrées',
-    unsavedDiscardOpen: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et ouvrir un autre fichier ?',
+    openNewWindowFailedMsg: 'Impossible d\'ouvrir le fichier dans une nouvelle fenêtre. Le document actuel n\'a pas changé.',
+    openElsewhereMsg: 'Ce fichier est déjà ouvert dans une autre fenêtre. Utilisez l\'autre fenêtre pour y travailler.',
     unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
     saveError: 'Erreur de sauvegarde', saveErrorMsg: 'Impossible d\'enregistrer le fichier.\n\nFormat de destination incompatible avec ce type de document.',
     saveDeniedMsg: 'Impossible d\'enregistrer le fichier.\n\nVous n\'avez pas l\'autorisation d\'écrire à cet emplacement, ou le fichier est en lecture seule.',
+    saveElsewhereMsg: 'Impossible d\'enregistrer le fichier.\n\nLe fichier est ouvert dans une autre fenêtre. Rien n\'a été enregistré.',
     pdfFontsErrorMsg: 'Impossible de créer le PDF, car l\'application n\'a pas pu préparer ses polices. Réessayez dans un instant. Si le problème persiste, redémarrez Euro-Office Lite.',
     printError: 'Échec de l\'impression', printErrorMsg: 'Impossible d\'imprimer le document. Veuillez réessayer.',
     documents: 'Documents', all: 'Tous', plainText: 'Texte brut', user: 'Utilisateur', language: 'Langue',
@@ -684,10 +690,12 @@ var _UI_STRINGS = {
     export: 'Exportieren',
     openFile: 'Datei öffnen', editPdf: 'PDF bearbeiten', newDocument: 'Neues Dokument', newSpreadsheet: 'Neue Tabelle',
     newPresentation: 'Neue Präsentation', unsavedChanges: 'Ungespeicherte Änderungen',
-    unsavedDiscardOpen: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und eine andere Datei öffnen?',
+    openNewWindowFailedMsg: 'Die Datei konnte nicht in einem neuen Fenster geöffnet werden. Das aktuelle Dokument ist unverändert.',
+    openElsewhereMsg: 'Diese Datei ist bereits in einem anderen Fenster geöffnet. Bearbeiten Sie sie im anderen Fenster.',
     unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
     saveError: 'Speicherfehler', saveErrorMsg: 'Die Datei konnte nicht gespeichert werden.\n\nZielformat nicht kompatibel mit diesem Dokumenttyp.',
     saveDeniedMsg: 'Die Datei konnte nicht gespeichert werden.\n\nSie haben keine Schreibberechtigung für diesen Ort, oder die Datei ist schreibgeschützt.',
+    saveElsewhereMsg: 'Die Datei konnte nicht gespeichert werden.\n\nDie Datei ist in einem anderen Fenster geöffnet. Es wurde nichts gespeichert.',
     pdfFontsErrorMsg: 'Das PDF konnte nicht erstellt werden, weil die App ihre Schriftarten nicht vorbereiten konnte. Versuchen Sie es gleich noch einmal. Wenn der Fehler weiterhin auftritt, starten Sie Euro-Office Lite neu.',
     printError: 'Druckfehler', printErrorMsg: 'Das Dokument konnte nicht gedruckt werden. Bitte versuchen Sie es erneut.',
     documents: 'Dokumente', all: 'Alle', plainText: 'Nur Text', user: 'Benutzer', language: 'Sprache',
@@ -714,10 +722,12 @@ var _UI_STRINGS = {
     export: 'Esporta',
     openFile: 'Apri file', editPdf: 'Modifica PDF', newDocument: 'Nuovo documento', newSpreadsheet: 'Nuovo foglio di calcolo',
     newPresentation: 'Nuova presentazione', unsavedChanges: 'Modifiche non salvate',
-    unsavedDiscardOpen: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e aprire un altro file?',
+    openNewWindowFailedMsg: 'Impossibile aprire il file in una nuova finestra. Il documento attuale non è cambiato.',
+    openElsewhereMsg: 'Questo file è già aperto in un\'altra finestra. Usa quella finestra per lavorarci.',
     unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
     saveError: 'Errore di salvataggio', saveErrorMsg: 'Impossibile salvare il file.\n\nFormato di destinazione non compatibile con questo tipo di documento.',
     saveDeniedMsg: 'Impossibile salvare il file.\n\nNon si dispone dell\'autorizzazione a scrivere in questa posizione, oppure il file è di sola lettura.',
+    saveElsewhereMsg: 'Impossibile salvare il file.\n\nIl file è aperto in un\'altra finestra. Non è stato salvato nulla.',
     pdfFontsErrorMsg: 'Impossibile creare il PDF perché l\'app non è riuscita a preparare i suoi caratteri. Riprova tra un momento. Se il problema persiste, riavvia Euro-Office Lite.',
     printError: 'Errore di stampa', printErrorMsg: 'Impossibile stampare il documento. Riprova.',
     documents: 'Documenti', all: 'Tutti', plainText: 'Testo normale', user: 'Utente', language: 'Lingua',
@@ -744,10 +754,12 @@ var _UI_STRINGS = {
     export: 'Exportar',
     openFile: 'Abrir arquivo', editPdf: 'Editar PDF', newDocument: 'Novo documento', newSpreadsheet: 'Nova planilha',
     newPresentation: 'Nova apresentação', unsavedChanges: 'Alterações não salvas',
-    unsavedDiscardOpen: 'O documento atual tem alterações não salvas. Deseja descartá-las e abrir outro arquivo?',
+    openNewWindowFailedMsg: 'Não foi possível abrir o arquivo em uma nova janela. O documento atual não foi alterado.',
+    openElsewhereMsg: 'Este arquivo já está aberto em outra janela. Use essa janela para trabalhar nele.',
     unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
     saveError: 'Erro ao salvar', saveErrorMsg: 'Não foi possível salvar o arquivo.\n\nFormato de destino não compatível com este tipo de documento.',
     saveDeniedMsg: 'Não foi possível salvar o arquivo.\n\nVocê não tem permissão para gravar nesse local, ou o arquivo é somente leitura.',
+    saveElsewhereMsg: 'Não foi possível salvar o arquivo.\n\nO arquivo está aberto em outra janela. Nada foi salvo.',
     pdfFontsErrorMsg: 'Não foi possível criar o PDF porque o aplicativo não conseguiu preparar suas fontes. Tente novamente em instantes. Se o problema continuar, reinicie o Euro-Office Lite.',
     printError: 'Erro ao imprimir', printErrorMsg: 'Não foi possível imprimir o documento. Tente novamente.',
     documents: 'Documentos', all: 'Todos', plainText: 'Texto simples', user: 'Usuário', language: 'Idioma',
@@ -774,10 +786,12 @@ var _UI_STRINGS = {
     export: 'Экспорт',
     openFile: 'Открыть файл', editPdf: 'Редактировать PDF', newDocument: 'Новый документ', newSpreadsheet: 'Новая таблица',
     newPresentation: 'Новая презентация', unsavedChanges: 'Несохранённые изменения',
-    unsavedDiscardOpen: 'Текущий документ содержит несохранённые изменения. Отменить их и открыть другой файл?',
+    openNewWindowFailedMsg: 'Не удалось открыть файл в новом окне. Текущий документ не изменён.',
+    openElsewhereMsg: 'Этот файл уже открыт в другом окне. Работайте с ним в том окне.',
     unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
     saveError: 'Ошибка сохранения', saveErrorMsg: 'Не удалось сохранить файл.\n\nФормат назначения несовместим с этим типом документа.',
     saveDeniedMsg: 'Не удалось сохранить файл.\n\nНет прав на запись в это место, или файл доступен только для чтения.',
+    saveElsewhereMsg: 'Не удалось сохранить файл.\n\nФайл открыт в другом окне. Ничего не сохранено.',
     pdfFontsErrorMsg: 'Не удалось создать PDF, так как приложению не удалось подготовить шрифты. Повторите попытку через несколько секунд. Если ошибка повторится, перезапустите Euro-Office Lite.',
     printError: 'Ошибка печати', printErrorMsg: 'Не удалось напечатать документ. Повторите попытку.',
     documents: 'Документы', all: 'Все', plainText: 'Обычный текст', user: 'Пользователь', language: 'Язык',
@@ -804,10 +818,12 @@ var _UI_STRINGS = {
     export: 'Експорт',
     openFile: 'Відкрити файл', editPdf: 'Редагувати PDF', newDocument: 'Новий документ', newSpreadsheet: 'Нова таблиця',
     newPresentation: 'Нова презентація', unsavedChanges: 'Незбережені зміни',
-    unsavedDiscardOpen: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і відкрити інший файл?',
+    openNewWindowFailedMsg: 'Не вдалося відкрити файл у новому вікні. Поточний документ не змінено.',
+    openElsewhereMsg: 'Цей файл уже відкрито в іншому вікні. Працюйте з ним у тому вікні.',
     unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
     saveError: 'Помилка збереження', saveErrorMsg: 'Не вдалося зберегти файл.\n\nФормат призначення несумісний із цим типом документа.',
     saveDeniedMsg: 'Не вдалося зберегти файл.\n\nНемає дозволу на запис у це місце, або файл доступний лише для читання.',
+    saveElsewhereMsg: 'Не вдалося зберегти файл.\n\nФайл відкрито в іншому вікні. Нічого не збережено.',
     pdfFontsErrorMsg: 'Не вдалося створити PDF, оскільки застосунку не вдалося підготувати шрифти. Спробуйте ще раз за мить. Якщо помилка повториться, перезапустіть Euro-Office Lite.',
     printError: 'Помилка друку', printErrorMsg: 'Не вдалося надрукувати документ. Спробуйте ще раз.',
     documents: 'Документи', all: 'Усі', plainText: 'Звичайний текст', user: 'Користувач', language: 'Мова',
@@ -834,10 +850,12 @@ var _UI_STRINGS = {
     export: '导出',
     openFile: '打开文件', editPdf: '编辑 PDF', newDocument: '新建文档', newSpreadsheet: '新建电子表格',
     newPresentation: '新建演示文稿', unsavedChanges: '未保存的更改',
-    unsavedDiscardOpen: '当前文档有未保存的更改。是否放弃更改并打开另一个文件？',
+    openNewWindowFailedMsg: '无法在新窗口中打开文件。当前文档未更改。',
+    openElsewhereMsg: '此文件已在另一个窗口中打开。请在该窗口中编辑它。',
     unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
     saveError: '保存错误', saveErrorMsg: '无法保存文件。\n\n目标格式与此文档类型不兼容。',
     saveDeniedMsg: '无法保存文件。\n\n您没有写入该位置的权限，或该文件为只读。',
+    saveElsewhereMsg: '无法保存文件。\n\n该文件已在另一个窗口中打开。未保存任何内容。',
     pdfFontsErrorMsg: '无法创建 PDF，因为应用无法准备字体。请稍后重试。如果问题仍然存在，请重新启动 Euro-Office Lite。',
     printError: '打印错误', printErrorMsg: '无法打印文档。请重试。',
     documents: '文档', all: '所有文件', plainText: '纯文本', user: '用户', language: '语言',
@@ -864,10 +882,12 @@ var _UI_STRINGS = {
     export: 'エクスポート',
     openFile: 'ファイルを開く', editPdf: 'PDF を編集', newDocument: '新規ドキュメント', newSpreadsheet: '新規スプレッドシート',
     newPresentation: '新規プレゼンテーション', unsavedChanges: '未保存の変更',
-    unsavedDiscardOpen: '現在のドキュメントには未保存の変更があります。変更を破棄して別のファイルを開きますか？',
+    openNewWindowFailedMsg: '新しいウィンドウでファイルを開けませんでした。現在のドキュメントは変更されていません。',
+    openElsewhereMsg: 'このファイルは別のウィンドウで既に開かれています。そのウィンドウで作業してください。',
     unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
     saveError: '保存エラー', saveErrorMsg: 'ファイルを保存できませんでした。\n\n対象の形式はこのドキュメントタイプと互換性がありません。',
     saveDeniedMsg: 'ファイルを保存できませんでした。\n\nその場所への書き込み権限がないか、ファイルが読み取り専用です。',
+    saveElsewhereMsg: 'ファイルを保存できませんでした。\n\nこのファイルは別のウィンドウで開かれています。何も保存されていません。',
     pdfFontsErrorMsg: 'アプリがフォントを準備できなかったため、PDF を作成できませんでした。しばらくしてからもう一度お試しください。問題が解決しない場合は、Euro-Office Lite を再起動してください。',
     printError: '印刷エラー', printErrorMsg: 'ドキュメントを印刷できませんでした。もう一度お試しください。',
     documents: 'ドキュメント', all: 'すべて', plainText: 'プレーンテキスト', user: 'ユーザー', language: '言語',
@@ -1004,13 +1024,32 @@ function _eoShowSavedName(savedName) {
 // converter cannot read, but the reason only reached js-debug.log: the user saw
 // the start screen come back and nothing else (Issue #38). The raw error stays
 // in the log, the user gets a translated, generic message.
-function _eoShowOpenError() {
+// `error` is what the open command rejected with. A file open in another
+// window is not damaged, so it gets its own message.
+function _eoShowOpenError(error) {
+  if (_eoIsOpenElsewhere(error)) return _eoShowOpenElsewhere();
   return window.__TAURI__.dialog.message(
     _t('openErrorMsg'),
     { title: _t('openFailed'), kind: 'error' }
   );
 }
 window._eoShowOpenError = _eoShowOpenError;
+
+// What the backend answers or rejects with when the file is open in another
+// window (new_window.rs): two windows saving one file overwrite each other.
+var _EO_OPEN_ELSEWHERE = 'open-elsewhere';
+
+function _eoIsOpenElsewhere(error) {
+  return String(error) === _EO_OPEN_ELSEWHERE;
+}
+window._eoIsOpenElsewhere = _eoIsOpenElsewhere;
+
+function _eoShowOpenElsewhere() {
+  return window.__TAURI__.dialog.message(
+    _t('openElsewhereMsg'),
+    { title: _t('openFailed'), kind: 'warning' }
+  );
+}
 
 // Converting a file happens before the editor exists and reports no progress,
 // so the shell shows an indeterminate indicator until the editor takes over
@@ -1176,6 +1215,37 @@ window._eoEditPdf = _eoEditPdf;
 function _eoSetPendingOpen(file) {
   if (!file || !file.token) return;
   localStorage.setItem('eo-pending-open', JSON.stringify({ token: file.token, name: file.name }));
+}
+
+// With a document open, another file opens in a new window: a new process of
+// the app with the file as its launch argument, as a double click on it does.
+// The backend answers 'already-open' for the open document itself and
+// 'open-elsewhere' for a file another window has open, as two windows saving
+// one file would overwrite each other.
+async function _eoOpenInNewWindow(file) {
+  var result;
+  try {
+    result = await invoke('open_in_new_window', { token: file.token });
+  } catch (e) {
+    window._eoLog('[EO] open in new window failed: ' + (e.message || e));
+    await _eoShowNewWindowError();
+    return;
+  }
+  if (result === 'already-open') {
+    window._eoLog('[EO] open in new window: the chosen file is the open document');
+    return;
+  }
+  if (_eoIsOpenElsewhere(result)) {
+    window._eoLog('[EO] open in new window: the chosen file is open in another window');
+    await _eoShowOpenElsewhere();
+  }
+}
+
+function _eoShowNewWindowError() {
+  return window.__TAURI__.dialog.message(
+    _t('openNewWindowFailedMsg'),
+    { title: _t('openFailed'), kind: 'error' }
+  );
 }
 
 // The editor's recent list names entries by path. The backend's own list
@@ -1374,11 +1444,13 @@ function _forceReload() {
   // close from coming back as a crash offer on the next start.
   invoke('recovery_end', { discard: true })
     .catch(function(){})
-    .finally(function() {
-      invoke('set_document_modified', { modified: false })
-        .catch(function(){})
-        .finally(function() { window.location.reload(); });
-    });
+    .then(function() { return invoke('set_document_modified', { modified: false }); })
+    .catch(function(){})
+    // The process outlives the page: without this, other windows would still
+    // be told the file is open here.
+    .then(function() { return invoke('close_document'); })
+    .catch(function(){})
+    .finally(function() { window.location.reload(); });
 }
 
 // Note lines (#42), a toggle. The horizontal rules above the notes come from
@@ -1655,6 +1727,7 @@ function _eoIsSaveDeniedError(error) {
 // What the failed-save dialog says, from the backend's error.
 function _eoSaveErrorText(error) {
   if (_eoIsFontCacheError(error)) return _t('pdfFontsErrorMsg');
+  if (_eoIsOpenElsewhere(error)) return _t('saveElsewhereMsg');
   if (_eoIsSaveDeniedError(error)) return _t('saveDeniedMsg');
   if (_eoIsSaveLockedError(error)) return _t('saveLockedMsg');
   return _t('saveErrorMsg');
@@ -2686,16 +2759,9 @@ window.AscDesktopEditor = {
     if (!file) file = await _eoPickDocument();
     if (!file || !file.token) return;
 
+    // The open document stays as it is, saved or not.
     if (window.AscDesktopEditor._currentDocType) {
-      if (window.AscDesktopEditor._isModified) {
-        var discard = await window.__TAURI__.dialog.confirm(
-          _t('unsavedDiscardOpen'),
-          { title: _t('unsavedChanges'), kind: 'warning' }
-        );
-        if (!discard) return;
-      }
-      _eoSetPendingOpen(file);
-      _forceReload();
+      await _eoOpenInNewWindow(file);
       return;
     }
 
@@ -3179,8 +3245,7 @@ window.AscDesktopEditor = {
     } else if (cmd === 'open:recent') {
       try {
         var recent = JSON.parse(param);
-        // LocalFileOpen already handles the unsaved-changes confirmation and the
-        // reload needed to switch documents.
+        // LocalFileOpen opens it in a new window when a document is open.
         if (recent && recent.path) _eoOpenRecent(recent.path);
       } catch(e) {
         window._eoLog('[EO] open:recent parse error: ' + (e.message || e));
@@ -3381,7 +3446,7 @@ async function _eoOpenGranted(file) {
   } catch(e) {
     window._eoLog('[EO] open-file: conversion failed: ' + (e.message || e));
     _eoHideOpening();
-    await _eoShowOpenError();
+    await _eoShowOpenError(e);
   }
 }
 

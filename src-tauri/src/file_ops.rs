@@ -45,6 +45,20 @@ pub struct AppState {
     // Where a recovered document was saved before the crash: offered by the
     // first Save As, never written to without asking.
     pub save_suggestion: Mutex<Option<PathBuf>>,
+    // The title bar options this process was started with, for the processes
+    // it starts (new_window.rs).
+    pub title_bar_args: Vec<&'static str>,
+}
+
+// Every change of the open file goes through here, so the other windows can
+// see it (temp_layout.rs, "The file each instance has open"). A failed write
+// is only logged: it must never stop an open or a save.
+pub(crate) fn set_current_file(state: &AppState, path: Option<PathBuf>) {
+    let published = crate::temp_layout::publish_open_document(&state.instance.dir, path.as_deref());
+    if let Err(e) = published {
+        log_event(state, &format!("[OPEN-DOCUMENT] could not publish: {e}"));
+    }
+    *state.current_file.lock().unwrap() = path;
 }
 
 // How the bridge names an image chosen in the insert dialog to copy-to-media.
@@ -254,6 +268,7 @@ pub async fn open_pdf(
     token: String,
 ) -> Result<String, String> {
     let input = pdf_to_open(&state.grants, &token)?;
+    crate::new_window::refuse_if_open_elsewhere(&state, &input)?;
     let path = input.to_string_lossy().to_string();
     let file_name = input
         .file_name()
@@ -282,7 +297,7 @@ pub async fn open_pdf(
         ),
     );
 
-    *state.current_file.lock().unwrap() = Some(input);
+    set_current_file(&state, Some(input));
     *state.modified.lock().unwrap() = false;
     *state.text_options.lock().unwrap() = None;
     super::recent::record(&app, &path);
@@ -333,6 +348,7 @@ pub async fn open_file(
     token: String,
 ) -> Result<String, String> {
     let path = state.grants.resolve(&token, GrantKind::Open)?;
+    crate::new_window::refuse_if_open_elsewhere(&state, &path)?;
     open_file_inner(app, state, path.to_string_lossy().to_string(), true).await
 }
 
@@ -493,7 +509,7 @@ async fn open_file_inner(
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
     let b64 = STANDARD.encode(&bin_data);
 
-    *state.current_file.lock().unwrap() = Some(input.clone());
+    set_current_file(&state, Some(input.clone()));
     *state.modified.lock().unwrap() = false;
     // None for anything that is not CSV or TXT: the options of the previous
     // document must not leak into how this one is saved.
@@ -555,6 +571,7 @@ pub async fn save_file_as(
     token: String,
 ) -> Result<String, String> {
     let dest = state.grants.resolve(&token, GrantKind::Save)?;
+    crate::new_window::refuse_save_if_open_elsewhere(&state, &dest)?;
     crate::save_target::check_writable_destination(&dest)?;
     let path = dest.to_string_lossy().to_string();
     let input = state.temp_dir.join("Editor.bin");
@@ -582,7 +599,7 @@ pub async fn save_file_as(
         // a real Save As does: record below files the path actually written,
         // which when the entry is consumed is that same path (#33).
         end_pending_recent(&state.pending_recent, &dest);
-        *state.current_file.lock().unwrap() = Some(dest);
+        set_current_file(&state, Some(dest));
         *state.modified.lock().unwrap() = false;
         super::recent::record(&app, &path);
     }
@@ -616,6 +633,9 @@ async fn save_pdf_inner(
     let changes = decode_pdf_changes(data)?;
     let current = open_pdf_file(state)?;
     let dest = pdf_save_destination(&state.grants, token.as_deref(), &current)?;
+    if dest != current {
+        crate::new_window::refuse_save_if_open_elsewhere(state, &dest)?;
+    }
     crate::protocol_limits::check_pdf_save_target(&dest)?;
     // Refused before x2t runs; write_beside_and_rename checks again.
     crate::save_target::check_writable_destination(&dest)?;
@@ -638,7 +658,7 @@ async fn save_pdf_inner(
         &format!("[SAVE] pdf success changes={} bytes", changes.len()),
     );
     if dest != current {
-        *state.current_file.lock().unwrap() = Some(dest.clone());
+        set_current_file(state, Some(dest.clone()));
         super::recent::record(app, &dest.to_string_lossy());
     }
     *state.modified.lock().unwrap() = false;
@@ -1074,6 +1094,13 @@ pub fn current_document(state: State<'_, AppState>) -> Option<GrantedFile> {
     Some(state.grants.grant(path, GrantKind::Open))
 }
 
+// The page is going back to the start screen while this process lives on, so
+// the other windows must stop seeing the file as open here.
+#[tauri::command]
+pub fn close_document(state: State<'_, AppState>) {
+    set_current_file(&state, None);
+}
+
 // Asked once by the frontend; "fonts-ready" carries the change after that.
 #[tauri::command]
 pub fn fonts_status(state: State<'_, AppState>) -> crate::fonts_state::FontsStatus {
@@ -1106,7 +1133,7 @@ pub async fn create_new(
         .map_err(|e| e.to_string())?
         .join(template);
 
-    *state.current_file.lock().unwrap() = None;
+    set_current_file(&state, None);
     *state.save_suggestion.lock().unwrap() = None;
     *state.modified.lock().unwrap() = false;
 
@@ -1117,7 +1144,7 @@ pub async fn create_new(
         false,
     )
     .await;
-    *state.current_file.lock().unwrap() = None;
+    set_current_file(&state, None);
     result
 }
 
