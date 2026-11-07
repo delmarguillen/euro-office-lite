@@ -272,6 +272,11 @@ fn store_markdown(
 ) -> Result<SavedMarkdown, String> {
     let current = state.current_file.lock().unwrap().clone();
     let dest = markdown_save_destination(&state.grants, token, current.clone())?;
+    // As the editors' Save As (save_file_as): the other window would write
+    // its own copy over this one on its next save.
+    if token.is_some() {
+        crate::new_window::refuse_save_if_open_elsewhere(state, &dest)?;
+    }
     let written = decode_markdown_data(data)
         .and_then(|bytes| crate::save_target::write_bytes_beside_and_rename(&bytes, &dest));
     if let Err(error) = written {
@@ -562,6 +567,32 @@ mod tests {
         let state = window_state(&dir, 1);
         let token = state.grants.grant(file.clone(), GrantKind::Open).token;
         assert!(open_markdown(&state, &token).is_ok());
+    }
+
+    #[test]
+    fn save_as_over_a_file_open_in_another_window_is_refused() {
+        let dir = test_dir("save-elsewhere");
+        let taken = file_with(&dir, "taken.md", b"theirs\n");
+        let other = window_state(&dir, 2);
+        crate::file_ops::set_current_file(&other, Some(taken.clone()));
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(taken.clone(), GrantKind::Save).token;
+        let result = store_markdown(&state, TEXT_B64, Some(&token));
+        assert_eq!(result.err().as_deref(), Some(crate::new_window::OPEN_ELSEWHERE));
+        assert_eq!(std::fs::read(&taken).unwrap(), b"theirs\n");
+        assert_eq!(*state.current_file.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn save_as_over_the_file_open_here_is_allowed() {
+        let dir = test_dir("save-here");
+        let file = file_with(&dir, "notes.md", b"old\n");
+        let state = window_state(&dir, 1);
+        let open = state.grants.grant(file.clone(), GrantKind::Open).token;
+        open_markdown(&state, &open).unwrap();
+        let save = state.grants.grant(file.clone(), GrantKind::Save).token;
+        assert!(store_markdown(&state, TEXT_B64, Some(&save)).is_ok());
+        assert_eq!(std::fs::read(&file).unwrap(), b"text\n");
     }
 
     #[test]
