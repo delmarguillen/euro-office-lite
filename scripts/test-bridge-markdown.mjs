@@ -30,6 +30,7 @@ async function routingBridge() {
       open_pdf: record('open_pdf', 'BASE64'),
       recovery_end: record('recovery_end', null),
       set_document_modified: record('set_document_modified', null),
+      open_in_new_window: record('open_in_new_window', 'opened'),
       fonts_status: () => 'ready',
     },
   });
@@ -110,29 +111,23 @@ for (const name of ['notes.md', 'NOTES.MD', 'notes.markdown']) {
   bridge.stopTimers();
 }
 
-// File > Open from an editor: the editor is dropped the usual way first.
-{
+// File > Open from an editor: every file, a .md too, goes to a new window
+// and the open document stays as it is.
+for (const name of ['notes.md', 'report.docx']) {
   const { bridge, commands } = await routingBridge();
   bridge.run(`window.AscDesktopEditor._currentDocType = 'word'`);
-  await bridge.run(`window.AscDesktopEditor.LocalFileOpen({ token: 'tok', name: 'notes.md' })`);
+  await bridge.run(`window.AscDesktopEditor.LocalFileOpen({ token: 'tok', name: '${name}' })`);
   await settle();
-  check(results, 'from an open editor, a .md loads the Markdown page',
-    bridge.sandbox.location.href === 'markdown/markdown.html' && !bridge.sandbox.location.reloaded);
-  check(results, 'from an open editor, the session ends as on any switch',
-    commands.some((command) => command.name === 'recovery_end') &&
-    commands.some((command) => command.name === 'set_document_modified'));
-  check(results, 'from an open editor, the .md is not queued for an editor',
-    bridge.sandbox.localStorage.getItem('eo-pending-open') === null);
-  bridge.stopTimers();
-}
-
-{
-  const { bridge } = await routingBridge();
-  bridge.run(`window.AscDesktopEditor._currentDocType = 'word'`);
-  await bridge.run(`window.AscDesktopEditor.LocalFileOpen({ token: 'tok', name: 'report.docx' })`);
-  await settle();
-  check(results, 'from an open editor, a .docx reloads for the editor as before',
-    bridge.sandbox.location.reloaded === true && bridge.sandbox.location.href === 'index.html');
+  const opened = commands.filter((command) => command.name === 'open_in_new_window');
+  check(results, `from an open editor, ${name} goes to open_in_new_window`,
+    opened.length === 1 && opened[0].args.token === 'tok');
+  check(results, `from an open editor, ${name} leaves this page as it is`,
+    bridge.sandbox.location.href === 'index.html' && !bridge.sandbox.location.reloaded);
+  check(results, `from an open editor, ${name} does not end the session`,
+    !commands.some((command) => command.name === 'recovery_end'));
+  check(results, `from an open editor, ${name} is queued for nothing`,
+    bridge.sandbox.localStorage.getItem('eo-pending-open') === null &&
+    bridge.sandbox.localStorage.getItem('eo-markdown-open') === null);
   bridge.stopTimers();
 }
 
