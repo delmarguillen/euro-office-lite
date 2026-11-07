@@ -571,6 +571,7 @@ pub async fn save_file_as(
     token: String,
 ) -> Result<String, String> {
     let dest = state.grants.resolve(&token, GrantKind::Save)?;
+    crate::new_window::refuse_save_if_open_elsewhere(&state, &dest)?;
     crate::save_target::check_writable_destination(&dest)?;
     let path = dest.to_string_lossy().to_string();
     let input = state.temp_dir.join("Editor.bin");
@@ -632,6 +633,9 @@ async fn save_pdf_inner(
     let changes = decode_pdf_changes(data)?;
     let current = open_pdf_file(state)?;
     let dest = pdf_save_destination(&state.grants, token.as_deref(), &current)?;
+    if dest != current {
+        crate::new_window::refuse_save_if_open_elsewhere(state, &dest)?;
+    }
     crate::protocol_limits::check_pdf_save_target(&dest)?;
     // Refused before x2t runs; write_beside_and_rename checks again.
     crate::save_target::check_writable_destination(&dest)?;
