@@ -216,9 +216,11 @@ fn start_markdown_document(state: &AppState, path: Option<PathBuf>) {
     *state.text_options.lock().unwrap() = None;
 }
 
-// The Markdown file an Open token names becomes the open document.
+// The Markdown file an Open token names becomes the open document, unless
+// another window has it open: two windows saving one file overwrite each other.
 fn open_markdown(state: &AppState, token: &str) -> Result<(PathBuf, Vec<u8>), String> {
     let (path, bytes) = read_markdown_file(&state.grants, token)?;
+    crate::new_window::refuse_if_open_elsewhere(state, &path)?;
     start_markdown_document(state, Some(path.clone()));
     Ok((path, bytes))
 }
@@ -535,6 +537,31 @@ mod tests {
         open_markdown(&state, &token).unwrap();
         assert!(published(&state, &file));
         assert_eq!(*state.current_file.lock().unwrap(), Some(file));
+    }
+
+    #[test]
+    fn a_file_open_in_another_window_is_not_opened() {
+        let dir = test_dir("open-elsewhere");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let other = window_state(&dir, 2);
+        crate::file_ops::set_current_file(&other, Some(file.clone()));
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        let result = open_markdown(&state, &token);
+        assert_eq!(result.err().as_deref(), Some(crate::new_window::OPEN_ELSEWHERE));
+        assert_eq!(*state.current_file.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn a_file_another_window_closed_opens() {
+        let dir = test_dir("closed-elsewhere");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let other = window_state(&dir, 2);
+        crate::file_ops::set_current_file(&other, Some(file.clone()));
+        drop(other);
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        assert!(open_markdown(&state, &token).is_ok());
     }
 
     #[test]
