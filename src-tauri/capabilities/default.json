@@ -17,6 +17,7 @@
     "allow-print-document",
     "allow-create-new",
     "allow-current-document",
+    "allow-close-document",
     "allow-pick-document",
     "allow-pick-pdf",
     "allow-pick-files",

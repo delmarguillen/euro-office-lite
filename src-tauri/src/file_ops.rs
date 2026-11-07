@@ -1094,6 +1094,13 @@ pub fn current_document(state: State<'_, AppState>) -> Option<GrantedFile> {
     Some(state.grants.grant(path, GrantKind::Open))
 }
 
+// The page is going back to the start screen while this process lives on, so
+// the other windows must stop seeing the file as open here.
+#[tauri::command]
+pub fn close_document(state: State<'_, AppState>) {
+    set_current_file(&state, None);
+}
+
 // Asked once by the frontend; "fonts-ready" carries the change after that.
 #[tauri::command]
 pub fn fonts_status(state: State<'_, AppState>) -> crate::fonts_state::FontsStatus {

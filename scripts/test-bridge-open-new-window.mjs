@@ -38,7 +38,7 @@ async function setup({ docType = 'word', modified = false, newWindow = () => 'op
   return env;
 }
 
-// The reload waits on two invoke round trips; let them settle before looking.
+// The reload waits on its invoke round trips; let them settle before looking.
 async function settle(env) {
   await new Promise((resolve) => setTimeout(resolve, 20));
   env.bridge.stopTimers();

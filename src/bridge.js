@@ -1444,11 +1444,13 @@ function _forceReload() {
   // close from coming back as a crash offer on the next start.
   invoke('recovery_end', { discard: true })
     .catch(function(){})
-    .finally(function() {
-      invoke('set_document_modified', { modified: false })
-        .catch(function(){})
-        .finally(function() { window.location.reload(); });
-    });
+    .then(function() { return invoke('set_document_modified', { modified: false }); })
+    .catch(function(){})
+    // The process outlives the page: without this, other windows would still
+    // be told the file is open here.
+    .then(function() { return invoke('close_document'); })
+    .catch(function(){})
+    .finally(function() { window.location.reload(); });
 }
 
 // Note lines (#42), a toggle. The horizontal rules above the notes come from

@@ -10,6 +10,7 @@ const APP_COMMANDS: &[&str] = &[
     "print_document",
     "create_new",
     "current_document",
+    "close_document",
     "pick_document",
     "pick_pdf",
     "pick_files",

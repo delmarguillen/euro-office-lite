@@ -421,6 +421,7 @@ fn main() {
             file_ops::print_document,
             file_ops::create_new,
             file_ops::current_document,
+            file_ops::close_document,
             file_dialogs::pick_document,
             file_dialogs::pick_pdf,
             file_dialogs::pick_files,
