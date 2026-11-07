@@ -1833,6 +1833,8 @@ function _loadEditorBin(b64data, fileName, options) {
     }
 
     if (editorDoc) {
+      if (_isMac) SlideshowEscGuard.install(editorDoc);
+
       if (isLinux) {
         // Must register before the Ctrl+V interceptor below: same document and
         // phase, so listener order is registration order, and the interceptor's
@@ -2679,6 +2681,45 @@ function _ensureCoreProps(ref) {
   }
 }
 
+// macOS: sdkjs handles Esc in the slideshow without preventDefault, so the key
+// also reaches AppKit, whose cancelOperation: toggles native fullscreen while
+// the backend leaves it too; the two transitions cross and the window stays
+// fullscreen. Preventing only the default keeps AppKit out: the event still
+// reaches sdkjs, which ends the slideshow or drops the pen.
+var SlideshowEscGuard = (function() {
+  var active = false;
+
+  function onKeyDown(e) {
+    if (!active) return;
+    if (e.keyCode !== 27) return;
+    e.preventDefault();
+  }
+
+  // Called on every editor load; the document flag keeps it to one listener.
+  function install(doc) {
+    if (!doc || doc.__eoSlideshowEscGuardInstalled) return;
+    doc.addEventListener('keydown', onKeyDown, true);
+    doc.__eoSlideshowEscGuardInstalled = true;
+  }
+
+  // A system exit (green button, Ctrl+Cmd+F) leaves it on until the slideshow
+  // ends; Esc then only ends the slideshow, which turns it off.
+  function setActive(on) {
+    active = on;
+  }
+
+  return { install: install, setActive: setActive };
+})();
+
+// The window has no fullscreen permission in the webview; the backend command
+// sets it and restores the earlier maximized state on exit.
+function _eoSetPresentationFullscreen(on) {
+  SlideshowEscGuard.setActive(on);
+  invoke('set_presentation_fullscreen', { on: on }).catch(function(e) {
+    _eoLog('[presentation] fullscreen ' + on + ' failed:', e);
+  });
+}
+
 window.AscDesktopEditor = {
   IsLocalFile: () => true,
   GetEditorId: () => 'euro-office-lite',
@@ -3349,15 +3390,10 @@ window.AscDesktopEditor = {
   isBlockchainSupport: () => false,
   SpellCheck: function(json) { SpellCheckBridge.check(json); },
   SetFullscreen: function(fullscreen) {
-    var win = window.__TAURI__.window.getCurrentWindow();
-    var fs = !!fullscreen;
-    win.setFullscreen(fs).catch(function(){});
-    win.setAlwaysOnTop(fs).catch(function(){});
+    _eoSetPresentationFullscreen(!!fullscreen);
   },
   endReporter: function() {
-    var win = window.__TAURI__.window.getCurrentWindow();
-    win.setFullscreen(false).catch(function(){});
-    win.setAlwaysOnTop(false).catch(function(){});
+    _eoSetPresentationFullscreen(false);
   },
   // The slide editor relays pen strokes and presenter commands to a separate
   // presenter window through this call. There is no such window here, so
