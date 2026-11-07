@@ -27,7 +27,7 @@ pub fn set_document_modified(
 
 #[tauri::command]
 pub fn force_close(app_handle: tauri::AppHandle) -> Result<(), String> {
-    app_handle.exit(0);
+    crate::app_quit::exit_confirmed(&app_handle);
     Ok(())
 }
 

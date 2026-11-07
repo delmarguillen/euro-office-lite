@@ -38,8 +38,20 @@ pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         QuitAction::Confirm => {
             let _ = app.emit("confirm-close", ());
         }
-        QuitAction::Exit => app.exit(0),
+        QuitAction::Exit => exit_confirmed(app),
     }
+}
+
+// An exit the user confirmed: there were no changes, or they chose to discard
+// them. Nothing unsaved is being dropped by surprise.
+pub fn mark_exit_confirmed(state: &AppState) {
+    *state.modified.lock().unwrap() = false;
+}
+
+// The only exit(0) of the app: every confirmed exit goes through here.
+pub fn exit_confirmed(app: &AppHandle) {
+    mark_exit_confirmed(&app.state::<AppState>());
+    app.exit(0);
 }
 
 // Tauri's default macOS menu with its last app-menu item (the stock Quit)
@@ -66,6 +78,51 @@ pub fn macos_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_ops::test_state;
+    use std::path::{Path, PathBuf};
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "eo-app-quit-test-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_confirmed_exit_clears_the_modified_flag() {
+        let state = test_state(&scratch("confirmed-flag"));
+        *state.modified.lock().unwrap() = true;
+        mark_exit_confirmed(&state);
+        assert!(!*state.modified.lock().unwrap());
+    }
+
+    // force_close, the menu's Quit and anything added later must clear the
+    // flag before exiting, so none of them may call exit() on its own.
+    #[test]
+    fn exit_confirmed_holds_the_only_exit_call() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files_with_exit = Vec::new();
+        for entry in std::fs::read_dir(&src).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            // Every module keeps its tests at the end: this one's needle is
+            // not a call.
+            let code = text.split("#[cfg(test)]").next().unwrap();
+            let calls = code.matches(".exit(").count();
+            if calls > 0 {
+                let name = entry.file_name().to_string_lossy().to_string();
+                files_with_exit.push((name, calls));
+            }
+        }
+        assert_eq!(files_with_exit, vec![("app_quit.rs".to_string(), 1)]);
+    }
 
     #[test]
     fn modified_document_asks_before_quitting() {

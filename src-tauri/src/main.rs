@@ -886,10 +886,13 @@ fn main() {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         let state = h.state::<AppState>();
                         let modified = *state.modified.lock().unwrap();
-                        if modified {
-                            api.prevent_close();
-                            let _ = h.emit("confirm-close", ());
+                        if !modified {
+                            // Tauri closes the window and the app exits.
+                            app_quit::mark_exit_confirmed(&state);
+                            return;
                         }
+                        api.prevent_close();
+                        let _ = h.emit("confirm-close", ());
                     }
                 });
             }

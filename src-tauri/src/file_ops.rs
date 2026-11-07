@@ -1277,6 +1277,32 @@ fn end_pending_recent(pending: &Mutex<Option<PathBuf>>, dest: &Path) -> Option<P
     consumed
 }
 
+// An AppState for tests in any module: no document open, the instance folder
+// under `root`.
+#[cfg(test)]
+pub(crate) fn test_state(root: &Path) -> AppState {
+    let instance = crate::temp_layout::unlocked_instance(root, 1, std::process::id());
+    AppState {
+        current_file: Mutex::new(None),
+        temp_dir: instance.dir.clone(),
+        temp_root: root.to_path_buf(),
+        font_root: root.join("fonts"),
+        fonts: std::sync::Arc::new(crate::fonts_state::FontsState::pending()),
+        instance,
+        doc_seq: std::sync::atomic::AtomicU64::new(1),
+        modified: Mutex::new(false),
+        pending_recent: Mutex::new(None),
+        recovery: Mutex::new(None),
+        pending_open: crate::pending_open::PendingOpens::default(),
+        grants: crate::path_grants::PathGrants::default(),
+        text_options: Mutex::new(None),
+        last_print_pdf: Mutex::new(None),
+        pasted_images: Mutex::new(Vec::new()),
+        save_suggestion: Mutex::new(None),
+        title_bar_args: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
