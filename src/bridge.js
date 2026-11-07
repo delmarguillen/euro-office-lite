@@ -581,6 +581,7 @@ var _UI_STRINGS = {
     openFile: 'Open file', editPdf: 'Edit PDF', newDocument: 'New document', newSpreadsheet: 'New spreadsheet',
     newPresentation: 'New presentation', unsavedChanges: 'Unsaved changes',
     openNewWindowFailedMsg: 'The file could not be opened in a new window. The current document has not changed.',
+    openElsewhereMsg: 'This file is already open in another window. Use that window to work on it.',
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
     saveError: 'Save error', saveErrorMsg: 'Could not save the file.\n\nTarget format not compatible with this document type.',
     saveDeniedMsg: 'Could not save the file.\n\nYou do not have permission to write there, or the file is read-only.',
@@ -624,6 +625,7 @@ var _UI_STRINGS = {
     openFile: 'Abrir archivo', editPdf: 'Editar PDF', newDocument: 'Nuevo documento', newSpreadsheet: 'Nueva hoja de cálculo',
     newPresentation: 'Nueva presentación', unsavedChanges: 'Cambios sin guardar',
     openNewWindowFailedMsg: 'No se pudo abrir el archivo en una ventana nueva. El documento actual no ha cambiado.',
+    openElsewhereMsg: 'Este archivo ya está abierto en otra ventana. Usa esa ventana para trabajar con él.',
     unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
     saveError: 'Error al guardar', saveErrorMsg: 'No se pudo guardar el archivo.\n\nFormato de destino no compatible con este tipo de documento.',
     saveDeniedMsg: 'No se pudo guardar el archivo.\n\nNo tiene permiso para escribir en esa ubicación, o el archivo es de solo lectura.',
@@ -655,6 +657,7 @@ var _UI_STRINGS = {
     openFile: 'Ouvrir un fichier', editPdf: 'Modifier un PDF', newDocument: 'Nouveau document', newSpreadsheet: 'Nouvelle feuille de calcul',
     newPresentation: 'Nouvelle présentation', unsavedChanges: 'Modifications non enregistrées',
     openNewWindowFailedMsg: 'Impossible d\'ouvrir le fichier dans une nouvelle fenêtre. Le document actuel n\'a pas changé.',
+    openElsewhereMsg: 'Ce fichier est déjà ouvert dans une autre fenêtre. Utilisez cette fenêtre pour y travailler.',
     unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
     saveError: 'Erreur de sauvegarde', saveErrorMsg: 'Impossible d\'enregistrer le fichier.\n\nFormat de destination incompatible avec ce type de document.',
     saveDeniedMsg: 'Impossible d\'enregistrer le fichier.\n\nVous n\'avez pas l\'autorisation d\'écrire à cet emplacement, ou le fichier est en lecture seule.',
@@ -685,6 +688,7 @@ var _UI_STRINGS = {
     openFile: 'Datei öffnen', editPdf: 'PDF bearbeiten', newDocument: 'Neues Dokument', newSpreadsheet: 'Neue Tabelle',
     newPresentation: 'Neue Präsentation', unsavedChanges: 'Ungespeicherte Änderungen',
     openNewWindowFailedMsg: 'Die Datei konnte nicht in einem neuen Fenster geöffnet werden. Das aktuelle Dokument ist unverändert.',
+    openElsewhereMsg: 'Diese Datei ist bereits in einem anderen Fenster geöffnet. Bearbeiten Sie sie in diesem Fenster.',
     unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
     saveError: 'Speicherfehler', saveErrorMsg: 'Die Datei konnte nicht gespeichert werden.\n\nZielformat nicht kompatibel mit diesem Dokumenttyp.',
     saveDeniedMsg: 'Die Datei konnte nicht gespeichert werden.\n\nSie haben keine Schreibberechtigung für diesen Ort, oder die Datei ist schreibgeschützt.',
@@ -715,6 +719,7 @@ var _UI_STRINGS = {
     openFile: 'Apri file', editPdf: 'Modifica PDF', newDocument: 'Nuovo documento', newSpreadsheet: 'Nuovo foglio di calcolo',
     newPresentation: 'Nuova presentazione', unsavedChanges: 'Modifiche non salvate',
     openNewWindowFailedMsg: 'Impossibile aprire il file in una nuova finestra. Il documento attuale non è cambiato.',
+    openElsewhereMsg: 'Questo file è già aperto in un\'altra finestra. Usa quella finestra per lavorarci.',
     unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
     saveError: 'Errore di salvataggio', saveErrorMsg: 'Impossibile salvare il file.\n\nFormato di destinazione non compatibile con questo tipo di documento.',
     saveDeniedMsg: 'Impossibile salvare il file.\n\nNon si dispone dell\'autorizzazione a scrivere in questa posizione, oppure il file è di sola lettura.',
@@ -745,6 +750,7 @@ var _UI_STRINGS = {
     openFile: 'Abrir arquivo', editPdf: 'Editar PDF', newDocument: 'Novo documento', newSpreadsheet: 'Nova planilha',
     newPresentation: 'Nova apresentação', unsavedChanges: 'Alterações não salvas',
     openNewWindowFailedMsg: 'Não foi possível abrir o arquivo em uma nova janela. O documento atual não foi alterado.',
+    openElsewhereMsg: 'Este arquivo já está aberto em outra janela. Use essa janela para trabalhar nele.',
     unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
     saveError: 'Erro ao salvar', saveErrorMsg: 'Não foi possível salvar o arquivo.\n\nFormato de destino não compatível com este tipo de documento.',
     saveDeniedMsg: 'Não foi possível salvar o arquivo.\n\nVocê não tem permissão para gravar nesse local, ou o arquivo é somente leitura.',
@@ -775,6 +781,7 @@ var _UI_STRINGS = {
     openFile: 'Открыть файл', editPdf: 'Редактировать PDF', newDocument: 'Новый документ', newSpreadsheet: 'Новая таблица',
     newPresentation: 'Новая презентация', unsavedChanges: 'Несохранённые изменения',
     openNewWindowFailedMsg: 'Не удалось открыть файл в новом окне. Текущий документ не изменён.',
+    openElsewhereMsg: 'Этот файл уже открыт в другом окне. Работайте с ним в том окне.',
     unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
     saveError: 'Ошибка сохранения', saveErrorMsg: 'Не удалось сохранить файл.\n\nФормат назначения несовместим с этим типом документа.',
     saveDeniedMsg: 'Не удалось сохранить файл.\n\nНет прав на запись в это место, или файл доступен только для чтения.',
@@ -805,6 +812,7 @@ var _UI_STRINGS = {
     openFile: 'Відкрити файл', editPdf: 'Редагувати PDF', newDocument: 'Новий документ', newSpreadsheet: 'Нова таблиця',
     newPresentation: 'Нова презентація', unsavedChanges: 'Незбережені зміни',
     openNewWindowFailedMsg: 'Не вдалося відкрити файл у новому вікні. Поточний документ не змінено.',
+    openElsewhereMsg: 'Цей файл уже відкрито в іншому вікні. Працюйте з ним у тому вікні.',
     unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
     saveError: 'Помилка збереження', saveErrorMsg: 'Не вдалося зберегти файл.\n\nФормат призначення несумісний із цим типом документа.',
     saveDeniedMsg: 'Не вдалося зберегти файл.\n\nНемає дозволу на запис у це місце, або файл доступний лише для читання.',
@@ -835,6 +843,7 @@ var _UI_STRINGS = {
     openFile: '打开文件', editPdf: '编辑 PDF', newDocument: '新建文档', newSpreadsheet: '新建电子表格',
     newPresentation: '新建演示文稿', unsavedChanges: '未保存的更改',
     openNewWindowFailedMsg: '无法在新窗口中打开文件。当前文档未更改。',
+    openElsewhereMsg: '此文件已在另一个窗口中打开。请在该窗口中编辑它。',
     unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
     saveError: '保存错误', saveErrorMsg: '无法保存文件。\n\n目标格式与此文档类型不兼容。',
     saveDeniedMsg: '无法保存文件。\n\n您没有写入该位置的权限，或该文件为只读。',
@@ -865,6 +874,7 @@ var _UI_STRINGS = {
     openFile: 'ファイルを開く', editPdf: 'PDF を編集', newDocument: '新規ドキュメント', newSpreadsheet: '新規スプレッドシート',
     newPresentation: '新規プレゼンテーション', unsavedChanges: '未保存の変更',
     openNewWindowFailedMsg: '新しいウィンドウでファイルを開けませんでした。現在のドキュメントは変更されていません。',
+    openElsewhereMsg: 'このファイルは別のウィンドウで既に開かれています。そのウィンドウで作業してください。',
     unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
     saveError: '保存エラー', saveErrorMsg: 'ファイルを保存できませんでした。\n\n対象の形式はこのドキュメントタイプと互換性がありません。',
     saveDeniedMsg: 'ファイルを保存できませんでした。\n\nその場所への書き込み権限がないか、ファイルが読み取り専用です。',
@@ -1004,13 +1014,32 @@ function _eoShowSavedName(savedName) {
 // converter cannot read, but the reason only reached js-debug.log: the user saw
 // the start screen come back and nothing else (Issue #38). The raw error stays
 // in the log, the user gets a translated, generic message.
-function _eoShowOpenError() {
+// `error` is what the open command rejected with. A file open in another
+// window is not damaged, so it gets its own message.
+function _eoShowOpenError(error) {
+  if (_eoIsOpenElsewhere(error)) return _eoShowOpenElsewhere();
   return window.__TAURI__.dialog.message(
     _t('openErrorMsg'),
     { title: _t('openFailed'), kind: 'error' }
   );
 }
 window._eoShowOpenError = _eoShowOpenError;
+
+// What the backend answers or rejects with when the file is open in another
+// window (new_window.rs): two windows saving one file overwrite each other.
+var _EO_OPEN_ELSEWHERE = 'open-elsewhere';
+
+function _eoIsOpenElsewhere(error) {
+  return String(error) === _EO_OPEN_ELSEWHERE;
+}
+window._eoIsOpenElsewhere = _eoIsOpenElsewhere;
+
+function _eoShowOpenElsewhere() {
+  return window.__TAURI__.dialog.message(
+    _t('openElsewhereMsg'),
+    { title: _t('openFailed'), kind: 'warning' }
+  );
+}
 
 // Converting a file happens before the editor exists and reports no progress,
 // so the shell shows an indeterminate indicator until the editor takes over
@@ -1180,8 +1209,9 @@ function _eoSetPendingOpen(file) {
 
 // With a document open, another file opens in a new window: a new process of
 // the app with the file as its launch argument, as a double click on it does.
-// The backend answers 'already-open' for the open document itself, as two
-// windows saving one file would overwrite each other.
+// The backend answers 'already-open' for the open document itself and
+// 'open-elsewhere' for a file another window has open, as two windows saving
+// one file would overwrite each other.
 async function _eoOpenInNewWindow(file) {
   var result;
   try {
@@ -1193,6 +1223,11 @@ async function _eoOpenInNewWindow(file) {
   }
   if (result === 'already-open') {
     window._eoLog('[EO] open in new window: the chosen file is the open document');
+    return;
+  }
+  if (_eoIsOpenElsewhere(result)) {
+    window._eoLog('[EO] open in new window: the chosen file is open in another window');
+    await _eoShowOpenElsewhere();
   }
 }
 
@@ -3398,7 +3433,7 @@ async function _eoOpenGranted(file) {
   } catch(e) {
     window._eoLog('[EO] open-file: conversion failed: ' + (e.message || e));
     _eoHideOpening();
-    await _eoShowOpenError();
+    await _eoShowOpenError(e);
   }
 }
 
