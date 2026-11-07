@@ -1230,6 +1230,7 @@
 
     // Every opening goes through open_file or open_pdf, which is where the Rust
     // side records the recent files entry. `file` is { token, name } from the backend.
+    // Returns false when the open failed and the caller may still explain why.
     async function _openPath(file, silent) {
       // Markdown has its own page (bridge.js, _eoOpenMarkdown).
       if (window._eoIsMarkdownPath(file.name)) {
@@ -1248,7 +1249,12 @@
         // a broken app (Issue #38).
         window._eoLog('[EO] Error opening file:', e);
         window._eoHideOpening();
-        if (!silent) await window._eoShowOpenError();
+        // Not a damaged file, whoever called: the caller has nothing to add.
+        if (window._eoIsOpenElsewhere(e)) {
+          await window._eoShowOpenError(e);
+          return true;
+        }
+        if (!silent) await window._eoShowOpenError(e);
         return false;
       }
     }
@@ -1306,7 +1312,7 @@
         window._eoLog('[EO] Error reopening file:', e);
         window._eoHideOpening();
         startScreen.classList.remove('hidden');
-        window._eoShowOpenError().catch(function(){});
+        window._eoShowOpenError(e).catch(function(){});
       });
     })();
 
