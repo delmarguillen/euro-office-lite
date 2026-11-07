@@ -15,6 +15,9 @@ use crate::path_grants::{GrantKind, PathGrants};
 // What the bridge gets back when nothing went wrong.
 pub const OPENED: &str = "opened";
 pub const ALREADY_OPEN: &str = "already-open";
+// The file is open in another window: what open_in_new_window returns, and the
+// error open_file and open_pdf refuse with, so two windows never save it.
+pub const OPEN_ELSEWHERE: &str = "open-elsewhere";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct NewWindowLaunch {
@@ -52,6 +55,19 @@ pub fn is_open_document(chosen: &Path, current: Option<&Path>) -> bool {
     }
 }
 
+pub fn is_open_elsewhere(state: &AppState, document: &Path) -> bool {
+    crate::temp_layout::open_in_another_instance(&state.temp_root, &state.instance.id, document)
+}
+
+// For the commands that open a file in this window.
+pub fn refuse_if_open_elsewhere(state: &AppState, document: &Path) -> Result<(), String> {
+    if !is_open_elsewhere(state, document) {
+        return Ok(());
+    }
+    log_event(state, "[OPEN] the file is open in another window: not opened");
+    Err(OPEN_ELSEWHERE.to_string())
+}
+
 // Starts this executable without a shell and does not wait for it. A thread
 // waits instead, so the finished process does not stay behind as a zombie.
 fn spawn_this_app(args: &[OsString]) -> Result<(), String> {
@@ -76,6 +92,10 @@ pub fn open_in_new_window(state: State<'_, AppState>, token: String) -> Result<S
     if is_open_document(&launch.document, current.as_deref()) {
         log_event(&state, "[NEW WINDOW] the chosen file is the open document: nothing to do");
         return Ok(ALREADY_OPEN.to_string());
+    }
+    if is_open_elsewhere(&state, &launch.document) {
+        log_event(&state, "[NEW WINDOW] the chosen file is open in another window: nothing to do");
+        return Ok(OPEN_ELSEWHERE.to_string());
     }
     spawn_this_app(&launch.args).map_err(|e| {
         log_event(&state, &format!("[NEW WINDOW] launch failed: {e}"));

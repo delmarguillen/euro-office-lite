@@ -268,6 +268,7 @@ pub async fn open_pdf(
     token: String,
 ) -> Result<String, String> {
     let input = pdf_to_open(&state.grants, &token)?;
+    crate::new_window::refuse_if_open_elsewhere(&state, &input)?;
     let path = input.to_string_lossy().to_string();
     let file_name = input
         .file_name()
@@ -347,6 +348,7 @@ pub async fn open_file(
     token: String,
 ) -> Result<String, String> {
     let path = state.grants.resolve(&token, GrantKind::Open)?;
+    crate::new_window::refuse_if_open_elsewhere(&state, &path)?;
     open_file_inner(app, state, path.to_string_lossy().to_string(), true).await
 }
 
