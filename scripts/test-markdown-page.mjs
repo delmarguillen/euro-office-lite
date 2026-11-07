@@ -69,6 +69,7 @@ function installFakeTauri(fake) {
       return { data: stored('disk') || fake.data, name: fake.name };
     },
     save_markdown: (args) => {
+      if (fake.saveError) throw fake.saveError;
       sessionStorage.setItem('disk', args.data);
       sessionStorage.removeItem('copy');
       return args.token ? 'copy.md' : fake.name;
@@ -663,6 +664,16 @@ async function reloadPage(page) {
   const message = (await calls()).find((call) => call.command === 'dialog.message');
   check(results, 'a file open in another window gets the warning the editors show',
     message && message.args.text.includes('otra ventana') && message.args.options.kind === 'warning',
+    message && message.args.text);
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('one\n'), saveError: 'open-elsewhere' });
+  await page.click('#md-save-as');
+  await page.waitForTimeout(200);
+  const message = (await calls()).find((call) => call.command === 'dialog.message');
+  check(results, 'a Save As over a file open in another window says so',
+    message && message.args.text.includes('open in another window') && message.args.text.includes('Nothing has been saved'),
     message && message.args.text);
   await context.close();
 }

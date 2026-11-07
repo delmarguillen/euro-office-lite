@@ -52,6 +52,7 @@
       notUtf8Msg: 'The file is not UTF-8 text. Opening it here could change it when saved.',
       saveError: 'Save error',
       saveErrorMsg: 'The file could not be saved.',
+      saveElsewhereMsg: 'Could not save the file.\n\nThe file is open in another window. Nothing has been saved.',
       saveDeniedMsg: 'The file could not be saved.\n\nYou do not have permission to write to that location, or the file is read-only.',
       saveTooLargeMsg: 'The text is larger than 10 MB and cannot be saved.',
       remoteImageBlocked: 'Remote image not loaded',
@@ -74,6 +75,7 @@
       notUtf8Msg: 'El archivo no es texto UTF-8. Abrirlo aquí podría cambiarlo al guardar.',
       saveError: 'Error al guardar',
       saveErrorMsg: 'No se pudo guardar el archivo.',
+      saveElsewhereMsg: 'No se pudo guardar el archivo.\n\nEl archivo está abierto en otra ventana. No se ha guardado nada.',
       saveDeniedMsg: 'No se pudo guardar el archivo.\n\nNo tienes permiso para escribir en esa ubicación o el archivo es de solo lectura.',
       saveTooLargeMsg: 'El texto ocupa más de 10 MB y no se puede guardar.',
       remoteImageBlocked: 'Imagen remota no cargada',
@@ -416,6 +418,7 @@
 
   function saveErrorText(error) {
     var text = errorText(error);
+    if (isOpenElsewhere(error)) return t('saveElsewhereMsg');
     if (text.indexOf(SAVE_DENIED_ERROR) === 0) return t('saveDeniedMsg');
     if (text.indexOf(TOO_LARGE_ERROR) === 0) return t('saveTooLargeMsg');
     return t('saveErrorMsg');
