@@ -901,16 +901,8 @@ fn main() {
         })
         .build(context)
         .expect("error running Euro-Office Lite")
-        // The one point every ordinary exit passes through: closing an
-        // unmodified document never reaches force_close (Tauri just closes the
-        // window), and neither path may leave a recovery folder behind. A
-        // killed process never runs this, which is the case the folder is for.
         .run(|app_handle, event| match event {
-            tauri::RunEvent::Exit => {
-                let state = app_handle.state::<AppState>();
-                recovery::end_session(&state, true);
-                state.instance.end();
-            }
+            tauri::RunEvent::Exit => app_quit::on_exit(&app_handle.state::<AppState>()),
             // The Finder hands files over here, not as launch arguments.
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
             tauri::RunEvent::Opened { urls } => pending_open::on_opened(app_handle, urls),
