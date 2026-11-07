@@ -165,6 +165,55 @@ fn restore_main_window(app: &tauri::App) {
     }
 }
 
+// A window opened from another one restores the same saved geometry, so it is
+// moved right and down to not hide the first. Not when maximized, nor on
+// Wayland, where the compositor places the window.
+fn offset_new_window(app: &tauri::App) {
+    let Some(window) = app.get_webview_window(window_state::MAIN_WINDOW) else {
+        log_startup("ERROR: new window offset: no main window");
+        return;
+    };
+    if on_wayland(&window) {
+        return;
+    }
+    if window.is_maximized().unwrap_or(false) {
+        return;
+    }
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        log_startup("ERROR: new window offset: no position or size");
+        return;
+    };
+    let placed = window_state::Area {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    };
+    let monitors = window.available_monitors().unwrap_or_default();
+    let areas: Vec<window_state::Area> = monitors
+        .iter()
+        .map(|monitor| window_state::Area {
+            x: monitor.position().x,
+            y: monitor.position().y,
+            width: monitor.size().width,
+            height: monitor.size().height,
+        })
+        .collect();
+    let Some(index) = window_state::monitor_of(placed, &areas) else {
+        log_startup("new window offset: the window is on no monitor, not moved");
+        return;
+    };
+    let scale = monitors[index].scale_factor();
+    let offset = (window_state::NEW_WINDOW_OFFSET * scale).round() as i32;
+    let Some((x, y)) = window_state::offset_position(placed, areas[index], offset) else {
+        log_startup("new window offset: no room on the monitor, not moved");
+        return;
+    };
+    if let Err(e) = window.set_position(tauri::PhysicalPosition { x, y }) {
+        log_startup(&format!("ERROR: new window offset: {e}"));
+    }
+}
+
 // main is built hidden (see main) and restored when setup shows it. On Linux
 // the window is either built visible or shown by apply_title_bar.
 #[cfg(not(target_os = "linux"))]
@@ -322,6 +371,7 @@ fn main() {
     }
 
     let launch = launch_args::parse_launch_args(std::env::args().skip(1));
+    let new_window = launch.new_window;
     let (title_bar, notes) = launch_args::resolve_title_bar(
         &launch,
         std::env::var(launch_args::TITLE_BAR_ENV).ok().as_deref(),
@@ -776,6 +826,9 @@ fn main() {
         .setup(move |app| {
             // Restored before it is shown, so a hidden window appears once.
             restore_main_window(app);
+            if new_window {
+                offset_new_window(app);
+            }
             // First, so a hidden window is shown as early as the default one.
             #[cfg(target_os = "linux")]
             apply_title_bar(app, title_bar);
