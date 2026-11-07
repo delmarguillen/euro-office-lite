@@ -10,6 +10,7 @@ mod file_dialogs;
 mod file_ops;
 mod fonts_state;
 mod launch_args;
+mod new_window;
 mod note_separator;
 mod path_grants;
 mod presentation;
@@ -409,6 +410,7 @@ fn main() {
             last_print_pdf: Mutex::new(None),
             pasted_images: Mutex::new(Vec::new()),
             save_suggestion: Mutex::new(None),
+            title_bar_args: launch_args::title_bar_options(&launch),
         })
         .manage(presentation::PresentationState::default())
         .manage(presentation::FullscreenFocus::default())
@@ -422,12 +424,14 @@ fn main() {
             file_ops::print_document,
             file_ops::create_new,
             file_ops::current_document,
+            file_ops::close_document,
             file_dialogs::pick_document,
             file_dialogs::pick_pdf,
             file_dialogs::pick_files,
             file_dialogs::pick_save_target,
             file_dialogs::locate_linked_file,
             file_ops::take_pending_open_file,
+            new_window::open_in_new_window,
             file_ops::open_pdf_viewer,
             file_ops::print_to_printer,
             file_ops::convert_for_insert,
