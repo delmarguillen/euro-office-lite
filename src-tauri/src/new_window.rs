@@ -68,6 +68,25 @@ pub fn refuse_if_open_elsewhere(state: &AppState, document: &Path) -> Result<(),
     Err(OPEN_ELSEWHERE.to_string())
 }
 
+// Err(OPEN_ELSEWHERE) when a live instance other than `own_id` has `dest`
+// open. A file that does not exist yet is open nowhere.
+pub fn check_save_destination(root: &Path, own_id: &str, dest: &Path) -> Result<(), String> {
+    if crate::temp_layout::open_in_another_instance(root, own_id, dest) {
+        return Err(OPEN_ELSEWHERE.to_string());
+    }
+    Ok(())
+}
+
+// For the commands that write a file chosen in a dialog. The other window keeps
+// its own copy and would overwrite this write on its next save.
+pub fn refuse_save_if_open_elsewhere(state: &AppState, dest: &Path) -> Result<(), String> {
+    let checked = check_save_destination(&state.temp_root, &state.instance.id, dest);
+    if checked.is_err() {
+        log_event(state, "[SAVE] the destination is open in another window: not saved");
+    }
+    checked
+}
+
 // Starts this executable without a shell and does not wait for it. A thread
 // waits instead, so the finished process does not stay behind as a zombie.
 fn spawn_this_app(args: &[OsString]) -> Result<(), String> {
@@ -175,5 +194,61 @@ mod tests {
         assert!(!is_open_document(&file, None));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn scratch_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("eo-save-dest-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn document_in(root: &Path, name: &str) -> PathBuf {
+        let path = root.join(name);
+        std::fs::write(&path, b"x").unwrap();
+        path
+    }
+
+    #[test]
+    fn a_save_over_a_file_open_in_another_window_is_refused() {
+        let root = scratch_root("other");
+        let file = document_in(&root, "a.docx");
+        let own = crate::temp_layout::begin_instance(&root, 1000, 1).unwrap();
+        let other = crate::temp_layout::begin_instance(&root, 1000, 2).unwrap();
+        crate::temp_layout::publish_open_document(&other.dir, Some(&file)).unwrap();
+
+        let checked = check_save_destination(&root, &own.id, &file);
+
+        assert_eq!(checked, Err(OPEN_ELSEWHERE.to_string()));
+        drop((own, other));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_save_over_the_file_open_in_this_window_is_allowed() {
+        let root = scratch_root("own");
+        let file = document_in(&root, "a.docx");
+        let own = crate::temp_layout::begin_instance(&root, 1000, 1).unwrap();
+        crate::temp_layout::publish_open_document(&own.dir, Some(&file)).unwrap();
+
+        assert_eq!(check_save_destination(&root, &own.id, &file), Ok(()));
+        drop(own);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_save_to_another_file_or_a_new_one_is_allowed() {
+        let root = scratch_root("free");
+        let open = document_in(&root, "a.docx");
+        let free = document_in(&root, "b.docx");
+        let new = root.join("c.docx");
+        let own = crate::temp_layout::begin_instance(&root, 1000, 1).unwrap();
+        let other = crate::temp_layout::begin_instance(&root, 1000, 2).unwrap();
+        crate::temp_layout::publish_open_document(&other.dir, Some(&open)).unwrap();
+
+        assert_eq!(check_save_destination(&root, &own.id, &free), Ok(()));
+        assert_eq!(check_save_destination(&root, &own.id, &new), Ok(()));
+        drop((own, other));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
