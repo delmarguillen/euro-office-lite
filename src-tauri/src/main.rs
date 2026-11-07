@@ -13,6 +13,7 @@ mod launch_args;
 mod new_window;
 mod note_separator;
 mod path_grants;
+mod presentation;
 mod protocol_limits;
 mod recent;
 mod recovery;
@@ -411,6 +412,8 @@ fn main() {
             save_suggestion: Mutex::new(None),
             title_bar_args: launch_args::title_bar_options(&launch),
         })
+        .manage(presentation::PresentationState::default())
+        .manage(presentation::FullscreenFocus::default())
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
             file_ops::open_pdf,
@@ -456,6 +459,7 @@ fn main() {
             dictionaries::list_user_dictionaries,
             dictionary_import::import_dictionary,
             dictionary_import::cancel_dictionary_import,
+            presentation::set_presentation_fullscreen,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let allow_origin = protocol_limits::allow_origin();
@@ -881,8 +885,22 @@ fn main() {
                 }
 
                 let h = handle.clone();
+                let presented = window.clone();
                 window.on_window_event(move |event| {
+                    let presentation = h.state::<presentation::PresentationState>();
+                    if let tauri::WindowEvent::Resized(_) = event {
+                        presentation::on_resized(&presented, &presentation);
+                        #[cfg(target_os = "macos")]
+                        presentation::refocus_after_fullscreen(
+                            &presented,
+                            &h.state::<presentation::FullscreenFocus>(),
+                        );
+                    }
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        if presentation::hold_close_for_restore(&presented, &presentation) {
+                            api.prevent_close();
+                            return;
+                        }
                         let state = h.state::<AppState>();
                         let modified = *state.modified.lock().unwrap();
                         if modified {
@@ -1169,6 +1187,15 @@ mod capability_tests {
     #[test]
     fn the_webview_has_no_shell_permission() {
         assert!(!permissions().iter().any(|p| p.starts_with("shell:")));
+    }
+
+    // Fullscreen goes through set_presentation_fullscreen (presentation.rs).
+    #[test]
+    fn the_webview_has_no_window_write_permission() {
+        let permissions = permissions();
+        for refused in ["core:window:allow-set-fullscreen", "core:window:allow-set-always-on-top"] {
+            assert!(!permissions.iter().any(|p| p == refused), "{refused}");
+        }
     }
 }
 
