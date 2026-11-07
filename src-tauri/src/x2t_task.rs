@@ -319,22 +319,29 @@ pub fn convert_params_xml(
     )
 }
 
+// x2t 10 writes "<this name>/<x2t version>" into what it saves: <Application>
+// in docProps/app.xml, meta:generator in ODF and /Producer and /Creator in PDF.
+// It reads the name from the APPLICATION_NAME variable, "ONLYOFFICE" without it.
+pub const APPLICATION_NAME: &str = "Euro-Office-Lite";
+
+// The variables every x2t run gets, on every platform.
+pub fn x2t_common_env() -> Vec<(&'static str, std::ffi::OsString)> {
+    vec![("APPLICATION_NAME", APPLICATION_NAME.into())]
+}
+
 // The variables the app sets when it runs x2t for an open, save or export:
-// the library folder on Linux, nothing elsewhere. The value goes through
+// the common ones, and the library folder on Linux. The folder goes through
 // to_string_lossy, as the sidecar call always passed it.
 pub fn convert_env(binaries_dir: &std::path::Path) -> Vec<(&'static str, std::ffi::OsString)> {
+    let mut env = x2t_common_env();
     #[cfg(target_os = "linux")]
-    {
-        vec![(
-            "LD_LIBRARY_PATH",
-            binaries_dir.to_string_lossy().into_owned().into(),
-        )]
-    }
+    env.push((
+        "LD_LIBRARY_PATH",
+        binaries_dir.to_string_lossy().into_owned().into(),
+    ));
     #[cfg(not(target_os = "linux"))]
-    {
-        let _ = binaries_dir;
-        Vec::new()
-    }
+    let _ = binaries_dir;
+    env
 }
 
 fn pdf_params_xml(input: &str, output: &str, fonts_dir: &str, allfonts: &str) -> String {
@@ -584,7 +591,8 @@ fn pdf_command(
 ) -> std::process::Command {
     let mut cmd = std::process::Command::new(run_x2t);
     cmd.current_dir(run_dir)
-        .arg(params_xml.to_string_lossy().as_ref());
+        .arg(params_xml.to_string_lossy().as_ref())
+        .envs(x2t_common_env());
     #[cfg(target_os = "linux")]
     cmd.env(
         "LD_LIBRARY_PATH",
@@ -1098,7 +1106,8 @@ pub fn font_scan_command(
     cmd.current_dir(&binaries_dir)
         .arg("-create-allfonts")
         .arg(fontdata_dir)
-        .arg(binaries_dir.join("fonts"));
+        .arg(binaries_dir.join("fonts"))
+        .envs(x2t_common_env());
     #[cfg(target_os = "linux")]
     cmd.env("LD_LIBRARY_PATH", &binaries_dir);
     #[cfg(windows)]
@@ -1933,15 +1942,16 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
-    fn the_convert_env_is_the_library_folder_on_linux_only() {
-        let env = convert_env(std::path::Path::new("/opt/Euro Office/binaries"));
+    fn the_convert_env_names_the_app_and_adds_the_library_folder_on_linux_only() {
+        use std::ffi::OsString;
+        let library_dir = "/opt/Euro Office/binaries";
+        let env = convert_env(std::path::Path::new(library_dir));
+        let app_name = ("APPLICATION_NAME", OsString::from(APPLICATION_NAME));
         if cfg!(target_os = "linux") {
-            assert_eq!(
-                env,
-                vec![("LD_LIBRARY_PATH", std::ffi::OsString::from("/opt/Euro Office/binaries"))]
-            );
+            let library_path = ("LD_LIBRARY_PATH", OsString::from(library_dir));
+            assert_eq!(env, vec![app_name, library_path]);
         } else {
-            assert!(env.is_empty(), "{:?}", env);
+            assert_eq!(env, vec![app_name]);
         }
     }
 
@@ -1962,6 +1972,15 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
             std::path::Path::new("/tmp/eo/pdf.xml"),
             std::path::Path::new("/opt/Euro Office/binaries"),
         )
+    }
+
+    #[test]
+    fn the_pdf_export_names_the_app() {
+        let cmd = pdf_test_command();
+        assert_eq!(
+            env_value(&cmd, "APPLICATION_NAME"),
+            Some(std::ffi::OsStr::new(APPLICATION_NAME))
+        );
     }
 
     #[test]
@@ -2268,9 +2287,22 @@ mod symlink_tests {
 
 #[cfg(test)]
 mod font_scan_tests {
-    use super::font_scan_command;
     use super::tests::env_value;
+    use super::{font_scan_command, APPLICATION_NAME};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn the_font_scan_names_the_app() {
+        let cmd = font_scan_command(
+            Path::new("/opt/Euro Office/binaries/x2t"),
+            Path::new("/tmp/fontdata"),
+            Path::new("/opt/Euro Office/binaries"),
+        );
+        assert_eq!(
+            env_value(&cmd, "APPLICATION_NAME"),
+            Some(std::ffi::OsStr::new(APPLICATION_NAME))
+        );
+    }
 
     #[test]
     #[cfg(target_os = "linux")]
