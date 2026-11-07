@@ -715,7 +715,7 @@ pub fn recovery_load(
     crate::file_ops::switch_document(&state)?;
 
     let (current, suggestion) = recovered_paths(path.as_deref());
-    *state.current_file.lock().unwrap() = current;
+    crate::file_ops::set_current_file(&state, current);
     *state.save_suggestion.lock().unwrap() = suggestion;
 
     let media_src = crate::temp_layout::recovery_media_source(
