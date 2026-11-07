@@ -94,6 +94,7 @@ function installFakeTauri(fake) {
     },
     current_document: () => (fake.isNew || fake.recoverId ? null : { token: 'tok-open', name: fake.name }),
     pick_document: () => window.__pickDocument || null,
+    open_in_new_window: () => fake.newWindow || 'opened',
   };
   window.__TAURI__ = {
     core: {
@@ -405,13 +406,33 @@ for (const [label, raw, eol] of [
   await context.close();
 }
 
-{
-  const { context, page } = await openPage({ name: 'notes.md', data: utf8('one\n') });
-  await page.evaluate(() => { window.__pickDocument = { token: 'tok-other', name: 'report.docx' }; });
+// Ctrl+O opens every file in a new window, as from the editors, and this
+// document stays open, modified or not.
+for (const name of ['other.md', 'report.docx']) {
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('one\n') });
+  await startEditing(page);
+  await page.keyboard.type('x');
+  await page.evaluate((picked) => { window.__pickDocument = { token: 'tok-other', name: picked }; }, name);
   await page.keyboard.press('Control+o');
-  await page.waitForURL('**/index.html');
-  const pending = await page.evaluate(() => localStorage.getItem('eo-pending-open'));
-  check(results, 'Ctrl+O hands another format to the editors', pending === JSON.stringify({ token: 'tok-other', name: 'report.docx' }));
+  await page.waitForTimeout(200);
+  const all = await calls();
+  const opened = all.filter((call) => call.command === 'open_in_new_window');
+  check(results, `Ctrl+O sends ${name} to open_in_new_window`, opened.length === 1 && opened[0].args.token === 'tok-other');
+  const names = all.map((call) => call.command);
+  check(results, `Ctrl+O with ${name} keeps this document`,
+    page.url().endsWith('/markdown/markdown.html') && !names.includes('dialog.confirm') &&
+    !names.includes('recovery_end') && !names.includes('close_document'), names.join(' '));
+  await context.close();
+}
+
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('one\n'), newWindow: 'open-elsewhere' });
+  await page.evaluate(() => { window.__pickDocument = { token: 'tok-other', name: 'other.md' }; });
+  await page.keyboard.press('Control+o');
+  await page.waitForTimeout(200);
+  const message = (await calls()).find((call) => call.command === 'dialog.message');
+  check(results, 'Ctrl+O on a file open in another window warns and stays',
+    message && message.args.text.includes('another window') && page.url().endsWith('/markdown/markdown.html'));
   await context.close();
 }
 

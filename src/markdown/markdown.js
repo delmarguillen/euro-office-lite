@@ -18,8 +18,6 @@
 
   // Written by _eoOpenMarkdown in bridge.js.
   var PENDING_KEY = 'eo-markdown-open';
-  // Read by the start screen to open a document in the editors (editor-patches.js).
-  var OPEN_IN_EDITOR_KEY = 'eo-pending-open';
   var START_PAGE = '../index.html';
   var RENDER_DELAY_MS = 250;
   // While modified, the text is copied for crash recovery at most this often.
@@ -503,22 +501,26 @@
     }
   });
 
-  // Another document: Markdown reloads this page, anything else opens in
-  // the editors from the start screen (editor-patches.js, eo-pending-open).
+  // Another document opens in a new window, as from the editors (bridge.js,
+  // _eoOpenInNewWindow). This one stays as it is, saved or not.
   async function openAnother() {
-    if (!(await confirmDiscard())) return;
     var file = await invoke('pick_document', { documents: t('documents'), all: t('all') });
     if (!file || !file.token) return;
-    await discardRecoveryCopy();
-    await invoke('set_document_modified', { modified: false }).catch(function() {});
-    var entry = JSON.stringify({ token: file.token, name: file.name });
-    if (Text.isMarkdownPath(file.name)) {
-      localStorage.setItem(PENDING_KEY, entry);
-      window.location.reload();
+    await openInNewWindow(file);
+  }
+
+  // The backend answers 'already-open' for this document itself (nothing to
+  // do) and OPEN_ELSEWHERE for a file another window has open.
+  async function openInNewWindow(file) {
+    var result;
+    try {
+      result = await invoke('open_in_new_window', { token: file.token });
+    } catch (error) {
+      log('open in new window failed: ' + errorText(error));
+      await tauri.dialog.message(t('openErrorMsg'), { title: t('openFailed'), kind: 'error' });
       return;
     }
-    localStorage.setItem(OPEN_IN_EDITOR_KEY, entry);
-    window.location.href = START_PAGE;
+    if (isOpenElsewhere(result)) await showOpenFailed(result);
   }
 
   // Ctrl+S, Ctrl+Shift+S, Ctrl+O and Ctrl+W, wherever the focus is: this
