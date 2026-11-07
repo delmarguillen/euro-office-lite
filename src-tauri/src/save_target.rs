@@ -228,8 +228,36 @@ fn create_temp(tmp: &Path, _target: &Path) -> std::io::Result<File> {
 fn fill_temp(mut file: File, from: &Path, target: &Path) -> std::io::Result<()> {
     let mut source = File::open(from)?;
     std::io::copy(&mut source, &mut file)?;
+    // chown can clear the setuid and setgid bits, so the mode is set after it.
+    keep_group(&file, target);
     keep_permissions(&file, target)?;
     file.sync_all()
+}
+
+// The copy is created with the user's primary group. Only the group is set,
+// and a refusal (a group the user is not in) does not fail the save.
+#[cfg(unix)]
+fn keep_group(file: &File, target: &Path) {
+    let Some(gid) = group_to_keep(target) else {
+        return;
+    };
+    let Err(error) = std::os::unix::fs::fchown(file, None, Some(gid)) else {
+        return;
+    };
+    let line = format!("[SAVE] could not keep the group of the replaced file: {}", error);
+    println!("{}", line);
+    crate::temp_layout::append_log(&line);
+}
+
+#[cfg(not(unix))]
+fn keep_group(_file: &File, _target: &Path) {}
+
+// A new destination keeps the group the copy was created with.
+#[cfg(unix)]
+fn group_to_keep(target: &Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(target).ok()?;
+    Some(metadata.gid())
 }
 
 // A new destination keeps the defaults the temp file was created with.
@@ -517,6 +545,58 @@ mod tests {
 
             assert_eq!(temp_mode, 0o600);
             assert_eq!(mode_of(&dest), 0o640);
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir_all(&source_dir);
+        }
+
+        fn gid_of(path: &Path) -> u32 {
+            std::os::unix::fs::MetadataExt::gid(&std::fs::metadata(path).unwrap())
+        }
+
+        #[test]
+        fn the_group_to_keep_is_the_existing_destinations() {
+            let dir = test_dir("group-to-keep");
+            let dest = dir.join("doc.pdf");
+            assert_eq!(group_to_keep(&dest), None);
+            std::fs::write(&dest, b"%PDF-1.7 old").unwrap();
+
+            assert_eq!(group_to_keep(&dest), Some(gid_of(&dest)));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        // A group of this process other than the one its new files get, read
+        // from /proc, so only on Linux and only with a supplementary group.
+        fn another_group_of_mine(new_file_gid: u32) -> Option<u32> {
+            let status = std::fs::read_to_string("/proc/self/status").ok()?;
+            let line = status.lines().find(|line| line.starts_with("Groups:"))?;
+            let groups = line.trim_start_matches("Groups:").split_whitespace();
+            groups
+                .filter_map(|group| group.parse().ok())
+                .find(|&group| group != new_file_gid)
+        }
+
+        // Setgid with group execute also checks the order: chown after the chmod
+        // would clear it.
+        #[test]
+        fn a_replaced_destination_keeps_its_group() {
+            let (source_dir, from) = new_content("group");
+            let dir = test_dir("group");
+            let dest = dir.join("doc.pdf");
+            std::fs::write(&dest, b"%PDF-1.7 old").unwrap();
+            let Some(gid) = another_group_of_mine(gid_of(&dest)) else {
+                eprintln!("skipped: this process has no supplementary group");
+                let _ = std::fs::remove_dir_all(&dir);
+                let _ = std::fs::remove_dir_all(&source_dir);
+                return;
+            };
+            std::os::unix::fs::chown(&dest, None, Some(gid)).unwrap();
+            set_mode(&dest, 0o2750);
+
+            write_beside_and_rename(&from, &dest).unwrap();
+
+            let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o7777;
+            assert_eq!(gid_of(&dest), gid);
+            assert_eq!(mode, 0o2750);
             let _ = std::fs::remove_dir_all(&dir);
             let _ = std::fs::remove_dir_all(&source_dir);
         }
