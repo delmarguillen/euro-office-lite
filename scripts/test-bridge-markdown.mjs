@@ -111,6 +111,21 @@ for (const name of ['notes.md', 'NOTES.MD', 'notes.markdown']) {
   bridge.stopTimers();
 }
 
+// A .md given at launch (a new window, a double click on the file) opens on
+// the Markdown page.
+{
+  const launch = { token: 'tok-launch', name: 'notes.md' };
+  const bridge = await loadBridge({ invoke: { take_pending_open_file: () => launch, fonts_status: () => 'ready' } });
+  bridge.sandbox.location = { href: 'index.html', reload() { this.reloaded = true; } };
+  bridge.sandbox.localStorage.removeItem('eo-markdown-open');
+  bridge.run('_eoTakePendingOpenFile()');
+  await settle();
+  const pending = JSON.parse(bridge.sandbox.localStorage.getItem('eo-markdown-open') || 'null');
+  check(results, 'a .md given at launch loads the Markdown page',
+    bridge.sandbox.location.href === 'markdown/markdown.html' && pending && pending.token === 'tok-launch');
+  bridge.stopTimers();
+}
+
 // File > Open from an editor: every file, a .md too, goes to a new window
 // and the open document stays as it is.
 for (const name of ['notes.md', 'report.docx']) {
