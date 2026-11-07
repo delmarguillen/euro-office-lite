@@ -73,7 +73,7 @@ pub fn write_beside_and_rename(from: &Path, dest: &Path) -> Result<(), String> {
     check_writable_destination(dest)?;
     let target = resolved_target(dest);
     let tmp = temp_path_beside(&target);
-    let file = create_temp(&tmp).map_err(|e| save_error(dest, e))?;
+    let file = create_temp(&tmp, &target).map_err(|e| save_error(dest, e))?;
     let result = fill_temp(file, from, &target).and_then(|_| std::fs::rename(&tmp, &target));
     let Err(error) = result else {
         return Ok(());
@@ -205,8 +205,22 @@ fn temp_path_beside(target: &Path) -> PathBuf {
     target.with_file_name(format!(".{}.{}-{}.tmp", name, std::process::id(), n))
 }
 
-// create_new never opens a file that is already there.
-fn create_temp(tmp: &Path) -> std::io::Result<File> {
+// create_new never opens a file that is already there. Over an existing file
+// the copy starts owner-only, so it is never more open than the file it
+// replaces; keep_permissions gives it the file's mode before the rename.
+#[cfg(unix)]
+fn create_temp(tmp: &Path, target: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    if target.exists() {
+        options.mode(0o600);
+    }
+    options.open(tmp)
+}
+
+#[cfg(not(unix))]
+fn create_temp(tmp: &Path, _target: &Path) -> std::io::Result<File> {
     OpenOptions::new().write(true).create_new(true).open(tmp)
 }
 
@@ -482,6 +496,43 @@ mod tests {
 
             assert_eq!(std::fs::read(&dest).unwrap(), b"%PDF-1.7 new");
             assert_eq!(mode_of(&dest), 0o640);
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir_all(&source_dir);
+        }
+
+        #[test]
+        fn the_copy_over_an_existing_destination_starts_owner_only() {
+            let (source_dir, from) = new_content("temp-mode");
+            let dir = test_dir("temp-mode");
+            let dest = dir.join("doc.pdf");
+            std::fs::write(&dest, b"%PDF-1.7 old").unwrap();
+            set_mode(&dest, 0o640);
+            let tmp = temp_path_beside(&dest);
+
+            let file = create_temp(&tmp, &dest).unwrap();
+            let temp_mode = mode_of(&tmp);
+            drop(file);
+            std::fs::remove_file(&tmp).unwrap();
+            write_beside_and_rename(&from, &dest).unwrap();
+
+            assert_eq!(temp_mode, 0o600);
+            assert_eq!(mode_of(&dest), 0o640);
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir_all(&source_dir);
+        }
+
+        #[test]
+        fn a_new_destination_gets_the_mode_of_a_plain_create() {
+            let (source_dir, from) = new_content("new-mode");
+            set_mode(&from, 0o600);
+            let dir = test_dir("new-mode");
+            let plain = dir.join("plain");
+            File::create(&plain).unwrap();
+            let dest = dir.join("doc.pdf");
+
+            write_beside_and_rename(&from, &dest).unwrap();
+
+            assert_eq!(mode_of(&dest), mode_of(&plain));
             let _ = std::fs::remove_dir_all(&dir);
             let _ = std::fs::remove_dir_all(&source_dir);
         }
