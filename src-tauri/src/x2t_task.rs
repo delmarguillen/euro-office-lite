@@ -530,22 +530,7 @@ fn run_x2t_to_pdf(
     );
     write_file(&params_xml, &xml)?;
 
-    let mut cmd = std::process::Command::new(&run_x2t);
-    cmd.current_dir(&run_dir)
-        .arg(params_xml.to_string_lossy().as_ref());
-    #[cfg(target_os = "linux")]
-    cmd.env(
-        "LD_LIBRARY_PATH",
-        format!("{}:{}", run_dir.display(), binaries_dir.display()),
-    );
-    #[cfg(target_os = "macos")]
-    cmd.env("DYLD_LIBRARY_PATH", &run_dir);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-
+    let mut cmd = pdf_command(&run_x2t, &run_dir, &params_xml, binaries_dir);
     let result = cmd.output().map_err(|error| {
         let message = format!("Failed to spawn x2t: {}", error);
         log(&message);
@@ -587,6 +572,34 @@ fn run_x2t_to_pdf(
             code, stderr
         ))
     }
+}
+
+// The x2t run for a PDF export: from `run_dir`, with the libraries of
+// `run_dir` first and those of `binaries_dir` after them on Linux.
+fn pdf_command(
+    run_x2t: &std::path::Path,
+    run_dir: &std::path::Path,
+    params_xml: &std::path::Path,
+    binaries_dir: &std::path::Path,
+) -> std::process::Command {
+    let mut cmd = std::process::Command::new(run_x2t);
+    cmd.current_dir(run_dir)
+        .arg(params_xml.to_string_lossy().as_ref());
+    #[cfg(target_os = "linux")]
+    cmd.env(
+        "LD_LIBRARY_PATH",
+        format!("{}:{}", run_dir.display(), binaries_dir.display()),
+    );
+    #[cfg(target_os = "macos")]
+    cmd.env("DYLD_LIBRARY_PATH", run_dir);
+    #[cfg(not(target_os = "linux"))]
+    let _ = binaries_dir;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 /// Windows: run x2t directly from binaries_dir (writable, all DLLs present).
@@ -1086,6 +1099,8 @@ pub fn font_scan_command(
         .arg("-create-allfonts")
         .arg(fontdata_dir)
         .arg(binaries_dir.join("fonts"));
+    #[cfg(target_os = "linux")]
+    cmd.env("LD_LIBRARY_PATH", &binaries_dir);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1141,8 +1156,6 @@ pub fn generate_fonts(
             symlink_dirs.len()
         ));
     }
-    #[cfg(target_os = "linux")]
-    cmd.env("LD_LIBRARY_PATH", binaries_dir);
     match cmd.output() {
         Ok(result) => {
             let code = result.status.code().unwrap_or(-1);
@@ -1932,6 +1945,35 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         }
     }
 
+    // The value of `name` that `cmd` sets for x2t, if it sets one.
+    pub(super) fn env_value<'a>(
+        cmd: &'a std::process::Command,
+        name: &str,
+    ) -> Option<&'a std::ffi::OsStr> {
+        cmd.get_envs()
+            .find(|(key, _)| *key == name)
+            .and_then(|(_, value)| value)
+    }
+
+    fn pdf_test_command() -> std::process::Command {
+        pdf_command(
+            std::path::Path::new("/tmp/eo/work/x2t"),
+            std::path::Path::new("/tmp/eo/work"),
+            std::path::Path::new("/tmp/eo/pdf.xml"),
+            std::path::Path::new("/opt/Euro Office/binaries"),
+        )
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_pdf_export_loads_the_work_dir_libraries_first() {
+        let cmd = pdf_test_command();
+        assert_eq!(
+            env_value(&cmd, "LD_LIBRARY_PATH"),
+            Some(std::ffi::OsStr::new("/tmp/eo/work:/opt/Euro Office/binaries"))
+        );
+    }
+
     #[test]
     fn convert_params_without_text_options_have_no_extra_elements() {
         let xml = convert_params_xml("/d/in.docx", "/t/Editor.bin", 8192, "/t", "");
@@ -2227,7 +2269,22 @@ mod symlink_tests {
 #[cfg(test)]
 mod font_scan_tests {
     use super::font_scan_command;
+    use super::tests::env_value;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_font_scan_loads_the_libraries_of_the_binaries_folder() {
+        let cmd = font_scan_command(
+            Path::new("/opt/Euro Office/binaries/x2t"),
+            Path::new("/tmp/fontdata"),
+            Path::new("/opt/Euro Office/binaries"),
+        );
+        assert_eq!(
+            env_value(&cmd, "LD_LIBRARY_PATH"),
+            Some(std::ffi::OsStr::new("/opt/Euro Office/binaries"))
+        );
+    }
 
     // resource_dir() on Windows: the scan used to receive this spelling and
     // x2t wrote it into the cache as /?/C:/... and \\?\C:\... An install on a
