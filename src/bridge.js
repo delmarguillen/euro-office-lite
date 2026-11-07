@@ -585,6 +585,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
     saveError: 'Save error', saveErrorMsg: 'Could not save the file.\n\nTarget format not compatible with this document type.',
     saveDeniedMsg: 'Could not save the file.\n\nYou do not have permission to write there, or the file is read-only.',
+    saveElsewhereMsg: 'Could not save the file.\n\nThe file is open in another window. Nothing has been saved.',
     saveLockedMsg: 'Could not save the file.\n\nIt may be open in another program.',
     pdfFontsErrorMsg: 'The PDF could not be created because the app could not prepare its fonts. Try again in a moment. If it keeps failing, restart Euro-Office Lite.',
     printError: 'Print failed', printErrorMsg: 'The document could not be printed. Please try again.',
@@ -629,6 +630,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
     saveError: 'Error al guardar', saveErrorMsg: 'No se pudo guardar el archivo.\n\nFormato de destino no compatible con este tipo de documento.',
     saveDeniedMsg: 'No se pudo guardar el archivo.\n\nNo tiene permiso para escribir en esa ubicación, o el archivo es de solo lectura.',
+    saveElsewhereMsg: 'No se pudo guardar el archivo.\n\nEl archivo está abierto en otra ventana. No se ha guardado nada.',
     pdfFontsErrorMsg: 'No se pudo crear el PDF porque la aplicación no pudo preparar sus fuentes. Inténtelo de nuevo en un momento. Si sigue fallando, reinicie Euro-Office Lite.',
     printError: 'Error al imprimir', printErrorMsg: 'No se pudo imprimir el documento. Inténtelo de nuevo.',
     documents: 'Documentos', all: 'Todos', plainText: 'Texto plano', user: 'Usuario', language: 'Idioma',
@@ -661,6 +663,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
     saveError: 'Erreur de sauvegarde', saveErrorMsg: 'Impossible d\'enregistrer le fichier.\n\nFormat de destination incompatible avec ce type de document.',
     saveDeniedMsg: 'Impossible d\'enregistrer le fichier.\n\nVous n\'avez pas l\'autorisation d\'écrire à cet emplacement, ou le fichier est en lecture seule.',
+    saveElsewhereMsg: 'Impossible d\'enregistrer le fichier.\n\nLe fichier est ouvert dans une autre fenêtre. Rien n\'a été enregistré.',
     pdfFontsErrorMsg: 'Impossible de créer le PDF, car l\'application n\'a pas pu préparer ses polices. Réessayez dans un instant. Si le problème persiste, redémarrez Euro-Office Lite.',
     printError: 'Échec de l\'impression', printErrorMsg: 'Impossible d\'imprimer le document. Veuillez réessayer.',
     documents: 'Documents', all: 'Tous', plainText: 'Texte brut', user: 'Utilisateur', language: 'Langue',
@@ -692,6 +695,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
     saveError: 'Speicherfehler', saveErrorMsg: 'Die Datei konnte nicht gespeichert werden.\n\nZielformat nicht kompatibel mit diesem Dokumenttyp.',
     saveDeniedMsg: 'Die Datei konnte nicht gespeichert werden.\n\nSie haben keine Schreibberechtigung für diesen Ort, oder die Datei ist schreibgeschützt.',
+    saveElsewhereMsg: 'Die Datei konnte nicht gespeichert werden.\n\nDie Datei ist in einem anderen Fenster geöffnet. Es wurde nichts gespeichert.',
     pdfFontsErrorMsg: 'Das PDF konnte nicht erstellt werden, weil die App ihre Schriftarten nicht vorbereiten konnte. Versuchen Sie es gleich noch einmal. Wenn der Fehler weiterhin auftritt, starten Sie Euro-Office Lite neu.',
     printError: 'Druckfehler', printErrorMsg: 'Das Dokument konnte nicht gedruckt werden. Bitte versuchen Sie es erneut.',
     documents: 'Dokumente', all: 'Alle', plainText: 'Nur Text', user: 'Benutzer', language: 'Sprache',
@@ -723,6 +727,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
     saveError: 'Errore di salvataggio', saveErrorMsg: 'Impossibile salvare il file.\n\nFormato di destinazione non compatibile con questo tipo di documento.',
     saveDeniedMsg: 'Impossibile salvare il file.\n\nNon si dispone dell\'autorizzazione a scrivere in questa posizione, oppure il file è di sola lettura.',
+    saveElsewhereMsg: 'Impossibile salvare il file.\n\nIl file è aperto in un\'altra finestra. Non è stato salvato nulla.',
     pdfFontsErrorMsg: 'Impossibile creare il PDF perché l\'app non è riuscita a preparare i suoi caratteri. Riprova tra un momento. Se il problema persiste, riavvia Euro-Office Lite.',
     printError: 'Errore di stampa', printErrorMsg: 'Impossibile stampare il documento. Riprova.',
     documents: 'Documenti', all: 'Tutti', plainText: 'Testo normale', user: 'Utente', language: 'Lingua',
@@ -754,6 +759,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
     saveError: 'Erro ao salvar', saveErrorMsg: 'Não foi possível salvar o arquivo.\n\nFormato de destino não compatível com este tipo de documento.',
     saveDeniedMsg: 'Não foi possível salvar o arquivo.\n\nVocê não tem permissão para gravar nesse local, ou o arquivo é somente leitura.',
+    saveElsewhereMsg: 'Não foi possível salvar o arquivo.\n\nO arquivo está aberto em outra janela. Nada foi salvo.',
     pdfFontsErrorMsg: 'Não foi possível criar o PDF porque o aplicativo não conseguiu preparar suas fontes. Tente novamente em instantes. Se o problema continuar, reinicie o Euro-Office Lite.',
     printError: 'Erro ao imprimir', printErrorMsg: 'Não foi possível imprimir o documento. Tente novamente.',
     documents: 'Documentos', all: 'Todos', plainText: 'Texto simples', user: 'Usuário', language: 'Idioma',
@@ -785,6 +791,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
     saveError: 'Ошибка сохранения', saveErrorMsg: 'Не удалось сохранить файл.\n\nФормат назначения несовместим с этим типом документа.',
     saveDeniedMsg: 'Не удалось сохранить файл.\n\nНет прав на запись в это место, или файл доступен только для чтения.',
+    saveElsewhereMsg: 'Не удалось сохранить файл.\n\nФайл открыт в другом окне. Ничего не сохранено.',
     pdfFontsErrorMsg: 'Не удалось создать PDF, так как приложению не удалось подготовить шрифты. Повторите попытку через несколько секунд. Если ошибка повторится, перезапустите Euro-Office Lite.',
     printError: 'Ошибка печати', printErrorMsg: 'Не удалось напечатать документ. Повторите попытку.',
     documents: 'Документы', all: 'Все', plainText: 'Обычный текст', user: 'Пользователь', language: 'Язык',
@@ -816,6 +823,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
     saveError: 'Помилка збереження', saveErrorMsg: 'Не вдалося зберегти файл.\n\nФормат призначення несумісний із цим типом документа.',
     saveDeniedMsg: 'Не вдалося зберегти файл.\n\nНемає дозволу на запис у це місце, або файл доступний лише для читання.',
+    saveElsewhereMsg: 'Не вдалося зберегти файл.\n\nФайл відкрито в іншому вікні. Нічого не збережено.',
     pdfFontsErrorMsg: 'Не вдалося створити PDF, оскільки застосунку не вдалося підготувати шрифти. Спробуйте ще раз за мить. Якщо помилка повториться, перезапустіть Euro-Office Lite.',
     printError: 'Помилка друку', printErrorMsg: 'Не вдалося надрукувати документ. Спробуйте ще раз.',
     documents: 'Документи', all: 'Усі', plainText: 'Звичайний текст', user: 'Користувач', language: 'Мова',
@@ -847,6 +855,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
     saveError: '保存错误', saveErrorMsg: '无法保存文件。\n\n目标格式与此文档类型不兼容。',
     saveDeniedMsg: '无法保存文件。\n\n您没有写入该位置的权限，或该文件为只读。',
+    saveElsewhereMsg: '无法保存文件。\n\n该文件已在另一个窗口中打开。未保存任何内容。',
     pdfFontsErrorMsg: '无法创建 PDF，因为应用无法准备字体。请稍后重试。如果问题仍然存在，请重新启动 Euro-Office Lite。',
     printError: '打印错误', printErrorMsg: '无法打印文档。请重试。',
     documents: '文档', all: '所有文件', plainText: '纯文本', user: '用户', language: '语言',
@@ -878,6 +887,7 @@ var _UI_STRINGS = {
     unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
     saveError: '保存エラー', saveErrorMsg: 'ファイルを保存できませんでした。\n\n対象の形式はこのドキュメントタイプと互換性がありません。',
     saveDeniedMsg: 'ファイルを保存できませんでした。\n\nその場所への書き込み権限がないか、ファイルが読み取り専用です。',
+    saveElsewhereMsg: 'ファイルを保存できませんでした。\n\nこのファイルは別のウィンドウで開かれています。何も保存されていません。',
     pdfFontsErrorMsg: 'アプリがフォントを準備できなかったため、PDF を作成できませんでした。しばらくしてからもう一度お試しください。問題が解決しない場合は、Euro-Office Lite を再起動してください。',
     printError: '印刷エラー', printErrorMsg: 'ドキュメントを印刷できませんでした。もう一度お試しください。',
     documents: 'ドキュメント', all: 'すべて', plainText: 'プレーンテキスト', user: 'ユーザー', language: '言語',
@@ -1715,6 +1725,7 @@ function _eoIsSaveDeniedError(error) {
 // What the failed-save dialog says, from the backend's error.
 function _eoSaveErrorText(error) {
   if (_eoIsFontCacheError(error)) return _t('pdfFontsErrorMsg');
+  if (_eoIsOpenElsewhere(error)) return _t('saveElsewhereMsg');
   if (_eoIsSaveDeniedError(error)) return _t('saveDeniedMsg');
   if (_eoIsSaveLockedError(error)) return _t('saveLockedMsg');
   return _t('saveErrorMsg');
