@@ -112,7 +112,8 @@ trait PresentationWindow {
     fn set_fullscreen(&self, on: bool) -> Result<(), String>;
     fn maximize(&self) -> Result<(), String>;
     fn close(&self);
-    fn exit(&self);
+    // Only for an exit already confirmed: no changes, or a discard.
+    fn exit_confirmed(&self);
     fn is_modified(&self) -> bool;
     // Asks the webview to show the unsaved-changes confirmation.
     fn confirm_close(&self);
@@ -141,8 +142,8 @@ impl PresentationWindow for WebviewWindow {
         let _ = WebviewWindow::close(self);
     }
 
-    fn exit(&self) {
-        self.app_handle().exit(0);
+    fn exit_confirmed(&self) {
+        crate::app_quit::exit_confirmed(self.app_handle());
     }
 
     fn is_modified(&self) -> bool {
@@ -325,7 +326,7 @@ pub fn discard_when_restored(window: &WebviewWindow, state: &PresentationState) 
 // Requested::Now means nothing waited, so the caller's check still holds.
 fn exit_when_restored(window: &WebviewWindow, state: &PresentationState, end: End) {
     match request_end(window, state, end) {
-        Requested::Now => window.exit(),
+        Requested::Now => window.exit_confirmed(),
         Requested::Held { started } => end_restore_after_timeout(window, started),
     }
 }
@@ -402,7 +403,7 @@ fn end_restore<W: PresentationWindow>(window: &W, state: &PresentationState, id:
     match finish(end, window.is_modified()) {
         Finish::Close => window.close(),
         Finish::Confirm => window.confirm_close(),
-        Finish::Exit => window.exit(),
+        Finish::Exit => window.exit_confirmed(),
     }
 }
 
@@ -807,7 +808,7 @@ mod tests {
             self.closes.set(self.closes.get() + 1);
         }
 
-        fn exit(&self) {
+        fn exit_confirmed(&self) {
             self.exits.set(self.exits.get() + 1);
         }
 
