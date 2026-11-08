@@ -62,11 +62,23 @@ pub fn discard_recovery_on_exit(modified: bool) -> bool {
     !modified
 }
 
+// The document's images are in the instance folder (media/), and a kept
+// recovery folder is recovered with them, so the instance folder stays with it.
+// The OS drops its lock when the process ends; the next start's sweep keeps it
+// while a recovery folder cites it (temp_layout::sweep_dead_instances).
+pub fn remove_instance_on_exit(recovery_discarded: bool) -> bool {
+    recovery_discarded
+}
+
 // RunEvent::Exit: the one point every exit that runs the event loop's end
 // passes through. A killed process never gets here; its folder stays too.
 pub fn on_exit(state: &AppState) {
     let modified = *state.modified.lock().unwrap();
-    crate::recovery::end_session(state, discard_recovery_on_exit(modified));
+    let discard = discard_recovery_on_exit(modified);
+    crate::recovery::end_session(state, discard);
+    if !remove_instance_on_exit(discard) {
+        return;
+    }
     state.instance.end();
 }
 
@@ -157,6 +169,17 @@ mod tests {
         dir
     }
 
+    const IMAGE_NAME: &str = "image1.png";
+
+    // An image inserted into the open document, where copy-to-media puts it.
+    fn insert_image(state: &AppState) -> PathBuf {
+        let media = state.temp_dir.join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let image = media.join(IMAGE_NAME);
+        std::fs::write(&image, b"\x89PNG").unwrap();
+        image
+    }
+
     #[test]
     fn an_exit_with_changes_keeps_the_recovery_folder() {
         assert!(!discard_recovery_on_exit(true));
@@ -165,6 +188,41 @@ mod tests {
     #[test]
     fn an_exit_without_changes_deletes_the_recovery_folder() {
         assert!(discard_recovery_on_exit(false));
+    }
+
+    #[test]
+    fn a_discarded_recovery_removes_the_instance_folder() {
+        assert!(remove_instance_on_exit(true));
+    }
+
+    #[test]
+    fn a_kept_recovery_keeps_the_instance_folder() {
+        assert!(!remove_instance_on_exit(false));
+    }
+
+    #[test]
+    fn an_exit_with_changes_keeps_the_instance_folder_and_its_images() {
+        let root = scratch("instance-kept");
+        let state = test_state(&root);
+        live_session(&state, &root.join("recover"));
+        let image = insert_image(&state);
+        *state.modified.lock().unwrap() = true;
+
+        on_exit(&state);
+
+        assert!(image.exists());
+    }
+
+    #[test]
+    fn an_exit_without_changes_removes_the_instance_folder() {
+        let root = scratch("instance-removed");
+        let state = test_state(&root);
+        live_session(&state, &root.join("recover"));
+        insert_image(&state);
+
+        on_exit(&state);
+
+        assert!(!state.instance.dir.exists());
     }
 
     #[test]
