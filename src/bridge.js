@@ -612,6 +612,8 @@ var _UI_STRINGS = {
     languageAdded: 'Installed as {lang}. Open a document to check its spelling.',
     languageAddedRestart: 'Installed as {lang}. Restart Euro-Office Lite to check its spelling: the spell checker loaded its languages when the first document opened.',
     languageExists: 'A {lang} dictionary is already installed. Replace it with the files you chose?',
+    languageReplace: 'Replace', languageKeep: 'Cancel',
+    languageBusy: 'Another Euro-Office Lite window is installing the {detail} dictionary. Wait for it to finish and try again.',
     languageNotAPair: 'Choose two files: one ending in .aff and one ending in .dic.',
     languageNamesDiffer: 'The two files are for different languages ({detail}). Choose an .aff and a .dic with the same name, for example es_ES.aff and es_ES.dic.',
     languageBadName: 'The file name "{detail}" is not a language code. Rename the files to a code such as fr_FR and try again.',
@@ -651,6 +653,10 @@ var _UI_STRINGS = {
     noteSeparatorAlready: 'El separador de notas ya se había quitado de este documento.',
     noteSeparatorAlreadyPresent: 'Este documento ya tiene sus líneas separadoras de notas.',
     noteSeparatorFailed: 'No se pudieron cambiar las líneas separadoras de notas.',
+    addLanguageTitle: 'Añadir idioma',
+    languageExists: 'Ya hay un diccionario {lang} instalado. ¿Reemplazarlo por los archivos elegidos?',
+    languageReplace: 'Reemplazar', languageKeep: 'Cancelar',
+    languageBusy: 'Otra ventana de Euro-Office Lite está instalando el diccionario {detail}. Espere a que termine y vuelva a intentarlo.',
     locateLinkedFile: 'Localiza el archivo vinculado'
   },
   fr: {
@@ -1642,7 +1648,8 @@ var _EO_IMPORT_MESSAGES = {
   'names-differ': 'languageNamesDiffer',
   'bad-name': 'languageBadName',
   'not-a-dictionary': 'languageNotADictionary',
-  'unknown-language': 'languageUnknown'
+  'unknown-language': 'languageUnknown',
+  'busy': 'languageBusy'
 };
 
 // sdkjs defines its language table (AscCommon.spellcheckGetLanguages) in this
@@ -1692,24 +1699,28 @@ function _eoFill(key, values) {
   return _t(key).replace(/\{(lang|detail)\}/g, function(_, name) { return values[name] || ''; });
 }
 
-async function _eoAddLanguage(replace) {
+// Over an installed language the backend asks "Replace?" itself, with a
+// native dialog; the bridge only sends the words, in the user's language.
+// "{lang}" stays in the text: the backend fills in the folder it chose.
+function _eoReplaceQuestion(title) {
+  return {
+    title: title,
+    text: _t('languageExists'),
+    replace: _t('languageReplace'),
+    cancel: _t('languageKeep')
+  };
+}
+
+async function _eoAddLanguage() {
   var dialog = window.__TAURI__.dialog;
   var title = _t('addLanguageTitle');
   var known = await _eoKnownLanguages();
   var lang;
   try {
-    lang = await invoke('import_dictionary', { known: known, replace: !!replace });
+    lang = await invoke('import_dictionary', { known: known, question: _eoReplaceQuestion(title) });
   } catch (e) {
     var error = _eoImportError(e);
     window._eoLog('[SPELL] import failed: ' + error.code + ': ' + error.detail);
-    if (error.code === 'exists') {
-      var yes = await dialog.confirm(_eoFill('languageExists', { lang: error.detail }),
-        { title: title, kind: 'warning' });
-      if (yes) return _eoAddLanguage(true);
-      // The backend keeps the chosen pair until told: drop it.
-      await invoke('cancel_dictionary_import');
-      return null;
-    }
     var key = _EO_IMPORT_MESSAGES[error.code] || 'languageFailed';
     await dialog.message(_eoFill(key, { detail: error.detail }), { title: title, kind: 'error' });
     return null;
@@ -1833,6 +1844,8 @@ function _loadEditorBin(b64data, fileName, options) {
     }
 
     if (editorDoc) {
+      if (_isMac) SlideshowEscGuard.install(editorDoc);
+
       if (isLinux) {
         // Must register before the Ctrl+V interceptor below: same document and
         // phase, so listener order is registration order, and the interceptor's
@@ -2679,6 +2692,45 @@ function _ensureCoreProps(ref) {
   }
 }
 
+// macOS: sdkjs handles Esc in the slideshow without preventDefault, so the key
+// also reaches AppKit, whose cancelOperation: toggles native fullscreen while
+// the backend leaves it too; the two transitions cross and the window stays
+// fullscreen. Preventing only the default keeps AppKit out: the event still
+// reaches sdkjs, which ends the slideshow or drops the pen.
+var SlideshowEscGuard = (function() {
+  var active = false;
+
+  function onKeyDown(e) {
+    if (!active) return;
+    if (e.keyCode !== 27) return;
+    e.preventDefault();
+  }
+
+  // Called on every editor load; the document flag keeps it to one listener.
+  function install(doc) {
+    if (!doc || doc.__eoSlideshowEscGuardInstalled) return;
+    doc.addEventListener('keydown', onKeyDown, true);
+    doc.__eoSlideshowEscGuardInstalled = true;
+  }
+
+  // A system exit (green button, Ctrl+Cmd+F) leaves it on until the slideshow
+  // ends; Esc then only ends the slideshow, which turns it off.
+  function setActive(on) {
+    active = on;
+  }
+
+  return { install: install, setActive: setActive };
+})();
+
+// The window has no fullscreen permission in the webview; the backend command
+// sets it and restores the earlier maximized state on exit.
+function _eoSetPresentationFullscreen(on) {
+  SlideshowEscGuard.setActive(on);
+  invoke('set_presentation_fullscreen', { on: on }).catch(function(e) {
+    _eoLog('[presentation] fullscreen ' + on + ' failed:', e);
+  });
+}
+
 window.AscDesktopEditor = {
   IsLocalFile: () => true,
   GetEditorId: () => 'euro-office-lite',
@@ -3349,15 +3401,10 @@ window.AscDesktopEditor = {
   isBlockchainSupport: () => false,
   SpellCheck: function(json) { SpellCheckBridge.check(json); },
   SetFullscreen: function(fullscreen) {
-    var win = window.__TAURI__.window.getCurrentWindow();
-    var fs = !!fullscreen;
-    win.setFullscreen(fs).catch(function(){});
-    win.setAlwaysOnTop(fs).catch(function(){});
+    _eoSetPresentationFullscreen(!!fullscreen);
   },
   endReporter: function() {
-    var win = window.__TAURI__.window.getCurrentWindow();
-    win.setFullscreen(false).catch(function(){});
-    win.setAlwaysOnTop(false).catch(function(){});
+    _eoSetPresentationFullscreen(false);
   },
   // The slide editor relays pen strokes and presenter commands to a separate
   // presenter window through this call. There is no such window here, so
