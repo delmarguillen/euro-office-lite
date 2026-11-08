@@ -13,6 +13,7 @@ mod launch_args;
 mod new_window;
 mod note_separator;
 mod path_grants;
+mod pending_open;
 mod presentation;
 mod protocol_limits;
 mod recent;
@@ -403,7 +404,7 @@ fn main() {
             modified: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
-            pending_open: Mutex::new(file_to_open),
+            pending_open: pending_open::PendingOpens::with_launch_file(file_to_open),
             grants: path_grants::PathGrants::default(),
             text_options: Mutex::new(None),
             last_print_pdf: Mutex::new(None),
@@ -917,12 +918,16 @@ fn main() {
         // unmodified document never reaches force_close (Tauri just closes the
         // window), and neither path may leave a recovery folder behind. A
         // killed process never runs this, which is the case the folder is for.
-        .run(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::Exit => {
                 let state = app_handle.state::<AppState>();
                 recovery::end_session(&state, true);
                 state.instance.end();
             }
+            // The Finder hands files over here, not as launch arguments.
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+            tauri::RunEvent::Opened { urls } => pending_open::on_opened(app_handle, urls),
+            _ => {}
         });
 }
 

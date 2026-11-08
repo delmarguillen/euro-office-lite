@@ -1079,11 +1079,25 @@ function _eoHideOpening() {
   overlay.classList.remove('active');
   var startScreen = document.getElementById('start-screen');
   if (startScreen) startScreen.inert = false;
+  _eoWakeOpeningWaiters();
 }
 
 function _eoIsOpening() {
   var overlay = document.getElementById('opening');
   return !!overlay && overlay.classList.contains('active');
+}
+
+// Resolved when the indicator goes away: the open in progress has finished,
+// with the editor mounted or with the start screen back.
+var _eoOpeningWaiters = [];
+function _eoOpeningEnded() {
+  return new Promise(function(resolve) { _eoOpeningWaiters.push(resolve); });
+}
+
+function _eoWakeOpeningWaiters() {
+  var waiters = _eoOpeningWaiters;
+  _eoOpeningWaiters = [];
+  waiters.forEach(function(resolve) { resolve(); });
 }
 
 // A function replacement, so a file name containing "$&" is inserted as is.
@@ -3497,17 +3511,57 @@ async function _eoOpenGranted(file) {
   }
 }
 
+// The files waiting in the backend: the launch argument, and on macOS the
+// files the Finder hands over (pending_open.rs). One drain at a time takes
+// them one by one, and LocalFileOpen decides between this window and a new
+// one. An open in progress is waited for, so no file is dropped.
+var _eoDraining = false;
+var _eoDrainAgain = false;
+async function _eoDrainPendingOpens() {
+  if (_eoDraining) {
+    _eoDrainAgain = true;
+    return;
+  }
+  _eoDraining = true;
+  try {
+    do {
+      _eoDrainAgain = false;
+      while (await _eoOpenNextPending()) {}
+    } while (_eoDrainAgain);
+  } catch(e) {
+    window._eoLog('[EO] open-file: pending file unavailable: ' + (e.message || e));
+  } finally {
+    _eoDraining = false;
+  }
+}
+
+// False when nothing was waiting.
+async function _eoOpenNextPending() {
+  var file = await invoke('take_pending_open_file');
+  if (!file) return false;
+  while (_eoIsOpening()) {
+    window._eoLog('[OPEN] waiting for the open in progress: ' + file.name);
+    await _eoOpeningEnded();
+  }
+  await window.AscDesktopEditor.LocalFileOpen(file);
+  return true;
+}
+
 // An event emitted by the backend at startup is lost if no listener exists yet,
-// so the page asks for the launch argument instead, once DOMContentLoaded
-// guarantees the later scripts (and window._openEditor) have run.
+// so the page drains the queue once DOMContentLoaded guarantees the later
+// scripts (and window._eoOpenPath) have run. Events before that only add to
+// the queue that this first drain collects.
+var _eoPageReady = false;
 function _eoTakePendingOpenFile() {
   _eoWaitForFonts();
-  invoke('take_pending_open_file').then(function(file) {
-    if (file) return _eoOpenGranted(file);
-  }).catch(function(e) {
-    window._eoLog('[EO] open-file: pending file unavailable: ' + (e.message || e));
-  });
+  _eoPageReady = true;
+  _eoDrainPendingOpens();
 }
+
+listen('pending-open-file', function() {
+  if (!_eoPageReady) return;
+  _eoDrainPendingOpens();
+});
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', _eoTakePendingOpenFile);
 } else {
