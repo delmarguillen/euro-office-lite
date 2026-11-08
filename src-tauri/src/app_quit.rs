@@ -27,8 +27,8 @@ pub fn is_quit_item(id: &str) -> bool {
     id == QUIT_MENU_ID
 }
 
-// Confirming ends in force_close, which calls exit(); exit() never comes back
-// here, so there is no loop.
+// Confirming ends in force_close, which exits without asking again; exit()
+// never comes back here, so there is no loop.
 pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     if !is_quit_item(event.id().as_ref()) {
         return;
@@ -38,8 +38,29 @@ pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         QuitAction::Confirm => {
             let _ = app.emit("confirm-close", ());
         }
-        QuitAction::Exit => app.exit(0),
+        QuitAction::Exit => quit_after_restore(app),
     }
+}
+
+// The slideshow window is restored first so the window-state plugin saves its
+// normal size on RunEvent::Exit. A quit checks for changes again once
+// restored; a discard does not.
+fn quit_after_restore(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(crate::window_state::MAIN_WINDOW) else {
+        app.exit(0);
+        return;
+    };
+    let state = app.state::<crate::presentation::PresentationState>();
+    crate::presentation::quit_when_restored(&window, &state);
+}
+
+pub fn discard_after_restore(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(crate::window_state::MAIN_WINDOW) else {
+        app.exit(0);
+        return;
+    };
+    let state = app.state::<crate::presentation::PresentationState>();
+    crate::presentation::discard_when_restored(&window, &state);
 }
 
 // Tauri's default macOS menu with its last app-menu item (the stock Quit)

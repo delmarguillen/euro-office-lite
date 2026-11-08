@@ -50,6 +50,18 @@ where
     parsed
 }
 
+// The title bar options as given, to pass on to another process of the app.
+pub fn title_bar_options(args: &LaunchArgs) -> Vec<&'static str> {
+    let mut options = Vec::new();
+    if args.system_title_bar {
+        options.push(SYSTEM_TITLE_BAR);
+    }
+    if args.no_title_bar {
+        options.push(NO_TITLE_BAR);
+    }
+    options
+}
+
 // The command line wins over the environment, and --no-title-bar over
 // --system-title-bar. The notes are lines for the startup log.
 pub fn resolve_title_bar(args: &LaunchArgs, env: Option<&str>) -> (TitleBar, Vec<String>) {
@@ -100,6 +112,19 @@ mod tests {
 
     fn document(args: &[&str]) -> Option<String> {
         parse(args).document
+    }
+
+    #[test]
+    fn title_bar_options_are_passed_on_as_given() {
+        assert!(title_bar_options(&parse(&["a.docx"])).is_empty());
+        assert_eq!(
+            title_bar_options(&parse(&["a.docx", SYSTEM_TITLE_BAR])),
+            vec![SYSTEM_TITLE_BAR]
+        );
+        assert_eq!(
+            title_bar_options(&parse(&[NO_TITLE_BAR, SYSTEM_TITLE_BAR])),
+            vec![SYSTEM_TITLE_BAR, NO_TITLE_BAR]
+        );
     }
 
     #[test]

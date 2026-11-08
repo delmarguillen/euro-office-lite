@@ -6,7 +6,7 @@
 // clipboard; it is left out here.
 //
 // Run: node scripts/test-bridge-no-paths.mjs [path/to/bridge.js]
-import { check, finish, loadBridge } from './bridge-test-harness.mjs';
+import { check, finish, loadBridge, pendingQueue } from './bridge-test-harness.mjs';
 
 const results = [];
 const HOME = '/home/u/Documents/';
@@ -31,8 +31,9 @@ async function setup(extra = {}) {
     invoke: {
       fonts_status: recorded('fonts_status', 'ready'),
       take_pending_open_file: recorded('take_pending_open_file',
-        { token: 'tok-launch', name: 'launch.docx' }),
+        pendingQueue({ token: 'tok-launch', name: 'launch.docx' })),
       open_file: recorded('open_file', 'Ymlu'),
+      open_in_new_window: recorded('open_in_new_window', 'opened'),
       write_editor_bin: recorded('write_editor_bin', 'ok'),
       current_document: recorded('current_document', { token: 'tok-current', name: 'report.docx' }),
       pick_save_target: recorded('pick_save_target', { token: 'tok-save', name: 'copy.docx' }),
@@ -53,6 +54,8 @@ async function setup(extra = {}) {
       ...extra,
     },
   });
+  // The start screen's open (editor-patches.js) is not loaded here.
+  bridge.sandbox._eoOpenPath = recorded('open_path', null);
   bridge.sandbox.__TAURI__.dialog = {
     open: (options) => { jsDialogs.push(['open', options]); return Promise.resolve(HOME + 'x.docx'); },
     save: (options) => { jsDialogs.push(['save', options]); return Promise.resolve(HOME + 'x.docx'); },
@@ -82,8 +85,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 let run = await setup();
 await settle();
 check(results, 'the launch argument opens by token',
-  argsOf(run.calls, 'open_file').map((args) => args.token).join() === 'tok-launch',
-  JSON.stringify(argsOf(run.calls, 'open_file')));
+  argsOf(run.calls, 'open_path').map((args) => args.token).join() === 'tok-launch',
+  JSON.stringify(argsOf(run.calls, 'open_path')));
 run.bridge.stopTimers();
 
 // Save As.
@@ -167,28 +170,29 @@ check(results, 'an inserted image is copied by token',
   copyUrl.endsWith('copy-to-media/eo-grant:tok-images/a.png'), copyUrl);
 run.bridge.stopTimers();
 
-// Reopening from the editor's recent list. The launch argument opens first,
-// after the font wait, so it settles before an editor counts as mounted.
+// Opening from the editor's recent list, which with a document open goes to a
+// new window. The launch argument opens first, so it settles before an
+// editor counts as mounted.
 run = await setup();
 await settle();
 run.bridge.sandbox.AscDesktopEditor._currentDocType = 'word';
 run.bridge.sandbox.location = { reload: () => {} };
 run.bridge.run(`AscDesktopEditor.execCommand('open:recent', ${JSON.stringify(JSON.stringify({ id: 0, path: HOME + 'recent.docx' }))})`);
 await settle();
-const pending = run.bridge.sandbox.localStorage.getItem('eo-pending-open');
-check(results, 'a recent entry is reopened by its token', pending === JSON.stringify({ token: 'tok-recent', name: 'recent.docx' }),
-  String(pending));
+const newWindow = argsOf(run.calls, 'open_in_new_window');
+check(results, 'a recent entry is opened by its token',
+  newWindow.length === 1 && JSON.stringify(newWindow[0]) === JSON.stringify({ token: 'tok-recent' }),
+  JSON.stringify(newWindow));
 run.bridge.stopTimers();
 
 // A PDF given as the launch argument.
 run = await setup({
-  take_pending_open_file: () => ({ token: 'tok-launch-pdf', name: 'launch.pdf' }),
-  open_pdf: (args) => { everyCall.push({ command: 'open_pdf', args }); return 'JVBERg=='; },
+  take_pending_open_file: pendingQueue({ token: 'tok-launch-pdf', name: 'launch.pdf' }),
 });
 await settle();
 check(results, 'a PDF launch argument opens by token',
-  everyCall.some((call) => call.command === 'open_pdf' && call.args.token === 'tok-launch-pdf'),
-  JSON.stringify(everyCall.filter((call) => call.command === 'open_pdf')));
+  argsOf(run.calls, 'open_path').map((args) => args.token).join() === 'tok-launch-pdf',
+  JSON.stringify(argsOf(run.calls, 'open_path')));
 run.bridge.stopTimers();
 
 // Save As and Print with a PDF open.
