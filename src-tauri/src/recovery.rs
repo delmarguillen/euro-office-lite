@@ -421,12 +421,12 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn write_doc_info(dir: &Path, info: &DocInfo) -> Result<(), String> {
+pub(crate) fn write_doc_info(dir: &Path, info: &DocInfo) -> Result<(), String> {
     let json = serde_json::to_string_pretty(info).map_err(|e| e.to_string())?;
     std::fs::write(dir.join(INFO_FILE), json).map_err(|e| e.to_string())
 }
 
-fn read_doc_info(dir: &Path) -> Option<DocInfo> {
+pub(crate) fn read_doc_info(dir: &Path) -> Option<DocInfo> {
     std::fs::read_to_string(dir.join(INFO_FILE))
         .ok()
         .and_then(|raw| serde_json::from_str::<DocInfo>(&raw).ok())

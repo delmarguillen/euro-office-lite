@@ -127,9 +127,15 @@ pub fn macos_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_ops::test_state;
-    use crate::recovery::{changes_path, scan_candidates, write_changes_file, RecoverySession};
-    use crate::temp_layout::{is_locked, take_lock};
+    use crate::file_ops::{test_state, test_state_for};
+    use crate::recovery::{
+        changes_path, copy_recovered_images, read_doc_info, referenced_instances, scan_candidates,
+        write_changes_file, write_doc_info, DocInfo, RecoverySession,
+    };
+    use crate::temp_layout::{
+        begin_instance, is_locked, sweep_dead_instances, take_lock, unlocked_instance,
+        MIN_SWEEP_AGE_MS,
+    };
     use std::path::{Path, PathBuf};
 
     fn scratch(name: &str) -> PathBuf {
@@ -151,11 +157,23 @@ mod tests {
     }
 
     // A live session the way recovery_begin and save_changes leave it: the
-    // opened document, one change past the last save and the lock held.
+    // opened document, its doc.info naming this instance, one change past the
+    // last save and the lock held.
     fn live_session(state: &AppState, recover_root: &Path) -> PathBuf {
         let dir = recover_root.join("1000-1");
         std::fs::create_dir_all(dir.join("changes")).unwrap();
         std::fs::write(dir.join("Editor.bin"), b"DOCY;v10").unwrap();
+        let info = DocInfo {
+            path: None,
+            format: None,
+            name: "a.docx".to_string(),
+            doc_type: "word".to_string(),
+            app_version: String::new(),
+            saved_count: 0,
+            created_ms: now_ms(),
+            instance: Some(state.instance.id.clone()),
+        };
+        write_doc_info(&dir, &info).unwrap();
         let entries = write_changes_file(&changes_path(&dir), &["AAAA".to_string()]).unwrap();
         let lock = take_lock(&dir.join("rec.lock")).unwrap();
         *state.recovery.lock().unwrap() = Some(RecoverySession {
@@ -223,6 +241,54 @@ mod tests {
         on_exit(&state);
 
         assert!(!state.instance.dir.exists());
+    }
+
+    // The next start: the exited instance is dead, and the sweep keeps its
+    // folder while a recovery folder cites it. Recovering rewrites the
+    // citation to the new instance and discarding removes the recovery
+    // folder; either way nothing cites it any more and the sweep removes it.
+    #[test]
+    fn the_sweep_keeps_the_instance_folder_while_a_recovery_folder_cites_it() {
+        let root = scratch("sweep");
+        let recover_root = root.join("recover");
+        let created_ms = 1_000;
+        let state = test_state_for(&root, begin_instance(&root, created_ms, 1).unwrap());
+        let instance_dir = state.instance.dir.clone();
+        let recovery_dir = live_session(&state, &recover_root);
+        *state.modified.lock().unwrap() = true;
+        on_exit(&state);
+        // The process ends: the instance lock goes with it.
+        drop(state);
+        let next_start_ms = created_ms + MIN_SWEEP_AGE_MS;
+
+        let cited = referenced_instances(&recover_root);
+        sweep_dead_instances(&root, next_start_ms, &cited, is_locked);
+        assert!(instance_dir.exists());
+
+        std::fs::remove_dir_all(&recovery_dir).unwrap();
+        let cited = referenced_instances(&recover_root);
+        sweep_dead_instances(&root, next_start_ms, &cited, is_locked);
+        assert!(!instance_dir.exists());
+    }
+
+    // The next start recovers the folder: the images come from the instance
+    // folder the exit kept, the way recovery_load copies them.
+    #[test]
+    fn a_recovery_after_an_exit_with_changes_gets_the_images() {
+        let root = scratch("images");
+        let exited = test_state(&root);
+        let recovery_dir = live_session(&exited, &root.join("recover"));
+        insert_image(&exited);
+        *exited.modified.lock().unwrap() = true;
+        on_exit(&exited);
+        drop(exited);
+
+        let next = test_state_for(&root, unlocked_instance(&root, 2, std::process::id()));
+        let info = read_doc_info(&recovery_dir);
+        let copied = copy_recovered_images(&next, info.as_ref()).unwrap();
+
+        assert!(copied >= 1);
+        assert!(next.temp_dir.join("media").join(IMAGE_NAME).exists());
     }
 
     #[test]

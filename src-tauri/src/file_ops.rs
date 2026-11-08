@@ -1288,6 +1288,13 @@ fn end_pending_recent(pending: &Mutex<Option<PathBuf>>, dest: &Path) -> Option<P
 #[cfg(test)]
 pub(crate) fn test_state(root: &Path) -> AppState {
     let instance = crate::temp_layout::unlocked_instance(root, 1, std::process::id());
+    test_state_for(root, instance)
+}
+
+// The same, with the instance the test gives: a second one under the same
+// root, or one holding its lock.
+#[cfg(test)]
+pub(crate) fn test_state_for(root: &Path, instance: crate::temp_layout::Instance) -> AppState {
     AppState {
         current_file: Mutex::new(None),
         temp_dir: instance.dir.clone(),
