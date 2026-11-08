@@ -135,7 +135,7 @@ async function setup({ recentFails = false } = {}) {
   const screen = buildStartScreen();
   bridge.sandbox.document = screen.doc;
   const addLanguageCalls = [];
-  bridge.sandbox._eoAddLanguage = (replace) => { addLanguageCalls.push(replace); return Promise.resolve(null); };
+  bridge.sandbox._eoAddLanguage = (...args) => { addLanguageCalls.push(args); return Promise.resolve(null); };
   const callbacks = { language: 0, recent: 0 };
   bridge.sandbox.__options = {
     onLanguageChange: () => { callbacks.language += 1; },
@@ -221,8 +221,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   const env = await setup();
   click(env.doc, env.toggle);
   click(env.doc, env.addLanguage);
-  check(results, 'the spell check button still starts _eoAddLanguage(false)',
-    env.addLanguageCalls.length === 1 && env.addLanguageCalls[0] === false, JSON.stringify(env.addLanguageCalls));
+  check(results, 'the spell check button still starts _eoAddLanguage()',
+    env.addLanguageCalls.length === 1 && env.addLanguageCalls[0].length === 0, JSON.stringify(env.addLanguageCalls));
 }
 
 {

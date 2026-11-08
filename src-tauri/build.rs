@@ -10,12 +10,14 @@ const APP_COMMANDS: &[&str] = &[
     "print_document",
     "create_new",
     "current_document",
+    "close_document",
     "pick_document",
     "pick_pdf",
     "pick_files",
     "pick_save_target",
     "locate_linked_file",
     "take_pending_open_file",
+    "open_in_new_window",
     "open_pdf_viewer",
     "print_to_printer",
     "convert_for_insert",
@@ -42,7 +44,7 @@ const APP_COMMANDS: &[&str] = &[
     "recovery_discard",
     "list_user_dictionaries",
     "import_dictionary",
-    "cancel_dictionary_import",
+    "set_presentation_fullscreen",
 ];
 
 fn main() {
