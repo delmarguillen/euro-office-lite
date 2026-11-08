@@ -167,6 +167,79 @@ fn restore_main_window(app: &tauri::App) {
     }
 }
 
+// The geometry the plugin saved for main, read from its state file. On macOS
+// tao queues the restored position, size and zoom on the main dispatch queue,
+// so until setup returns the live window still has its default geometry.
+fn saved_main_window(app: &tauri::App) -> Option<window_state::SavedWindow> {
+    use tauri_plugin_window_state::AppHandleExt;
+    let config_dir = app.path().app_config_dir().ok()?;
+    let state_path = config_dir.join(app.handle().filename());
+    window_state::read_saved_window(&state_path, window_state::MAIN_WINDOW)
+}
+
+// The outer rectangle main is restored to, and whether it is maximized.
+fn restored_main_geometry(
+    app: &tauri::App,
+    window: &tauri::WebviewWindow,
+) -> Option<(window_state::Area, bool)> {
+    let outer = window.outer_size().ok()?;
+    let inner = window.inner_size().ok()?;
+    if let Some(saved) = saved_main_window(app) {
+        let frame_width = outer.width.saturating_sub(inner.width);
+        let frame_height = outer.height.saturating_sub(inner.height);
+        let area = window_state::saved_outer_area(saved, frame_width, frame_height);
+        return Some((area, saved.maximized));
+    }
+    // Nothing saved, so nothing was restored: the live window is where it opens.
+    let position = window.outer_position().ok()?;
+    let maximized = window.is_maximized().unwrap_or(false);
+    let area = window_state::Area {
+        x: position.x,
+        y: position.y,
+        width: outer.width,
+        height: outer.height,
+    };
+    Some((area, maximized))
+}
+
+// A window opened from another one restores the same saved geometry, so it is
+// moved right and down to not hide the first. Not when maximized, nor on
+// Wayland, where the compositor places the window.
+fn offset_new_window(app: &tauri::App) {
+    let Some(window) = app.get_webview_window(window_state::MAIN_WINDOW) else {
+        log_startup("ERROR: new window offset: no main window");
+        return;
+    };
+    if on_wayland(&window) {
+        return;
+    }
+    let Some((placed, maximized)) = restored_main_geometry(app, &window) else {
+        log_startup("ERROR: new window offset: no position or size");
+        return;
+    };
+    let monitors: Vec<window_state::Monitor> = window
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(|monitor| window_state::Monitor {
+            area: window_state::Area {
+                x: monitor.position().x,
+                y: monitor.position().y,
+                width: monitor.size().width,
+                height: monitor.size().height,
+            },
+            scale_factor: monitor.scale_factor(),
+        })
+        .collect();
+    let Some((x, y)) = window_state::new_window_position(placed, maximized, &monitors) else {
+        log_startup("new window offset: maximized, on no monitor or no room, not moved");
+        return;
+    };
+    if let Err(e) = window.set_position(tauri::PhysicalPosition { x, y }) {
+        log_startup(&format!("ERROR: new window offset: {e}"));
+    }
+}
+
 // main is built hidden (see main) and restored when setup shows it. On Linux
 // the window is either built visible or shown by apply_title_bar.
 #[cfg(not(target_os = "linux"))]
@@ -324,6 +397,7 @@ fn main() {
     }
 
     let launch = launch_args::parse_launch_args(std::env::args().skip(1));
+    let new_window = launch.new_window;
     let (title_bar, notes) = launch_args::resolve_title_bar(
         &launch,
         std::env::var(launch_args::TITLE_BAR_ENV).ok().as_deref(),
@@ -779,6 +853,9 @@ fn main() {
         .setup(move |app| {
             // Restored before it is shown, so a hidden window appears once.
             restore_main_window(app);
+            if new_window {
+                offset_new_window(app);
+            }
             // First, so a hidden window is shown as early as the default one.
             #[cfg(target_os = "linux")]
             apply_title_bar(app, title_bar);
