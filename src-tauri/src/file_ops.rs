@@ -534,6 +534,9 @@ pub async fn save_file(
 ) -> Result<String, String> {
     let current = state.current_file.lock().unwrap().clone();
     let dest = current.ok_or("No file is currently open")?;
+    if !crate::file_dialogs::saves_in_place(&dest) {
+        return Err(format!("{} can only be saved with Save As", dest.display()));
+    }
     // x2t only reports a failed write as a generic exit code.
     crate::save_target::check_writable_destination(&dest)?;
 

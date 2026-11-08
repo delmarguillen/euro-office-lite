@@ -1154,12 +1154,33 @@ window._eoOpeningFileText = _eoOpeningFileText;
 // the reopen-after-reload path and the recent files list all agree.
 function _eoDocTypeForPath(path) {
   var ext = String(path || '').split('.').pop().toLowerCase();
-  if (['xlsx', 'xls', 'ods', 'csv'].indexOf(ext) !== -1) return 'cell';
-  if (['pptx', 'ppt', 'odp'].indexOf(ext) !== -1) return 'slide';
+  var cell = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb', 'ods', 'ots', 'fods', 'csv'];
+  var slide = ['pptx', 'ppt', 'pptm', 'ppsx', 'potx', 'odp', 'otp', 'fodp'];
+  if (cell.indexOf(ext) !== -1) return 'cell';
+  if (slide.indexOf(ext) !== -1) return 'slide';
   if (ext === 'pdf') return 'pdf';
   return 'word';
 }
 window._eoDocTypeForPath = _eoDocTypeForPath;
+
+// The formats Ctrl+S writes back to the same path: SAVE_IN_PLACE_EXTENSIONS
+// in src-tauri/src/file_dialogs.rs. Any other (a .doc, a .dotx, an .xlsm, a
+// .fodt) goes through Save As, so a legacy, template or macro file is never
+// overwritten with content of another format under its own name.
+var _EO_SAVE_IN_PLACE = [
+  'docx', 'odt', 'rtf', 'txt', 'xlsx', 'ods', 'csv', 'pptx', 'odp', 'pdf'
+];
+function _eoSavesInPlace(name) {
+  var ext = String(name || '').split('.').pop().toLowerCase();
+  return _EO_SAVE_IN_PLACE.indexOf(ext) !== -1;
+}
+
+// What Save As proposes for a document Ctrl+S cannot write back.
+function _eoFamilyFormat(docType) {
+  if (docType === 'cell') return 'xlsx';
+  if (docType === 'slide') return 'pptx';
+  return 'docx';
+}
 
 // Files reach the backend only as the tokens it handed out (path_grants.rs).
 // What the editor holds for a granted file is this name, which keeps the
@@ -2880,6 +2901,11 @@ window.AscDesktopEditor = {
       var current = await invoke('current_document');
       var currentName = current ? current.name : null;
       if (!isSaveAs && !current) isSaveAs = true;
+      var familyExt = null;
+      if (!isSaveAs && !_eoSavesInPlace(currentName)) {
+        isSaveAs = true;
+        familyExt = _eoFamilyFormat(docType);
+      }
       var wasModified = _eoUnsavedChanges;
       // A cancelled Save As or a PDF export leaves the open document where it
       // was, so it must not end as a save.
@@ -2892,7 +2918,9 @@ window.AscDesktopEditor = {
           257: 'xlsx', 258: 'xls', 259: 'ods', 260: 'csv',
           513: 'pdf'
         };
-        var requestedExt = formatExtensions[fileType] || null;
+        // Ctrl+S on a .doc arrives with the .doc format (66), which x2t 10
+        // does not write: the family's format wins over the document's own.
+        var requestedExt = familyExt || formatExtensions[fileType] || null;
 
         // The backend opens the dialog: where it starts after a recovery and
         // the extension the chosen name gets are decided there.

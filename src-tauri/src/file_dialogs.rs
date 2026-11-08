@@ -11,8 +11,11 @@ use tauri_plugin_dialog::{
 
 const ALL_FILES: [&str; 1] = ["*"];
 
-const OPEN_EXTENSIONS: [&str; 10] = [
-    "docx", "xlsx", "pptx", "odt", "ods", "odp", "rtf", "txt", "csv", "pdf",
+// Every one of them converts to Editor.bin with x2t 10.0.0.169.
+const OPEN_EXTENSIONS: [&str; 28] = [
+    "docx", "doc", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "txt",
+    "xlsx", "xls", "xlsm", "xltx", "xlsb", "ods", "ots", "fods", "csv",
+    "pptx", "ppt", "pptm", "ppsx", "potx", "odp", "otp", "fodp", "pdf",
 ];
 
 // The start screen's Edit PDF.
@@ -23,6 +26,35 @@ const PDF_EXTENSIONS: [&str; 1] = ["pdf"];
 const SAVE_EXTENSIONS: [&str; 13] = [
     "docx", "doc", "odt", "rtf", "txt", "xlsx", "xls", "ods", "csv", "pptx", "ppt", "odp", "pdf",
 ];
+
+// The formats Ctrl+S writes back to the document's own path. Its own list,
+// not SAVE_EXTENSIONS: x2t 10 refuses to write .doc and .ppt (exit 80/88)
+// and its .xls output is not checked against the original, so a .doc, .xls
+// or .ppt goes through Save As. _EO_SAVE_IN_PLACE in src/bridge.js must match
+// (scripts/test-bridge-save-unwritable-format.mjs checks it).
+const SAVE_IN_PLACE_EXTENSIONS: [&str; 10] = [
+    "docx", "odt", "rtf", "txt", "xlsx", "ods", "csv", "pptx", "odp", "pdf",
+];
+
+// The GTK file chooser rfd uses on Linux matches each "*.ext" pattern with
+// the case it is given, so REPORT.XLSM is hidden by an "xlsm" filter. Windows
+// and macOS dialogs ignore case. Mixed case (Report.Docx) is still hidden.
+fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
+    if cfg!(any(target_os = "windows", target_os = "macos")) {
+        return extensions.iter().map(|ext| ext.to_string()).collect();
+    }
+    with_upper_case(extensions)
+}
+
+// Each extension followed by its upper-case form.
+fn with_upper_case(extensions: &[&str]) -> Vec<String> {
+    let mut both = Vec::with_capacity(extensions.len() * 2);
+    for ext in extensions {
+        both.push(ext.to_string());
+        both.push(ext.to_uppercase());
+    }
+    both
+}
 
 // One kind of the editor's OpenFilenameDialog.
 struct PickKind {
@@ -116,8 +148,10 @@ pub async fn pick_document(
     documents: String,
     all: String,
 ) -> Result<Option<GrantedFile>, String> {
+    let extensions = open_filter_extensions(&OPEN_EXTENSIONS);
+    let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
     let dialog = file_dialog(&window)
-        .add_filter(documents, &OPEN_EXTENSIONS)
+        .add_filter(documents, &extensions)
         .add_filter(all, &ALL_FILES);
     let Some(path) = pick_one(dialog).await? else {
         return Ok(None);
@@ -134,8 +168,10 @@ pub async fn pick_pdf(
     pdf_label: String,
     all: String,
 ) -> Result<Option<GrantedFile>, String> {
+    let extensions = open_filter_extensions(&PDF_EXTENSIONS);
+    let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
     let dialog = file_dialog(&window)
-        .add_filter(pdf_label, &PDF_EXTENSIONS)
+        .add_filter(pdf_label, &extensions)
         .add_filter(all, &ALL_FILES);
     let Some(path) = pick_one(dialog).await? else {
         return Ok(None);
@@ -289,6 +325,17 @@ pub fn suggestion_with_ext(path: &Path, ext: Option<&str>) -> PathBuf {
     path.with_extension(ext)
 }
 
+// Whether Ctrl+S may write the open document back to its own path. Formats
+// outside SAVE_IN_PLACE_EXTENSIONS (a .doc, a .dotx, an .xlsm, a .fodt) go
+// through Save As: the bridge never sends them here, and save_file refuses them.
+pub fn saves_in_place(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    SAVE_IN_PLACE_EXTENSIONS.contains(&ext.as_str())
+}
+
 // A name typed without a known extension gets the format's: x2t picks the
 // format from the extension.
 pub fn with_save_extension(path: PathBuf, fallback_ext: &str) -> PathBuf {
@@ -349,6 +396,48 @@ mod tests {
     }
 
     #[test]
+    fn the_open_filter_offers_the_legacy_and_variant_office_formats() {
+        let offered = [
+            "doc", "docm", "dotx", "dotm", "ott", "fodt", "xls", "xlsm", "xltx", "xlsb",
+            "ots", "fods", "ppt", "pptm", "ppsx", "potx", "otp", "fodp",
+        ];
+        for ext in offered {
+            assert!(OPEN_EXTENSIONS.contains(&ext), "{}", ext);
+        }
+        for ext in OPEN_EXTENSIONS {
+            let path = std::path::PathBuf::from(format!("/tmp/a.{}", ext));
+            assert_ne!(crate::x2t_task::detect_format(&path), 0, "{}", ext);
+        }
+    }
+
+    #[test]
+    fn only_the_formats_save_as_writes_are_saved_in_place() {
+        for name in ["a.docx", "a.DOCX", "a.xlsx", "a.pptx", "a.odt", "a.csv", "a.pdf"] {
+            assert!(saves_in_place(Path::new(name)), "{}", name);
+        }
+        for name in ["a.dotx", "a.docm", "a.xlsm", "a.xlsb", "a.pptm", "a.fodt", "a.ots", "a"] {
+            assert!(!saves_in_place(Path::new(name)), "{}", name);
+        }
+    }
+
+    #[test]
+    fn legacy_binary_formats_go_through_save_as() {
+        for name in ["a.doc", "a.DOC", "a.xls", "a.ppt"] {
+            assert!(!saves_in_place(Path::new(name)), "{}", name);
+        }
+    }
+
+    #[test]
+    fn legacy_binary_formats_stay_save_as_targets() {
+        for ext in ["doc", "xls", "ppt"] {
+            assert!(SAVE_EXTENSIONS.contains(&ext), "{}", ext);
+        }
+        for ext in SAVE_IN_PLACE_EXTENSIONS {
+            assert!(SAVE_EXTENSIONS.contains(&ext), "{}", ext);
+        }
+    }
+
+    #[test]
     fn a_saved_name_keeps_a_known_extension_and_gains_one_otherwise() {
         assert_eq!(
             with_save_extension(PathBuf::from("/docs/other.ODT"), "docx"),
@@ -394,6 +483,28 @@ mod tests {
             assert!(grants.resolve(&shown, kind).is_err());
         }
         assert!(grants.resolve(&picked.token, GrantKind::Insert).is_ok());
+    }
+
+    #[test]
+    fn the_upper_case_form_follows_each_extension() {
+        assert_eq!(with_upper_case(&["xlsm", "pdf"]), ["xlsm", "XLSM", "pdf", "PDF"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_open_filters_show_upper_case_names() {
+        let documents = open_filter_extensions(&OPEN_EXTENSIONS);
+        for ext in ["xlsm", "XLSM", "docx", "DOCX", "fodt", "FODT"] {
+            assert!(documents.contains(&ext.to_string()), "{}", ext);
+        }
+        assert_eq!(documents.len(), OPEN_EXTENSIONS.len() * 2);
+        assert_eq!(open_filter_extensions(&PDF_EXTENSIONS), ["pdf", "PDF"]);
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn the_windows_and_macos_open_filters_are_not_doubled() {
+        assert_eq!(open_filter_extensions(&PDF_EXTENSIONS), ["pdf"]);
     }
 
     #[test]
