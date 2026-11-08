@@ -718,11 +718,7 @@ pub fn recovery_load(
     crate::file_ops::set_current_file(&state, current);
     *state.save_suggestion.lock().unwrap() = suggestion;
 
-    let media_src = crate::temp_layout::recovery_media_source(
-        &state.temp_root,
-        info.as_ref().and_then(|info| info.instance.as_deref()),
-    );
-    match crate::temp_layout::copy_media(&media_src, &state.temp_dir.join("media")) {
+    match copy_recovered_images(&state, info.as_ref()) {
         Ok(copied) => log_event(&state, &format!("[RECOVER] images copied={}", copied)),
         Err(e) => log_event(&state, &format!("[RECOVER] images not copied: {}", e)),
     }
@@ -760,6 +756,14 @@ pub fn recovery_load(
         path,
         doc_type,
     })
+}
+
+// Copies the images of a recovered document from the folder of the instance
+// that had it open into this instance's media/. Returns how many it copied.
+pub(crate) fn copy_recovered_images(state: &AppState, info: Option<&DocInfo>) -> std::io::Result<usize> {
+    let instance = info.and_then(|info| info.instance.as_deref());
+    let source = crate::temp_layout::recovery_media_source(&state.temp_root, instance);
+    crate::temp_layout::copy_media(&source, &state.temp_dir.join("media"))
 }
 
 // `id` absent means "all of them": the start screen offers a discard-all next
