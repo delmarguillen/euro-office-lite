@@ -6,6 +6,8 @@ mod clipboard;
 mod converter;
 mod dictionaries;
 mod dictionary_import;
+#[cfg(target_os = "linux")]
+mod dmabuf_default;
 mod file_dialogs;
 mod file_ops;
 mod fonts_state;
@@ -236,15 +238,11 @@ fn copy_source(state: &AppState, src_path: &str) -> Result<std::path::PathBuf, S
 }
 
 fn main() {
-    // WebKitGTK's DMABUF renderer produces jagged/rough canvas rendering on some
-    // drivers (Nvidia proprietary especially, issue #27). The Flatpak already sets
-    // this for everyone; mirror it here so the .deb matches. Set before any WebKit
-    // initialization, and only if the user has not set their own value (so
-    // WEBKIT_DISABLE_DMABUF_RENDERER=0 re-enables the DMABUF path).
+    // WEBKIT_DISABLE_DMABUF_RENDERER=1 only with NVIDIA's proprietary driver
+    // (dmabuf_default.rs). Decided before anything starts WebKitGTK; a value the
+    // user set is left as it is.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
+    dmabuf_default::apply();
 
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut context = tauri::generate_context!();
