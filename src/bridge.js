@@ -592,6 +592,7 @@ var _UI_STRINGS = {
     documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
     recoveredDocuments: 'Recovered documents', recover: 'Recover', discard: 'Discard', discardAll: 'Discard all',
     recentFiles: 'Recent files', rememberRecent: 'Remember recent files', clearRecent: 'Clear',
+    settings: 'Settings', interfaceLanguage: 'Interface language', spellCheck: 'Spell check',
     noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
     openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.',
     openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.',
@@ -638,6 +639,7 @@ var _UI_STRINGS = {
     documents: 'Documentos', all: 'Todos', plainText: 'Texto plano', user: 'Usuario', language: 'Idioma',
     recoveredDocuments: 'Documentos recuperados', recover: 'Recuperar', discard: 'Descartar', discardAll: 'Descartar todo',
     recentFiles: 'Archivos recientes', rememberRecent: 'Recordar archivos recientes', clearRecent: 'Limpiar',
+    settings: 'Configuración', interfaceLanguage: 'Idioma de la interfaz', spellCheck: 'Corrector ortográfico', addLanguage: 'Añadir idioma del corrector…',
     noRecentFiles: 'Todavía no hay archivos recientes', openFailed: 'No se pudo abrir el archivo',
     openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.',
     openErrorMsg: 'No se pudo abrir el archivo. No es un documento válido o está dañado.',
@@ -675,6 +677,7 @@ var _UI_STRINGS = {
     documents: 'Documents', all: 'Tous', plainText: 'Texte brut', user: 'Utilisateur', language: 'Langue',
     recoveredDocuments: 'Documents récupérés', recover: 'Récupérer', discard: 'Abandonner', discardAll: 'Tout abandonner',
     recentFiles: 'Fichiers récents', rememberRecent: 'Mémoriser les fichiers récents', clearRecent: 'Effacer',
+    settings: 'Paramètres', interfaceLanguage: 'Langue de l\'interface', spellCheck: 'Vérification orthographique', addLanguage: 'Ajouter une langue de vérification…',
     noRecentFiles: 'Aucun fichier récent pour le moment', openFailed: 'Impossible d\'ouvrir le fichier',
     openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.',
     openErrorMsg: 'Impossible d\'ouvrir le fichier. Ce n\'est pas un document valide ou il est endommagé.',
@@ -707,6 +710,7 @@ var _UI_STRINGS = {
     documents: 'Dokumente', all: 'Alle', plainText: 'Nur Text', user: 'Benutzer', language: 'Sprache',
     recoveredDocuments: 'Wiederhergestellte Dokumente', recover: 'Wiederherstellen', discard: 'Verwerfen', discardAll: 'Alle verwerfen',
     recentFiles: 'Zuletzt verwendete Dateien', rememberRecent: 'Zuletzt verwendete Dateien merken', clearRecent: 'Leeren',
+    settings: 'Einstellungen', interfaceLanguage: 'Sprache der Benutzeroberfläche', spellCheck: 'Rechtschreibprüfung', addLanguage: 'Sprache für die Rechtschreibprüfung hinzufügen…',
     noRecentFiles: 'Noch keine zuletzt verwendeten Dateien', openFailed: 'Datei konnte nicht geöffnet werden',
     openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.',
     openErrorMsg: 'Die Datei konnte nicht geöffnet werden. Sie ist kein gültiges Dokument oder sie ist beschädigt.',
@@ -739,6 +743,7 @@ var _UI_STRINGS = {
     documents: 'Documenti', all: 'Tutti', plainText: 'Testo normale', user: 'Utente', language: 'Lingua',
     recoveredDocuments: 'Documenti recuperati', recover: 'Recupera', discard: 'Scarta', discardAll: 'Scarta tutto',
     recentFiles: 'File recenti', rememberRecent: 'Ricorda i file recenti', clearRecent: 'Cancella',
+    settings: 'Impostazioni', interfaceLanguage: 'Lingua dell\'interfaccia', spellCheck: 'Controllo ortografico', addLanguage: 'Aggiungi lingua di controllo ortografico…',
     noRecentFiles: 'Nessun file recente', openFailed: 'Impossibile aprire il file',
     openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.',
     openErrorMsg: 'Impossibile aprire il file. Non è un documento valido oppure è danneggiato.',
@@ -771,6 +776,7 @@ var _UI_STRINGS = {
     documents: 'Documentos', all: 'Todos', plainText: 'Texto simples', user: 'Usuário', language: 'Idioma',
     recoveredDocuments: 'Documentos recuperados', recover: 'Recuperar', discard: 'Descartar', discardAll: 'Descartar tudo',
     recentFiles: 'Arquivos recentes', rememberRecent: 'Lembrar arquivos recentes', clearRecent: 'Limpar',
+    settings: 'Configurações', interfaceLanguage: 'Idioma da interface', spellCheck: 'Verificação ortográfica', addLanguage: 'Adicionar idioma de verificação ortográfica…',
     noRecentFiles: 'Ainda não há arquivos recentes', openFailed: 'Não foi possível abrir o arquivo',
     openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.',
     openErrorMsg: 'Não foi possível abrir o arquivo. Não é um documento válido ou está danificado.',
@@ -803,6 +809,7 @@ var _UI_STRINGS = {
     documents: 'Документы', all: 'Все', plainText: 'Обычный текст', user: 'Пользователь', language: 'Язык',
     recoveredDocuments: 'Восстановленные документы', recover: 'Восстановить', discard: 'Отклонить', discardAll: 'Отклонить всё',
     recentFiles: 'Недавние файлы', rememberRecent: 'Запоминать недавние файлы', clearRecent: 'Очистить',
+    settings: 'Настройки', interfaceLanguage: 'Язык интерфейса', spellCheck: 'Проверка орфографии', addLanguage: 'Добавить язык проверки орфографии…',
     noRecentFiles: 'Недавних файлов пока нет', openFailed: 'Не удалось открыть файл',
     openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.',
     openErrorMsg: 'Не удалось открыть файл. Это не действительный документ или он повреждён.',
@@ -835,6 +842,7 @@ var _UI_STRINGS = {
     documents: 'Документи', all: 'Усі', plainText: 'Звичайний текст', user: 'Користувач', language: 'Мова',
     recoveredDocuments: 'Відновлені документи', recover: 'Відновити', discard: 'Відхилити', discardAll: 'Відхилити все',
     recentFiles: 'Нещодавні файли', rememberRecent: 'Запам\'ятовувати нещодавні файли', clearRecent: 'Очистити',
+    settings: 'Налаштування', interfaceLanguage: 'Мова інтерфейсу', spellCheck: 'Перевірка правопису', addLanguage: 'Додати мову перевірки правопису…',
     noRecentFiles: 'Нещодавніх файлів поки немає', openFailed: 'Не вдалося відкрити файл',
     openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.',
     openErrorMsg: 'Не вдалося відкрити файл. Це не дійсний документ або його пошкоджено.',
@@ -867,6 +875,7 @@ var _UI_STRINGS = {
     documents: '文档', all: '所有文件', plainText: '纯文本', user: '用户', language: '语言',
     recoveredDocuments: '已恢复的文档', recover: '恢复', discard: '丢弃', discardAll: '全部丢弃',
     recentFiles: '最近的文件', rememberRecent: '记住最近的文件', clearRecent: '清除',
+    settings: '设置', interfaceLanguage: '界面语言', spellCheck: '拼写检查', addLanguage: '添加拼写检查语言…',
     noRecentFiles: '暂无最近的文件', openFailed: '无法打开文件',
     openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。',
     openErrorMsg: '无法打开文件。它不是有效的文档，或者已损坏。',
@@ -899,6 +908,7 @@ var _UI_STRINGS = {
     documents: 'ドキュメント', all: 'すべて', plainText: 'プレーンテキスト', user: 'ユーザー', language: '言語',
     recoveredDocuments: '復元されたドキュメント', recover: '復元', discard: '破棄', discardAll: 'すべて破棄',
     recentFiles: '最近使用したファイル', rememberRecent: '最近使用したファイルを記憶する', clearRecent: 'クリア',
+    settings: '設定', interfaceLanguage: '表示言語', spellCheck: 'スペルチェック', addLanguage: 'スペルチェックの言語を追加…',
     noRecentFiles: '最近使用したファイルはありません', openFailed: 'ファイルを開けませんでした',
     openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。',
     openErrorMsg: 'ファイルを開けませんでした。有効なドキュメントではないか、破損しています。',
@@ -1064,6 +1074,7 @@ function _eoShowOpening(text) {
   var overlay = document.getElementById('opening');
   if (!overlay) return;
   document.getElementById('opening-text').textContent = text || '';
+  _eoCloseSettings(false);
   if (overlay.classList.contains('active')) return;
   overlay.classList.add('active');
   // The overlay already catches clicks; inert also stops a focused button
@@ -1757,6 +1768,97 @@ async function _eoAddLanguage() {
   return lang;
 }
 window._eoAddLanguage = _eoAddLanguage;
+
+// ── Start screen settings panel ──
+// The gear in the top right corner opens a small panel with the interface
+// language, "Add spell check language…" and the recent files switch.
+
+function _eoSettingsParts() {
+  var toggle = document.getElementById('settings-toggle');
+  var panel = document.getElementById('settings-panel');
+  if (!toggle || !panel) return null;
+  return { toggle: toggle, panel: panel };
+}
+
+function _eoSettingsIsOpen() {
+  var parts = _eoSettingsParts();
+  return !!parts && !parts.panel.hidden;
+}
+
+function _eoOpenSettings() {
+  var parts = _eoSettingsParts();
+  if (!parts) return;
+  parts.panel.hidden = false;
+  parts.toggle.setAttribute('aria-expanded', 'true');
+  var first = parts.panel.querySelector('select, button, input');
+  if (first) first.focus();
+}
+
+// returnFocus: false when the start screen is going away (a document opens).
+function _eoCloseSettings(returnFocus) {
+  var parts = _eoSettingsParts();
+  if (!parts || parts.panel.hidden) return;
+  parts.panel.hidden = true;
+  parts.toggle.setAttribute('aria-expanded', 'false');
+  if (returnFocus) parts.toggle.focus();
+}
+
+function _eoOnSettingsToggleClick() {
+  if (_eoSettingsIsOpen()) {
+    _eoCloseSettings(true);
+    return;
+  }
+  _eoOpenSettings();
+}
+
+function _eoOnSettingsKeydown(event) {
+  if (event.key !== 'Escape') return;
+  if (!_eoSettingsIsOpen()) return;
+  event.preventDefault();
+  _eoCloseSettings(true);
+}
+
+function _eoOnSettingsOutsideClick(event) {
+  var parts = _eoSettingsParts();
+  if (!parts || parts.panel.hidden) return;
+  if (parts.panel.contains(event.target)) return;
+  if (parts.toggle.contains(event.target)) return;
+  // Focus goes back to the gear only when the click left it nowhere useful:
+  // a click on another button keeps the focus on that button.
+  var focused = document.activeElement;
+  var lost = !focused || focused === document.body || parts.panel.contains(focused);
+  _eoCloseSettings(lost);
+}
+
+// options.onLanguageChange: runs after the UI language is stored.
+// options.onRecentChange: runs after the recent files switch is stored.
+function _eoInitStartSettings(options) {
+  var parts = _eoSettingsParts();
+  if (!parts) return;
+  options = options || {};
+
+  parts.toggle.addEventListener('click', _eoOnSettingsToggleClick);
+  document.addEventListener('keydown', _eoOnSettingsKeydown);
+  document.addEventListener('click', _eoOnSettingsOutsideClick);
+
+  document.getElementById('lang-select').addEventListener('change', function() {
+    window._eoSetLang(this.value);
+    if (options.onLanguageChange) options.onLanguageChange();
+  });
+
+  document.getElementById('add-language').addEventListener('click', function() {
+    window._eoAddLanguage();
+  });
+
+  document.getElementById('recent-remember').addEventListener('change', function() {
+    var done = options.onRecentChange || function() {};
+    invoke('set_recent_files_enabled', { enabled: this.checked })
+      .then(done)
+      .catch(function(e) { window._eoLog('[EO] Recent files toggle failed: ' + (e.message || e)); });
+  });
+}
+window._eoInitStartSettings = _eoInitStartSettings;
+window._eoCloseSettings = _eoCloseSettings;
 
 // The backend starts its error with this when it may not write the file: a
 // read-only file or a folder the user cannot write to.
