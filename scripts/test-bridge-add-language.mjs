@@ -1,6 +1,6 @@
 // Checks "Add spell check language…": an installed language is announced and
-// the user dictionary list is asked for again, an existing one is replaced
-// only after a confirm, and a misnamed pair shows its message.
+// the user dictionary list is asked for again, the "Replace?" words go to the
+// backend (which asks), and a misnamed pair shows its message.
 //
 // Run: node scripts/test-bridge-add-language.mjs [path/to/bridge.js]
 import { check, finish, loadBridge } from './bridge-test-harness.mjs';
@@ -15,10 +15,9 @@ const SPELL_JS = "window['AscCommon']['spellcheckGetLanguages']=function(){retur
   + "window['AscCommon'].spellcheckGetLanguages = window['AscCommon']['spellcheckGetLanguages'];\n";
 
 // answers: what import_dictionary does on each call, in order.
-async function setup(answers, confirmAnswer = true) {
+async function setup(answers) {
   const imports = [];
   let listCalls = 0;
-  let cancels = 0;
   const bridge = await loadBridge({
     invoke: {
       list_user_dictionaries: () => { listCalls += 1; return { valid: [], skipped: [] }; },
@@ -28,7 +27,6 @@ async function setup(answers, confirmAnswer = true) {
         if (answer instanceof Error) throw answer;
         return answer;
       },
-      cancel_dictionary_import: () => { cancels += 1; return null; },
     },
   });
   const fetched = [];
@@ -40,7 +38,7 @@ async function setup(answers, confirmAnswer = true) {
   const confirms = [];
   bridge.sandbox.__TAURI__.dialog = {
     message: (text, options) => { messages.push({ text, kind: options.kind }); return Promise.resolve(); },
-    confirm: (text) => { confirms.push(text); return Promise.resolve(confirmAnswer); },
+    confirm: (text) => { confirms.push(text); return Promise.resolve(true); },
   };
   return {
     bridge,
@@ -49,13 +47,12 @@ async function setup(answers, confirmAnswer = true) {
     messages,
     confirms,
     listCalls: () => listCalls,
-    cancels: () => cancels,
     t: (key) => bridge.run(`_t(${JSON.stringify(key)})`),
   };
 }
 
 async function addLanguage(env) {
-  const lang = await env.bridge.run('_eoAddLanguage(false)');
+  const lang = await env.bridge.run('_eoAddLanguage()');
   env.bridge.stopTimers();
   return lang;
 }
@@ -98,8 +95,8 @@ async function addLanguage(env) {
   const lang = await addLanguage(env);
   await new Promise((resolve) => setTimeout(resolve, 10));
   check(results, 'an import returns the language', lang === 'es');
-  check(results, 'the import opens the dialog without replace',
-    env.imports.length === 1 && env.imports[0].replace === false);
+  check(results, 'the import is one call, with no replace flag',
+    env.imports.length === 1 && !('replace' in env.imports[0]));
   check(results, 'the success message names the language',
     env.messages.length === 1 && env.messages[0].kind === 'info'
     && env.messages[0].text.includes('es') && env.messages[0].text === env.t('languageAdded').replace('{lang}', 'es'));
@@ -108,28 +105,44 @@ async function addLanguage(env) {
 }
 
 {
-  const env = await setup([new Error('dictionary-exists: es'), 'es']);
-  const lang = await addLanguage(env);
-  check(results, 'an existing language asks before replacing', env.confirms.length === 1
-    && env.confirms[0] === env.t('languageExists').replace('{lang}', 'es'));
-  check(results, 'the confirmed replace is sent with replace: true',
-    env.imports.length === 2 && env.imports[1].replace === true && lang === 'es');
-  check(results, 'the replace sends the codes too',
-    Array.isArray(env.imports[1].known) && env.imports[1].known.includes('fr_FR'));
-}
-
-{
-  const env = await setup([new Error('dictionary-exists: es')], false);
-  const lang = await addLanguage(env);
-  check(results, 'a declined replace installs nothing',
-    lang === null && env.imports.length === 1 && env.messages.length === 0);
-  check(results, 'a declined replace tells the backend to drop the pair', env.cancels() === 1);
-}
-
-{
-  const env = await setup([new Error('dictionary-exists: es'), 'es']);
+  const env = await setup(['es_ES']);
   await addLanguage(env);
-  check(results, 'a confirmed replace does not cancel', env.cancels() === 0);
+  const question = env.imports[0] && env.imports[0].question;
+  check(results, 'the import sends the translated question words',
+    question && question.title === env.t('addLanguageTitle')
+    && question.text === env.t('languageExists')
+    && question.replace === env.t('languageReplace')
+    && question.cancel === env.t('languageKeep'), JSON.stringify(question));
+  check(results, 'the question keeps {lang} for the backend to fill',
+    question && question.text.includes('{lang}'));
+  check(results, 'the bridge never asks "Replace?" itself', env.confirms.length === 0);
+}
+
+{
+  const env = await setup(['es_ES']);
+  env.bridge.run("window._eoCurrentLang = 'es'");
+  await addLanguage(env);
+  const question = env.imports[0].question;
+  check(results, 'the question is sent in Spanish',
+    question.title === 'Añadir idioma' && question.replace === 'Reemplazar'
+    && question.cancel === 'Cancelar' && question.text.startsWith('Ya hay un diccionario {lang}'),
+    JSON.stringify(question));
+}
+
+{
+  // The backend returns null when the user keeps the installed language.
+  const env = await setup([null]);
+  const lang = await addLanguage(env);
+  check(results, 'a kept language shows nothing and installs nothing',
+    lang === null && env.messages.length === 0 && env.imports.length === 1);
+}
+
+{
+  const env = await setup([new Error('dictionary-busy: es_ES')]);
+  await addLanguage(env);
+  check(results, 'a language another window is installing shows its message',
+    env.messages.length === 1 && env.messages[0].kind === 'error'
+    && env.messages[0].text === env.t('languageBusy').replace('{detail}', 'es_ES'));
 }
 
 {

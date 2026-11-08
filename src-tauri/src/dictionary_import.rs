@@ -6,9 +6,8 @@ use crate::dictionaries::{is_dictionary_asset, is_folder_name, user_dir};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
-use tauri::{AppHandle, State};
-use tauri_plugin_dialog::DialogExt;
+use tauri::AppHandle;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 // Start of every error the command returns. The bridge reads the code after
 // it ("dictionary-exists: es") to pick the message it shows.
@@ -30,8 +29,8 @@ pub enum ImportError {
     // The spell checker has no folder for this language, or several and none
     // is <lang>_<LANG>. Holds the language and the folders it could take.
     UnknownLanguage { lang: String, options: Vec<String> },
-    // The language is installed and replace was not asked for.
-    Exists(String),
+    // Another app window is installing this language right now.
+    Busy(String),
     // Reading or writing failed. Holds the language or the chosen file name,
     // never a path: the error text goes to the webview.
     Io(String),
@@ -45,7 +44,7 @@ impl ImportError {
             ImportError::BadName(_) => "bad-name",
             ImportError::NotADictionary(_) => "not-a-dictionary",
             ImportError::UnknownLanguage { .. } => "unknown-language",
-            ImportError::Exists(_) => "exists",
+            ImportError::Busy(_) => "busy",
             ImportError::Io(_) => "io",
         }
     }
@@ -60,7 +59,7 @@ impl ImportError {
             }
             ImportError::BadName(name)
             | ImportError::NotADictionary(name)
-            | ImportError::Exists(name)
+            | ImportError::Busy(name)
             | ImportError::Io(name) => name.clone(),
         }
     }
@@ -237,10 +236,16 @@ fn is_installed(folder: &Path, lang: &str) -> bool {
     folder.join(format!("{lang}.aff")).exists() || folder.join(format!("{lang}.dic")).exists()
 }
 
+// The app log (js-debug-<instance>.log), local to this machine, so it may
+// hold paths. stderr goes nowhere in the Windows GUI build.
+fn log(line: &str) {
+    crate::temp_layout::append_log(&format!("[dictionary] {line}"));
+}
+
 // The webview gets the language only; the path and the OS error go to the
-// backend log.
+// app log.
 fn io_error(lang: &str, what: &str, path: &Path, error: std::io::Error) -> ImportError {
-    eprintln!("[dictionary] {what} {}: {error}", path.display());
+    log(&format!("{what} {}: {error}", path.display()));
     ImportError::Io(lang.to_string())
 }
 
@@ -272,8 +277,50 @@ fn refuse_link(lang: &str, path: &Path) -> Result<(), ImportError> {
     if !is_link(path) {
         return Ok(());
     }
-    eprintln!("[dictionary] refused, a link: {}", path.display());
+    log(&format!("refused, a link: {}", path.display()));
     Err(ImportError::Io(lang.to_string()))
+}
+
+// dictionaries/ itself, checked before anything is created or written in
+// it. Checked again after create_dir_all, which follows a link at that name.
+fn open_dir(lang: &str, dir: &Path) -> Result<(), ImportError> {
+    refuse_link(lang, dir)?;
+    std::fs::create_dir_all(dir).map_err(|e| io_error(lang, "create", dir, e))?;
+    refuse_link(lang, dir)
+}
+
+// One lock per language, in dictionaries/, held from the "installed?" check
+// to the last rename. It is an OS lock (temp_layout::take_lock: flock, or a
+// share mode of 0 on Windows), which the OS drops when the process ends: a
+// lock file left by a crash is free, and only a running app holds one. The
+// empty file stays; list_user_dictionaries only reads folders.
+fn lock_path(dir: &Path, lang: &str) -> PathBuf {
+    dir.join(format!(".{lang}.install.lock"))
+}
+
+fn lock_install(dir: &Path, lang: &str) -> Result<File, ImportError> {
+    let path = lock_path(dir, lang);
+    refuse_link(lang, &path)?;
+    match crate::temp_layout::take_lock(&path) {
+        Ok(file) => Ok(file),
+        Err(error) if is_held_elsewhere(&error) => {
+            log(&format!(
+                "busy, locked by another process: {}",
+                path.display()
+            ));
+            Err(ImportError::Busy(lang.to_string()))
+        }
+        Err(error) => Err(io_error(lang, "lock", &path, error)),
+    }
+}
+
+// flock answers EWOULDBLOCK; Windows answers ERROR_SHARING_VIOLATION (32)
+// to an open with a share mode of 0 while another handle is open.
+fn is_held_elsewhere(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+    cfg!(windows) && error.raw_os_error() == Some(32)
 }
 
 static TEMP_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -309,27 +356,100 @@ fn copy_and_sync(from: &Path, tmp: &Path) -> std::io::Result<()> {
     file.sync_all()
 }
 
+// A second name for the installed file, in the same folder, so the rename
+// over it does not lose it. A hard link copies nothing; a file system
+// without hard links gets a copy.
+fn keep_old(
+    lang: &str,
+    dest: &Path,
+    folder: &Path,
+    file_name: &str,
+) -> Result<Option<PathBuf>, ImportError> {
+    if !dest.exists() {
+        return Ok(None);
+    }
+    let backup = backup_path(folder, file_name);
+    if std::fs::hard_link(dest, &backup).is_ok() {
+        return Ok(Some(backup));
+    }
+    match copy_and_sync(dest, &backup) {
+        Ok(()) => Ok(Some(backup)),
+        Err(error) => {
+            let _ = std::fs::remove_file(&backup);
+            Err(io_error(lang, "back up", dest, error))
+        }
+    }
+}
+
+fn backup_path(folder: &Path, file_name: &str) -> PathBuf {
+    let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    folder.join(format!(".{file_name}.{}-{n}.bak", std::process::id()))
+}
+
+// Undoes the first rename: the kept file goes back, or, when there was none,
+// the new file goes away.
+fn put_back(backup: Option<&Path>, dest: &Path) {
+    let result = match backup {
+        Some(backup) => std::fs::rename(backup, dest),
+        None => std::fs::remove_file(dest),
+    };
+    if let Err(error) = result {
+        log(&format!("restore {}: {error}", dest.display()));
+    }
+}
+
 // Copies the pair to <dir>/<lang>/<lang>.aff and .dic. Both files are first
 // written as temp files beside the destinations; only then are they renamed
-// over them, .dic first. A failure before the renames leaves the installed
-// pair as it was. If the .aff rename fails after the .dic one, a first
-// install removes the new .dic, so no lone half stays; a replace keeps the
-// new .dic with the old .aff, which hunspell still loads.
+// over them, .dic first. Before the renames the installed .dic gets a second
+// name (.<lang>.dic.<pid>-<n>.bak). If the .aff rename fails, that .dic is
+// renamed back, so the folder holds the old pair again; a first install
+// removes the new .dic instead. If the app stops between the two renames,
+// the folder holds the new .dic, the old .aff and the old .dic as the .bak.
+//
+// When the language is installed, `may_replace` asks the user, with the
+// lock held, so a second window cannot install in between.
 pub fn install(
     dir: &Path,
     lang: &str,
     aff: &Path,
     dic: &Path,
-    replace: bool,
-) -> Result<(), ImportError> {
+    may_replace: impl FnOnce(&str) -> bool,
+) -> Result<Installed, ImportError> {
     let folder = folder_path(dir, lang)?;
-    if !replace && is_installed(&folder, lang) {
-        return Err(ImportError::Exists(lang.to_string()));
+    open_dir(lang, dir)?;
+    let _lock = lock_install(dir, lang)?;
+    let installed = is_installed(&folder, lang);
+    if !should_write(installed, || may_replace(lang)) {
+        return Ok(Installed::Declined);
     }
-    std::fs::create_dir_all(dir).map_err(|e| io_error(lang, "create", dir, e))?;
-    refuse_link(lang, &folder)?;
+    if installed {
+        // The files may have changed while the question was up.
+        check_file(aff)?;
+        check_file(dic)?;
+    }
+    write_pair(&folder, lang, aff, dic)?;
+    Ok(Installed::Done)
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Installed {
+    Done,
+    // The language was installed and the user said no: nothing was written.
+    Declined,
+}
+
+// A first install writes; over an installed language only a yes does.
+fn should_write(installed: bool, ask: impl FnOnce() -> bool) -> bool {
+    if !installed {
+        return true;
+    }
+    ask()
+}
+
+fn write_pair(folder: &Path, lang: &str, aff: &Path, dic: &Path) -> Result<(), ImportError> {
+    refuse_link(lang, folder)?;
     if !folder.exists() {
-        std::fs::create_dir(&folder).map_err(|e| io_error(lang, "create", &folder, e))?;
+        std::fs::create_dir(folder).map_err(|e| io_error(lang, "create", folder, e))?;
     }
     let aff_name = format!("{lang}.aff");
     let dic_name = format!("{lang}.dic");
@@ -337,27 +457,38 @@ pub fn install(
     let dic_dest = folder.join(&dic_name);
     refuse_link(lang, &aff_dest)?;
     refuse_link(lang, &dic_dest)?;
-    let first_install = !is_installed(&folder, lang);
 
-    let aff_tmp = write_temp(lang, aff, &folder, &aff_name)?;
-    let dic_tmp = match write_temp(lang, dic, &folder, &dic_name) {
+    let aff_tmp = write_temp(lang, aff, folder, &aff_name)?;
+    let dic_tmp = match write_temp(lang, dic, folder, &dic_name) {
         Ok(tmp) => tmp,
         Err(error) => {
             let _ = std::fs::remove_file(&aff_tmp);
             return Err(error);
         }
     };
+    let dic_backup = match keep_old(lang, &dic_dest, folder, &dic_name) {
+        Ok(backup) => backup,
+        Err(error) => {
+            let _ = std::fs::remove_file(&aff_tmp);
+            let _ = std::fs::remove_file(&dic_tmp);
+            return Err(error);
+        }
+    };
     if let Err(error) = std::fs::rename(&dic_tmp, &dic_dest) {
         let _ = std::fs::remove_file(&aff_tmp);
         let _ = std::fs::remove_file(&dic_tmp);
+        if let Some(backup) = &dic_backup {
+            let _ = std::fs::remove_file(backup);
+        }
         return Err(io_error(lang, "rename", &dic_dest, error));
     }
     if let Err(error) = std::fs::rename(&aff_tmp, &aff_dest) {
         let _ = std::fs::remove_file(&aff_tmp);
-        if first_install {
-            let _ = std::fs::remove_file(&dic_dest);
-        }
+        put_back(dic_backup.as_deref(), &dic_dest);
         return Err(io_error(lang, "rename", &aff_dest, error));
+    }
+    if let Some(backup) = &dic_backup {
+        let _ = std::fs::remove_file(backup);
     }
     Ok(())
 }
@@ -380,60 +511,83 @@ pub fn resolve(paths: &[PathBuf], known: &[String]) -> Result<Resolved, ImportEr
     Ok(Resolved { aff, dic, folder })
 }
 
-// Checks the chosen pair and installs it; returns the folder it went to.
+// Checks the chosen pair and installs it. Returns the folder it went to, or
+// None when the language was installed and the user kept it.
 pub fn import_pair(
     dir: &Path,
     paths: &[PathBuf],
     known: &[String],
-    replace: bool,
-) -> Result<String, ImportError> {
+    may_replace: impl FnOnce(&str) -> bool,
+) -> Result<Option<String>, ImportError> {
     let resolved = resolve(paths, known)?;
-    install(dir, &resolved.folder, &resolved.aff, &resolved.dic, replace)?;
-    Ok(resolved.folder)
+    let installed = install(
+        dir,
+        &resolved.folder,
+        &resolved.aff,
+        &resolved.dic,
+        may_replace,
+    )?;
+    if installed == Installed::Declined {
+        return Ok(None);
+    }
+    Ok(Some(resolved.folder))
 }
 
-// A first import. On Exists, also returns what the user is asked to replace.
-pub fn start_import(
-    dir: &Path,
-    paths: &[PathBuf],
-    known: &[String],
-) -> (Result<String, ImportError>, Option<Resolved>) {
-    let resolved = match resolve(paths, known) {
-        Ok(resolved) => resolved,
-        Err(error) => return (Err(error), None),
-    };
-    match install(dir, &resolved.folder, &resolved.aff, &resolved.dic, false) {
-        Ok(()) => (Ok(resolved.folder), None),
-        Err(error @ ImportError::Exists(_)) => (Err(error), Some(resolved)),
-        Err(error) => (Err(error), None),
-    }
+// The words of the "Replace?" question, in the user's language. The webview
+// sends them; the backend shows the dialog and reads the answer.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct ReplaceQuestion {
+    pub title: String,
+    // "{lang}" is replaced with the folder the backend chose.
+    pub text: String,
+    pub replace: String,
+    pub cancel: String,
 }
 
-// Replaces exactly the folder the user confirmed, with the files chosen then.
-// It takes no language list, so a second call cannot point elsewhere. The
-// files are checked again: they may have changed while the question was up.
-pub fn finish_replace(dir: &Path, confirmed: &Resolved) -> Result<String, ImportError> {
-    check_file(&confirmed.aff)?;
-    check_file(&confirmed.dic)?;
-    install(dir, &confirmed.folder, &confirmed.aff, &confirmed.dic, true)?;
-    Ok(confirmed.folder.clone())
+fn or_default(text: &str, default: &str) -> String {
+    if text.trim().is_empty() {
+        return default.to_string();
+    }
+    text.to_string()
 }
 
-// The pair waiting for a "Replace?" answer, kept in the backend so the dialog
-// does not open a second time. It holds the folder resolved then. It is
-// dropped when used, when cancelled and when another import starts. The
-// webview never sees these paths.
-#[derive(Default)]
-pub struct PendingImport(Mutex<Option<Resolved>>);
-
-impl PendingImport {
-    fn take(&self) -> Option<Resolved> {
-        self.0.lock().unwrap().take()
+// The question shown for `lang`. The language is always in it: a text
+// without "{lang}" gets it added at the end.
+pub fn question_text(template: &str, lang: &str) -> String {
+    let template = or_default(
+        template,
+        "A {lang} dictionary is already installed. Replace it?",
+    );
+    if template.contains("{lang}") {
+        return template.replace("{lang}", lang);
     }
+    format!("{template} ({lang})")
+}
 
-    fn keep(&self, resolved: Option<Resolved>) {
-        *self.0.lock().unwrap() = resolved;
-    }
+// A native dialog, parented to the window. Called off the main thread.
+fn ask_replace(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    question: &ReplaceQuestion,
+    lang: &str,
+) -> bool {
+    let buttons = MessageDialogButtons::OkCancelCustom(
+        or_default(&question.replace, "Replace"),
+        or_default(&question.cancel, "Cancel"),
+    );
+    let yes = app
+        .dialog()
+        .message(question_text(&question.text, lang))
+        .title(or_default(&question.title, "Add language"))
+        .kind(MessageDialogKind::Warning)
+        .buttons(buttons)
+        .parent(window)
+        .blocking_show();
+    log(&format!(
+        "replace {lang}: {}",
+        if yes { "yes" } else { "no" }
+    ));
+    yes
 }
 
 async fn pick_pair(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<Vec<PathBuf>, String> {
@@ -453,49 +607,45 @@ async fn pick_pair(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<Vec
     Ok(paths)
 }
 
-// Without replace, opens the dialog. With replace, installs over the folder
-// the previous call reported as existing, from the files chosen then; `known`
-// is ignored. Ok(None) means the user cancelled the dialog, or there was
-// nothing waiting to replace. `known` is the spell checker's list of
-// language folder names, never a path.
+// Opens the file dialog and installs the chosen pair. Over an installed
+// language the backend asks first, with `question`'s words; the webview only
+// sees the result. Ok(None) means the user cancelled a dialog. `known` is the
+// spell checker's list of language folder names, never a path.
 #[tauri::command]
 pub async fn import_dictionary(
     app: AppHandle,
     window: tauri::WebviewWindow,
-    pending: State<'_, PendingImport>,
     known: Vec<String>,
-    replace: bool,
+    question: ReplaceQuestion,
 ) -> Result<Option<String>, String> {
-    let waiting = pending.take();
     let Some(dir) = user_dir(&app) else {
         return Err(ImportError::Io("no app data folder".to_string()).to_string());
     };
-    if replace {
-        let Some(confirmed) = waiting else {
-            return Ok(None);
-        };
-        return finish_replace(&dir, &confirmed)
-            .map(Some)
-            .map_err(|error| error.to_string());
-    }
     let paths = pick_pair(&app, &window).await?;
     if paths.is_empty() {
         return Ok(None);
     }
-    let (result, to_confirm) = start_import(&dir, &paths, &known);
-    pending.keep(to_confirm);
-    result.map(Some).map_err(|error| error.to_string())
-}
-
-// The user answered "No" to "Replace?".
-#[tauri::command]
-pub fn cancel_dictionary_import(pending: State<'_, PendingImport>) {
-    pending.take();
+    let import = move || {
+        let may_replace = |lang: &str| ask_replace(&app, &window, &question, lang);
+        import_pair(&dir, &paths, &known, may_replace)
+    };
+    tauri::async_runtime::spawn_blocking(import)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn yes(_lang: &str) -> bool {
+        true
+    }
+
+    fn no(_lang: &str) -> bool {
+        false
+    }
 
     static DIR_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -634,9 +784,9 @@ mod tests {
         let aff = write(&source, "es.aff.txt", b"SET UTF-8\n");
         let dic = write(&source, "es.dic", b"1\nhola\n");
 
-        let installed = import_pair(&dir, &[dic, aff], &known(), false);
+        let installed = import_pair(&dir, &[dic, aff], &known(), no);
 
-        assert_eq!(installed, Ok("es_ES".to_string()));
+        assert_eq!(installed, Ok(Some("es_ES".to_string())));
         assert_eq!(
             std::fs::read(dir.join("es_ES/es_ES.aff")).unwrap(),
             b"SET UTF-8\n"
@@ -657,33 +807,103 @@ mod tests {
     }
 
     #[test]
-    fn an_installed_language_is_kept_unless_replace_is_asked() {
+    fn a_no_to_the_question_writes_nothing() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        installed_es_es(&dir);
+        let aff = write(&source, "es_ES.aff", b"SET new\n");
+        let dic = write(&source, "es_ES.dic", b"1\nnew\n");
+        let mut asked = Vec::new();
+
+        let kept = import_pair(&dir, &[aff, dic], &known(), |lang: &str| {
+            asked.push(lang.to_string());
+            false
+        });
+
+        assert_eq!(kept, Ok(None));
+        assert_eq!(asked, vec!["es_ES"]);
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.aff")).unwrap(),
+            b"SET old\n"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
+            b"1\nold\n"
+        );
+        assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
+        assert_eq!(names_in(&dir), vec![".es_ES.install.lock", "es_ES"]);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_yes_to_the_question_replaces_the_pair() {
         let source = test_dir("source");
         let dir = test_dir("user");
         std::fs::create_dir_all(dir.join("es_ES")).unwrap();
         std::fs::write(dir.join("es_ES/es_ES.dic"), b"1\nold\n").unwrap();
         let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
         let dic = write(&source, "es_ES.dic", b"1\nnew\n");
-        let paths = [aff, dic];
 
-        let refused = import_pair(&dir, &paths, &known(), false);
-        assert_eq!(refused, Err(ImportError::Exists("es_ES".to_string())));
-        assert_eq!(
-            std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
-            b"1\nold\n"
-        );
-        assert!(!dir.join("es_ES/es_ES.aff").exists());
+        let replaced = import_pair(&dir, &[aff, dic], &known(), yes);
 
-        assert_eq!(
-            import_pair(&dir, &paths, &known(), true),
-            Ok("es_ES".to_string())
-        );
+        assert_eq!(replaced, Ok(Some("es_ES".to_string())));
         assert_eq!(
             std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
             b"1\nnew\n"
         );
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.aff")).unwrap(),
+            b"SET UTF-8\n"
+        );
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_spoilt_while_the_question_is_up_is_refused() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        installed_es_es(&dir);
+        let aff = write(&source, "es_ES.aff", b"SET new\n");
+        let dic = write(&source, "es_ES.dic", b"1\nnew\n");
+        let spoil = dic.clone();
+
+        let refused = import_pair(&dir, &[aff, dic], &known(), |_: &str| {
+            std::fs::write(&spoil, b"").unwrap();
+            true
+        });
+
+        assert_eq!(
+            refused,
+            Err(ImportError::NotADictionary("es_ES.dic".to_string()))
+        );
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
+            b"1\nold\n"
+        );
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_an_installed_language_asks() {
+        assert!(should_write(false, || panic!("asked for a first install")));
+        assert!(should_write(true, || true));
+        assert!(!should_write(true, || false));
+    }
+
+    #[test]
+    fn the_question_always_names_the_language() {
+        assert_eq!(
+            question_text("¿Reemplazar el diccionario {lang}?", "es_ES"),
+            "¿Reemplazar el diccionario es_ES?"
+        );
+        assert_eq!(question_text("Replace it?", "es_ES"), "Replace it? (es_ES)");
+        assert_eq!(
+            question_text(" ", "es_ES"),
+            "A es_ES dictionary is already installed. Replace it?"
+        );
     }
 
     #[test]
@@ -693,7 +913,7 @@ mod tests {
         let aff = write(&source, "es.aff", b"<html><body>404</body></html>");
         let dic = write(&source, "es.dic", b"1\nhola\n");
 
-        let refused = import_pair(&dir, &[aff, dic], &known(), false);
+        let refused = import_pair(&dir, &[aff, dic], &known(), no);
 
         assert_eq!(
             refused,
@@ -765,7 +985,7 @@ mod tests {
         let aff = write(&source, "xx.aff", b"SET UTF-8\n");
         let dic = write(&source, "xx.dic", b"1\nhola\n");
 
-        let refused = import_pair(&dir, &[aff, dic], &known(), false);
+        let refused = import_pair(&dir, &[aff, dic], &known(), no);
 
         assert!(matches!(refused, Err(ImportError::UnknownLanguage { .. })));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
@@ -780,9 +1000,9 @@ mod tests {
         let aff = write(&source, "fr.aff", b"SET UTF-8\n");
         let dic = write(&source, "fr.dic", b"1\nbonjour\n");
 
-        let installed = import_pair(&dir, &[aff, dic], &known(), false);
+        let installed = import_pair(&dir, &[aff, dic], &known(), no);
 
-        assert_eq!(installed, Ok("fr_FR".to_string()));
+        assert_eq!(installed, Ok(Some("fr_FR".to_string())));
         assert!(dir.join("fr_FR/fr_FR.aff").exists());
         assert!(dir.join("fr_FR/fr_FR.dic").exists());
         assert!(!dir.join("fr").exists());
@@ -841,7 +1061,7 @@ mod tests {
         let dir = root.join("dictionaries");
         let aff = write(&source, "es.aff", b"SET UTF-8\n");
         let dic = write(&source, "es.dic", b"1\nhola\n");
-        let refused = import_pair(&dir, &[aff, dic], &hostile, false);
+        let refused = import_pair(&dir, &[aff, dic], &hostile, no);
         assert!(matches!(refused, Err(ImportError::UnknownLanguage { .. })));
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&source);
@@ -856,7 +1076,7 @@ mod tests {
         let aff = write(&source, "es.aff", b"SET UTF-8\n");
         let dic = write(&source, "es.dic", b"1\nhola\n");
         for folder in ["../outside", "es_ES/..", ""] {
-            let refused = install(&dir, folder, &aff, &dic, false);
+            let refused = install(&dir, folder, &aff, &dic, no);
             assert_eq!(refused, Err(ImportError::BadName(folder.to_string())));
         }
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
@@ -887,7 +1107,7 @@ mod tests {
         let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
         let missing = source.join("es_ES.dic");
 
-        let refused = install(&dir, "es_ES", &aff, &missing, true).unwrap_err();
+        let refused = write_pair(&dir.join("es_ES"), "es_ES", &aff, &missing).unwrap_err();
         let text = refused.to_string();
 
         assert_eq!(text, "dictionary-io: es_ES");
@@ -907,7 +1127,7 @@ mod tests {
         let dic = source.join("es_ES.dic");
         std::fs::create_dir(&dic).unwrap();
 
-        let refused = install(&dir, "es_ES", &aff, &dic, true);
+        let refused = write_pair(&dir.join("es_ES"), "es_ES", &aff, &dic);
 
         assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
         assert_eq!(
@@ -934,7 +1154,7 @@ mod tests {
         let aff = write(&source, "es_ES.aff", b"SET new\n");
         let dic = write(&source, "es_ES.dic", b"1\nnew\n");
 
-        let refused = install(&dir, "es_ES", &aff, &dic, true);
+        let refused = install(&dir, "es_ES", &aff, &dic, yes);
 
         assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
         assert_eq!(
@@ -944,6 +1164,114 @@ mod tests {
         assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
         let _ = std::fs::remove_dir_all(&source);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_second_rename_keeps_the_installed_pair() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        std::fs::create_dir_all(dir.join("es_ES")).unwrap();
+        std::fs::write(dir.join("es_ES/es_ES.dic"), b"1\nold\n").unwrap();
+        // The .dic rename works; the .aff one cannot go over a non-empty folder.
+        std::fs::create_dir_all(dir.join("es_ES/es_ES.aff/inside")).unwrap();
+        let aff = write(&source, "es_ES.aff", b"SET new\n");
+        let dic = write(&source, "es_ES.dic", b"1\nnew\n");
+
+        let refused = install(&dir, "es_ES", &aff, &dic, yes);
+
+        assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
+            b"1\nold\n"
+        );
+        assert!(dir.join("es_ES/es_ES.aff/inside").is_dir());
+        assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_second_rename_on_a_first_install_leaves_no_half() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        std::fs::create_dir_all(dir.join("es_ES/es_ES.aff/inside")).unwrap();
+        let aff = write(&source, "es_ES.aff", b"SET new\n");
+        let dic = write(&source, "es_ES.dic", b"1\nnew\n");
+
+        let refused = install(&dir, "es_ES", &aff, &dic, yes);
+
+        assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
+        assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff"]);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_replace_leaves_no_backup() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        installed_es_es(&dir);
+        let aff = write(&source, "es_ES.aff", b"SET new\n");
+        let dic = write(&source, "es_ES.dic", b"1\nnew\n");
+
+        assert_eq!(install(&dir, "es_ES", &aff, &dic, yes), Ok(Installed::Done));
+
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.aff")).unwrap(),
+            b"SET new\n"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("es_ES/es_ES.dic")).unwrap(),
+            b"1\nnew\n"
+        );
+        assert_eq!(names_in(&dir.join("es_ES")), vec!["es_ES.aff", "es_ES.dic"]);
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_held_lock_stops_a_second_install() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es_ES.dic", b"1\nhola\n");
+        // Another app window, in the middle of its own install.
+        let held = crate::temp_layout::take_lock(&lock_path(&dir, "es_ES")).unwrap();
+
+        let refused = install(&dir, "es_ES", &aff, &dic, no);
+
+        assert_eq!(refused, Err(ImportError::Busy("es_ES".to_string())));
+        assert!(!dir.join("es_ES").exists());
+        drop(held);
+        assert_eq!(install(&dir, "es_ES", &aff, &dic, no), Ok(Installed::Done));
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_lock_file_left_by_a_crash_does_not_block() {
+        let source = test_dir("source");
+        let dir = test_dir("user");
+        let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es_ES.dic", b"1\nhola\n");
+        std::fs::write(lock_path(&dir, "es_ES"), b"").unwrap();
+
+        assert_eq!(install(&dir, "es_ES", &aff, &dic, no), Ok(Installed::Done));
+        assert!(dir.join("es_ES/es_ES.dic").exists());
+        let _ = std::fs::remove_dir_all(&source);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_lock_taken_elsewhere_is_busy() {
+        let would_block = std::io::Error::from(std::io::ErrorKind::WouldBlock);
+        assert!(is_held_elsewhere(&would_block));
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(!is_held_elsewhere(&denied));
+        assert_eq!(
+            ImportError::Busy("es_ES".to_string()).to_string(),
+            "dictionary-busy: es_ES"
+        );
     }
 
     #[cfg(unix)]
@@ -956,11 +1284,31 @@ mod tests {
         let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
         let dic = write(&source, "es_ES.dic", b"1\nhola\n");
 
-        let refused = install(&dir, "es_ES", &aff, &dic, true);
+        let refused = install(&dir, "es_ES", &aff, &dic, yes);
 
         assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
         assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
         for path in [&source, &dir, &outside] {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_dictionaries_folder_is_refused() {
+        let source = test_dir("source");
+        let root = test_dir("user");
+        let outside = test_dir("outside");
+        let dir = root.join("dictionaries");
+        std::os::unix::fs::symlink(&outside, &dir).unwrap();
+        let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
+        let dic = write(&source, "es_ES.dic", b"1\nhola\n");
+
+        let refused = install(&dir, "es_ES", &aff, &dic, yes);
+
+        assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        for path in [&source, &root, &outside] {
             let _ = std::fs::remove_dir_all(path);
         }
     }
@@ -977,7 +1325,7 @@ mod tests {
         let aff = write(&source, "es_ES.aff", b"SET UTF-8\n");
         let dic = write(&source, "es_ES.dic", b"1\nhola\n");
 
-        let refused = install(&dir, "es_ES", &aff, &dic, true);
+        let refused = install(&dir, "es_ES", &aff, &dic, yes);
 
         assert_eq!(refused, Err(ImportError::Io("es_ES".to_string())));
         assert_eq!(std::fs::read(&target).unwrap(), b"kept\n");
@@ -988,22 +1336,22 @@ mod tests {
     }
 
     #[test]
-    fn a_replace_uses_the_folder_the_user_confirmed() {
+    fn the_question_names_the_folder_the_backend_chose() {
         let source = test_dir("source");
         let dir = test_dir("user");
         std::fs::create_dir_all(dir.join("pt_PT")).unwrap();
         std::fs::write(dir.join("pt_PT/pt_PT.dic"), b"1\nold\n").unwrap();
         let aff = write(&source, "pt.aff", b"SET UTF-8\n");
         let dic = write(&source, "pt.dic", b"1\nnovo\n");
+        let mut asked = Vec::new();
 
-        let (result, to_confirm) = start_import(&dir, &[aff, dic], &known());
-        assert_eq!(result, Err(ImportError::Exists("pt_PT".to_string())));
-        let confirmed = to_confirm.unwrap();
-        assert_eq!(confirmed.folder, "pt_PT");
+        let replaced = import_pair(&dir, &[aff, dic], &known(), |lang: &str| {
+            asked.push(lang.to_string());
+            true
+        });
 
-        // The second call carries no language list, so a new one sent then
-        // (only pt_BR) cannot move the replace.
-        assert_eq!(finish_replace(&dir, &confirmed), Ok("pt_PT".to_string()));
+        assert_eq!(replaced, Ok(Some("pt_PT".to_string())));
+        assert_eq!(asked, vec!["pt_PT"]);
         assert_eq!(
             std::fs::read(dir.join("pt_PT/pt_PT.dic")).unwrap(),
             b"1\nnovo\n"
@@ -1014,26 +1362,10 @@ mod tests {
     }
 
     #[test]
-    fn only_an_existing_language_waits_for_a_replace() {
-        let source = test_dir("source");
-        let dir = test_dir("user");
-        let aff = write(&source, "fr.aff", b"SET UTF-8\n");
-        let dic = write(&source, "fr.dic", b"1\nbonjour\n");
-        let (result, to_confirm) = start_import(&dir, &[aff.clone(), dic.clone()], &known());
-        assert_eq!(result, Ok("fr_FR".to_string()));
-        assert_eq!(to_confirm, None);
-        let (result, to_confirm) = start_import(&dir, &[aff], &known());
-        assert_eq!(result, Err(ImportError::NotAPair));
-        assert_eq!(to_confirm, None);
-        let _ = std::fs::remove_dir_all(&source);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn the_error_text_carries_its_code() {
         assert_eq!(
-            ImportError::Exists("es".to_string()).to_string(),
-            "dictionary-exists: es"
+            ImportError::Io("es".to_string()).to_string(),
+            "dictionary-io: es"
         );
         assert_eq!(
             ImportError::BadName("es v2".to_string()).to_string(),

@@ -1481,7 +1481,7 @@
     });
 
     document.getElementById('add-language').addEventListener('click', function() {
-      window._eoAddLanguage(false);
+      window._eoAddLanguage();
     });
 
     document.getElementById('recent-remember').addEventListener('change', function() {
