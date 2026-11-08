@@ -51,6 +51,6 @@
     "allow-recovery-discard",
     "allow-list-user-dictionaries",
     "allow-import-dictionary",
-    "allow-cancel-dictionary-import"
+    "allow-set-presentation-fullscreen"
   ]
 }

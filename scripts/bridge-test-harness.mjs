@@ -117,6 +117,13 @@ export async function loadSdkjsSnippet(bridge, relativePath, startMarker, endMar
   bridge.run(source.slice(start, end + endMarker.length));
 }
 
+// A take_pending_open_file that hands out each file once, in order, as the
+// backend does (pending_open.rs).
+export function pendingQueue(...files) {
+  const queue = files.filter(Boolean);
+  return () => queue.shift() || null;
+}
+
 export function check(results, label, ok, detail = '') {
   results.push({ label, ok });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? '  (' + detail + ')' : ''}`);

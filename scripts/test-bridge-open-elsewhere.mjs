@@ -1,10 +1,11 @@
 // Checks a file that is open in another window: the backend answers or
 // rejects with 'open-elsewhere', and the bridge shows its own warning instead
 // of opening it. With a document, the document stays as it is; on the start
-// screen (a launch argument, Open, Edit PDF), the start screen stays.
+// screen (Open, Edit PDF), the start screen stays. A launch argument takes the
+// start screen's Open (editor-patches.js, not loaded here).
 //
 // Run: node scripts/test-bridge-open-elsewhere.mjs [path/to/bridge.js]
-import { check, finish, loadBridge } from './bridge-test-harness.mjs';
+import { check, finish, loadBridge, pendingQueue } from './bridge-test-harness.mjs';
 
 const results = [];
 const OTHER = { token: 'tok-other', name: 'other.docx' };
@@ -21,7 +22,7 @@ async function setup({ docType = 'word', pending = null } = {}) {
       pick_document: () => OTHER,
       open_in_new_window: () => { calls.newWindow += 1; return 'open-elsewhere'; },
       open_file: () => { calls.open += 1; return openElsewhere(); },
-      take_pending_open_file: () => pending,
+      take_pending_open_file: pendingQueue(pending),
       recovery_end: () => null,
       set_document_modified: () => null,
     },
@@ -79,10 +80,10 @@ function warnedOnce(env) {
   // The bridge asks for the launch argument by itself when it loads.
   const env = await setup({ docType: null, pending: OTHER });
   await settle(env);
-  check(results, 'Launch argument (double click), file open elsewhere: warning, start screen',
-    env.calls.open === 1 && warnedOnce(env) && env.editors.length === 0
-      && env.pendingData() === undefined,
-    `open=${env.calls.open} editors=${env.editors.length} messages=${JSON.stringify(env.messages)}`);
+  check(results, 'Launch argument (double click): the start screen\'s Open, once',
+    env.sameWindow.length === 1 && env.sameWindow[0].token === OTHER.token
+      && env.calls.newWindow === 0,
+    `sameWindow=${JSON.stringify(env.sameWindow)} newWindow=${env.calls.newWindow}`);
 }
 
 {

@@ -319,22 +319,29 @@ pub fn convert_params_xml(
     )
 }
 
+// x2t 10 writes "<this name>/<x2t version>" into what it saves: <Application>
+// in docProps/app.xml, meta:generator in ODF and /Producer and /Creator in PDF.
+// It reads the name from the APPLICATION_NAME variable, "ONLYOFFICE" without it.
+pub const APPLICATION_NAME: &str = "Euro-Office-Lite";
+
+// The variables every x2t run gets, on every platform.
+pub fn x2t_common_env() -> Vec<(&'static str, std::ffi::OsString)> {
+    vec![("APPLICATION_NAME", APPLICATION_NAME.into())]
+}
+
 // The variables the app sets when it runs x2t for an open, save or export:
-// the library folder on Linux, nothing elsewhere. The value goes through
+// the common ones, and the library folder on Linux. The folder goes through
 // to_string_lossy, as the sidecar call always passed it.
 pub fn convert_env(binaries_dir: &std::path::Path) -> Vec<(&'static str, std::ffi::OsString)> {
+    let mut env = x2t_common_env();
     #[cfg(target_os = "linux")]
-    {
-        vec![(
-            "LD_LIBRARY_PATH",
-            binaries_dir.to_string_lossy().into_owned().into(),
-        )]
-    }
+    env.push((
+        "LD_LIBRARY_PATH",
+        binaries_dir.to_string_lossy().into_owned().into(),
+    ));
     #[cfg(not(target_os = "linux"))]
-    {
-        let _ = binaries_dir;
-        Vec::new()
-    }
+    let _ = binaries_dir;
+    env
 }
 
 fn pdf_params_xml(input: &str, output: &str, fonts_dir: &str, allfonts: &str) -> String {
@@ -530,22 +537,7 @@ fn run_x2t_to_pdf(
     );
     write_file(&params_xml, &xml)?;
 
-    let mut cmd = std::process::Command::new(&run_x2t);
-    cmd.current_dir(&run_dir)
-        .arg(params_xml.to_string_lossy().as_ref());
-    #[cfg(target_os = "linux")]
-    cmd.env(
-        "LD_LIBRARY_PATH",
-        format!("{}:{}", run_dir.display(), binaries_dir.display()),
-    );
-    #[cfg(target_os = "macos")]
-    cmd.env("DYLD_LIBRARY_PATH", &run_dir);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-
+    let mut cmd = pdf_command(&run_x2t, &run_dir, &params_xml, binaries_dir);
     let result = cmd.output().map_err(|error| {
         let message = format!("Failed to spawn x2t: {}", error);
         log(&message);
@@ -587,6 +579,35 @@ fn run_x2t_to_pdf(
             code, stderr
         ))
     }
+}
+
+// The x2t run for a PDF export: from `run_dir`, with the libraries of
+// `run_dir` first and those of `binaries_dir` after them on Linux.
+fn pdf_command(
+    run_x2t: &std::path::Path,
+    run_dir: &std::path::Path,
+    params_xml: &std::path::Path,
+    binaries_dir: &std::path::Path,
+) -> std::process::Command {
+    let mut cmd = std::process::Command::new(run_x2t);
+    cmd.current_dir(run_dir)
+        .arg(params_xml.to_string_lossy().as_ref())
+        .envs(x2t_common_env());
+    #[cfg(target_os = "linux")]
+    cmd.env(
+        "LD_LIBRARY_PATH",
+        format!("{}:{}", run_dir.display(), binaries_dir.display()),
+    );
+    #[cfg(target_os = "macos")]
+    cmd.env("DYLD_LIBRARY_PATH", run_dir);
+    #[cfg(not(target_os = "linux"))]
+    let _ = binaries_dir;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 /// Windows: run x2t directly from binaries_dir (writable, all DLLs present).
@@ -820,20 +841,40 @@ fn link_editor_resources(
 
 // x2t format ids, shared with the editors: web-apps uses the same numbers in
 // utils.defines.FileFormat to pick the icon and to filter the Open Recent list.
+// Values from core/Common/OfficeFileFormats.h at v10.0.0.169.
 pub fn detect_format(path: &std::path::Path) -> i32 {
-    match path.extension().and_then(|e| e.to_str()) {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+    match ext.as_deref() {
         Some("docx") => 65,
         Some("doc") => 66,
         Some("odt") => 67,
         Some("rtf") => 68,
         Some("txt") => 69,
+        Some("docm") => 75,
+        Some("dotx") => 76,
+        Some("dotm") => 77,
+        Some("fodt") => 78,
+        Some("ott") => 79,
         Some("xlsx") => 257,
         Some("xls") => 258,
         Some("ods") => 259,
         Some("csv") => 260,
+        Some("xlsm") => 261,
+        Some("xltx") => 262,
+        Some("xlsb") => 264,
+        Some("fods") => 265,
+        Some("ots") => 266,
         Some("pptx") => 129,
         Some("ppt") => 130,
         Some("odp") => 131,
+        Some("ppsx") => 132,
+        Some("pptm") => 133,
+        Some("potx") => 135,
+        Some("fodp") => 137,
+        Some("otp") => 138,
         Some("pdf") => 513,
         _ => 0,
     }
@@ -870,21 +911,96 @@ const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
 const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
 // A container format must start like one; x2t would otherwise pick the format
-// from the content. OOXML is a ZIP, or a CFB when it has a password. ODF is
-// always a ZIP. Other extensions (doc, xls, rtf...) are left to x2t.
+// from the content. OOXML is a ZIP, or a CFB when it has a password; xlsb is
+// always a ZIP. ODF is always a ZIP, flat ODF an XML document. Word 97-2003,
+// Excel 97-2003 and PowerPoint 97-2003 are CFB; the legacy extensions also
+// take the other content x2t converts under them: see is_legacy_doc,
+// is_legacy_xls and is_legacy_ppt. HTML is never accepted, because x2t picks
+// the format from the content. Other extensions (rtf, txt, csv...) are left to
+// x2t.
 pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return true;
     };
-    let is_zip = head.starts_with(ZIP_SIGNATURE);
-    let is_cfb = head.starts_with(CFB_SIGNATURE);
+    let zip = is_zip(head);
+    let cfb = is_cfb(head);
     match ext.to_lowercase().as_str() {
-        "docx" | "docm" | "dotx" | "dotm" => is_zip || is_cfb,
-        "xlsx" | "xlsm" | "xltx" | "xltm" => is_zip || is_cfb,
-        "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => is_zip || is_cfb,
-        "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => is_zip,
+        "docx" | "docm" | "dotx" | "dotm" => zip || cfb,
+        "xlsx" | "xlsm" | "xltx" | "xltm" => zip || cfb,
+        "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => zip || cfb,
+        "xlsb" => zip,
+        "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => zip,
+        "doc" => is_legacy_doc(head),
+        "xls" => is_legacy_xls(head),
+        "ppt" => is_legacy_ppt(head),
+        "fodt" | "fods" | "fodp" => starts_with_xml_declaration(head),
         _ => true,
     }
+}
+
+fn is_zip(head: &[u8]) -> bool {
+    head.starts_with(ZIP_SIGNATURE)
+}
+
+fn is_cfb(head: &[u8]) -> bool {
+    head.starts_with(CFB_SIGNATURE)
+}
+
+// .doc: Word 97-2003 (CFB), a DOCX renamed to .doc (ZIP) or an RTF saved as .doc.
+fn is_legacy_doc(head: &[u8]) -> bool {
+    is_cfb(head) || is_zip(head) || starts_with_rtf(head)
+}
+
+// .xls: Excel 97-2003 (CFB), an XLSX renamed to .xls (ZIP) or Excel 2003 XML.
+fn is_legacy_xls(head: &[u8]) -> bool {
+    is_cfb(head) || is_zip(head) || is_spreadsheet_ml(head)
+}
+
+// .ppt: PowerPoint 97-2003 (CFB) or a PPTX renamed to .ppt (ZIP).
+fn is_legacy_ppt(head: &[u8]) -> bool {
+    is_cfb(head) || is_zip(head)
+}
+
+const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+const XML_DECLARATION: &[u8] = b"<?xml";
+const RTF_START: &[u8] = b"{\\rtf";
+const SPREADSHEET_ML_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:office:spreadsheet";
+const SPREADSHEET_ML_PROGID: &[u8] = b"progid=\"Excel.Sheet\"";
+
+// The head without an optional UTF-8 BOM and the whitespace after it.
+fn skip_bom_and_space(head: &[u8]) -> &[u8] {
+    let without_bom = head.strip_prefix(UTF8_BOM).unwrap_or(head);
+    let first_non_space = without_bom
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(without_bom.len());
+    &without_bom[first_non_space..]
+}
+
+// An XML document's first bytes: an optional UTF-8 BOM, optional whitespace,
+// then "<?xml".
+fn starts_with_xml_declaration(head: &[u8]) -> bool {
+    skip_bom_and_space(head).starts_with(XML_DECLARATION)
+}
+
+// An RTF document's first bytes: an optional UTF-8 BOM, optional whitespace,
+// then "{\rtf".
+fn starts_with_rtf(head: &[u8]) -> bool {
+    skip_bom_and_space(head).starts_with(RTF_START)
+}
+
+// Excel 2003 XML (SpreadsheetML): an XML document whose first bytes carry the
+// <?mso-application progid="Excel.Sheet"?> instruction or the SpreadsheetML
+// namespace on the root <Workbook>. Any other XML, XHTML included, is not.
+fn is_spreadsheet_ml(head: &[u8]) -> bool {
+    if !starts_with_xml_declaration(head) {
+        return false;
+    }
+    contains(head, SPREADSHEET_ML_PROGID) || contains(head, SPREADSHEET_ML_NAMESPACE)
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|window| window == needle)
 }
 
 // x2t does not use fontconfig: it scans a fixed list of directories
@@ -1085,7 +1201,10 @@ pub fn font_scan_command(
     cmd.current_dir(&binaries_dir)
         .arg("-create-allfonts")
         .arg(fontdata_dir)
-        .arg(binaries_dir.join("fonts"));
+        .arg(binaries_dir.join("fonts"))
+        .envs(x2t_common_env());
+    #[cfg(target_os = "linux")]
+    cmd.env("LD_LIBRARY_PATH", &binaries_dir);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1141,8 +1260,6 @@ pub fn generate_fonts(
             symlink_dirs.len()
         ));
     }
-    #[cfg(target_os = "linux")]
-    cmd.env("LD_LIBRARY_PATH", binaries_dir);
     match cmd.output() {
         Ok(result) => {
             let code = result.status.code().unwrap_or(-1);
@@ -1920,16 +2037,55 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
-    fn the_convert_env_is_the_library_folder_on_linux_only() {
-        let env = convert_env(std::path::Path::new("/opt/Euro Office/binaries"));
+    fn the_convert_env_names_the_app_and_adds_the_library_folder_on_linux_only() {
+        use std::ffi::OsString;
+        let library_dir = "/opt/Euro Office/binaries";
+        let env = convert_env(std::path::Path::new(library_dir));
+        let app_name = ("APPLICATION_NAME", OsString::from(APPLICATION_NAME));
         if cfg!(target_os = "linux") {
-            assert_eq!(
-                env,
-                vec![("LD_LIBRARY_PATH", std::ffi::OsString::from("/opt/Euro Office/binaries"))]
-            );
+            let library_path = ("LD_LIBRARY_PATH", OsString::from(library_dir));
+            assert_eq!(env, vec![app_name, library_path]);
         } else {
-            assert!(env.is_empty(), "{:?}", env);
+            assert_eq!(env, vec![app_name]);
         }
+    }
+
+    // The value of `name` that `cmd` sets for x2t, if it sets one.
+    pub(super) fn env_value<'a>(
+        cmd: &'a std::process::Command,
+        name: &str,
+    ) -> Option<&'a std::ffi::OsStr> {
+        cmd.get_envs()
+            .find(|(key, _)| *key == name)
+            .and_then(|(_, value)| value)
+    }
+
+    fn pdf_test_command() -> std::process::Command {
+        pdf_command(
+            std::path::Path::new("/tmp/eo/work/x2t"),
+            std::path::Path::new("/tmp/eo/work"),
+            std::path::Path::new("/tmp/eo/pdf.xml"),
+            std::path::Path::new("/opt/Euro Office/binaries"),
+        )
+    }
+
+    #[test]
+    fn the_pdf_export_names_the_app() {
+        let cmd = pdf_test_command();
+        assert_eq!(
+            env_value(&cmd, "APPLICATION_NAME"),
+            Some(std::ffi::OsStr::new(APPLICATION_NAME))
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_pdf_export_loads_the_work_dir_libraries_first() {
+        let cmd = pdf_test_command();
+        assert_eq!(
+            env_value(&cmd, "LD_LIBRARY_PATH"),
+            Some(std::ffi::OsStr::new("/tmp/eo/work:/opt/Euro Office/binaries"))
+        );
     }
 
     #[test]
@@ -2023,9 +2179,126 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
-    fn legacy_and_other_extensions_are_left_to_x2t() {
-        for name in ["/d/a.doc", "/d/a.xls", "/d/a.ppt", "/d/a.rtf", "/d/a.txt", "/d/a.csv", "/d/a"] {
+    fn text_formats_are_left_to_x2t() {
+        for name in ["/d/a.rtf", "/d/a.txt", "/d/a.csv", "/d/a"] {
             assert!(matches(name, HTML_HEAD), "{name}");
+        }
+    }
+
+    #[test]
+    fn legacy_binary_extensions_accept_a_cfb_or_a_zip() {
+        for name in ["/d/a.doc", "/d/a.xls", "/d/a.ppt", "/d/A.DOC"] {
+            assert!(matches(name, CFB_SIGNATURE), "{name}");
+            assert!(matches(name, b"PK\x03\x04rest"), "{name}");
+            assert!(!matches(name, b"just some text\n"), "{name}");
+            assert!(!matches(name, HTML_HEAD), "{name}");
+            assert!(!matches(name, b""), "{name}");
+        }
+    }
+
+    #[test]
+    fn legacy_extensions_reject_html() {
+        let doctype = b"<!DOCTYPE html><html><body>";
+        let spaced = b"\xEF\xBB\xBF\n<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\">";
+        for name in ["/d/a.doc", "/d/a.xls", "/d/a.ppt"] {
+            assert!(!matches(name, HTML_HEAD), "{name}");
+            assert!(!matches(name, doctype), "{name}");
+            assert!(!matches(name, spaced), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_rtf_doc_is_accepted_with_or_without_a_bom() {
+        assert!(matches("/d/a.doc", b"{\\rtf1\\ansi\\deff0"));
+        assert!(matches("/d/a.doc", b"\xEF\xBB\xBF{\\rtf1\\ansi"));
+        assert!(matches("/d/a.doc", b"\xEF\xBB\xBF\r\n {\\rtf1\\ansi"));
+    }
+
+    #[test]
+    fn rtf_is_only_accepted_as_doc() {
+        assert!(!matches("/d/a.xls", b"{\\rtf1\\ansi"));
+        assert!(!matches("/d/a.ppt", b"{\\rtf1\\ansi"));
+    }
+
+    // The first bytes Excel 2003 writes for "XML Spreadsheet 2003".
+    const EXCEL_2003_XML_HEAD: &[u8] = b"<?xml version=\"1.0\"?>\r\n\
+<?mso-application progid=\"Excel.Sheet\"?>\r\n\
+<Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\"\r\n\
+ xmlns:o=\"urn:schemas-microsoft-com:office:office\"\r\n\
+ xmlns:x=\"urn:schemas-microsoft-com:office:excel\"\r\n\
+ xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\"\r\n\
+ xmlns:html=\"http://www.w3.org/TR/REC-html40\">\r\n";
+
+    #[test]
+    fn an_excel_2003_xml_xls_is_accepted() {
+        assert!(matches("/d/a.xls", EXCEL_2003_XML_HEAD));
+        assert!(matches("/d/A.XLS", EXCEL_2003_XML_HEAD));
+    }
+
+    #[test]
+    fn spreadsheet_ml_markers_fit_in_the_bytes_read_before_conversion() {
+        let head = &EXCEL_2003_XML_HEAD[..EXCEL_2003_XML_HEAD.len().min(256)];
+        assert!(matches("/d/a.xls", head));
+    }
+
+    #[test]
+    fn spreadsheet_ml_is_recognised_by_either_marker() {
+        let only_namespace = b"\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\">";
+        let only_progid = b"  <?xml version=\"1.0\"?><?mso-application progid=\"Excel.Sheet\"?><Workbook>";
+        assert!(matches("/d/a.xls", only_namespace));
+        assert!(matches("/d/a.xls", only_progid));
+    }
+
+    #[test]
+    fn spreadsheet_ml_is_only_accepted_as_xls() {
+        assert!(!matches("/d/a.doc", EXCEL_2003_XML_HEAD));
+        assert!(!matches("/d/a.ppt", EXCEL_2003_XML_HEAD));
+    }
+
+    #[test]
+    fn an_xml_xls_that_is_not_spreadsheet_ml_is_rejected() {
+        let xhtml = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\n\
+<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><img src=\"/etc/passwd\"/></body></html>";
+        let other_xml = b"<?xml version=\"1.0\"?><root/>";
+        assert!(!matches("/d/a.xls", xhtml));
+        assert!(!matches("/d/a.xls", other_xml));
+    }
+
+    #[test]
+    fn spreadsheet_ml_markers_without_an_xml_declaration_are_rejected() {
+        let html = b"<html><body>urn:schemas-microsoft-com:office:spreadsheet</body></html>";
+        assert!(!matches("/d/a.xls", html));
+    }
+
+    #[test]
+    fn a_text_file_renamed_to_doc_is_rejected() {
+        assert!(!matches("/d/fake.doc", b"Hello, this is plain text.\n"));
+    }
+
+    #[test]
+    fn xlsb_needs_a_zip() {
+        assert!(matches("/d/a.xlsb", b"PK\x03\x04rest"));
+        assert!(!matches("/d/a.xlsb", CFB_SIGNATURE));
+        assert!(!matches("/d/a.xlsb", b"just some text\n"));
+    }
+
+    #[test]
+    fn flat_odf_extensions_need_an_xml_declaration() {
+        let with_bom = b"\xEF\xBB\xBF<?xml version=\"1.0\"?>";
+        let with_space = b" \r\n\t<?xml version=\"1.0\"?>";
+        let with_bom_and_space = b"\xEF\xBB\xBF\n<?xml version=\"1.0\"?>";
+        for ext in ["fodt", "fods", "fodp", "FODT"] {
+            let name = format!("/d/a.{ext}");
+            assert!(matches(&name, b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"), "{ext}");
+            assert!(matches(&name, with_bom), "{ext}");
+            assert!(matches(&name, with_space), "{ext}");
+            assert!(matches(&name, with_bom_and_space), "{ext}");
+            assert!(!matches(&name, b"just some text\n"), "{ext}");
+            assert!(!matches(&name, b"PK\x03\x04rest"), "{ext}");
+            assert!(!matches(&name, b"\xEF\xBB\xBF"), "{ext}");
+            assert!(!matches(&name, b""), "{ext}");
         }
     }
 
@@ -2055,6 +2328,26 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.pdf")), 513);
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.docx")), 65);
         assert_eq!(detect_format(std::path::Path::new("/tmp/out.unknown")), 0);
+    }
+
+    #[test]
+    fn detect_format_ignores_the_case_of_the_extension() {
+        assert_eq!(detect_format(std::path::Path::new("/tmp/REPORT.DOCX")), 65);
+        assert_eq!(detect_format(std::path::Path::new("/tmp/Budget.Xls")), 258);
+        assert_eq!(detect_format(std::path::Path::new("/tmp/SLIDES.PDF")), 513);
+    }
+
+    #[test]
+    fn detect_format_knows_the_office_variants_the_open_dialog_offers() {
+        let cases = [
+            ("docm", 75), ("dotx", 76), ("dotm", 77), ("fodt", 78), ("ott", 79),
+            ("xlsm", 261), ("xltx", 262), ("xlsb", 264), ("fods", 265), ("ots", 266),
+            ("ppsx", 132), ("pptm", 133), ("potx", 135), ("fodp", 137), ("otp", 138),
+        ];
+        for (ext, code) in cases {
+            let path = std::path::PathBuf::from(format!("/tmp/a.{}", ext));
+            assert_eq!(detect_format(&path), code, "{}", ext);
+        }
     }
 
     #[test]
@@ -2226,8 +2519,36 @@ mod symlink_tests {
 
 #[cfg(test)]
 mod font_scan_tests {
-    use super::font_scan_command;
+    use super::tests::env_value;
+    use super::{font_scan_command, APPLICATION_NAME};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn the_font_scan_names_the_app() {
+        let cmd = font_scan_command(
+            Path::new("/opt/Euro Office/binaries/x2t"),
+            Path::new("/tmp/fontdata"),
+            Path::new("/opt/Euro Office/binaries"),
+        );
+        assert_eq!(
+            env_value(&cmd, "APPLICATION_NAME"),
+            Some(std::ffi::OsStr::new(APPLICATION_NAME))
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_font_scan_loads_the_libraries_of_the_binaries_folder() {
+        let cmd = font_scan_command(
+            Path::new("/opt/Euro Office/binaries/x2t"),
+            Path::new("/tmp/fontdata"),
+            Path::new("/opt/Euro Office/binaries"),
+        );
+        assert_eq!(
+            env_value(&cmd, "LD_LIBRARY_PATH"),
+            Some(std::ffi::OsStr::new("/opt/Euro Office/binaries"))
+        );
+    }
 
     // resource_dir() on Windows: the scan used to receive this spelling and
     // x2t wrote it into the cache as /?/C:/... and \\?\C:\... An install on a

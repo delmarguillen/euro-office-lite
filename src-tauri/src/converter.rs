@@ -209,10 +209,15 @@ fn check_container_content(input: &str) -> Result<(), String> {
     Err(format!("This file is not a valid .{}", ext.to_lowercase()))
 }
 
+// Enough for the 8-byte CFB signature, for a flat ODF's "<?xml" after a BOM
+// and some leading whitespace, and for the progid and namespace Excel 2003
+// writes in the first 127 bytes of an XML Spreadsheet.
+const HEAD_LEN: u64 = 256;
+
 fn read_head(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
     let mut head = Vec::new();
-    std::fs::File::open(path)?.take(8).read_to_end(&mut head)?;
+    std::fs::File::open(path)?.take(HEAD_LEN).read_to_end(&mut head)?;
     Ok(head)
 }
 
@@ -235,6 +240,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn content_check(name: &str, content: &[u8]) -> Result<(), String> {
+        let path = scratch_root().join(name);
+        std::fs::write(&path, content).unwrap();
+        check_container_content(path.to_str().unwrap())
+    }
+
+    #[test]
+    fn a_text_file_named_doc_or_fodt_is_refused_before_x2t() {
+        let text = b"Hello, this is plain text.\n";
+        assert_eq!(
+            content_check("fake.doc", text),
+            Err("This file is not a valid .doc".to_string())
+        );
+        assert_eq!(
+            content_check("fake.FODT", text),
+            Err("This file is not a valid .fodt".to_string())
+        );
+    }
+
+    #[test]
+    fn a_flat_odf_after_a_bom_and_blank_lines_is_accepted() {
+        let mut content = b"\xEF\xBB\xBF".to_vec();
+        content.extend_from_slice(&[b'\n'; 40]);
+        content.extend_from_slice(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document/>");
+        assert_eq!(content_check("flat.fodt", &content), Ok(()));
+    }
+
+    #[test]
+    fn a_real_word_97_doc_passes_the_content_check() {
+        let doc = include_bytes!("../../tests/fixtures/word97.doc");
+        assert_eq!(content_check("word97.doc", doc), Ok(()));
     }
 
     // A temp root whose font cache is missing, next to an app folder whose
