@@ -42,6 +42,17 @@ pub enum Reason {
     NotNeeded,
 }
 
+impl Reason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Reason::User => "user",
+            Reason::NvidiaProprietary => "nvidia-proprietary",
+            Reason::UnknownDriver => "unknown-driver",
+            Reason::NotNeeded => "not-needed",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Decision {
     pub set_flag: bool,
@@ -92,6 +103,16 @@ pub fn apply() -> Decision {
         std::env::set_var(ENV_NAME, "1");
     }
     decision
+}
+
+// The end of the "[STARTUP] Linux ..." line: the value WebKitGTK sees and why.
+pub fn log_field(value: Option<&str>, reason: Reason) -> String {
+    format!(
+        "{}={} reason={}",
+        ENV_NAME,
+        value.unwrap_or("unset"),
+        reason.as_str()
+    )
 }
 
 #[cfg(test)]
@@ -189,6 +210,30 @@ mod tests {
                 set_flag: true,
                 reason: Reason::UnknownDriver
             }
+        );
+    }
+
+    #[test]
+    fn reasons_have_their_log_names() {
+        assert_eq!(Reason::User.as_str(), "user");
+        assert_eq!(Reason::NvidiaProprietary.as_str(), "nvidia-proprietary");
+        assert_eq!(Reason::UnknownDriver.as_str(), "unknown-driver");
+        assert_eq!(Reason::NotNeeded.as_str(), "not-needed");
+    }
+
+    #[test]
+    fn log_field_shows_value_and_reason() {
+        assert_eq!(
+            log_field(Some("1"), Reason::NvidiaProprietary),
+            "WEBKIT_DISABLE_DMABUF_RENDERER=1 reason=nvidia-proprietary"
+        );
+        assert_eq!(
+            log_field(Some("0"), Reason::User),
+            "WEBKIT_DISABLE_DMABUF_RENDERER=0 reason=user"
+        );
+        assert_eq!(
+            log_field(None, Reason::NotNeeded),
+            "WEBKIT_DISABLE_DMABUF_RENDERER=unset reason=not-needed"
         );
     }
 }

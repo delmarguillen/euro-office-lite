@@ -242,7 +242,7 @@ fn main() {
     // (dmabuf_default.rs). Decided before anything starts WebKitGTK; a value the
     // user set is left as it is.
     #[cfg(target_os = "linux")]
-    dmabuf_default::apply();
+    let dmabuf = dmabuf_default::apply();
 
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut context = tauri::generate_context!();
@@ -312,11 +312,11 @@ fn main() {
         let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
         let desktop = std::env::var("XDG_CURRENT_DESKTOP")
             .unwrap_or_else(|_| "unknown".to_string());
-        let dmabuf = std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER")
-            .unwrap_or_else(|_| "unset".to_string());
+        let dmabuf_value = std::env::var(dmabuf_default::ENV_NAME).ok();
+        let dmabuf_field = dmabuf_default::log_field(dmabuf_value.as_deref(), dmabuf.reason);
         log_startup(&format!(
-            "Linux distro={} session={} desktop={} WEBKIT_DISABLE_DMABUF_RENDERER={}",
-            distro, session, desktop, dmabuf
+            "Linux distro={} session={} desktop={} {}",
+            distro, session, desktop, dmabuf_field
         ));
     }
 
