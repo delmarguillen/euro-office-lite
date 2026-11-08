@@ -165,6 +165,41 @@ fn restore_main_window(app: &tauri::App) {
     }
 }
 
+// The geometry the plugin saved for main, read from its state file. On macOS
+// tao queues the restored position, size and zoom on the main dispatch queue,
+// so until setup returns the live window still has its default geometry.
+fn saved_main_window(app: &tauri::App) -> Option<window_state::SavedWindow> {
+    use tauri_plugin_window_state::AppHandleExt;
+    let config_dir = app.path().app_config_dir().ok()?;
+    let state_path = config_dir.join(app.handle().filename());
+    window_state::read_saved_window(&state_path, window_state::MAIN_WINDOW)
+}
+
+// The outer rectangle main is restored to, and whether it is maximized.
+fn restored_main_geometry(
+    app: &tauri::App,
+    window: &tauri::WebviewWindow,
+) -> Option<(window_state::Area, bool)> {
+    let outer = window.outer_size().ok()?;
+    let inner = window.inner_size().ok()?;
+    if let Some(saved) = saved_main_window(app) {
+        let frame_width = outer.width.saturating_sub(inner.width);
+        let frame_height = outer.height.saturating_sub(inner.height);
+        let area = window_state::saved_outer_area(saved, frame_width, frame_height);
+        return Some((area, saved.maximized));
+    }
+    // Nothing saved, so nothing was restored: the live window is where it opens.
+    let position = window.outer_position().ok()?;
+    let maximized = window.is_maximized().unwrap_or(false);
+    let area = window_state::Area {
+        x: position.x,
+        y: position.y,
+        width: outer.width,
+        height: outer.height,
+    };
+    Some((area, maximized))
+}
+
 // A window opened from another one restores the same saved geometry, so it is
 // moved right and down to not hide the first. Not when maximized, nor on
 // Wayland, where the compositor places the window.
@@ -176,37 +211,26 @@ fn offset_new_window(app: &tauri::App) {
     if on_wayland(&window) {
         return;
     }
-    if window.is_maximized().unwrap_or(false) {
-        return;
-    }
-    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+    let Some((placed, maximized)) = restored_main_geometry(app, &window) else {
         log_startup("ERROR: new window offset: no position or size");
         return;
     };
-    let placed = window_state::Area {
-        x: position.x,
-        y: position.y,
-        width: size.width,
-        height: size.height,
-    };
-    let monitors = window.available_monitors().unwrap_or_default();
-    let areas: Vec<window_state::Area> = monitors
+    let monitors: Vec<window_state::Monitor> = window
+        .available_monitors()
+        .unwrap_or_default()
         .iter()
-        .map(|monitor| window_state::Area {
-            x: monitor.position().x,
-            y: monitor.position().y,
-            width: monitor.size().width,
-            height: monitor.size().height,
+        .map(|monitor| window_state::Monitor {
+            area: window_state::Area {
+                x: monitor.position().x,
+                y: monitor.position().y,
+                width: monitor.size().width,
+                height: monitor.size().height,
+            },
+            scale_factor: monitor.scale_factor(),
         })
         .collect();
-    let Some(index) = window_state::monitor_of(placed, &areas) else {
-        log_startup("new window offset: the window is on no monitor, not moved");
-        return;
-    };
-    let scale = monitors[index].scale_factor();
-    let offset = (window_state::NEW_WINDOW_OFFSET * scale).round() as i32;
-    let Some((x, y)) = window_state::offset_position(placed, areas[index], offset) else {
-        log_startup("new window offset: no room on the monitor, not moved");
+    let Some((x, y)) = window_state::new_window_position(placed, maximized, &monitors) else {
+        log_startup("new window offset: maximized, on no monitor or no room, not moved");
         return;
     };
     if let Err(e) = window.set_position(tauri::PhysicalPosition { x, y }) {
