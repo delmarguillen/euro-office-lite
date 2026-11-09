@@ -25,6 +25,7 @@ const APP_COMMANDS: &[&str] = &[
     "fonts_status",
     "set_window_title",
     "set_document_modified",
+    "set_save_pending",
     "js_log",
     "force_close",
     "remove_note_separator",

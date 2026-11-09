@@ -476,6 +476,7 @@ fn main() {
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
             modified: Mutex::new(false),
+            save_pending: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
             pending_open: pending_open::PendingOpens::with_launch_file(file_to_open),
@@ -513,6 +514,7 @@ fn main() {
             file_ops::fonts_status,
             bridge::set_window_title,
             bridge::set_document_modified,
+            bridge::set_save_pending,
             bridge::js_log,
             bridge::force_close,
             note_separator::remove_note_separator,
@@ -978,8 +980,7 @@ fn main() {
                             return;
                         }
                         let state = h.state::<AppState>();
-                        let modified = *state.modified.lock().unwrap();
-                        if !modified {
+                        if !app_quit::has_unsaved_changes(&state) {
                             // Tauri closes the window and the app exits.
                             app_quit::mark_exit_confirmed(&state);
                             return;

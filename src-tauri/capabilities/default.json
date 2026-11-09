@@ -32,6 +32,7 @@
     "allow-fonts-status",
     "allow-set-window-title",
     "allow-set-document-modified",
+    "allow-set-save-pending",
     "allow-js-log",
     "allow-force-close",
     "allow-remove-note-separator",
