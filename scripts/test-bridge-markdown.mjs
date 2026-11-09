@@ -7,7 +7,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import vm from 'node:vm';
-import { check, finish, loadBridge, projectRoot } from './bridge-test-harness.mjs';
+import { check, finish, loadBridge, pendingQueue, projectRoot } from './bridge-test-harness.mjs';
 
 const results = [];
 
@@ -115,9 +115,15 @@ for (const name of ['notes.md', 'NOTES.MD', 'notes.markdown']) {
 // the Markdown page.
 {
   const launch = { token: 'tok-launch', name: 'notes.md' };
-  const bridge = await loadBridge({ invoke: { take_pending_open_file: () => launch, fonts_status: () => 'ready' } });
+  const bridge = await loadBridge({ invoke: { take_pending_open_file: pendingQueue(launch), fonts_status: () => 'ready' } });
   bridge.sandbox.location = { href: 'index.html', reload() { this.reloaded = true; } };
   bridge.sandbox.localStorage.removeItem('eo-markdown-open');
+  // With no editor open, LocalFileOpen hands the file to _openPath in
+  // editor-patches.js, which this harness does not load. Its Markdown routing
+  // is checked below ('the start screen routes Markdown before converting').
+  bridge.run(`window._eoOpenPath = async function(file) {
+    if (window._eoIsMarkdownPath(file.name)) window._eoOpenMarkdown(file);
+  }`);
   bridge.run('_eoTakePendingOpenFile()');
   await settle();
   const pending = JSON.parse(bridge.sandbox.localStorage.getItem('eo-markdown-open') || 'null');
