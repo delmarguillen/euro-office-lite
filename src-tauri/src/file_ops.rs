@@ -437,10 +437,9 @@ async fn open_file_inner(
         ),
     );
 
-    // x2t's UTF-8 CSV reader adds an empty row after a final line break, and it
-    // loses the text of a UTF-16 TXT, so those are read from a copy that avoids
-    // both. current_file and the recent list keep the original path, and saving
-    // keeps the original's options; only the conversion sees the copy.
+    // A TXT or CSV is read from a copy made for x2t. current_file and the recent
+    // list keep the original path, and saving keeps the original's options; only
+    // the conversion sees the copy.
     let read_copy = match crate::text_import::prepare_read_copy(
         Path::new(&source),
         &state.temp_dir,
@@ -1188,10 +1187,26 @@ pub async fn convert_for_insert(
     let format_from = detect_format(&input);
     let format_to = 8192;
 
-    // The same copy opening uses, so the inserted RTF keeps its content too.
+    // The same copies opening uses, so the inserted file is read as what it is.
+    // x2t still gets no options here: it refuses a TXT or CSV without them, as
+    // it has always done when inserting one.
+    let text_kind = crate::text_import::TextKind::for_path(&input);
+    let text_options = match text_kind {
+        Some(kind) => {
+            Some(crate::text_import::detect_file(&input, kind).map_err(|e| e.to_string())?)
+        }
+        None => None,
+    };
+    let read_copy =
+        crate::text_import::prepare_read_copy(&input, &insert_dir, text_kind, text_options)
+            .map_err(|e| e.to_string())?;
     let rtf_copy =
         crate::text_import::rtf_read_copy(&input, &insert_dir).map_err(|e| e.to_string())?;
-    let convert_from = rtf_copy
+    let copy_path = read_copy
+        .as_ref()
+        .map(|copy| copy.path.clone())
+        .or(rtf_copy);
+    let convert_from = copy_path
         .as_ref()
         .map_or_else(|| path.clone(), |copy| copy.to_string_lossy().to_string());
 
@@ -1206,7 +1221,7 @@ pub async fn convert_for_insert(
         None,
     )
     .await;
-    if let Some(copy) = &rtf_copy {
+    if let Some(copy) = &copy_path {
         let _ = std::fs::remove_file(copy);
     }
     converted?;
