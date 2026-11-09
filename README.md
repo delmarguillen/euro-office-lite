@@ -2,7 +2,7 @@
 
 Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~89 MB (Windows), ~123-129 MB (macOS), ~137 MB (Linux x64 .deb), ~133 MB (Linux arm64 .deb), ~92 MB (Flatpak). No cloud, no telemetry.
 
-Supports Word, Excel and PowerPoint documents, OpenDocument files, RTF, CSV and plain text, with native file operations and printing. PDF files open in a PDF editor where you can add comments, highlights and free text and save them. The window opens with the size and position it had when it was last closed (on Linux with Wayland, only whether it was maximized). Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
+Supports Word, Excel and PowerPoint documents, OpenDocument files, RTF, CSV and plain text, with native file operations and printing. PDF files open in a PDF editor where you can add comments, highlights and free text and save them. Older formats such as .doc, .xls and .ppt open too, and are saved as .docx, .xlsx or .pptx. With a document open, opening another one starts a new window. The window opens with the size and position it had when it was last closed (on Linux with Wayland, only whether it was maximized). Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
 
 > **Alpha**: This project is in early development. Core features work (create, open, edit, save, PDF export), but expect rough edges. Printing sends the document to a printer on Windows and opens it in the system PDF viewer on macOS and Linux.
 
@@ -111,6 +111,8 @@ flatpak override --user --env=EURO_OFFICE_LITE_TITLE_BAR=system org.eurooffice.L
 
 With the `.deb`, copy the desktop file to `~/.local/share/applications/` and change its `Exec` line to `Exec=euro-office-lite --system-title-bar %F`.
 
+**Slow scrolling.** The DMABUF renderer is off by default on Linux because it made text look jagged with the proprietary NVIDIA driver ([#27](https://github.com/delmarguillen/euro-office-lite/issues/27)). On other GPUs, scrolling can be smoother with it on. To try it with the `.deb`, start the app from a terminal with `WEBKIT_DISABLE_DMABUF_RENDERER=0 euro-office-lite`.
+
 ## Adding more spellcheck languages
 
 The spell checker works with any language from the [Euro-Office dictionaries repository](https://github.com/Euro-Office/dictionaries). Each language there is a folder named after its locale, holding the two files hunspell needs. A language the repository names `xx_YY` goes in as `xx_YY/xx_YY.aff` and `xx_YY/xx_YY.dic`, inside your dictionaries folder:
@@ -119,7 +121,7 @@ The spell checker works with any language from the [Euro-Office dictionaries rep
 - **macOS**: `~/Library/Application Support/org.euro-office.lite/dictionaries/`
 - **Linux**: `~/.local/share/org.euro-office.lite/dictionaries/`
 
-The easiest way is the "Add spell check language…" option on the start screen: choose the .aff and .dic files of a Hunspell dictionary (for example from LibreOffice's dictionaries) and the app copies them into the right folder. If that language is already installed, it asks before replacing it.
+The easiest way is the "Add spell check language…" option in the settings gear on the start screen: choose the .aff and .dic files of a Hunspell dictionary (for example from LibreOffice's dictionaries) and the app copies them into the right folder. If that language is already installed, it asks before replacing it.
 
 To copy the files by hand instead, create the folder if it is not there yet, restart the app, and the language shows up in the language list with a dictionary indicator, checked like any other. Keep the folder name exactly as the repository spells it, because that name is how the app matches the folder to the language set on the text. A folder missing either file is ignored, and the reason is written to the log file listed below.
 
