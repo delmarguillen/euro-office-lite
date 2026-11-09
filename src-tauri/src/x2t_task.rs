@@ -916,8 +916,8 @@ const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 // Excel 97-2003 and PowerPoint 97-2003 are CFB; the legacy extensions also
 // take the other content x2t converts under them: see is_legacy_doc,
 // is_legacy_xls and is_legacy_ppt. HTML is never accepted, because x2t picks
-// the format from the content. Other extensions (rtf, txt, csv...) are left to
-// x2t.
+// the format from the content. An .rtf starts like one, after an optional BOM
+// and blank space. Other extensions (txt, csv...) are left to x2t.
 pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return true;
@@ -930,6 +930,7 @@ pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
         "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => zip || cfb,
         "xlsb" => zip,
         "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => zip,
+        "rtf" => starts_with_rtf(head),
         "doc" => is_legacy_doc(head),
         "xls" => is_legacy_xls(head),
         "ppt" => is_legacy_ppt(head),
@@ -2180,8 +2181,30 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 
     #[test]
     fn text_formats_are_left_to_x2t() {
-        for name in ["/d/a.rtf", "/d/a.txt", "/d/a.csv", "/d/a"] {
+        for name in ["/d/a.txt", "/d/a.csv", "/d/a"] {
             assert!(matches(name, HTML_HEAD), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_rtf_must_start_like_one() {
+        let heads: [&[u8]; 4] = [HTML_HEAD, b"just some text\n", b"", b"<!DOCTYPE html><html>"];
+        for head in heads {
+            assert!(!matches("/d/a.rtf", head), "{}", String::from_utf8_lossy(head));
+            assert!(!matches("/d/A.RTF", head), "{}", String::from_utf8_lossy(head));
+        }
+    }
+
+    #[test]
+    fn an_rtf_is_accepted_with_or_without_a_bom_and_blank_space() {
+        let heads: [&[u8]; 4] = [
+            b"{\\rtf1\\ansi\\deff0",
+            b"\xEF\xBB\xBF{\\rtf1\\ansi",
+            b"\xEF\xBB\xBF\r\n {\\rtf1\\ansi",
+            b"\r\n{\\rtf1\\ansi",
+        ];
+        for head in heads {
+            assert!(matches("/d/a.rtf", head), "{}", String::from_utf8_lossy(head));
         }
     }
 
