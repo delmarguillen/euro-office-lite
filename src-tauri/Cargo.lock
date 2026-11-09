@@ -821,6 +821,7 @@ dependencies = [
  "gtk",
  "image",
  "libc",
+ "quick-xml 0.39.4",
  "serde",
  "serde_json",
  "tauri",

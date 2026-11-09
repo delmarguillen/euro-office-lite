@@ -20,6 +20,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # deflate is the single method a docx uses besides stored, so the rest of the
 # codecs stay out of the binary.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Reads the .rels parts of an OOXML package. Already built for the plist crate.
+quick-xml = "0.39"
 # flock for the recovery session lock. Nothing heavier: a file-locking crate
 # would be a dependency for two calls, and libc is already in the tree.
 [target.'cfg(unix)'.dependencies]

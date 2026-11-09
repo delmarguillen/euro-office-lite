@@ -12,6 +12,7 @@ mod fonts_state;
 mod launch_args;
 mod new_window;
 mod note_separator;
+mod package_relationships;
 mod path_grants;
 mod pending_open;
 mod presentation;

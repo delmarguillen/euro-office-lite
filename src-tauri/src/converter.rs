@@ -202,7 +202,8 @@ fn ensure_pdf_font_cache(
 fn check_container_content(input: &str) -> Result<(), String> {
     let path = std::path::Path::new(input);
     let head = read_head(path).map_err(|e| e.to_string())?;
-    if x2t_task::content_matches_extension(path, &head) {
+    let matches_format = x2t_task::content_matches_extension(path, &head);
+    if matches_format && crate::package_relationships::relationships_are_allowed(path, &head) {
         return Ok(());
     }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
@@ -267,6 +268,24 @@ mod tests {
         content.extend_from_slice(&[b'\n'; 40]);
         content.extend_from_slice(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document/>");
         assert_eq!(content_check("flat.fodt", &content), Ok(()));
+    }
+
+    #[test]
+    fn a_package_with_a_local_image_link_is_refused_before_x2t() {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        writer.start_file("word/_rels/document.xml.rels", options).unwrap();
+        writer
+            .write_all(
+                b"<Relationships><Relationship Id=\"r\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"/a/b.png\" TargetMode=\"External\"/></Relationships>",
+            )
+            .unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        assert_eq!(
+            content_check("linked.docx", &bytes),
+            Err("This file is not a valid .docx".to_string())
+        );
     }
 
     #[test]
