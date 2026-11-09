@@ -456,9 +456,23 @@ async fn open_file_inner(
             return Err(e.to_string());
         }
     };
-    let convert_from = read_copy
+    let rtf_copy = match crate::text_import::rtf_read_copy(Path::new(&source), &state.temp_dir) {
+        Ok(copy) => copy,
+        Err(e) => {
+            log_event(
+                &state,
+                &format!("[OPEN] failed file={} error=read copy: {}", file_name, e),
+            );
+            return Err(e.to_string());
+        }
+    };
+    let copy_path = read_copy
         .as_ref()
-        .map(|copy| copy.path.to_string_lossy().to_string())
+        .map(|copy| copy.path.clone())
+        .or(rtf_copy);
+    let convert_from = copy_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_else(|| source.clone());
     let convert_options = read_copy.as_ref().map(|copy| copy.options).or(text_options);
 
@@ -473,8 +487,8 @@ async fn open_file_inner(
         convert_options,
     )
     .await;
-    if let Some(copy) = &read_copy {
-        let _ = std::fs::remove_file(&copy.path);
+    if let Some(path) = &copy_path {
+        let _ = std::fs::remove_file(path);
     }
     converted.map_err(|error| {
         log_event(
@@ -1174,9 +1188,16 @@ pub async fn convert_for_insert(
     let format_from = detect_format(&input);
     let format_to = 8192;
 
-    super::converter::convert_file(
+    // The same copy opening uses, so the inserted RTF keeps its content too.
+    let rtf_copy =
+        crate::text_import::rtf_read_copy(&input, &insert_dir).map_err(|e| e.to_string())?;
+    let convert_from = rtf_copy
+        .as_ref()
+        .map_or_else(|| path.clone(), |copy| copy.to_string_lossy().to_string());
+
+    let converted = super::converter::convert_file(
         &app,
-        &path,
+        &convert_from,
         &output.to_string_lossy(),
         format_from,
         format_to,
@@ -1184,7 +1205,11 @@ pub async fn convert_for_insert(
         &crate::temp_layout::fontdata_dir(&state.font_root),
         None,
     )
-    .await?;
+    .await;
+    if let Some(copy) = &rtf_copy {
+        let _ = std::fs::remove_file(copy);
+    }
+    converted?;
 
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
     let b64 = STANDARD.encode(&bin_data);

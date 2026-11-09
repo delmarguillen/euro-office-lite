@@ -576,6 +576,54 @@ pub fn prepare_read_copy(
     }))
 }
 
+const RTF_START: &[u8] = b"{\\rtf";
+
+// Where the RTF begins in a file that starts with a UTF-8 BOM and has only
+// blank space between the BOM and the "{\rtf". None for anything else.
+fn rtf_start_after_bom(head: &[u8]) -> Option<usize> {
+    let after_bom = head.strip_prefix(UTF8_BOM)?;
+    let blanks = after_bom
+        .iter()
+        .take_while(|byte| byte.is_ascii_whitespace())
+        .count();
+    let is_rtf = after_bom[blanks..].starts_with(RTF_START);
+    is_rtf.then_some(UTF8_BOM.len() + blanks)
+}
+
+fn is_rtf_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rtf"))
+}
+
+fn copy_from_offset(source: &Path, copy: &Path, offset: u64) -> std::io::Result<()> {
+    let mut input = std::fs::File::open(source)?;
+    input.seek(SeekFrom::Start(offset))?;
+    let mut output = std::fs::File::create(copy)?;
+    std::io::copy(&mut input, &mut output)?;
+    Ok(())
+}
+
+// x2t reads a file as RTF only when "{\rtf" are its first bytes. After a UTF-8
+// BOM it takes the file for plain text: the document opens as RTF code and
+// saving it loses the content. So that file is read from a copy in `temp_dir`
+// that starts at the "{\rtf". An RTF without a BOM needs no copy.
+pub fn rtf_read_copy(
+    source: &Path,
+    temp_dir: &Path,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    if !is_rtf_path(source) {
+        return Ok(None);
+    }
+    let (head, _) = read_head(source)?;
+    let Some(start) = rtf_start_after_bom(&head) else {
+        return Ok(None);
+    };
+    let copy = temp_dir.join("eo-read-copy.rtf");
+    copy_from_offset(source, &copy, start as u64)?;
+    Ok(Some(copy))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1329,5 +1377,86 @@ mod tests {
         assert_eq!(prepared(&source, &temp), None);
         assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "nothing written");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- the read copy of an RTF with a BOM ----
+
+    const RTF_DOCUMENT: &[u8] = b"{\\rtf1\\ansi Some text\\par}";
+
+    fn with_prefix(prefix: &[u8]) -> Vec<u8> {
+        let mut bytes = prefix.to_vec();
+        bytes.extend_from_slice(RTF_DOCUMENT);
+        bytes
+    }
+
+    fn rtf_copy_of(
+        case: &str,
+        name: &str,
+        bytes: &[u8],
+    ) -> (std::path::PathBuf, Option<Vec<u8>>, usize) {
+        let (dir, temp) = read_copy_dirs(case);
+        let source = dir.join(name);
+        std::fs::write(&source, bytes).unwrap();
+        let copy = rtf_read_copy(&source, &temp).unwrap();
+        let content = copy.map(|path| {
+            assert_eq!(path, temp.join("eo-read-copy.rtf"));
+            std::fs::read(path).unwrap()
+        });
+        assert_eq!(std::fs::read(&source).unwrap(), bytes, "the original is left alone");
+        let written = std::fs::read_dir(&temp).unwrap().count();
+        (dir, content, written)
+    }
+
+    #[test]
+    fn an_rtf_with_a_bom_is_read_from_a_copy_without_it() {
+        let (dir, content, _) = rtf_copy_of("rtf-bom", "a.rtf", &with_prefix(UTF8_BOM));
+        assert_eq!(content.as_deref(), Some(RTF_DOCUMENT));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn blank_space_after_the_bom_stays_out_of_the_copy() {
+        let bytes = with_prefix(b"\xEF\xBB\xBF\r\n \t");
+        let (dir, content, _) = rtf_copy_of("rtf-bom-space", "a.rtf", &bytes);
+        assert_eq!(content.as_deref(), Some(RTF_DOCUMENT));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_rtf_with_a_bom_is_copied_whatever_the_case_of_its_extension() {
+        let (dir, content, _) = rtf_copy_of("rtf-upper", "A.RTF", &with_prefix(UTF8_BOM));
+        assert_eq!(content.as_deref(), Some(RTF_DOCUMENT));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_rtf_without_a_bom_has_no_copy() {
+        for (case, bytes) in [
+            ("rtf-plain", with_prefix(b"")),
+            ("rtf-blank", with_prefix(b"\r\n ")),
+        ] {
+            let (dir, content, written) = rtf_copy_of(case, "a.rtf", &bytes);
+            assert_eq!(content, None, "{}", case);
+            assert_eq!(written, 0, "{}: nothing written", case);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn a_bom_before_something_that_is_not_rtf_has_no_copy() {
+        let (dir, content, written) = rtf_copy_of("rtf-text", "a.rtf", b"\xEF\xBB\xBFJust text\n");
+        assert_eq!(content, None);
+        assert_eq!(written, 0, "nothing written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_the_rtf_extension_gets_this_copy() {
+        for name in ["a.txt", "a.doc", "rtf"] {
+            let (dir, content, written) = rtf_copy_of("rtf-other", name, &with_prefix(UTF8_BOM));
+            assert_eq!(content, None, "{}", name);
+            assert_eq!(written, 0, "{}: nothing written", name);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
