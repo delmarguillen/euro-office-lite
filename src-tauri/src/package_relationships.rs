@@ -129,7 +129,7 @@ fn rels_part_allowed(xml: &[u8]) -> bool {
     }
 }
 
-fn declares_utf8(declaration: &quick_xml::events::BytesDecl) -> bool {
+pub(crate) fn declares_utf8(declaration: &quick_xml::events::BytesDecl) -> bool {
     match declaration.encoding() {
         None => true,
         Some(Ok(encoding)) => encoding.eq_ignore_ascii_case(b"utf-8"),
@@ -170,7 +170,7 @@ fn relationship_allowed(element: &BytesStart) -> bool {
 
 // The target, with its XML entities already decoded, is percent-decoded before
 // its scheme is read. A Windows drive letter is not a scheme on the list.
-fn has_allowed_scheme(target: &str) -> bool {
+pub(crate) fn has_allowed_scheme(target: &str) -> bool {
     let decoded = percent_decoded(target);
     let Some((scheme, _)) = decoded.split_once(':') else {
         return false;
@@ -178,7 +178,7 @@ fn has_allowed_scheme(target: &str) -> bool {
     ALLOWED_SCHEMES.contains(&scheme.to_ascii_lowercase().as_str())
 }
 
-fn percent_decoded(text: &str) -> String {
+pub(crate) fn percent_decoded(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;

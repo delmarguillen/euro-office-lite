@@ -16,9 +16,14 @@ pub async fn convert_file(
     fontdata_dir: &std::path::Path,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<String, String> {
+    // Removed when this function returns, whichever way it does.
+    let mut package_copy = TempCopy(None);
     if format_to == 8192 {
         check_container_content(input)?;
+        package_copy.0 = package_images_copy(input, temp_dir)?;
     }
+    let copy_input = package_copy.0.as_ref().map(|path| path.to_string_lossy().into_owned());
+    let input = copy_input.as_deref().unwrap_or(input);
 
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let binaries_dir = resource_dir.join("binaries");
@@ -197,6 +202,37 @@ fn ensure_pdf_font_cache(
     }
 }
 
+// The copy x2t reads an ODF package from when one of its picture references has
+// been emptied, or None to read the original.
+fn package_images_copy(
+    input: &str,
+    temp_dir: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    use crate::odf_links::PackageImages;
+    let path = std::path::Path::new(input);
+    let head = read_head(path).map_err(|e| e.to_string())?;
+    match crate::odf_links::prepare(path, &head, std::path::Path::new(temp_dir)) {
+        PackageImages::Unchanged => Ok(None),
+        PackageImages::Copy(copy) => Ok(Some(copy)),
+        PackageImages::NotAllowed => Err(not_valid_error(path)),
+    }
+}
+
+struct TempCopy(Option<std::path::PathBuf>);
+
+impl Drop for TempCopy {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn not_valid_error(path: &std::path::Path) -> String {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
+    format!("This file is not a valid .{}", ext.to_lowercase())
+}
+
 // Opening and inserting convert the user's file to Editor.bin (8192); this runs
 // before x2t is launched for them.
 fn check_container_content(input: &str) -> Result<(), String> {
@@ -206,8 +242,7 @@ fn check_container_content(input: &str) -> Result<(), String> {
     if matches_format && crate::package_relationships::relationships_are_allowed(path, &head) {
         return Ok(());
     }
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
-    Err(format!("This file is not a valid .{}", ext.to_lowercase()))
+    Err(not_valid_error(path))
 }
 
 // Enough for the 8-byte CFB signature, for a flat ODF's "<?xml" after a BOM
