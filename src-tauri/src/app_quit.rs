@@ -183,6 +183,7 @@ mod tests {
             entries,
             saved_count: 0,
             capped: false,
+            markdown: false,
         });
         dir
     }
