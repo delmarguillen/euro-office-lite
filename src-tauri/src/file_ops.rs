@@ -29,8 +29,9 @@ pub struct AppState {
     pub pending_recent: Mutex<Option<PathBuf>>,
     // Crash recovery session of the open document, if any (recovery.rs).
     pub recovery: Mutex<Option<crate::recovery::RecoverySession>>,
-    // Path passed as a launch argument that the frontend has not opened yet.
-    pub pending_open: Mutex<Option<PathBuf>>,
+    // Files the frontend has not opened yet: the launch argument and, on
+    // macOS, the files the system hands over later (pending_open.rs).
+    pub pending_open: crate::pending_open::PendingOpens,
     // The files the webview may name by token (path_grants.rs).
     pub grants: crate::path_grants::PathGrants,
     // Encoding, delimiter and line breaks detected when the open document came
@@ -539,23 +540,8 @@ pub async fn save_file(
     // x2t only reports a failed write as a generic exit code.
     crate::save_target::check_writable_destination(&dest)?;
 
-    let input = state.temp_dir.join("Editor.bin");
-    let format_from = 8192;
     let format_to = detect_format(&dest);
-    let text_options = text_options_for_save(&state, &dest);
-
-    super::converter::convert_file(
-        &app,
-        &input.to_string_lossy(),
-        &dest.to_string_lossy(),
-        format_from,
-        format_to,
-        &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.font_root),
-        text_options,
-    )
-    .await?;
-    finish_text_save(&state, &dest, text_options);
+    save_editor_bin(&app, &state, &dest, format_to).await?;
 
     // The 0-byte file this document was opened from now holds a real document,
     // so it earns its place in the recent list (#33).
@@ -577,23 +563,8 @@ pub async fn save_file_as(
     crate::new_window::refuse_save_if_open_elsewhere(&state, &dest)?;
     crate::save_target::check_writable_destination(&dest)?;
     let path = dest.to_string_lossy().to_string();
-    let input = state.temp_dir.join("Editor.bin");
-    let format_from = 8192;
     let format_to = detect_format(&dest);
-    let text_options = text_options_for_save(&state, &dest);
-
-    super::converter::convert_file(
-        &app,
-        &input.to_string_lossy(),
-        &dest.to_string_lossy(),
-        format_from,
-        format_to,
-        &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.font_root),
-        text_options,
-    )
-    .await?;
-    finish_text_save(&state, &dest, text_options);
+    save_editor_bin(&app, &state, &dest, format_to).await?;
 
     // A PDF export leaves the document itself untouched (current_file keeps
     // pointing at the editable file), so it does not belong in the list either.
@@ -607,6 +578,42 @@ pub async fn save_file_as(
         super::recent::record(&app, &path);
     }
     Ok("ok".to_string())
+}
+
+// Converts Editor.bin to `format_to` (513 is the PDF export) and puts the
+// result at `dest`. x2t writes into the instance folder, never the user's: the
+// PDF export gives x2t no m_sTempDir, so x2t makes its asc… scratch folder
+// next to the output file.
+async fn save_editor_bin(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    dest: &Path,
+    format_to: i32,
+) -> Result<(), String> {
+    let input = state.temp_dir.join("Editor.bin");
+    let temp_dir = state.temp_dir.to_string_lossy().to_string();
+    let fontdata = crate::temp_layout::fontdata_dir(&state.font_root);
+    let text_options = text_options_for_save(state, dest);
+    let convert = |output: PathBuf| async move {
+        super::converter::convert_file(
+            app,
+            &input.to_string_lossy(),
+            &output.to_string_lossy(),
+            8192,
+            format_to,
+            &temp_dir,
+            &fontdata,
+            text_options,
+        )
+        .await
+    };
+    let reshape = |staged: &Path| finish_text_save(state, staged, text_options);
+    let staging_dir = save_staging_dir(&state.temp_dir);
+    crate::save_target::convert_and_place(&staging_dir, dest, convert, reshape).await
+}
+
+fn save_staging_dir(temp_dir: &Path) -> PathBuf {
+    temp_dir.join("save_output")
 }
 
 // Saves the open PDF: x2t applies the PDF editor's changes (`data`, base64)
@@ -800,18 +807,18 @@ fn text_options_for_save(state: &AppState, dest: &Path) -> Option<crate::text_im
 
 // x2t does not write CSV and TXT back the way they were read (BOM, line
 // endings, final breaks, and for TXT the encoding), so the saved file is put
-// back into the original's shape. It is already saved by now, so a failure
-// here is only logged.
+// back into the original's shape, in the instance folder before it is placed.
+// x2t's output is complete by now, so a failure here is only logged.
 fn finish_text_save(
     state: &AppState,
-    dest: &Path,
+    saved: &Path,
     text_options: Option<crate::text_import::TextOptions>,
 ) {
-    let (Some(options), Some(kind)) = (text_options, crate::text_import::TextKind::for_path(dest))
+    let (Some(options), Some(kind)) = (text_options, crate::text_import::TextKind::for_path(saved))
     else {
         return;
     };
-    match crate::text_import::finish_saved_text(dest, kind, options) {
+    match crate::text_import::finish_saved_text(saved, kind, options) {
         Ok(0) => {}
         Ok(unmappable) => log_event(
             state,
@@ -1110,10 +1117,10 @@ pub fn fonts_status(state: State<'_, AppState>) -> crate::fonts_state::FontsStat
     state.fonts.status()
 }
 
-// Hands over the launch argument once: a page reload must not open it again.
+// Hands over the next waiting file once: a page reload must not open it again.
 #[tauri::command]
 pub fn take_pending_open_file(state: State<'_, AppState>) -> Option<GrantedFile> {
-    let path = state.pending_open.lock().unwrap().take()?;
+    let path = state.pending_open.take()?;
     Some(state.grants.grant(path, GrantKind::Open))
 }
 

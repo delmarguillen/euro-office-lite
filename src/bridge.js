@@ -592,6 +592,7 @@ var _UI_STRINGS = {
     documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
     recoveredDocuments: 'Recovered documents', recover: 'Recover', discard: 'Discard', discardAll: 'Discard all',
     recentFiles: 'Recent files', rememberRecent: 'Remember recent files', clearRecent: 'Clear',
+    settings: 'Settings', interfaceLanguage: 'Interface language', spellCheck: 'Spell check',
     noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
     openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.',
     openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.',
@@ -612,6 +613,8 @@ var _UI_STRINGS = {
     languageAdded: 'Installed as {lang}. Open a document to check its spelling.',
     languageAddedRestart: 'Installed as {lang}. Restart Euro-Office Lite to check its spelling: the spell checker loaded its languages when the first document opened.',
     languageExists: 'A {lang} dictionary is already installed. Replace it with the files you chose?',
+    languageReplace: 'Replace', languageKeep: 'Cancel',
+    languageBusy: 'Another Euro-Office Lite window is installing the {detail} dictionary. Wait for it to finish and try again.',
     languageNotAPair: 'Choose two files: one ending in .aff and one ending in .dic.',
     languageNamesDiffer: 'The two files are for different languages ({detail}). Choose an .aff and a .dic with the same name, for example es_ES.aff and es_ES.dic.',
     languageBadName: 'The file name "{detail}" is not a language code. Rename the files to a code such as fr_FR and try again.',
@@ -636,6 +639,7 @@ var _UI_STRINGS = {
     documents: 'Documentos', all: 'Todos', plainText: 'Texto plano', user: 'Usuario', language: 'Idioma',
     recoveredDocuments: 'Documentos recuperados', recover: 'Recuperar', discard: 'Descartar', discardAll: 'Descartar todo',
     recentFiles: 'Archivos recientes', rememberRecent: 'Recordar archivos recientes', clearRecent: 'Limpiar',
+    settings: 'Configuración', interfaceLanguage: 'Idioma de la interfaz', spellCheck: 'Corrector ortográfico', addLanguage: 'Añadir idioma del corrector…',
     noRecentFiles: 'Todavía no hay archivos recientes', openFailed: 'No se pudo abrir el archivo',
     openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.',
     openErrorMsg: 'No se pudo abrir el archivo. No es un documento válido o está dañado.',
@@ -651,6 +655,10 @@ var _UI_STRINGS = {
     noteSeparatorAlready: 'El separador de notas ya se había quitado de este documento.',
     noteSeparatorAlreadyPresent: 'Este documento ya tiene sus líneas separadoras de notas.',
     noteSeparatorFailed: 'No se pudieron cambiar las líneas separadoras de notas.',
+    addLanguageTitle: 'Añadir idioma',
+    languageExists: 'Ya hay un diccionario {lang} instalado. ¿Reemplazarlo por los archivos elegidos?',
+    languageReplace: 'Reemplazar', languageKeep: 'Cancelar',
+    languageBusy: 'Otra ventana de Euro-Office Lite está instalando el diccionario {detail}. Espere a que termine y vuelva a intentarlo.',
     locateLinkedFile: 'Localiza el archivo vinculado'
   },
   fr: {
@@ -669,6 +677,7 @@ var _UI_STRINGS = {
     documents: 'Documents', all: 'Tous', plainText: 'Texte brut', user: 'Utilisateur', language: 'Langue',
     recoveredDocuments: 'Documents récupérés', recover: 'Récupérer', discard: 'Abandonner', discardAll: 'Tout abandonner',
     recentFiles: 'Fichiers récents', rememberRecent: 'Mémoriser les fichiers récents', clearRecent: 'Effacer',
+    settings: 'Paramètres', interfaceLanguage: 'Langue de l\'interface', spellCheck: 'Vérification orthographique', addLanguage: 'Ajouter une langue de vérification…',
     noRecentFiles: 'Aucun fichier récent pour le moment', openFailed: 'Impossible d\'ouvrir le fichier',
     openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.',
     openErrorMsg: 'Impossible d\'ouvrir le fichier. Ce n\'est pas un document valide ou il est endommagé.',
@@ -701,6 +710,7 @@ var _UI_STRINGS = {
     documents: 'Dokumente', all: 'Alle', plainText: 'Nur Text', user: 'Benutzer', language: 'Sprache',
     recoveredDocuments: 'Wiederhergestellte Dokumente', recover: 'Wiederherstellen', discard: 'Verwerfen', discardAll: 'Alle verwerfen',
     recentFiles: 'Zuletzt verwendete Dateien', rememberRecent: 'Zuletzt verwendete Dateien merken', clearRecent: 'Leeren',
+    settings: 'Einstellungen', interfaceLanguage: 'Sprache der Benutzeroberfläche', spellCheck: 'Rechtschreibprüfung', addLanguage: 'Sprache für die Rechtschreibprüfung hinzufügen…',
     noRecentFiles: 'Noch keine zuletzt verwendeten Dateien', openFailed: 'Datei konnte nicht geöffnet werden',
     openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.',
     openErrorMsg: 'Die Datei konnte nicht geöffnet werden. Sie ist kein gültiges Dokument oder sie ist beschädigt.',
@@ -733,6 +743,7 @@ var _UI_STRINGS = {
     documents: 'Documenti', all: 'Tutti', plainText: 'Testo normale', user: 'Utente', language: 'Lingua',
     recoveredDocuments: 'Documenti recuperati', recover: 'Recupera', discard: 'Scarta', discardAll: 'Scarta tutto',
     recentFiles: 'File recenti', rememberRecent: 'Ricorda i file recenti', clearRecent: 'Cancella',
+    settings: 'Impostazioni', interfaceLanguage: 'Lingua dell\'interfaccia', spellCheck: 'Controllo ortografico', addLanguage: 'Aggiungi lingua di controllo ortografico…',
     noRecentFiles: 'Nessun file recente', openFailed: 'Impossibile aprire il file',
     openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.',
     openErrorMsg: 'Impossibile aprire il file. Non è un documento valido oppure è danneggiato.',
@@ -765,6 +776,7 @@ var _UI_STRINGS = {
     documents: 'Documentos', all: 'Todos', plainText: 'Texto simples', user: 'Usuário', language: 'Idioma',
     recoveredDocuments: 'Documentos recuperados', recover: 'Recuperar', discard: 'Descartar', discardAll: 'Descartar tudo',
     recentFiles: 'Arquivos recentes', rememberRecent: 'Lembrar arquivos recentes', clearRecent: 'Limpar',
+    settings: 'Configurações', interfaceLanguage: 'Idioma da interface', spellCheck: 'Verificação ortográfica', addLanguage: 'Adicionar idioma de verificação ortográfica…',
     noRecentFiles: 'Ainda não há arquivos recentes', openFailed: 'Não foi possível abrir o arquivo',
     openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.',
     openErrorMsg: 'Não foi possível abrir o arquivo. Não é um documento válido ou está danificado.',
@@ -797,6 +809,7 @@ var _UI_STRINGS = {
     documents: 'Документы', all: 'Все', plainText: 'Обычный текст', user: 'Пользователь', language: 'Язык',
     recoveredDocuments: 'Восстановленные документы', recover: 'Восстановить', discard: 'Отклонить', discardAll: 'Отклонить всё',
     recentFiles: 'Недавние файлы', rememberRecent: 'Запоминать недавние файлы', clearRecent: 'Очистить',
+    settings: 'Настройки', interfaceLanguage: 'Язык интерфейса', spellCheck: 'Проверка орфографии', addLanguage: 'Добавить язык проверки орфографии…',
     noRecentFiles: 'Недавних файлов пока нет', openFailed: 'Не удалось открыть файл',
     openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.',
     openErrorMsg: 'Не удалось открыть файл. Это не действительный документ или он повреждён.',
@@ -829,6 +842,7 @@ var _UI_STRINGS = {
     documents: 'Документи', all: 'Усі', plainText: 'Звичайний текст', user: 'Користувач', language: 'Мова',
     recoveredDocuments: 'Відновлені документи', recover: 'Відновити', discard: 'Відхилити', discardAll: 'Відхилити все',
     recentFiles: 'Нещодавні файли', rememberRecent: 'Запам\'ятовувати нещодавні файли', clearRecent: 'Очистити',
+    settings: 'Налаштування', interfaceLanguage: 'Мова інтерфейсу', spellCheck: 'Перевірка правопису', addLanguage: 'Додати мову перевірки правопису…',
     noRecentFiles: 'Нещодавніх файлів поки немає', openFailed: 'Не вдалося відкрити файл',
     openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.',
     openErrorMsg: 'Не вдалося відкрити файл. Це не дійсний документ або його пошкоджено.',
@@ -861,6 +875,7 @@ var _UI_STRINGS = {
     documents: '文档', all: '所有文件', plainText: '纯文本', user: '用户', language: '语言',
     recoveredDocuments: '已恢复的文档', recover: '恢复', discard: '丢弃', discardAll: '全部丢弃',
     recentFiles: '最近的文件', rememberRecent: '记住最近的文件', clearRecent: '清除',
+    settings: '设置', interfaceLanguage: '界面语言', spellCheck: '拼写检查', addLanguage: '添加拼写检查语言…',
     noRecentFiles: '暂无最近的文件', openFailed: '无法打开文件',
     openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。',
     openErrorMsg: '无法打开文件。它不是有效的文档，或者已损坏。',
@@ -893,6 +908,7 @@ var _UI_STRINGS = {
     documents: 'ドキュメント', all: 'すべて', plainText: 'プレーンテキスト', user: 'ユーザー', language: '言語',
     recoveredDocuments: '復元されたドキュメント', recover: '復元', discard: '破棄', discardAll: 'すべて破棄',
     recentFiles: '最近使用したファイル', rememberRecent: '最近使用したファイルを記憶する', clearRecent: 'クリア',
+    settings: '設定', interfaceLanguage: '表示言語', spellCheck: 'スペルチェック', addLanguage: 'スペルチェックの言語を追加…',
     noRecentFiles: '最近使用したファイルはありません', openFailed: 'ファイルを開けませんでした',
     openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。',
     openErrorMsg: 'ファイルを開けませんでした。有効なドキュメントではないか、破損しています。',
@@ -1058,6 +1074,7 @@ function _eoShowOpening(text) {
   var overlay = document.getElementById('opening');
   if (!overlay) return;
   document.getElementById('opening-text').textContent = text || '';
+  _eoCloseSettings(false);
   if (overlay.classList.contains('active')) return;
   overlay.classList.add('active');
   // The overlay already catches clicks; inert also stops a focused button
@@ -1073,11 +1090,25 @@ function _eoHideOpening() {
   overlay.classList.remove('active');
   var startScreen = document.getElementById('start-screen');
   if (startScreen) startScreen.inert = false;
+  _eoWakeOpeningWaiters();
 }
 
 function _eoIsOpening() {
   var overlay = document.getElementById('opening');
   return !!overlay && overlay.classList.contains('active');
+}
+
+// Resolved when the indicator goes away: the open in progress has finished,
+// with the editor mounted or with the start screen back.
+var _eoOpeningWaiters = [];
+function _eoOpeningEnded() {
+  return new Promise(function(resolve) { _eoOpeningWaiters.push(resolve); });
+}
+
+function _eoWakeOpeningWaiters() {
+  var waiters = _eoOpeningWaiters;
+  _eoOpeningWaiters = [];
+  waiters.forEach(function(resolve) { resolve(); });
 }
 
 // A function replacement, so a file name containing "$&" is inserted as is.
@@ -1694,7 +1725,8 @@ var _EO_IMPORT_MESSAGES = {
   'names-differ': 'languageNamesDiffer',
   'bad-name': 'languageBadName',
   'not-a-dictionary': 'languageNotADictionary',
-  'unknown-language': 'languageUnknown'
+  'unknown-language': 'languageUnknown',
+  'busy': 'languageBusy'
 };
 
 // sdkjs defines its language table (AscCommon.spellcheckGetLanguages) in this
@@ -1744,24 +1776,28 @@ function _eoFill(key, values) {
   return _t(key).replace(/\{(lang|detail)\}/g, function(_, name) { return values[name] || ''; });
 }
 
-async function _eoAddLanguage(replace) {
+// Over an installed language the backend asks "Replace?" itself, with a
+// native dialog; the bridge only sends the words, in the user's language.
+// "{lang}" stays in the text: the backend fills in the folder it chose.
+function _eoReplaceQuestion(title) {
+  return {
+    title: title,
+    text: _t('languageExists'),
+    replace: _t('languageReplace'),
+    cancel: _t('languageKeep')
+  };
+}
+
+async function _eoAddLanguage() {
   var dialog = window.__TAURI__.dialog;
   var title = _t('addLanguageTitle');
   var known = await _eoKnownLanguages();
   var lang;
   try {
-    lang = await invoke('import_dictionary', { known: known, replace: !!replace });
+    lang = await invoke('import_dictionary', { known: known, question: _eoReplaceQuestion(title) });
   } catch (e) {
     var error = _eoImportError(e);
     window._eoLog('[SPELL] import failed: ' + error.code + ': ' + error.detail);
-    if (error.code === 'exists') {
-      var yes = await dialog.confirm(_eoFill('languageExists', { lang: error.detail }),
-        { title: title, kind: 'warning' });
-      if (yes) return _eoAddLanguage(true);
-      // The backend keeps the chosen pair until told: drop it.
-      await invoke('cancel_dictionary_import');
-      return null;
-    }
     var key = _EO_IMPORT_MESSAGES[error.code] || 'languageFailed';
     await dialog.message(_eoFill(key, { detail: error.detail }), { title: title, kind: 'error' });
     return null;
@@ -1777,6 +1813,97 @@ async function _eoAddLanguage(replace) {
   return lang;
 }
 window._eoAddLanguage = _eoAddLanguage;
+
+// ── Start screen settings panel ──
+// The gear in the top right corner opens a small panel with the interface
+// language, "Add spell check language…" and the recent files switch.
+
+function _eoSettingsParts() {
+  var toggle = document.getElementById('settings-toggle');
+  var panel = document.getElementById('settings-panel');
+  if (!toggle || !panel) return null;
+  return { toggle: toggle, panel: panel };
+}
+
+function _eoSettingsIsOpen() {
+  var parts = _eoSettingsParts();
+  return !!parts && !parts.panel.hidden;
+}
+
+function _eoOpenSettings() {
+  var parts = _eoSettingsParts();
+  if (!parts) return;
+  parts.panel.hidden = false;
+  parts.toggle.setAttribute('aria-expanded', 'true');
+  var first = parts.panel.querySelector('select, button, input');
+  if (first) first.focus();
+}
+
+// returnFocus: false when the start screen is going away (a document opens).
+function _eoCloseSettings(returnFocus) {
+  var parts = _eoSettingsParts();
+  if (!parts || parts.panel.hidden) return;
+  parts.panel.hidden = true;
+  parts.toggle.setAttribute('aria-expanded', 'false');
+  if (returnFocus) parts.toggle.focus();
+}
+
+function _eoOnSettingsToggleClick() {
+  if (_eoSettingsIsOpen()) {
+    _eoCloseSettings(true);
+    return;
+  }
+  _eoOpenSettings();
+}
+
+function _eoOnSettingsKeydown(event) {
+  if (event.key !== 'Escape') return;
+  if (!_eoSettingsIsOpen()) return;
+  event.preventDefault();
+  _eoCloseSettings(true);
+}
+
+function _eoOnSettingsOutsideClick(event) {
+  var parts = _eoSettingsParts();
+  if (!parts || parts.panel.hidden) return;
+  if (parts.panel.contains(event.target)) return;
+  if (parts.toggle.contains(event.target)) return;
+  // Focus goes back to the gear only when the click left it nowhere useful:
+  // a click on another button keeps the focus on that button.
+  var focused = document.activeElement;
+  var lost = !focused || focused === document.body || parts.panel.contains(focused);
+  _eoCloseSettings(lost);
+}
+
+// options.onLanguageChange: runs after the UI language is stored.
+// options.onRecentChange: runs after the recent files switch is stored.
+function _eoInitStartSettings(options) {
+  var parts = _eoSettingsParts();
+  if (!parts) return;
+  options = options || {};
+
+  parts.toggle.addEventListener('click', _eoOnSettingsToggleClick);
+  document.addEventListener('keydown', _eoOnSettingsKeydown);
+  document.addEventListener('click', _eoOnSettingsOutsideClick);
+
+  document.getElementById('lang-select').addEventListener('change', function() {
+    window._eoSetLang(this.value);
+    if (options.onLanguageChange) options.onLanguageChange();
+  });
+
+  document.getElementById('add-language').addEventListener('click', function() {
+    window._eoAddLanguage();
+  });
+
+  document.getElementById('recent-remember').addEventListener('change', function() {
+    var done = options.onRecentChange || function() {};
+    invoke('set_recent_files_enabled', { enabled: this.checked })
+      .then(done)
+      .catch(function(e) { window._eoLog('[EO] Recent files toggle failed: ' + (e.message || e)); });
+  });
+}
+window._eoInitStartSettings = _eoInitStartSettings;
+window._eoCloseSettings = _eoCloseSettings;
 
 // The backend starts its error with this when it may not write the file: a
 // read-only file or a folder the user cannot write to.
@@ -1885,6 +2012,8 @@ function _loadEditorBin(b64data, fileName, options) {
     }
 
     if (editorDoc) {
+      if (_isMac) SlideshowEscGuard.install(editorDoc);
+
       if (isLinux) {
         // Must register before the Ctrl+V interceptor below: same document and
         // phase, so listener order is registration order, and the interceptor's
@@ -2731,6 +2860,45 @@ function _ensureCoreProps(ref) {
   }
 }
 
+// macOS: sdkjs handles Esc in the slideshow without preventDefault, so the key
+// also reaches AppKit, whose cancelOperation: toggles native fullscreen while
+// the backend leaves it too; the two transitions cross and the window stays
+// fullscreen. Preventing only the default keeps AppKit out: the event still
+// reaches sdkjs, which ends the slideshow or drops the pen.
+var SlideshowEscGuard = (function() {
+  var active = false;
+
+  function onKeyDown(e) {
+    if (!active) return;
+    if (e.keyCode !== 27) return;
+    e.preventDefault();
+  }
+
+  // Called on every editor load; the document flag keeps it to one listener.
+  function install(doc) {
+    if (!doc || doc.__eoSlideshowEscGuardInstalled) return;
+    doc.addEventListener('keydown', onKeyDown, true);
+    doc.__eoSlideshowEscGuardInstalled = true;
+  }
+
+  // A system exit (green button, Ctrl+Cmd+F) leaves it on until the slideshow
+  // ends; Esc then only ends the slideshow, which turns it off.
+  function setActive(on) {
+    active = on;
+  }
+
+  return { install: install, setActive: setActive };
+})();
+
+// The window has no fullscreen permission in the webview; the backend command
+// sets it and restores the earlier maximized state on exit.
+function _eoSetPresentationFullscreen(on) {
+  SlideshowEscGuard.setActive(on);
+  invoke('set_presentation_fullscreen', { on: on }).catch(function(e) {
+    _eoLog('[presentation] fullscreen ' + on + ' failed:', e);
+  });
+}
+
 window.AscDesktopEditor = {
   IsLocalFile: () => true,
   GetEditorId: () => 'euro-office-lite',
@@ -3408,15 +3576,10 @@ window.AscDesktopEditor = {
   isBlockchainSupport: () => false,
   SpellCheck: function(json) { SpellCheckBridge.check(json); },
   SetFullscreen: function(fullscreen) {
-    var win = window.__TAURI__.window.getCurrentWindow();
-    var fs = !!fullscreen;
-    win.setFullscreen(fs).catch(function(){});
-    win.setAlwaysOnTop(fs).catch(function(){});
+    _eoSetPresentationFullscreen(!!fullscreen);
   },
   endReporter: function() {
-    var win = window.__TAURI__.window.getCurrentWindow();
-    win.setFullscreen(false).catch(function(){});
-    win.setAlwaysOnTop(false).catch(function(){});
+    _eoSetPresentationFullscreen(false);
   },
   // The slide editor relays pen strokes and presenter commands to a separate
   // presenter window through this call. There is no such window here, so
@@ -3527,17 +3690,57 @@ async function _eoOpenGranted(file) {
   }
 }
 
+// The files waiting in the backend: the launch argument, and on macOS the
+// files the Finder hands over (pending_open.rs). One drain at a time takes
+// them one by one, and LocalFileOpen decides between this window and a new
+// one. An open in progress is waited for, so no file is dropped.
+var _eoDraining = false;
+var _eoDrainAgain = false;
+async function _eoDrainPendingOpens() {
+  if (_eoDraining) {
+    _eoDrainAgain = true;
+    return;
+  }
+  _eoDraining = true;
+  try {
+    do {
+      _eoDrainAgain = false;
+      while (await _eoOpenNextPending()) {}
+    } while (_eoDrainAgain);
+  } catch(e) {
+    window._eoLog('[EO] open-file: pending file unavailable: ' + (e.message || e));
+  } finally {
+    _eoDraining = false;
+  }
+}
+
+// False when nothing was waiting.
+async function _eoOpenNextPending() {
+  var file = await invoke('take_pending_open_file');
+  if (!file) return false;
+  while (_eoIsOpening()) {
+    window._eoLog('[OPEN] waiting for the open in progress: ' + file.name);
+    await _eoOpeningEnded();
+  }
+  await window.AscDesktopEditor.LocalFileOpen(file);
+  return true;
+}
+
 // An event emitted by the backend at startup is lost if no listener exists yet,
-// so the page asks for the launch argument instead, once DOMContentLoaded
-// guarantees the later scripts (and window._openEditor) have run.
+// so the page drains the queue once DOMContentLoaded guarantees the later
+// scripts (and window._eoOpenPath) have run. Events before that only add to
+// the queue that this first drain collects.
+var _eoPageReady = false;
 function _eoTakePendingOpenFile() {
   _eoWaitForFonts();
-  invoke('take_pending_open_file').then(function(file) {
-    if (file) return _eoOpenGranted(file);
-  }).catch(function(e) {
-    window._eoLog('[EO] open-file: pending file unavailable: ' + (e.message || e));
-  });
+  _eoPageReady = true;
+  _eoDrainPendingOpens();
 }
+
+listen('pending-open-file', function() {
+  if (!_eoPageReady) return;
+  _eoDrainPendingOpens();
+});
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', _eoTakePendingOpenFile);
 } else {

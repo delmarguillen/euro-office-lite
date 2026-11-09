@@ -60,15 +60,26 @@
     }
     @keyframes opening-spin { to { transform: rotate(360deg); } }
 
-    .lang-selector {
-      position: absolute;
-      top: 1rem;
-      right: 1rem;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
+    .settings { position: absolute; top: 1rem; right: 1rem; z-index: 10; text-align: left; }
+    .settings-toggle {
+      display: flex; align-items: center; justify-content: center;
+      width: 2.1rem; height: 2.1rem; padding: 0; border-radius: 6px;
+      background: #313244; border: 1px solid #45475a; color: #cdd6f4; cursor: pointer;
     }
-    .lang-selector select {
+    .settings-toggle:hover { border-color: #6c7086; }
+    .settings-toggle[aria-expanded="true"] { border-color: #89b4fa; }
+    .settings-toggle svg { width: 1.15rem; height: 1.15rem; }
+    .settings-panel {
+      position: absolute; top: calc(100% + 0.4rem); right: 0;
+      width: min(260px, 88vw); padding: 0.4rem 0.8rem;
+      background: #1e1e2e; border: 1px solid #45475a; border-radius: 8px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+    }
+    .settings-section { padding: 0.55rem 0; }
+    .settings-section + .settings-section { border-top: 1px solid #313244; }
+    .settings-label { display: block; font-size: 0.75rem; color: #a6adc8; margin-bottom: 0.4rem; }
+    .settings-panel select {
+      width: 100%;
       background: #313244;
       border: 1px solid #45475a;
       color: #cdd6f4;
@@ -76,7 +87,6 @@
       border-radius: 6px;
       font-size: 0.85rem;
       cursor: pointer;
-      max-width: 200px;
       -webkit-appearance: none;
       appearance: none;
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23cdd6f4' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
@@ -84,10 +94,14 @@
       background-position: right 0.5rem center;
       padding-right: 1.5rem;
     }
-    .lang-selector select option { background: #313244; color: #cdd6f4; }
-    .lang-selector select:hover { border-color: #6c7086; }
-    .lang-selector select:focus { outline: none; border-color: #89b4fa; }
-    .lang-selector label { font-size: 0.8rem; color: #a6adc8; }
+    .settings-panel select option { background: #313244; color: #cdd6f4; }
+    .settings-panel select:hover { border-color: #6c7086; }
+    .settings-panel select:focus { outline: none; border-color: #89b4fa; }
+    .settings-panel .recent-clear { padding-left: 0; }
+    .settings-panel .recent-toggle { margin-top: 0; }
+    .settings-toggle:focus-visible,
+    .settings-panel button:focus-visible,
+    .settings-panel input:focus-visible { outline: 2px solid #89b4fa; outline-offset: 2px; }
 
     /* Same look as the recent list below, minus the clickable row: these rows
        carry two buttons of their own, so the row itself is not a button. */
@@ -148,15 +162,40 @@
       font-size: 0.8rem; color: #a6adc8; cursor: pointer;
     }
     .recent-toggle input { accent-color: #89b4fa; cursor: pointer; }
-    .spell-languages { margin-top: 0.75rem; }
     [hidden] { display: none !important; }
   </style>
 </head>
 <body>
   <div id="start-screen" class="start">
-    <div class="lang-selector">
-      <label for="lang-select" id="lang-label"></label>
-      <select id="lang-select"></select>
+    <div class="settings">
+      <button type="button" class="settings-toggle" id="settings-toggle"
+              aria-expanded="false" aria-controls="settings-panel"
+              data-i18n-label="settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+      <div class="settings-panel" id="settings-panel" role="dialog"
+           data-i18n-label="settings" aria-label="Settings" hidden>
+        <div class="settings-section">
+          <label class="settings-label" for="lang-select" data-i18n="interfaceLanguage">Interface language</label>
+          <select id="lang-select"></select>
+        </div>
+        <div class="settings-section">
+          <span class="settings-label" data-i18n="spellCheck">Spell check</span>
+          <button type="button" class="recent-clear" id="add-language"
+                  data-i18n="addLanguage">Add spell check language…</button>
+        </div>
+        <div class="settings-section">
+          <span class="settings-label" data-i18n="recentFiles">Recent files</span>
+          <label class="recent-toggle">
+            <input type="checkbox" id="recent-remember">
+            <span data-i18n="rememberRecent">Remember recent files</span>
+          </label>
+        </div>
+      </div>
     </div>
     <div>
       <h1>Euro-Office Lite</h1>
@@ -198,15 +237,6 @@
         </div>
         <ul class="recent-list" id="recent-list"></ul>
         <p class="recent-empty" id="recent-empty" data-i18n="noRecentFiles">No recent files yet</p>
-        <label class="recent-toggle">
-          <input type="checkbox" id="recent-remember">
-          <span data-i18n="rememberRecent">Remember recent files</span>
-        </label>
-      </div>
-
-      <div class="spell-languages">
-        <button type="button" class="recent-clear" id="add-language"
-                data-i18n="addLanguage">Add spell check language…</button>
       </div>
     </div>
   </div>

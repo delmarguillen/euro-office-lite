@@ -51,7 +51,7 @@
     "allow-recovery-discard",
     "allow-list-user-dictionaries",
     "allow-import-dictionary",
-    "allow-cancel-dictionary-import",
+    "allow-set-presentation-fullscreen",
     "allow-read-markdown",
     "allow-new-markdown",
     "allow-export-markdown-html",

@@ -44,7 +44,7 @@ const APP_COMMANDS: &[&str] = &[
     "recovery_discard",
     "list_user_dictionaries",
     "import_dictionary",
-    "cancel_dictionary_import",
+    "set_presentation_fullscreen",
     "read_markdown",
     "new_markdown",
     "export_markdown_html",

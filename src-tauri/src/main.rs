@@ -14,6 +14,8 @@ mod markdown;
 mod new_window;
 mod note_separator;
 mod path_grants;
+mod pending_open;
+mod presentation;
 mod protocol_limits;
 mod recent;
 mod recovery;
@@ -392,7 +394,6 @@ fn main() {
     let fonts = std::sync::Arc::new(fonts_state::FontsState::pending());
 
     builder
-        .manage(dictionary_import::PendingImport::default())
         .manage(AppState {
             current_file: Mutex::new(None),
             temp_dir,
@@ -404,7 +405,7 @@ fn main() {
             modified: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
-            pending_open: Mutex::new(file_to_open),
+            pending_open: pending_open::PendingOpens::with_launch_file(file_to_open),
             grants: path_grants::PathGrants::default(),
             text_options: Mutex::new(None),
             last_print_pdf: Mutex::new(None),
@@ -412,6 +413,8 @@ fn main() {
             save_suggestion: Mutex::new(None),
             title_bar_args: launch_args::title_bar_options(&launch),
         })
+        .manage(presentation::PresentationState::default())
+        .manage(presentation::FullscreenFocus::default())
         .invoke_handler(tauri::generate_handler![
             file_ops::open_file,
             file_ops::open_pdf,
@@ -456,7 +459,7 @@ fn main() {
             recovery::recovery_discard,
             dictionaries::list_user_dictionaries,
             dictionary_import::import_dictionary,
-            dictionary_import::cancel_dictionary_import,
+            presentation::set_presentation_fullscreen,
             markdown::read_markdown,
             markdown::new_markdown,
             markdown::export_markdown_html,
@@ -890,8 +893,22 @@ fn main() {
                 }
 
                 let h = handle.clone();
+                let presented = window.clone();
                 window.on_window_event(move |event| {
+                    let presentation = h.state::<presentation::PresentationState>();
+                    if let tauri::WindowEvent::Resized(_) = event {
+                        presentation::on_resized(&presented, &presentation);
+                        #[cfg(target_os = "macos")]
+                        presentation::refocus_after_fullscreen(
+                            &presented,
+                            &h.state::<presentation::FullscreenFocus>(),
+                        );
+                    }
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        if presentation::hold_close_for_restore(&presented, &presentation) {
+                            api.prevent_close();
+                            return;
+                        }
                         let state = h.state::<AppState>();
                         let modified = *state.modified.lock().unwrap();
                         if modified {
@@ -910,12 +927,16 @@ fn main() {
         // unmodified document never reaches force_close (Tauri just closes the
         // window), and neither path may leave a recovery folder behind. A
         // killed process never runs this, which is the case the folder is for.
-        .run(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::Exit => {
                 let state = app_handle.state::<AppState>();
                 recovery::end_session(&state, true);
                 state.instance.end();
             }
+            // The Finder hands files over here, not as launch arguments.
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+            tauri::RunEvent::Opened { urls } => pending_open::on_opened(app_handle, urls),
+            _ => {}
         });
 }
 
@@ -1178,6 +1199,15 @@ mod capability_tests {
     #[test]
     fn the_webview_has_no_shell_permission() {
         assert!(!permissions().iter().any(|p| p.starts_with("shell:")));
+    }
+
+    // Fullscreen goes through set_presentation_fullscreen (presentation.rs).
+    #[test]
+    fn the_webview_has_no_window_write_permission() {
+        let permissions = permissions();
+        for refused in ["core:window:allow-set-fullscreen", "core:window:allow-set-always-on-top"] {
+            assert!(!permissions.iter().any(|p| p == refused), "{refused}");
+        }
     }
 }
 

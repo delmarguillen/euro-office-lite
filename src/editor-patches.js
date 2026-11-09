@@ -1113,6 +1113,7 @@
         }
       }
       window.AscDesktopEditor._currentDocType = docType;
+      window._eoCloseSettings(false);
       startScreen.classList.add('hidden');
       document.getElementById('placeholder').classList.add('active');
       window._eoHideOpening();
@@ -1494,16 +1495,6 @@
         .catch(function(e) { _log('[EO] Recent files clear failed: ' + (e.message || e)); });
     });
 
-    document.getElementById('add-language').addEventListener('click', function() {
-      window._eoAddLanguage(false);
-    });
-
-    document.getElementById('recent-remember').addEventListener('change', function() {
-      window.__TAURI__.core.invoke('set_recent_files_enabled', { enabled: this.checked })
-        .then(_refreshRecentFiles)
-        .catch(function(e) { _log('[EO] Recent files toggle failed: ' + (e.message || e)); });
-    });
-
     _refreshRecentFiles();
     // Skipped while a recovery is on its way to the editor: the start screen
     // is leaving and that folder is this process's session now.
@@ -1515,8 +1506,9 @@
       document.querySelectorAll('[data-i18n]').forEach(function(el) {
         el.textContent = _t(el.dataset.i18n);
       });
-      var langLabel = document.getElementById('lang-label');
-      if (langLabel) langLabel.textContent = _t('language');
+      document.querySelectorAll('[data-i18n-label]').forEach(function(el) {
+        el.setAttribute('aria-label', _t(el.dataset.i18nLabel));
+      });
     }
 
     (function initLangSelector() {
@@ -1531,11 +1523,13 @@
         select.appendChild(opt);
       }
 
-      select.addEventListener('change', function() {
-        window._eoSetLang(select.value);
-        _updateStartScreenStrings();
-        // Dates in the list are formatted for the UI language.
-        _refreshRecentFiles();
+      window._eoInitStartSettings({
+        onLanguageChange: function() {
+          _updateStartScreenStrings();
+          // Dates in the list are formatted for the UI language.
+          _refreshRecentFiles();
+        },
+        onRecentChange: _refreshRecentFiles
       });
 
       _updateStartScreenStrings();
