@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 use tauri::State;
 
 use crate::file_ops::{log_event, AppState};
+use crate::launch_args::NEW_WINDOW;
 use crate::path_grants::{GrantKind, PathGrants};
 
 // What the bridge gets back when nothing went wrong.
@@ -22,7 +23,8 @@ pub const OPEN_ELSEWHERE: &str = "open-elsewhere";
 #[derive(Debug, PartialEq, Eq)]
 pub struct NewWindowLaunch {
     pub document: PathBuf,
-    // Everything after the program name: the title bar options, then the path.
+    // Everything after the program name: the title bar options, NEW_WINDOW,
+    // then the path.
     pub args: Vec<OsString>,
 }
 
@@ -39,6 +41,7 @@ pub fn new_window_launch(
         return Err("The file to open in a new window has no absolute path".to_string());
     }
     let mut args: Vec<OsString> = title_bar_args.iter().map(OsString::from).collect();
+    args.push(OsString::from(NEW_WINDOW));
     args.push(document.clone().into_os_string());
     Ok(NewWindowLaunch { document, args })
 }
@@ -134,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn an_open_token_gives_the_options_then_the_absolute_path() {
+    fn an_open_token_gives_the_options_new_window_then_the_absolute_path() {
         let grants = PathGrants::default();
         let file = grants.grant(absolute_document(), GrantKind::Open);
         let launch =
@@ -145,17 +148,21 @@ mod tests {
             vec![
                 OsString::from(SYSTEM_TITLE_BAR),
                 OsString::from(NO_TITLE_BAR),
+                OsString::from(NEW_WINDOW),
                 absolute_document().into_os_string(),
             ]
         );
     }
 
     #[test]
-    fn without_title_bar_options_the_path_is_the_only_argument() {
+    fn without_title_bar_options_new_window_and_the_path_are_the_arguments() {
         let grants = PathGrants::default();
         let file = grants.grant(absolute_document(), GrantKind::Open);
         let launch = new_window_launch(&grants, &file.token, &[]).unwrap();
-        assert_eq!(launch.args, vec![absolute_document().into_os_string()]);
+        assert_eq!(
+            launch.args,
+            vec![OsString::from(NEW_WINDOW), absolute_document().into_os_string()]
+        );
     }
 
     #[test]
