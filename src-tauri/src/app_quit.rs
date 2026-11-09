@@ -33,7 +33,7 @@ pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     if !is_quit_item(event.id().as_ref()) {
         return;
     }
-    let modified = *app.state::<AppState>().modified.lock().unwrap();
+    let modified = has_unsaved_changes(&app.state::<AppState>());
     match quit_action(modified) {
         QuitAction::Confirm => {
             let _ = app.emit("confirm-close", ());
@@ -42,10 +42,27 @@ pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     }
 }
 
+// What every exit asks: closing the window, Quit, the slideshow's Quit and
+// on_exit. sdkjs reports the document as saved when a save begins, so a save
+// still running counts as unsaved; undoing back to the saved state, with no
+// save running, does not.
+pub fn has_unsaved_changes(state: &AppState) -> bool {
+    let modified = *state.modified.lock().unwrap();
+    let save_pending = *state.save_pending.lock().unwrap();
+    modified || save_pending
+}
+
+// A save command wrote the document: nothing is unsaved any more.
+pub fn mark_document_saved(state: &AppState) {
+    *state.modified.lock().unwrap() = false;
+    *state.save_pending.lock().unwrap() = false;
+}
+
 // An exit the user confirmed: there were no changes, or they chose to discard
-// them. Clearing the flag is what tells on_exit to delete the recovery folder.
+// them. Clearing the flags is what tells on_exit to delete the recovery folder.
 pub fn mark_exit_confirmed(state: &AppState) {
     *state.modified.lock().unwrap() = false;
+    *state.save_pending.lock().unwrap() = false;
 }
 
 // The only exit(0) of the app: every confirmed exit goes through here.
@@ -73,7 +90,7 @@ pub fn remove_instance_on_exit(recovery_discarded: bool) -> bool {
 // RunEvent::Exit: the one point every exit that runs the event loop's end
 // passes through. A killed process never gets here; its folder stays too.
 pub fn on_exit(state: &AppState) {
-    let modified = *state.modified.lock().unwrap();
+    let modified = has_unsaved_changes(state);
     let discard = discard_recovery_on_exit(modified);
     crate::recovery::end_session(state, discard);
     if !remove_instance_on_exit(discard) {
@@ -289,6 +306,76 @@ mod tests {
 
         assert!(copied >= 1);
         assert!(next.temp_dir.join("media").join(IMAGE_NAME).exists());
+    }
+
+    // The order sdkjs follows: a change, then the "saved" report as the save
+    // begins, while the save is still running (set_save_pending).
+    fn begin_save_after_a_change(state: &AppState) {
+        *state.modified.lock().unwrap() = true;
+        *state.save_pending.lock().unwrap() = true;
+        *state.modified.lock().unwrap() = false;
+    }
+
+    #[test]
+    fn an_exit_during_a_save_keeps_the_recovery_and_instance_folders() {
+        let root = scratch("during-save");
+        let state = test_state(&root);
+        let dir = live_session(&state, &root.join("recover"));
+        let image = insert_image(&state);
+        begin_save_after_a_change(&state);
+
+        on_exit(&state);
+
+        assert!(dir.exists());
+        assert!(image.exists());
+    }
+
+    #[test]
+    fn a_save_running_asks_before_quitting() {
+        let state = test_state(&scratch("during-save-quit"));
+        begin_save_after_a_change(&state);
+        assert_eq!(
+            quit_action(has_unsaved_changes(&state)),
+            QuitAction::Confirm
+        );
+    }
+
+    #[test]
+    fn an_exit_after_a_finished_save_deletes_the_recovery_and_instance_folders() {
+        let root = scratch("after-save");
+        let state = test_state(&root);
+        let dir = live_session(&state, &root.join("recover"));
+        insert_image(&state);
+        begin_save_after_a_change(&state);
+
+        mark_document_saved(&state);
+        on_exit(&state);
+
+        assert!(!dir.exists());
+        assert!(!state.instance.dir.exists());
+    }
+
+    #[test]
+    fn an_exit_confirmed_during_a_save_deletes_the_recovery_and_instance_folders() {
+        let root = scratch("confirmed-during-save");
+        let state = test_state(&root);
+        let dir = live_session(&state, &root.join("recover"));
+        insert_image(&state);
+        begin_save_after_a_change(&state);
+
+        mark_exit_confirmed(&state);
+        on_exit(&state);
+
+        assert!(!dir.exists());
+        assert!(!state.instance.dir.exists());
+    }
+
+    #[test]
+    fn undoing_back_to_the_saved_state_leaves_nothing_unsaved() {
+        let state = test_state(&scratch("undo"));
+        *state.modified.lock().unwrap() = true;
+        *state.modified.lock().unwrap() = false;
+        assert!(!has_unsaved_changes(&state));
     }
 
     #[test]

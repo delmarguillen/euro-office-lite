@@ -148,8 +148,7 @@ impl PresentationWindow for WebviewWindow {
 
     fn is_modified(&self) -> bool {
         let state = self.state::<crate::file_ops::AppState>();
-        let modified = *state.modified.lock().unwrap();
-        modified
+        crate::app_quit::has_unsaved_changes(&state)
     }
 
     fn confirm_close(&self) {
