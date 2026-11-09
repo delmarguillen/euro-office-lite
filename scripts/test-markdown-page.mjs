@@ -95,7 +95,10 @@ function installFakeTauri(fake) {
     current_document: () => (fake.isNew || fake.recoverId ? null : { token: 'tok-open', name: fake.name }),
     pick_document: () => window.__pickDocument || null,
     open_in_new_window: () => fake.newWindow || 'opened',
+    take_pending_open_file: () => window.__pendingOpens.shift() || null,
   };
+  // The backend's PendingOpens queue (pending_open.rs).
+  window.__pendingOpens = (fake.pendingOpens || []).slice();
   window.__TAURI__ = {
     core: {
       invoke: (command, args) => {
@@ -422,6 +425,56 @@ for (const name of ['other.md', 'report.docx']) {
   check(results, `Ctrl+O with ${name} keeps this document`,
     page.url().endsWith('/markdown/markdown.html') && !names.includes('dialog.confirm') &&
     !names.includes('recovery_end') && !names.includes('close_document'), names.join(' '));
+  await context.close();
+}
+
+// Files the Finder hands over while this page is shown (pending-open-file):
+// each one goes to open_in_new_window and the queue ends empty.
+async function finderHandsOver(page, files) {
+  await page.evaluate((queued) => {
+    window.__pendingOpens.push(...queued);
+    for (const handler of window.__listeners['pending-open-file'] || []) handler();
+  }, files);
+  await page.waitForTimeout(300);
+}
+
+const FINDER_FILES = [{ token: 'tok-finder-1', name: 'a.docx' }, { token: 'tok-finder-2', name: 'b.md' }];
+
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('one\n') });
+  await finderHandsOver(page, FINDER_FILES);
+  const opened = (await calls()).filter((call) => call.command === 'open_in_new_window').map((call) => call.args.token);
+  check(results, 'two files from the Finder ask for two new windows', opened.join(' ') === 'tok-finder-1 tok-finder-2', opened.join(' '));
+  check(results, 'the Finder queue ends empty', (await page.evaluate(() => window.__pendingOpens.length)) === 0);
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('one\n') });
+  await finderHandsOver(page, []);
+  const names = (await calls()).map((call) => call.command);
+  check(results, 'an empty Finder queue is read and asks for no window',
+    names.includes('take_pending_open_file') && !names.includes('open_in_new_window'), names.join(' '));
+  await context.close();
+}
+{
+  const { context, page, calls, preview } = await openPage({ name: 'notes.md', data: utf8('# Kept\n'), newWindow: 'open-elsewhere' });
+  await finderHandsOver(page, FINDER_FILES);
+  const all = await calls();
+  const opened = all.filter((call) => call.command === 'open_in_new_window');
+  const warnings = all.filter((call) => call.command === 'dialog.message' && call.args.options.kind === 'warning');
+  check(results, 'files open in another window: each is tried and warned about', opened.length === 2 && warnings.length === 2,
+    opened.length + ' opens, ' + warnings.length + ' warnings');
+  check(results, 'files open in another window leave this page as it was',
+    page.url().endsWith('/markdown/markdown.html') && (await preview()).includes('Kept') &&
+    (await page.evaluate(() => window.__pendingOpens.length)) === 0);
+  await context.close();
+}
+{
+  // Queued before the page listens: the event for them is gone.
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('one\n'), pendingOpens: FINDER_FILES });
+  await page.waitForTimeout(300);
+  const opened = (await calls()).filter((call) => call.command === 'open_in_new_window').map((call) => call.args.token);
+  check(results, 'files queued before the page loaded open once it has', opened.join(' ') === 'tok-finder-1 tok-finder-2', opened.join(' '));
   await context.close();
 }
 

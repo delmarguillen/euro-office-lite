@@ -401,6 +401,9 @@
 
   // ── Edit, save, close ──
   var editing = false;
+  // Set once the page heads back to the start screen, whose bridge.js takes
+  // the files still waiting in pending_open.rs.
+  var leaving = false;
 
   async function setEditing(on) {
     editing = on;
@@ -472,6 +475,7 @@
   }
 
   async function leaveToStart() {
+    leaving = true;
     await invoke('set_document_modified', { modified: false }).catch(function() {});
     // As bridge.js's _forceReload: the process outlives the page, and without
     // this the other windows would still be told the file is open here.
@@ -521,6 +525,40 @@
       return;
     }
     if (isOpenElsewhere(result)) await showOpenFailed(result);
+  }
+
+  // ── Files the Finder hands over (pending_open.rs) ──
+  // bridge.js opens them on the other pages. Here each one opens in a new
+  // window, as Ctrl+O does, and this document stays. One drain at a time;
+  // an event during a drain makes it read the queue again.
+  var draining = false;
+  var drainAgain = false;
+
+  async function drainPendingOpens() {
+    if (draining) {
+      drainAgain = true;
+      return;
+    }
+    draining = true;
+    try {
+      do {
+        drainAgain = false;
+        while (await openNextPending()) {}
+      } while (drainAgain);
+    } catch (error) {
+      log('pending file unavailable: ' + errorText(error));
+    } finally {
+      draining = false;
+    }
+  }
+
+  // False when nothing was waiting or the page is leaving.
+  async function openNextPending() {
+    if (leaving) return false;
+    var file = await invoke('take_pending_open_file');
+    if (!file) return false;
+    await openInNewWindow(file);
+    return true;
   }
 
   // Ctrl+S, Ctrl+Shift+S, Ctrl+O and Ctrl+W, wherever the focus is: this
@@ -772,5 +810,9 @@
   document.getElementById('md-close').addEventListener('click', closeDocument);
   document.getElementById('md-export').addEventListener('click', exportHtml);
 
-  start();
+  tauri.event.listen('pending-open-file', drainPendingOpens);
+
+  // The event for a file queued before this page listened is gone: the
+  // queue is read once the page has started.
+  start().then(drainPendingOpens);
 })();
