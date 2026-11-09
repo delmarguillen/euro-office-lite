@@ -912,12 +912,13 @@ const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
 // A container format must start like one; x2t would otherwise pick the format
 // from the content. OOXML is a ZIP, or a CFB when it has a password; xlsb is
-// always a ZIP. ODF is always a ZIP, flat ODF an XML document. Word 97-2003,
-// Excel 97-2003 and PowerPoint 97-2003 are CFB; the legacy extensions also
-// take the other content x2t converts under them: see is_legacy_doc,
-// is_legacy_xls and is_legacy_ppt. HTML is never accepted, because x2t picks
-// the format from the content. An .rtf starts like one, after an optional BOM
-// and blank space. Other extensions (txt, csv...) are left to x2t.
+// always a ZIP. ODF is always a ZIP, flat ODF an XML document whose root is
+// office:document. Word 97-2003, Excel 97-2003 and PowerPoint 97-2003 are
+// CFB; the legacy extensions also take the other content x2t converts under
+// them: see is_legacy_doc, is_legacy_xls and is_legacy_ppt. HTML is never
+// accepted, because x2t picks the format from the content. An .rtf starts
+// like one, after an optional BOM and blank space. Other extensions (txt,
+// csv...) are left to x2t.
 pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return true;
@@ -934,7 +935,7 @@ pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
         "doc" => is_legacy_doc(head),
         "xls" => is_legacy_xls(head),
         "ppt" => is_legacy_ppt(head),
-        "fodt" | "fods" | "fodp" => starts_with_xml_declaration(head),
+        "fodt" | "fods" | "fodp" => is_flat_odf(head),
         _ => true,
     }
 }
@@ -964,6 +965,8 @@ fn is_legacy_ppt(head: &[u8]) -> bool {
 
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 const XML_DECLARATION: &[u8] = b"<?xml";
+const XML_DECLARATION_END: &[u8] = b"?>";
+const FLAT_ODF_ROOT: &[u8] = b"<office:document";
 const RTF_START: &[u8] = b"{\\rtf";
 const SPREADSHEET_ML_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:office:spreadsheet";
 const SPREADSHEET_ML_PROGID: &[u8] = b"progid=\"Excel.Sheet\"";
@@ -982,6 +985,35 @@ fn skip_bom_and_space(head: &[u8]) -> &[u8] {
 // then "<?xml".
 fn starts_with_xml_declaration(head: &[u8]) -> bool {
     skip_bom_and_space(head).starts_with(XML_DECLARATION)
+}
+
+fn skip_space(bytes: &[u8]) -> &[u8] {
+    let first_non_space = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    &bytes[first_non_space..]
+}
+
+// A flat ODF's first bytes: an optional UTF-8 BOM and whitespace, the XML
+// declaration, whitespace, then the root element, as LibreOffice writes it.
+// Anything else between the declaration and the root is not a flat ODF.
+fn is_flat_odf(head: &[u8]) -> bool {
+    let document = skip_bom_and_space(head);
+    if !document.starts_with(XML_DECLARATION) {
+        return false;
+    }
+    let Some(end) = document
+        .windows(XML_DECLARATION_END.len())
+        .position(|window| window == XML_DECLARATION_END)
+    else {
+        return false;
+    };
+    let after_declaration = skip_space(&document[end + XML_DECLARATION_END.len()..]);
+    let Some(after_root) = after_declaration.strip_prefix(FLAT_ODF_ROOT) else {
+        return false;
+    };
+    matches!(after_root.first(), Some(b' ' | b'\t' | b'\r' | b'\n' | b'>' | b'/'))
 }
 
 // An RTF document's first bytes: an optional UTF-8 BOM, optional whitespace,
@@ -2307,21 +2339,68 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert!(!matches("/d/a.xlsb", b"just some text\n"));
     }
 
+    const FLAT_ODF_EXTENSIONS: [&str; 4] = ["fodt", "fods", "fodp", "FODT"];
+    const ROOT_ELEMENT: &str = "<office:document xmlns:office=\"urn:x\" office:version=\"1.3\">";
+
+    // The start of a flat ODF, as much of it as the content check reads.
+    fn check_head(bytes: &[u8]) -> &[u8] {
+        &bytes[..bytes.len().min(256)]
+    }
+
     #[test]
-    fn flat_odf_extensions_need_an_xml_declaration() {
-        let with_bom = b"\xEF\xBB\xBF<?xml version=\"1.0\"?>";
-        let with_space = b" \r\n\t<?xml version=\"1.0\"?>";
-        let with_bom_and_space = b"\xEF\xBB\xBF\n<?xml version=\"1.0\"?>";
-        for ext in ["fodt", "fods", "fodp", "FODT"] {
+    fn flat_odf_extensions_accept_an_office_document_root() {
+        let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+        let accepted = [
+            format!("{declaration}{ROOT_ELEMENT}"),
+            format!("{declaration}\n{ROOT_ELEMENT}"),
+            format!("{declaration}\n\n{ROOT_ELEMENT}"),
+            format!("\u{FEFF}{declaration}\n{ROOT_ELEMENT}"),
+            format!(" \r\n\t{declaration}\r\n{ROOT_ELEMENT}"),
+            format!("{declaration}<office:document/>"),
+            format!("{declaration}<office:document>"),
+        ];
+        for ext in FLAT_ODF_EXTENSIONS {
             let name = format!("/d/a.{ext}");
-            assert!(matches(&name, b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"), "{ext}");
-            assert!(matches(&name, with_bom), "{ext}");
-            assert!(matches(&name, with_space), "{ext}");
-            assert!(matches(&name, with_bom_and_space), "{ext}");
-            assert!(!matches(&name, b"just some text\n"), "{ext}");
-            assert!(!matches(&name, b"PK\x03\x04rest"), "{ext}");
-            assert!(!matches(&name, b"\xEF\xBB\xBF"), "{ext}");
-            assert!(!matches(&name, b""), "{ext}");
+            for head in &accepted {
+                assert!(matches(&name, head.as_bytes()), "{ext}: {head}");
+            }
+        }
+    }
+
+    #[test]
+    fn flat_odf_extensions_refuse_anything_else() {
+        let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+        let refused = [
+            declaration.to_string(),
+            format!("{declaration}\n"),
+            format!("{declaration}<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>"),
+            format!("{declaration}<!-- padding --><office:document>"),
+            format!("{declaration}<!DOCTYPE html><office:document>"),
+            format!("{declaration}<office:document-content>"),
+            format!("{declaration}<other:document>"),
+            "<?xml version=\"1.0\" <office:document>".to_string(),
+            "just some text\n".to_string(),
+            "PK\u{3}\u{4}rest".to_string(),
+            "\u{FEFF}".to_string(),
+            String::new(),
+        ];
+        for ext in FLAT_ODF_EXTENSIONS {
+            let name = format!("/d/a.{ext}");
+            for head in &refused {
+                assert!(!matches(&name, head.as_bytes()), "{ext}: {head}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_flat_odf_documents_of_the_corpus_are_accepted() {
+        let documents: [(&str, &[u8]); 3] = [
+            ("/d/a.fodt", include_bytes!("../../tests/corpus/src/basic.fodt")),
+            ("/d/a.fods", include_bytes!("../../tests/corpus/src/basic.fods")),
+            ("/d/a.fodp", include_bytes!("../../tests/corpus/src/basic.fodp")),
+        ];
+        for (name, bytes) in documents {
+            assert!(matches(name, check_head(bytes)), "{name}");
         }
     }
 
