@@ -516,7 +516,7 @@ mod tests {
             modified: std::sync::Mutex::new(false),
             pending_recent: std::sync::Mutex::new(None),
             recovery: std::sync::Mutex::new(None),
-            pending_open: std::sync::Mutex::new(None),
+            pending_open: crate::pending_open::PendingOpens::default(),
             grants: PathGrants::default(),
             text_options: std::sync::Mutex::new(None),
             last_print_pdf: std::sync::Mutex::new(None),
