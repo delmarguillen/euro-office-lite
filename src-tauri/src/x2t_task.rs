@@ -1027,17 +1027,65 @@ fn is_cfb(head: &[u8]) -> bool {
 }
 
 // What x2t looks for before it gets to the format the extension names, in a
-// file that is neither a CFB nor a ZIP: a ZIP after other data, then an Office
-// document in a single XML, which only an .xls of Excel 2003 XML may be.
+// file that is neither a CFB nor a ZIP: a ZIP after other data, an Office
+// document in a single XML, which only an .xls of Excel 2003 XML may be, and
+// HTML or MHT, refused even where x2t would find RTF first.
 fn x2t_finds_another_format(ext: &str, content: &ContentSample) -> bool {
-    if has_zip_end(&content.tail) {
-        return true;
-    }
-    match x2t_flat_ooxml(&content.head) {
+    has_zip_end(&content.tail)
+        || flat_ooxml_under_another_extension(ext, &content.head)
+        || x2t_reads_as_html(content)
+        || x2t_reads_as_mht(&content.head)
+}
+
+fn flat_ooxml_under_another_extension(ext: &str, head: &[u8]) -> bool {
+    match x2t_flat_ooxml(head) {
         None => false,
         Some(FlatOoxml::Excel2003) => ext != "xls",
         Some(_) => true,
     }
+}
+
+// x2t takes a file for HTML when isHtmlFormatFile (OfficeFileFormatChecker2.cpp:156)
+// finds an html tag in its first bytes, then a closing html or body tag in
+// its last X2T_HEAD_LEN bytes, the whole file when shorter (:887-899). It
+// checks this before flat ODF.
+fn x2t_reads_as_html(content: &ContentSample) -> bool {
+    let end = &content.tail[content.tail.len().saturating_sub(X2T_HEAD_LEN)..];
+    html_start(&content.head) && html_end(end)
+}
+
+// "html", in any case, inside a tag opened in the first 100 bytes.
+fn html_start(head: &[u8]) -> bool {
+    if head.len() < 4 {
+        return false;
+    }
+    let mut tag_open = false;
+    for i in 0..(head.len() - 4).min(100) {
+        match head[i] {
+            b'<' => tag_open = true,
+            b'>' => tag_open = false,
+            _ if tag_open && head[i..i + 4].eq_ignore_ascii_case(b"html") => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+// "</html" in any case, or "</body>" in lower case.
+fn html_end(bytes: &[u8]) -> bool {
+    if bytes.len() <= 6 {
+        return false;
+    }
+    (0..bytes.len() - 6).any(|i| {
+        let window = &bytes[i..];
+        window[..6].eq_ignore_ascii_case(b"</html") || window.starts_with(b"</body>")
+    })
+}
+
+// isMultiPartsHtmlFormatFile (OfficeFileFormatChecker2.cpp:113): both headers
+// anywhere in the first X2T_HEAD_LEN bytes.
+fn x2t_reads_as_mht(head: &[u8]) -> bool {
+    contains(head, b"Content-Type: multipart/related") && contains(head, b"Content-Type: text/html")
 }
 
 // The Office documents in a single XML isOOXFlatFormatFile finds
@@ -2613,6 +2661,59 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert!(!matches("/d/a.xls", instruction_then_other_root));
         let commented_then_workbook = b"<?xml version=\"1.0\"?><!-- note --><?mso-application progid=\"Excel.Sheet\"?>\n<Workbook>";
         assert!(matches("/d/a.xls", commented_then_workbook));
+    }
+
+    #[test]
+    fn a_flat_odf_or_an_rtf_x2t_takes_for_html_is_refused() {
+        let fodt = b"<?xml version=\"1.0\"?><office:document xmlns:h=\"html\"><x/></office:document><!-- </html> -->";
+        let rtf = b"{\\rtf1\\ansi <html><body>Some text</body></html>}";
+        assert!(!matches("/d/a.fodt", fodt));
+        assert!(!matches("/d/a.rtf", rtf));
+        assert!(!matches("/d/a.doc", rtf));
+        assert!(!matches("/d/a.txt", rtf));
+    }
+
+    #[test]
+    fn html_is_only_what_x2t_takes_for_it() {
+        let late_tag = format!("{{\\rtf1\\ansi{}<html></html>}}", " ".repeat(100));
+        assert!(matches("/d/a.rtf", late_tag.as_bytes()), "the tag is past the first 100 bytes");
+        let unclosed = format!("{{\\rtf1 <HTML>{}}}", " ".repeat(5000));
+        assert!(matches("/d/a.rtf", unclosed.as_bytes()), "no closing tag in the last bytes");
+        let closed = format!("{}</Html>", unclosed);
+        assert!(!matches("/d/a.rtf", closed.as_bytes()));
+        let closed_far_back = format!("{{\\rtf1 <HTML></HTML>{}}}", " ".repeat(5000));
+        assert!(matches("/d/a.rtf", closed_far_back.as_bytes()), "the closing tag is before the last 4096 bytes");
+    }
+
+    #[test]
+    fn mht_headers_are_refused() {
+        let headers = "Content-Type: multipart/related; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/html\r\n";
+        let rtf = format!("{{\\rtf1\\ansi {headers}}}");
+        let fodt = format!("<?xml version=\"1.0\"?><office:document><!-- {headers} -->");
+        assert!(!matches("/d/a.rtf", rtf.as_bytes()));
+        assert!(!matches("/d/a.fodt", fodt.as_bytes()));
+        let one_header = format!("{{\\rtf1\\ansi Content-Type: text/html}}");
+        assert!(matches("/d/a.rtf", one_header.as_bytes()));
+    }
+
+    // The root LibreOffice writes: xmlns:xhtml is one of many namespaces, well
+    // past the first 100 bytes x2t looks for an html tag in.
+    const FLAT_ODF_WITH_XHTML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n\
+<office:document xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
+xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" \
+xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" \
+xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+xmlns:xhtml=\"http://www.w3.org/1999/xhtml\" xmlns:grddl=\"http://www.w3.org/2003/g/data-view#\" \
+office:version=\"1.3\" office:mimetype=\"application/vnd.oasis.opendocument.text\">\n\
+<office:body><office:text><text:p xhtml:about=\"#p1\">Text</text:p></office:text></office:body>\n\
+</office:document>\n";
+
+    #[test]
+    fn a_flat_odf_whose_root_declares_xhtml_is_accepted() {
+        assert!(!html_start(FLAT_ODF_WITH_XHTML.as_bytes()));
+        for name in ["/d/a.fodt", "/d/a.fods", "/d/a.fodp"] {
+            assert!(matches(name, FLAT_ODF_WITH_XHTML.as_bytes()), "{name}");
+        }
     }
 
     #[test]
