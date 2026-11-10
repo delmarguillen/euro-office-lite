@@ -873,6 +873,7 @@ pub fn detect_format(path: &std::path::Path) -> i32 {
         Some("csv") => 260,
         Some("xlsm") => 261,
         Some("xltx") => 262,
+        Some("xltm") => 263,
         Some("xlsb") => 264,
         Some("fods") => 265,
         Some("ots") => 266,
@@ -881,7 +882,9 @@ pub fn detect_format(path: &std::path::Path) -> i32 {
         Some("odp") => 131,
         Some("ppsx") => 132,
         Some("pptm") => 133,
+        Some("ppsm") => 134,
         Some("potx") => 135,
+        Some("potm") => 136,
         Some("fodp") => 137,
         Some("otp") => 138,
         Some("pdf") => 513,
@@ -2862,6 +2865,18 @@ office:version=\"1.3\" office:mimetype=\"application/vnd.oasis.opendocument.text
         for (ext, code) in cases {
             let path = std::path::PathBuf::from(format!("/tmp/a.{}", ext));
             assert_eq!(detect_format(&path), code, "{}", ext);
+        }
+    }
+
+    // AVS_OFFICESTUDIO_FILE_SPREADSHEET_XLTM, _PRESENTATION_POTM and
+    // _PRESENTATION_PPSM (core/Common/OfficeFileFormats.h at v10.0.0.169).
+    #[test]
+    fn detect_format_knows_the_macro_templates_and_shows_opened_another_way() {
+        let cases = [("xltm", 263), ("potm", 136), ("ppsm", 134)];
+        for (ext, code) in cases {
+            for name in [format!("/tmp/a.{}", ext), format!("/tmp/A.{}", ext.to_uppercase())] {
+                assert_eq!(detect_format(std::path::Path::new(&name)), code, "{}", name);
+            }
         }
     }
 
