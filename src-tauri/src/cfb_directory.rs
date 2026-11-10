@@ -35,8 +35,9 @@ pub enum CfbDirectory {
     // find the names at the root is in the file.
     Readable { holds_encrypted_package: bool },
     // The file starts with the CFB signature, but its header is shorter than
-    // 512 bytes or has a sector size POLE refuses, one of those sectors is not
-    // whole in the file, or the directory or the DIFAT is past its limit.
+    // 512 bytes or is one POLE refuses, its DIFAT is not the length POLE reads,
+    // one of those sectors or a FAT sector is not whole in the file, or the
+    // directory or the DIFAT is past its limit.
     Unreadable,
 }
 
@@ -69,6 +70,7 @@ struct Unreadable;
 
 fn root_names<R: Read + Seek>(reader: R, header: &[u8]) -> Result<Vec<String>, Unreadable> {
     let mut cfb = Cfb::open(reader, header)?;
+    cfb.check_fat_sectors_whole()?;
     let chain = cfb.directory_chain()?;
     cfb.names_under_root(&chain)
 }
@@ -80,6 +82,9 @@ struct Cfb<R> {
     // The number of FAT sectors the header declares: POLE reads no FAT entry
     // past them.
     fat_sectors: u64,
+    // The number of DIFAT sectors the header declares: POLE reads exactly
+    // that many.
+    difat_sectors: u64,
     directory_start: u32,
     header_difat: Vec<u32>,
     first_difat_sector: u32,
@@ -100,25 +105,71 @@ impl<R: Read + Seek> Cfb<R> {
         if header.len() < HEADER_LEN {
             return Err(Unreadable);
         }
-        // POLE refuses a sector size outside these (Header::valid).
-        let sector_shift = u16_at(header, 0x1E) as u32;
-        if !(7..=30).contains(&sector_shift) {
+        if !pole_accepts_header(header) {
             return Err(Unreadable);
         }
+        let sector_shift = u16_at(header, 0x1E) as u32;
         let file_len = reader.seek(SeekFrom::End(0)).map_err(|_| Unreadable)?;
         let header_difat = (0..HEADER_FAT_SECTORS as usize)
             .map(|i| u32_at(header, 0x4C + i * 4))
             .collect();
-        Ok(Cfb {
+        let cfb = Cfb {
             reader,
             file_len,
             sector_shift,
             fat_sectors: u32_at(header, 0x2C) as u64,
+            difat_sectors: u32_at(header, 0x48) as u64,
             directory_start: u32_at(header, 0x30),
             header_difat,
             first_difat_sector: u32_at(header, 0x44),
             difat_chain: Vec::new(),
-        })
+        };
+        if !cfb.difat_length_as_pole_reads_it() {
+            return Err(Unreadable);
+        }
+        Ok(cfb)
+    }
+
+    // POLE reads the FAT sectors past the first 109 from exactly the number
+    // of DIFAT sectors the header declares, and none when there are 109 or
+    // fewer (StorageIO::getbbatBlocks, pole.cpp:1903-1931). With fewer, it
+    // takes the next link as a FAT sector and leaves the rest at sector 0;
+    // with more, it reads the last FAT sector as one more DIFAT sector. Only
+    // with as many as the FAT sectors need does it follow the chain this
+    // reader follows.
+    fn difat_length_as_pole_reads_it(&self) -> bool {
+        if self.fat_sectors <= HEADER_FAT_SECTORS {
+            return true;
+        }
+        let per_difat_sector = self.u32s_per_sector() - 1;
+        let needed = (self.fat_sectors - HEADER_FAT_SECTORS).div_ceil(per_difat_sector);
+        self.difat_sectors == needed
+    }
+
+    // POLE loads every FAT sector into one table, one after the other
+    // (StorageIO::loadBigBlocks, pole.cpp:1682-1706): one not whole in the
+    // file moves the ones after it to other entries of that table.
+    fn check_fat_sectors_whole(&mut self) -> Result<(), Unreadable> {
+        let in_header = self.fat_sectors.min(HEADER_FAT_SECTORS) as usize;
+        for index in 0..in_header {
+            self.sector_offset(self.header_difat[index])?;
+        }
+        let per_difat_sector = self.u32s_per_sector() - 1;
+        let mut remaining = self.fat_sectors.saturating_sub(HEADER_FAT_SECTORS);
+        let mut position = 0;
+        while remaining > 0 {
+            let count = remaining.min(per_difat_sector);
+            let difat_sector = self.difat_sector(position)?;
+            let offset = self.sector_offset(difat_sector)?;
+            self.reader.seek(SeekFrom::Start(offset)).map_err(|_| Unreadable)?;
+            for _ in 0..count {
+                let fat_sector = self.read_next_u32()?;
+                self.sector_offset(fat_sector)?;
+            }
+            remaining -= count;
+            position += 1;
+        }
+        Ok(())
     }
 
     // Where a sector starts, when the file holds all of it.
@@ -145,8 +196,13 @@ impl<R: Read + Seek> Cfb<R> {
     }
 
     fn read_u32(&mut self, offset: u64) -> Result<u32, Unreadable> {
+        self.reader.seek(SeekFrom::Start(offset)).map_err(|_| Unreadable)?;
+        self.read_next_u32()
+    }
+
+    fn read_next_u32(&mut self) -> Result<u32, Unreadable> {
         let mut bytes = [0u8; 4];
-        self.read_bytes(offset, &mut bytes)?;
+        self.reader.read_exact(&mut bytes).map_err(|_| Unreadable)?;
         Ok(u32::from_le_bytes(bytes))
     }
 
@@ -261,6 +317,26 @@ impl<R: Read + Seek> Cfb<R> {
     }
 }
 
+// Header::valid (pole.cpp:377-388), with the threshold Header::load reads
+// (pole.cpp:401-402): POLE reads no directory from a header it refuses.
+fn pole_accepts_header(header: &[u8]) -> bool {
+    let sector_shift = u16_at(header, 0x1E);
+    let mini_sector_shift = u16_at(header, 0x20);
+    let fat_sectors = u32_at(header, 0x2C);
+    let difat_sectors = u32_at(header, 0x48);
+    let threshold = match u32_at(header, 0x38) {
+        0 => 4096,
+        threshold => threshold,
+    };
+    if threshold != 4096 || fat_sectors == 0 {
+        return false;
+    }
+    if fat_sectors < HEADER_FAT_SECTORS as u32 && difat_sectors != 0 {
+        return false;
+    }
+    mini_sector_shift <= sector_shift && (7..=30).contains(&sector_shift)
+}
+
 // As DirTree::load reads an entry: at most 32 UTF-16 units of name, without
 // the terminating one, and without a first unit below 32.
 fn parse_entry(bytes: &[u8]) -> Entry {
@@ -349,17 +425,51 @@ pub mod test_cfb {
 
     // A directory in a sector whose FAT sector is named in DIFAT sector
     // `position`. Sector 1 is the only DIFAT sector, and names itself as the
-    // next, so the DIFAT chain never ends.
+    // next, so the DIFAT chain never ends. Every FAT sector is sector 0.
     pub fn directory_behind_difat_sector(position: u32) -> Vec<u8> {
         let mut bytes = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
         let fat_index = 109 + position * 127;
         bytes[0x2C..0x30].copy_from_slice(&(fat_index + 1).to_le_bytes());
         bytes[0x30..0x34].copy_from_slice(&(fat_index * 128).to_le_bytes());
         bytes[0x44..0x48].copy_from_slice(&1u32.to_le_bytes());
-        bytes[0x48..0x4C].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x48..0x4C].copy_from_slice(&(position + 1).to_le_bytes());
+        bytes[0x4C..0x200].fill(0);
         let difat = 1024..1536;
         bytes[difat.clone()].fill(0);
         bytes[difat.end - 4..difat.end].copy_from_slice(&1u32.to_le_bytes());
+        bytes
+    }
+
+    // The offset of the link at the end of the first DIFAT sector of
+    // directory_found_through_the_difat.
+    pub const FIRST_DIFAT_LINK: usize = 2 * 512 + 127 * 4;
+
+    // 512-byte sectors and 237 FAT sectors, 128 more than the header names, so
+    // the DIFAT takes two sectors: sectors 1 and 2. Sector 0 is FAT sectors 0
+    // to 108, and sector 3 FAT sectors 109 to 236. The directory is in sector
+    // 109 * 128, the first one whose FAT entry is in FAT sector 109.
+    pub fn directory_found_through_the_difat() -> Vec<u8> {
+        const FAT_SECTOR: u32 = 0xFFFF_FFFD;
+        const DIFAT_SECTOR: u32 = 0xFFFF_FFFC;
+        const END_OF_CHAIN: u32 = 0xFFFF_FFFE;
+        let directory_start: u32 = 109 * 128;
+        let streams = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
+        let mut bytes = streams[..512].to_vec();
+        bytes[0x2C..0x30].copy_from_slice(&237u32.to_le_bytes());
+        bytes[0x30..0x34].copy_from_slice(&directory_start.to_le_bytes());
+        bytes[0x44..0x48].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x48..0x4C].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0x4C..0x200].fill(0);
+        let mut sectors = [[NONE; 128]; 4];
+        sectors[0][..4].copy_from_slice(&[FAT_SECTOR, DIFAT_SECTOR, DIFAT_SECTOR, FAT_SECTOR]);
+        sectors[1][..127].fill(3);
+        sectors[1][127] = 2;
+        sectors[2][0] = 3;
+        sectors[2][127] = END_OF_CHAIN;
+        sectors[3][0] = END_OF_CHAIN;
+        bytes.extend(sectors.iter().flatten().flat_map(|entry| entry.to_le_bytes()));
+        bytes.resize((directory_start as usize + 1) * 512, 0);
+        bytes.extend_from_slice(&streams[1024..1536]);
         bytes
     }
 
@@ -416,8 +526,9 @@ pub mod test_cfb {
 #[cfg(test)]
 mod tests {
     use super::test_cfb::{
-        directory_behind_difat_sector, directory_of_sectors, directory_past_the_end, header_only,
-        with_entries, with_root_streams, NONE, STORAGE, STREAM,
+        directory_behind_difat_sector, directory_found_through_the_difat, directory_of_sectors,
+        directory_past_the_end, header_only, with_entries, with_root_streams, FIRST_DIFAT_LINK, NONE,
+        STORAGE, STREAM,
     };
     use super::*;
 
@@ -595,5 +706,71 @@ mod tests {
         let mut cfb = Cfb::open(std::io::Cursor::new(bytes.clone()), &bytes[..512]).ok().unwrap();
         assert!(cfb.difat_sector(MAX_DIFAT_SECTORS - 1).is_ok());
         assert!(cfb.difat_sector(MAX_DIFAT_SECTORS).is_err());
+    }
+
+    fn declaring_difat_sectors(declared: u32) -> Vec<u8> {
+        let mut bytes = directory_found_through_the_difat();
+        bytes[0x48..0x4C].copy_from_slice(&declared.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn an_index_found_through_the_difat_is_read_as_the_converter_reads_it() {
+        assert!(holds(&directory_found_through_the_difat()));
+    }
+
+    #[test]
+    fn with_109_fat_sectors_the_declared_difat_length_is_not_read() {
+        let mut bytes = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
+        bytes[0x2C..0x30].copy_from_slice(&109u32.to_le_bytes());
+        bytes[0x48..0x4C].copy_from_slice(&5u32.to_le_bytes());
+        bytes[0x4C..0x200].fill(0);
+        assert!(holds(&bytes));
+    }
+
+    #[test]
+    fn a_header_that_declares_no_difat_sector_for_more_than_109_fat_sectors_is_unreadable() {
+        assert_eq!(read_bytes(&declaring_difat_sectors(0)), CfbDirectory::Unreadable);
+    }
+
+    #[test]
+    fn a_header_that_declares_fewer_difat_sectors_than_the_fat_needs_is_unreadable() {
+        // The converter would read the link at the end of the first DIFAT
+        // sector as FAT sector 236.
+        assert_eq!(read_bytes(&declaring_difat_sectors(1)), CfbDirectory::Unreadable);
+    }
+
+    #[test]
+    fn a_header_that_declares_more_difat_sectors_than_the_fat_needs_is_unreadable() {
+        // The converter would read FAT sector 236 as a third DIFAT sector.
+        assert_eq!(read_bytes(&declaring_difat_sectors(3)), CfbDirectory::Unreadable);
+    }
+
+    #[test]
+    fn a_difat_link_to_a_sector_outside_the_file_is_unreadable() {
+        let mut bytes = directory_found_through_the_difat();
+        bytes[FIRST_DIFAT_LINK..FIRST_DIFAT_LINK + 4].copy_from_slice(&END_OF_CHAIN.to_le_bytes());
+        assert_eq!(read_bytes(&bytes), CfbDirectory::Unreadable);
+    }
+
+    #[test]
+    fn a_fat_sector_the_index_does_not_need_is_still_read_whole() {
+        let mut bytes = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
+        bytes[0x2C..0x30].copy_from_slice(&2u32.to_le_bytes());
+        bytes[0x50..0x54].copy_from_slice(&40u32.to_le_bytes());
+        assert_eq!(read_bytes(&bytes), CfbDirectory::Unreadable);
+    }
+
+    #[test]
+    fn a_header_the_converter_refuses_is_unreadable() {
+        let refused = [(0x2C, 0u32), (0x48, 1), (0x38, 512)];
+        for (offset, value) in refused {
+            let mut bytes = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            assert_eq!(read_bytes(&bytes), CfbDirectory::Unreadable, "{offset:#x}");
+        }
+        let mut mini_sectors_too_large = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
+        mini_sectors_too_large[0x20] = 10;
+        assert_eq!(read_bytes(&mini_sectors_too_large), CfbDirectory::Unreadable);
     }
 }
