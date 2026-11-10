@@ -290,12 +290,11 @@ fn check_container_content(
     path: &std::path::Path,
     content: &x2t_task::ContentSample,
 ) -> Result<(), String> {
-    let matches_format = x2t_task::content_matches_extension(path, content);
-    if matches_format && is_encrypted_ooxml(path, content) {
-        return Err(PASSWORD_ERROR.to_string());
+    if !x2t_task::content_matches_extension(path, content) {
+        return Err(not_valid_error(path));
     }
-    if matches_format
-        && opens_if_it_starts_like_a_zip(path, &content.head)
+    check_cfb_directory(path)?;
+    if opens_if_it_starts_like_a_zip(path, &content.head)
         && crate::package_relationships::relationships_are_allowed(path, content)
     {
         return Ok(());
@@ -303,14 +302,22 @@ fn check_container_content(
     Err(not_valid_error(path))
 }
 
-// An OOXML document with a password: a CFB with EncryptionInfo and
-// EncryptedPackage at its root. x2t opens one without being given a password
-// when it has Excel's default one (OfficeCryptReader/source/ECMACryptFile.cpp:973),
-// and then converts the package inside whatever the extension
-// (X2tConverter/src/lib/crypt.h:57-133); with any other password it fails with
-// exit 90. Refusing it here treats it the same whichever password it has.
-fn is_encrypted_ooxml(path: &std::path::Path, content: &x2t_task::ContentSample) -> bool {
-    content.starts_like_a_cfb() && crate::cfb_directory::holds_encrypted_package(path)
+// A CFB whose directory cannot be read whole is not valid, whatever its
+// extension. An OOXML document with a password, a CFB with EncryptionInfo and
+// EncryptedPackage at its root, gets the password error: x2t opens one without
+// being given a password when it has Excel's default one
+// (OfficeCryptReader/source/ECMACryptFile.cpp:973), and then converts the
+// package inside whatever the extension (X2tConverter/src/lib/crypt.h:57-133);
+// with any other password it fails with exit 90. Refusing it here treats it the
+// same whichever password it has.
+fn check_cfb_directory(path: &std::path::Path) -> Result<(), String> {
+    use crate::cfb_directory::CfbDirectory;
+    match crate::cfb_directory::read(path) {
+        CfbDirectory::NotCfb => Ok(()),
+        CfbDirectory::Readable { holds_encrypted_package: false } => Ok(()),
+        CfbDirectory::Readable { holds_encrypted_package: true } => Err(PASSWORD_ERROR.to_string()),
+        CfbDirectory::Unreadable => Err(not_valid_error(path)),
+    }
 }
 
 // x2t picks the format of a file that starts like a ZIP but does not open as
@@ -486,12 +493,46 @@ mod tests {
         }
     }
 
+    fn assert_not_valid_before_x2t(content: &[u8]) {
+        for ext in ["xlsx", "doc"] {
+            let name = format!("unreadable.{ext}");
+            let (original, work_dir) = original_and_work_dir(&name, content);
+
+            let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+            assert_eq!(refused.err(), Some(format!("This file is not a valid .{ext}")), "{name}");
+            assert_eq!(files_in(&work_dir), 0, "{name}");
+        }
+    }
+
     #[test]
-    fn a_cfb_whose_directory_cannot_be_read_is_left_to_x2t() {
-        use crate::cfb_directory::test_cfb::with_root_streams;
-        let header_only = with_root_streams(&["EncryptionInfo", "EncryptedPackage"])[..512].to_vec();
-        for name in ["unreadable.xlsx", "unreadable.pptx", "unreadable.doc"] {
-            assert_eq!(content_check(name, &header_only), Ok(()), "{name}");
+    fn a_cfb_with_only_its_header_is_not_valid() {
+        assert_not_valid_before_x2t(&crate::cfb_directory::test_cfb::header_only());
+    }
+
+    #[test]
+    fn a_cfb_whose_index_has_more_entries_than_the_limit_is_not_valid() {
+        use crate::cfb_directory::test_cfb::directory_of_sectors;
+        assert_not_valid_before_x2t(&directory_of_sectors((1 << 16) / 32 + 1));
+    }
+
+    #[test]
+    fn a_cfb_whose_index_needs_more_difat_sectors_than_the_limit_is_not_valid() {
+        use crate::cfb_directory::test_cfb::directory_behind_difat_sector;
+        assert_not_valid_before_x2t(&directory_behind_difat_sector(1024));
+    }
+
+    #[test]
+    fn a_cfb_whose_index_starts_past_the_end_of_the_file_is_not_valid() {
+        assert_not_valid_before_x2t(&crate::cfb_directory::test_cfb::directory_past_the_end());
+    }
+
+    #[test]
+    fn a_cfb_whose_index_cannot_be_read_whole_is_not_valid_under_every_cfb_extension() {
+        let header_only = crate::cfb_directory::test_cfb::header_only();
+        for ext in CFB_EXTENSIONS {
+            let name = format!("unreadable.{ext}");
+            assert_eq!(content_check(&name, &header_only), Err(not_valid_error(std::path::Path::new(&name))), "{name}");
         }
     }
 

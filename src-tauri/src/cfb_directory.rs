@@ -1,6 +1,7 @@
 // Reads the names at the root of a CFB's directory the way x2t reads them
 // (POLE, core/Common/3dParty/pole/pole.cpp at v10.0.0.169), to tell an OOXML
-// document with a password from any other CFB.
+// document with a password from any other CFB, and a CFB whose directory can
+// be read whole from one whose directory cannot.
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -12,7 +13,7 @@ use std::io::{Read, Seek, SeekFrom};
 const ENCRYPTION_INFO: &str = "EncryptionInfo";
 const ENCRYPTED_PACKAGE: &str = "EncryptedPackage";
 
-// A directory longer than this is left unread.
+// A CFB whose directory is longer than this cannot be read whole.
 const MAX_DIRECTORY_ENTRIES: usize = 1 << 16;
 // DIFAT sectors followed at most to find a FAT sector: enough for a FAT of
 // 109 + 1024 * 127 sectors at 512 bytes, a file of about 8 GiB.
@@ -26,28 +27,55 @@ const END_OF_CHAIN: u32 = 0xFFFF_FFFE;
 // Sector numbers from here up are not sectors of the file (MAXREGSECT + 1).
 const FIRST_SPECIAL_SECTOR: u32 = 0xFFFF_FFFA;
 
-// True when the file is a CFB whose root holds both entries x2t decrypts an
-// OOXML package from. False for any other file, and for a CFB whose header or
-// directory cannot be read.
-pub fn holds_encrypted_package(path: &std::path::Path) -> bool {
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
-    let Some(names) = root_names(std::io::BufReader::new(file)) else {
-        return false;
-    };
-    let has = |wanted: &str| names.iter().any(|name| name == wanted);
-    has(ENCRYPTION_INFO) && has(ENCRYPTED_PACKAGE)
+#[derive(Debug, PartialEq)]
+pub enum CfbDirectory {
+    // The file does not start with the CFB signature.
+    NotCfb,
+    // Every sector of the header, the FAT, the DIFAT and the directory read to
+    // find the names at the root is in the file.
+    Readable { holds_encrypted_package: bool },
+    // The file starts with the CFB signature, but its header is shorter than
+    // 512 bytes or has a sector size POLE refuses, one of those sectors is not
+    // whole in the file, or the directory or the DIFAT is past its limit.
+    Unreadable,
 }
 
-fn root_names<R: Read + Seek>(reader: R) -> Option<Vec<String>> {
-    let mut cfb = Cfb::open(reader)?;
+// Whether the file is a CFB, and whether its root holds both entries x2t
+// decrypts an OOXML package from.
+pub fn read(path: &std::path::Path) -> CfbDirectory {
+    let Ok(file) = std::fs::File::open(path) else {
+        return CfbDirectory::Unreadable;
+    };
+    read_from(std::io::BufReader::new(file))
+}
+
+fn read_from<R: Read + Seek>(mut reader: R) -> CfbDirectory {
+    let mut header = Vec::with_capacity(HEADER_LEN);
+    if reader.by_ref().take(HEADER_LEN as u64).read_to_end(&mut header).is_err() {
+        return CfbDirectory::Unreadable;
+    }
+    if !header.starts_with(SIGNATURE) {
+        return CfbDirectory::NotCfb;
+    }
+    let Ok(names) = root_names(reader, &header) else {
+        return CfbDirectory::Unreadable;
+    };
+    let has = |wanted: &str| names.iter().any(|name| name == wanted);
+    CfbDirectory::Readable { holds_encrypted_package: has(ENCRYPTION_INFO) && has(ENCRYPTED_PACKAGE) }
+}
+
+// A sector, or the header, that cannot be read whole, or a limit passed.
+struct Unreadable;
+
+fn root_names<R: Read + Seek>(reader: R, header: &[u8]) -> Result<Vec<String>, Unreadable> {
+    let mut cfb = Cfb::open(reader, header)?;
     let chain = cfb.directory_chain()?;
-    Some(cfb.names_under_root(&chain))
+    cfb.names_under_root(&chain)
 }
 
 struct Cfb<R> {
     reader: R,
+    file_len: u64,
     sector_shift: u32,
     // The number of FAT sectors the header declares: POLE reads no FAT entry
     // past them.
@@ -68,33 +96,39 @@ struct Entry {
 }
 
 impl<R: Read + Seek> Cfb<R> {
-    fn open(mut reader: R) -> Option<Cfb<R>> {
-        let mut header = [0u8; HEADER_LEN];
-        reader.read_exact(&mut header).ok()?;
-        if !header.starts_with(SIGNATURE) {
-            return None;
+    fn open(mut reader: R, header: &[u8]) -> Result<Cfb<R>, Unreadable> {
+        if header.len() < HEADER_LEN {
+            return Err(Unreadable);
         }
         // POLE refuses a sector size outside these (Header::valid).
-        let sector_shift = u16_at(&header, 0x1E) as u32;
+        let sector_shift = u16_at(header, 0x1E) as u32;
         if !(7..=30).contains(&sector_shift) {
-            return None;
+            return Err(Unreadable);
         }
+        let file_len = reader.seek(SeekFrom::End(0)).map_err(|_| Unreadable)?;
         let header_difat = (0..HEADER_FAT_SECTORS as usize)
-            .map(|i| u32_at(&header, 0x4C + i * 4))
+            .map(|i| u32_at(header, 0x4C + i * 4))
             .collect();
-        Some(Cfb {
+        Ok(Cfb {
             reader,
+            file_len,
             sector_shift,
-            fat_sectors: u32_at(&header, 0x2C) as u64,
-            directory_start: u32_at(&header, 0x30),
+            fat_sectors: u32_at(header, 0x2C) as u64,
+            directory_start: u32_at(header, 0x30),
             header_difat,
-            first_difat_sector: u32_at(&header, 0x44),
+            first_difat_sector: u32_at(header, 0x44),
             difat_chain: Vec::new(),
         })
     }
 
-    fn sector_offset(&self, sector: u32) -> u64 {
-        (sector as u64 + 1) << self.sector_shift
+    // Where a sector starts, when the file holds all of it.
+    fn sector_offset(&self, sector: u32) -> Result<u64, Unreadable> {
+        let sector_len = 1u64 << self.sector_shift;
+        let offset = (sector as u64 + 1) << self.sector_shift;
+        if offset + sector_len > self.file_len {
+            return Err(Unreadable);
+        }
+        Ok(offset)
     }
 
     fn u32s_per_sector(&self) -> u64 {
@@ -105,11 +139,15 @@ impl<R: Read + Seek> Cfb<R> {
         1 << (self.sector_shift - 7)
     }
 
-    fn read_u32(&mut self, offset: u64) -> Option<u32> {
+    fn read_bytes(&mut self, offset: u64, bytes: &mut [u8]) -> Result<(), Unreadable> {
+        self.reader.seek(SeekFrom::Start(offset)).map_err(|_| Unreadable)?;
+        self.reader.read_exact(bytes).map_err(|_| Unreadable)
+    }
+
+    fn read_u32(&mut self, offset: u64) -> Result<u32, Unreadable> {
         let mut bytes = [0u8; 4];
-        self.reader.seek(SeekFrom::Start(offset)).ok()?;
-        self.reader.read_exact(&mut bytes).ok()?;
-        Some(u32::from_le_bytes(bytes))
+        self.read_bytes(offset, &mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
     }
 
     // Whether the FAT has an entry for this sector.
@@ -117,92 +155,90 @@ impl<R: Read + Seek> Cfb<R> {
         sector < FIRST_SPECIAL_SECTOR && (sector as u64) < self.fat_sectors * self.u32s_per_sector()
     }
 
-    // The sectors of the directory, in order, as AllocTable::follow reads them:
-    // up to the end of the chain, a sector the FAT has no entry for, or a
-    // sector already in it.
-    fn directory_chain(&mut self) -> Option<Vec<u32>> {
+    // The sectors of the directory, in order, as AllocTable::follow reads them
+    // (pole.cpp:533-560): up to the end of the chain, a sector the FAT has no
+    // entry for, or a sector already in it.
+    fn directory_chain(&mut self) -> Result<Vec<u32>, Unreadable> {
         let max_sectors = MAX_DIRECTORY_ENTRIES / self.entries_per_sector();
         let mut chain = Vec::new();
         let mut seen = HashSet::new();
         let mut sector = self.directory_start;
         while self.in_fat(sector) && seen.insert(sector) {
             if chain.len() == max_sectors {
-                return None;
+                return Err(Unreadable);
             }
             chain.push(sector);
             sector = self.next_sector(sector)?;
         }
-        Some(chain)
+        // POLE reads every sector of the chain (StorageIO::loadBigBlocks).
+        for &sector in &chain {
+            self.sector_offset(sector)?;
+        }
+        Ok(chain)
     }
 
-    fn next_sector(&mut self, sector: u32) -> Option<u32> {
+    fn next_sector(&mut self, sector: u32) -> Result<u32, Unreadable> {
         let per_sector = self.u32s_per_sector();
         let fat_sector = self.fat_sector(sector as u64 / per_sector)?;
-        if fat_sector >= FIRST_SPECIAL_SECTOR {
-            return Some(END_OF_CHAIN);
-        }
-        let offset = self.sector_offset(fat_sector) + (sector as u64 % per_sector) * 4;
+        let offset = self.sector_offset(fat_sector)? + (sector as u64 % per_sector) * 4;
         self.read_u32(offset)
     }
 
     // The sector that holds FAT sector `index`: one of the first 109 is named
     // in the header, the others in the DIFAT chain.
-    fn fat_sector(&mut self, index: u64) -> Option<u32> {
+    fn fat_sector(&mut self, index: u64) -> Result<u32, Unreadable> {
         if index < HEADER_FAT_SECTORS {
-            return Some(self.header_difat[index as usize]);
+            return Ok(self.header_difat[index as usize]);
         }
         let per_difat_sector = self.u32s_per_sector() - 1;
         let index = index - HEADER_FAT_SECTORS;
         let difat_sector = self.difat_sector((index / per_difat_sector) as usize)?;
-        let offset = self.sector_offset(difat_sector) + (index % per_difat_sector) * 4;
+        let offset = self.sector_offset(difat_sector)? + (index % per_difat_sector) * 4;
         self.read_u32(offset)
     }
 
     // The `position`th sector of the DIFAT chain; each one ends with the
     // number of the next.
-    fn difat_sector(&mut self, position: usize) -> Option<u32> {
+    fn difat_sector(&mut self, position: usize) -> Result<u32, Unreadable> {
         if position >= MAX_DIFAT_SECTORS {
-            return None;
+            return Err(Unreadable);
         }
         while self.difat_chain.len() <= position {
             let next = match self.difat_chain.last() {
                 None => self.first_difat_sector,
                 Some(&last) => {
-                    let offset = self.sector_offset(last) + (self.u32s_per_sector() - 1) * 4;
+                    let offset = self.sector_offset(last)? + (self.u32s_per_sector() - 1) * 4;
                     self.read_u32(offset)?
                 }
             };
-            if next >= FIRST_SPECIAL_SECTOR {
-                return None;
-            }
             self.difat_chain.push(next);
         }
-        Some(self.difat_chain[position])
+        Ok(self.difat_chain[position])
     }
 
-    fn entry(&mut self, chain: &[u32], index: usize) -> Option<Entry> {
+    fn entry(&mut self, chain: &[u32], index: usize) -> Result<Entry, Unreadable> {
         let per_sector = self.entries_per_sector();
-        let sector = *chain.get(index / per_sector)?;
-        let offset = self.sector_offset(sector) + (index % per_sector) as u64 * ENTRY_LEN;
+        let sector = chain[index / per_sector];
+        let offset = self.sector_offset(sector)? + (index % per_sector) as u64 * ENTRY_LEN;
         let mut bytes = [0u8; ENTRY_LEN as usize];
-        self.reader.seek(SeekFrom::Start(offset)).ok()?;
-        self.reader.read_exact(&mut bytes).ok()?;
-        Some(parse_entry(&bytes))
+        self.read_bytes(offset, &mut bytes)?;
+        Ok(parse_entry(&bytes))
     }
 
     // The names of the root's children: every entry reachable through the
     // siblings of the root's child, which holds every one POLE's search from
     // the root can reach (dirtree_find_sibling). An invalid entry ends a
     // branch, as it ends POLE's search.
-    fn names_under_root(&mut self, chain: &[u32]) -> Vec<String> {
+    fn names_under_root(&mut self, chain: &[u32]) -> Result<Vec<String>, Unreadable> {
         let count = chain.len() * self.entries_per_sector();
         let in_directory = |index: u32| (index as usize) < count;
         let mut names = Vec::new();
-        let Some(root) = self.entry(chain, 0) else {
-            return names;
-        };
+        if chain.is_empty() {
+            return Ok(names);
+        }
+        let root = self.entry(chain, 0)?;
         if !root.valid || !in_directory(root.child) {
-            return names;
+            return Ok(names);
         }
         let mut seen = HashSet::new();
         let mut pending = vec![root.child];
@@ -210,9 +246,7 @@ impl<R: Read + Seek> Cfb<R> {
             if !seen.insert(index) {
                 continue;
             }
-            let Some(entry) = self.entry(chain, index as usize) else {
-                continue;
-            };
+            let entry = self.entry(chain, index as usize)?;
             if !entry.valid {
                 continue;
             }
@@ -223,7 +257,7 @@ impl<R: Read + Seek> Cfb<R> {
                 }
             }
         }
-        names
+        Ok(names)
     }
 }
 
@@ -302,6 +336,55 @@ pub mod test_cfb {
         bytes
     }
 
+    pub fn header_only() -> Vec<u8> {
+        with_root_streams(&["EncryptionInfo", "EncryptedPackage"])[..512].to_vec()
+    }
+
+    // A directory that starts at sector 50, past the end of the file.
+    pub fn directory_past_the_end() -> Vec<u8> {
+        let mut bytes = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
+        bytes[0x30..0x34].copy_from_slice(&50u32.to_le_bytes());
+        bytes
+    }
+
+    // A directory in a sector whose FAT sector is named in DIFAT sector
+    // `position`. Sector 1 is the only DIFAT sector, and names itself as the
+    // next, so the DIFAT chain never ends.
+    pub fn directory_behind_difat_sector(position: u32) -> Vec<u8> {
+        let mut bytes = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
+        let fat_index = 109 + position * 127;
+        bytes[0x2C..0x30].copy_from_slice(&(fat_index + 1).to_le_bytes());
+        bytes[0x30..0x34].copy_from_slice(&(fat_index * 128).to_le_bytes());
+        bytes[0x44..0x48].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x48..0x4C].copy_from_slice(&1u32.to_le_bytes());
+        let difat = 1024..1536;
+        bytes[difat.clone()].fill(0);
+        bytes[difat.end - 4..difat.end].copy_from_slice(&1u32.to_le_bytes());
+        bytes
+    }
+
+    // 4096-byte sectors: the header sector, three FAT sectors, and a directory
+    // chain of `sectors` sectors from sector 3, all of them in the file, whose
+    // first entry is not a valid root.
+    pub fn directory_of_sectors(sectors: u32) -> Vec<u8> {
+        let mut bytes = with_root_streams(&[])[..512].to_vec();
+        bytes[0x1E..0x20].copy_from_slice(&12u16.to_le_bytes());
+        bytes[0x2C..0x30].copy_from_slice(&3u32.to_le_bytes());
+        bytes[0x30..0x34].copy_from_slice(&3u32.to_le_bytes());
+        bytes[0x50..0x54].copy_from_slice(&1u32.to_le_bytes());
+        bytes[0x54..0x58].copy_from_slice(&2u32.to_le_bytes());
+        bytes.resize(4096, 0);
+        let mut fat = vec![NONE; 3 * 1024];
+        fat[..3].fill(0xFFFF_FFFD);
+        let last = 2 + sectors;
+        for sector in 3..=last {
+            fat[sector as usize] = if sector == last { 0xFFFF_FFFE } else { sector + 1 };
+        }
+        bytes.extend(fat.iter().flat_map(|entry| entry.to_le_bytes()));
+        bytes.resize(bytes.len() + sectors as usize * 4096, 0);
+        bytes
+    }
+
     // A root whose children are streams with these names, each the right
     // sibling of the one before.
     pub fn with_root_streams(names: &[&str]) -> Vec<u8> {
@@ -332,13 +415,16 @@ pub mod test_cfb {
 
 #[cfg(test)]
 mod tests {
-    use super::test_cfb::{with_entries, with_root_streams, NONE, STORAGE, STREAM};
+    use super::test_cfb::{
+        directory_behind_difat_sector, directory_of_sectors, directory_past_the_end, header_only,
+        with_entries, with_root_streams, NONE, STORAGE, STREAM,
+    };
     use super::*;
 
     const ENCRYPTED_DOCX: &[u8] = include_bytes!("../../tests/fixtures/encrypted-test.docx");
     const WORD97_DOC: &[u8] = include_bytes!("../../tests/fixtures/word97.doc");
 
-    fn holds(bytes: &[u8]) -> bool {
+    fn read_bytes(bytes: &[u8]) -> CfbDirectory {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let path = std::env::temp_dir().join(format!(
@@ -347,9 +433,13 @@ mod tests {
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::write(&path, bytes).unwrap();
-        let held = holds_encrypted_package(&path);
+        let directory = read(&path);
         let _ = std::fs::remove_file(&path);
-        held
+        directory
+    }
+
+    fn holds(bytes: &[u8]) -> bool {
+        read_bytes(bytes) == CfbDirectory::Readable { holds_encrypted_package: true }
     }
 
     #[test]
@@ -409,16 +499,72 @@ mod tests {
     }
 
     #[test]
-    fn a_cfb_that_cannot_be_read_holds_nothing() {
-        let whole = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
-        assert!(!holds(SIGNATURE));
-        assert!(!holds(&whole[..512]), "no FAT and no directory");
-        let mut bad_shift = whole.clone();
+    fn a_file_without_the_signature_is_not_a_cfb() {
+        assert_eq!(read_bytes(b""), CfbDirectory::NotCfb);
+        assert_eq!(read_bytes(b"PK\x03\x04"), CfbDirectory::NotCfb);
+        assert_eq!(read_bytes(&SIGNATURE[..7]), CfbDirectory::NotCfb);
+    }
+
+    #[test]
+    fn a_cfb_whose_index_cannot_be_read_whole_is_unreadable() {
+        let mut bad_shift = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
         bad_shift[0x1E] = 40;
-        assert!(!holds(&bad_shift));
-        let mut no_directory = whole;
+        let unreadable = [
+            SIGNATURE.to_vec(),
+            header_only(),
+            bad_shift,
+            directory_past_the_end(),
+            directory_behind_difat_sector(MAX_DIFAT_SECTORS as u32),
+            directory_of_sectors((MAX_DIRECTORY_ENTRIES / 32) as u32 + 1),
+        ];
+        for (i, bytes) in unreadable.iter().enumerate() {
+            assert_eq!(read_bytes(bytes), CfbDirectory::Unreadable, "case {i}");
+        }
+    }
+
+    #[test]
+    fn a_cfb_whose_last_directory_sector_is_cut_short_is_unreadable() {
+        let whole = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
+        assert_eq!(read_bytes(&whole[..whole.len() - 1]), CfbDirectory::Unreadable);
+    }
+
+    #[test]
+    fn a_cfb_whose_fat_sector_is_past_the_end_is_unreadable() {
+        let mut bytes = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
+        bytes[0x4C..0x50].copy_from_slice(&40u32.to_le_bytes());
+        assert_eq!(read_bytes(&bytes), CfbDirectory::Unreadable);
+    }
+
+    #[test]
+    fn a_directory_chain_that_ends_normally_is_readable() {
+        let mut no_directory = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
         no_directory[0x30..0x34].copy_from_slice(&END_OF_CHAIN.to_le_bytes());
-        assert!(!holds(&no_directory));
+        assert_eq!(read_bytes(&no_directory), CfbDirectory::Readable { holds_encrypted_package: false });
+        let mut outside_the_fat = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
+        outside_the_fat[0x30..0x34].copy_from_slice(&128u32.to_le_bytes());
+        assert_eq!(read_bytes(&outside_the_fat), CfbDirectory::Readable { holds_encrypted_package: false });
+    }
+
+    #[test]
+    fn every_cfb_under_tests_is_read_whole() {
+        let mut pending = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests")];
+        let mut cfbs = 0;
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let directory = read(&path);
+                if directory == CfbDirectory::NotCfb {
+                    continue;
+                }
+                assert!(matches!(directory, CfbDirectory::Readable { .. }), "{}", path.display());
+                cfbs += 1;
+            }
+        }
+        assert!(cfbs >= 2, "{cfbs}");
     }
 
     #[test]
@@ -435,30 +581,19 @@ mod tests {
         assert!(holds(&siblings_loop));
     }
 
-    // 4096-byte sectors: the header sector, three FAT sectors, and a directory
-    // chain of `sectors` sectors from sector 3, whose content is not needed.
-    fn directory_of_sectors(sectors: u32) -> Vec<u8> {
-        let mut bytes = with_root_streams(&[])[..512].to_vec();
-        bytes[0x1E..0x20].copy_from_slice(&12u16.to_le_bytes());
-        bytes[0x2C..0x30].copy_from_slice(&3u32.to_le_bytes());
-        bytes[0x30..0x34].copy_from_slice(&3u32.to_le_bytes());
-        bytes[0x50..0x54].copy_from_slice(&1u32.to_le_bytes());
-        bytes[0x54..0x58].copy_from_slice(&2u32.to_le_bytes());
-        bytes.resize(4096, 0);
-        let mut fat = vec![NONE; 3 * 1024];
-        fat[..3].fill(0xFFFF_FFFD);
-        let last = 2 + sectors;
-        for sector in 3..=last {
-            fat[sector as usize] = if sector == last { END_OF_CHAIN } else { sector + 1 };
-        }
-        bytes.extend(fat.iter().flat_map(|entry| entry.to_le_bytes()));
-        bytes
+    #[test]
+    fn a_directory_past_the_limit_is_unreadable() {
+        let at_limit = (MAX_DIRECTORY_ENTRIES / 32) as u32;
+        let readable = CfbDirectory::Readable { holds_encrypted_package: false };
+        assert_eq!(read_bytes(&directory_of_sectors(at_limit)), readable);
+        assert_eq!(read_bytes(&directory_of_sectors(at_limit + 1)), CfbDirectory::Unreadable);
     }
 
     #[test]
-    fn a_directory_past_the_limit_is_left_unread() {
-        let at_limit = (MAX_DIRECTORY_ENTRIES / 32) as u32;
-        assert!(root_names(std::io::Cursor::new(directory_of_sectors(at_limit))).is_some());
-        assert!(root_names(std::io::Cursor::new(directory_of_sectors(at_limit + 1))).is_none());
+    fn a_difat_chain_past_the_limit_is_unreadable() {
+        let bytes = directory_behind_difat_sector(MAX_DIFAT_SECTORS as u32);
+        let mut cfb = Cfb::open(std::io::Cursor::new(bytes.clone()), &bytes[..512]).ok().unwrap();
+        assert!(cfb.difat_sector(MAX_DIFAT_SECTORS - 1).is_ok());
+        assert!(cfb.difat_sector(MAX_DIFAT_SECTORS).is_err());
     }
 }
