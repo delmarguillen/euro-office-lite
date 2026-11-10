@@ -420,8 +420,10 @@ mod tests {
         for ext in &offered {
             assert!(CONVERTED_EXTENSIONS.contains(ext), "{}", ext);
         }
+        // Converted when opened another way, as before the list was closed.
+        let not_offered = ["xltm", "potm", "ppsm"];
         for ext in CONVERTED_EXTENSIONS {
-            assert!(offered.contains(&ext), "{}", ext);
+            assert!(offered.contains(&ext) || not_offered.contains(&ext), "{}", ext);
         }
     }
 

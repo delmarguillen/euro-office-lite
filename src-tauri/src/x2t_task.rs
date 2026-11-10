@@ -917,12 +917,13 @@ pub fn is_empty_file(path: &std::path::Path) -> bool {
 }
 
 // The extensions the app converts to Editor.bin: those the open dialog offers,
-// but PDF (open_pdf reads it as it is), and those the insert, compare and
-// merge dialogs offer (file_dialogs.rs). A file under any other is refused.
-pub const CONVERTED_EXTENSIONS: [&str; 27] = [
+// but PDF (open_pdf reads it as it is), those the insert, compare and merge
+// dialogs offer (file_dialogs.rs), and xltm, potm and ppsm, which x2t converts
+// like the others of their family. A file under any other is refused.
+pub const CONVERTED_EXTENSIONS: [&str; 30] = [
     "docx", "doc", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "txt",
-    "xlsx", "xls", "xlsm", "xltx", "xlsb", "ods", "ots", "fods", "csv",
-    "pptx", "ppt", "pptm", "ppsx", "potx", "odp", "otp", "fodp",
+    "xlsx", "xls", "xlsm", "xltx", "xltm", "xlsb", "ods", "ots", "fods", "csv",
+    "pptx", "ppt", "pptm", "ppsx", "ppsm", "potx", "potm", "odp", "otp", "fodp",
 ];
 
 pub fn is_converted_extension(path: &std::path::Path) -> bool {
@@ -1011,8 +1012,8 @@ pub fn content_matches_extension(path: &std::path::Path, content: &ContentSample
     let text = !zip && !cfb && !x2t_finds_another_format(&ext, content);
     match ext.as_str() {
         "docx" | "docm" | "dotx" | "dotm" => zip || cfb,
-        "xlsx" | "xlsm" | "xltx" => zip || cfb,
-        "pptx" | "pptm" | "potx" | "ppsx" => zip || cfb,
+        "xlsx" | "xlsm" | "xltx" | "xltm" => zip || cfb,
+        "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => zip || cfb,
         "xlsb" => zip,
         "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => zip,
         // Word 97-2003 (CFB), a DOCX renamed to .doc (ZIP) or an RTF saved as .doc.
@@ -2409,7 +2410,8 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 
     const HTML_HEAD: &[u8] = b"<html><body>";
     const OOXML_EXTENSIONS: &[&str] = &[
-        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "pptx", "pptm", "potx", "ppsx",
+        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx", "potm",
+        "ppsx", "ppsm",
     ];
     const ODF_EXTENSIONS: &[&str] = &["odt", "ods", "odp", "ott", "ots", "otp"];
 
@@ -2498,11 +2500,22 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     #[test]
     fn an_extension_outside_the_list_is_refused() {
         let contents: [&[u8]; 4] = [b"PK\x03\x04rest", CFB_SIGNATURE, b"just some text\n", b"<?xml version=\"1.0\"?><a/>"];
-        for name in ["/d/a.xml", "/d/a.html", "/d/a.mht", "/d/a.xltm", "/d/a.ppsm", "/d/a.pdf", "/d/a"] {
+        for name in ["/d/a.xml", "/d/a.html", "/d/a.mht", "/d/a.xlam", "/d/a.ppam", "/d/a.pdf", "/d/a"] {
             assert!(!is_converted_extension(std::path::Path::new(name)), "{name}");
             for content in contents {
                 assert!(!matches(name, content), "{name}");
             }
+        }
+    }
+
+    #[test]
+    fn xltm_potm_and_ppsm_are_converted_like_the_others_of_their_family() {
+        for ext in ["xltm", "potm", "ppsm", "XLTM"] {
+            let name = format!("/d/a.{ext}");
+            assert!(is_converted_extension(std::path::Path::new(&name)), "{ext}");
+            assert!(matches(&name, b"PK\x03\x04rest"), "{ext}");
+            assert!(matches(&name, CFB_SIGNATURE), "{ext}");
+            assert!(!matches(&name, b"just some text\n"), "{ext}");
         }
     }
 

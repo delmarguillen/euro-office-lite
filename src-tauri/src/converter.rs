@@ -494,7 +494,7 @@ mod tests {
 
     #[test]
     fn an_extension_outside_the_list_is_refused_before_any_copy() {
-        for name in ["data.xml", "page.html", "Book.xltm", "noextension"] {
+        for name in ["data.xml", "page.html", "Book.xlam", "noextension"] {
             let (original, work_dir) = original_and_work_dir(name, DOCX);
 
             let refused = prepare_editor_input(&original, &work_dir, None, None);
