@@ -221,23 +221,50 @@ fn all_rels_allowed<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, limits: &L
     if archive.len() > limits.entries {
         return false;
     }
+    let mut parts = Vec::new();
     let mut total = 0;
     for index in 0..archive.len() {
-        let is_rels = archive
-            .name_for_index(index)
-            .is_some_and(|name| name.to_ascii_lowercase().ends_with(".rels"));
-        if !is_rels {
+        let Some(name) = archive.name_for_index(index).map(String::from) else {
+            continue;
+        };
+        if !name.to_ascii_lowercase().ends_with(".rels") {
             continue;
         }
         let Some(xml) = read_rels(archive, index, limits.rels_bytes) else {
             return false;
         };
         total += xml.len() as u64;
-        if total > limits.total_rels_bytes || !rels_part_allowed(&xml) {
+        if total > limits.total_rels_bytes {
             return false;
         }
+        let Some(relationships) = read_relationships(&xml) else {
+            return false;
+        };
+        parts.push(RelsPart { name, relationships });
     }
-    true
+    let entries: HashSet<&str> = archive.file_names().collect();
+    parts.iter().all(|part| {
+        let folder = source_folder(&part.name);
+        part.relationships.iter().all(|relationship| relationship_allowed(relationship, folder, &entries))
+    })
+}
+
+// A .rels part and the relationships it declares.
+struct RelsPart {
+    name: String,
+    relationships: Vec<Relationship>,
+}
+
+// The attributes of a Relationship element, by local name: a prefixed one counts
+// as well. x2t only takes it for external when it has a TargetMode attribute,
+// without a prefix, of exactly "External" (CRelationShip::IsExternal and
+// ReadAttributes, OOXML/DocxFormat/Rels.cpp).
+#[derive(Default)]
+struct Relationship {
+    kinds: Vec<String>,
+    targets: Vec<String>,
+    modes: Vec<String>,
+    x2t_external: bool,
 }
 
 // The bytes of one .rels part, at most `limit` of them. None past the limit, or
@@ -256,47 +283,42 @@ fn read_rels<R: Read + Seek>(
     Some(xml)
 }
 
-// Only UTF-8 is read, and a part that cannot be analysed is not allowed.
-fn rels_part_allowed(xml: &[u8]) -> bool {
+// Only UTF-8 is read, and a part that cannot be analysed has None.
+fn read_relationships(xml: &[u8]) -> Option<Vec<Relationship>> {
     if xml.contains(&0) {
-        return false;
+        return None;
     }
-    let Ok(text) = std::str::from_utf8(xml) else {
-        return false;
-    };
+    let text = std::str::from_utf8(xml).ok()?;
     let mut reader = Reader::from_str(text.strip_prefix('\u{FEFF}').unwrap_or(text));
+    let mut relationships = Vec::new();
     let mut depth = 0usize;
     let mut saw_element = false;
     loop {
         match reader.read_event() {
-            Ok(Event::Eof) => return depth == 0 && saw_element,
+            Ok(Event::Eof) => return (depth == 0 && saw_element).then_some(relationships),
             Ok(Event::Decl(declaration)) => {
                 if !declares_utf8(&declaration) {
-                    return false;
+                    return None;
                 }
             }
             Ok(Event::Start(element)) => {
-                if !element_allowed(&element) {
-                    return false;
-                }
+                relationships.extend(relationship(&element)?);
                 depth += 1;
                 saw_element = true;
             }
             Ok(Event::Empty(element)) => {
-                if !element_allowed(&element) {
-                    return false;
-                }
+                relationships.extend(relationship(&element)?);
                 saw_element = true;
             }
             Ok(Event::End(_)) => depth = depth.saturating_sub(1),
             Ok(Event::Text(text)) => {
                 if depth == 0 && !text.iter().all(u8::is_ascii_whitespace) {
-                    return false;
+                    return None;
                 }
             }
             Ok(Event::Comment(_)) | Ok(Event::PI(_)) => {}
-            Ok(_) => return false,
-            Err(_) => return false,
+            Ok(_) => return None,
+            Err(_) => return None,
         }
     }
 }
@@ -309,38 +331,102 @@ pub(crate) fn declares_utf8(declaration: &quick_xml::events::BytesDecl) -> bool 
     }
 }
 
-fn element_allowed(element: &BytesStart) -> bool {
-    element.local_name().as_ref() != b"Relationship" || relationship_allowed(element)
-}
-
-fn relationship_allowed(element: &BytesStart) -> bool {
-    let mut targets = Vec::new();
-    let mut modes = Vec::new();
-    let mut types = Vec::new();
+// Some(None) for an element that is not a Relationship, None when its
+// attributes cannot be read.
+fn relationship(element: &BytesStart) -> Option<Option<Relationship>> {
+    if element.local_name().as_ref() != b"Relationship" {
+        return Some(None);
+    }
+    let mut relationship = Relationship::default();
     for attribute in element.attributes() {
-        let Ok(attribute) = attribute else {
-            return false;
-        };
-        let Ok(value) = attribute.unescape_value() else {
-            return false;
-        };
+        let attribute = attribute.ok()?;
+        let value = attribute.unescape_value().ok()?.into_owned();
+        if attribute.key.as_ref() == b"TargetMode" && value == "External" {
+            relationship.x2t_external = true;
+        }
         match attribute.key.local_name().as_ref() {
-            b"Target" => targets.push(value.into_owned()),
-            b"TargetMode" => modes.push(value.into_owned()),
-            b"Type" => types.push(value.into_owned()),
+            b"Target" => relationship.targets.push(value),
+            b"TargetMode" => relationship.modes.push(value),
+            b"Type" => relationship.kinds.push(value),
             _ => {}
         }
     }
-    if types.iter().any(|kind| is_alt_chunk(kind)) {
+    Some(Some(relationship))
+}
+
+fn relationship_allowed(relationship: &Relationship, folder: &str, entries: &HashSet<&str>) -> bool {
+    let Relationship { kinds, targets, modes, x2t_external } = relationship;
+    if kinds.iter().any(|kind| is_alt_chunk(kind)) {
+        return false;
+    }
+    let in_package = |target: &String| target_stays_in_package(folder, target, entries);
+    if !x2t_external && !targets.iter().all(in_package) {
         return false;
     }
     if modes.iter().all(|mode| mode == "Internal") {
         return true;
     }
-    if !types.is_empty() && types.iter().all(|kind| HYPERLINK_TYPES.contains(&kind.as_str())) {
+    if !kinds.is_empty() && kinds.iter().all(|kind| HYPERLINK_TYPES.contains(&kind.as_str())) {
         return true;
     }
     !targets.is_empty() && targets.iter().all(|target| target == MISSING_TARGET || has_allowed_scheme(target))
+}
+
+// The folder of the part a .rels part belongs to: "word" for
+// word/_rels/document.xml.rels, the package root for _rels/.rels.
+fn source_folder(rels_name: &str) -> &str {
+    let folder = rels_name.rsplit_once(['/', '\\']).map_or("", |(folder, _)| folder);
+    let (parent, last) = folder.rsplit_once(['/', '\\']).unwrap_or(("", folder));
+    if last.eq_ignore_ascii_case("_rels") {
+        parent
+    } else {
+        folder
+    }
+}
+
+// x2t joins an internal target to the folder of its part, or to the package
+// root when it starts with "/" (CreateFile, OOXML/DocxFormat/FileFactory.cpp).
+// Presentations and themes look for a part that is not in that folder from the
+// package root too (FileContainer::CorrectPathRels,
+// OOXML/PPTXFormat/FileContainer.cpp).
+fn target_stays_in_package(folder: &str, target: &str, entries: &HashSet<&str>) -> bool {
+    let Some(part) = resolved_target(folder, target) else {
+        return false;
+    };
+    entries.contains(part.as_str()) || resolved_target("", target).is_some()
+}
+
+// The path in the package x2t reads for an internal target, None when it is
+// outside the package. CPath::Normalize (OOXML/SystemUtility/SystemUtility.cpp)
+// takes "/" and "\\" for separators and drops empty segments; a ".." followed by
+// a separator removes the segment before it, "." included. The file system then
+// resolves the "." and the last ".." left.
+fn resolved_target(folder: &str, target: &str) -> Option<String> {
+    let base = if target.starts_with('/') { "" } else { folder };
+    let joined = format!("{base}/{target}");
+    let mut normalized: Vec<&str> = Vec::new();
+    let mut segments = joined.split(['/', '\\']).peekable();
+    while let Some(segment) = segments.next() {
+        let followed_by_separator = segments.peek().is_some();
+        match segment {
+            "" => {}
+            ".." if followed_by_separator => {
+                normalized.pop()?;
+            }
+            _ => normalized.push(segment),
+        }
+    }
+    let mut resolved = Vec::new();
+    for segment in normalized {
+        match segment {
+            "." => {}
+            ".." => {
+                resolved.pop()?;
+            }
+            _ => resolved.push(segment),
+        }
+    }
+    Some(resolved.join("/"))
 }
 
 fn is_alt_chunk(kind: &str) -> bool {
@@ -418,6 +504,11 @@ mod tests {
         rels_xml(&format!(
             "<Relationship Id=\"rId1\" Type=\"{kind}\" Target=\"{target}\" TargetMode=\"External\"/>"
         ))
+    }
+
+    // One .rels part, judged in a package of its own.
+    fn rels_part_allowed(xml: &[u8]) -> bool {
+        allowed(package(&[("word/_rels/document.xml.rels", xml)]))
     }
 
     fn rels_allowed(xml: &str) -> bool {
@@ -527,6 +618,66 @@ mod tests {
         for target in ["null", "NULL ", "NULL/a.png", "/NULL"] {
             assert!(!image_target_allowed(target), "{target}");
         }
+    }
+
+    fn internal(target: &str, mode: &str) -> String {
+        rels_xml(&format!("<Relationship Id=\"rId1\" Type=\"{IMAGE}\" Target=\"{target}\"{mode}/>"))
+    }
+
+    const SLIDE_RELS: &str = "ppt/slides/_rels/slide1.xml.rels";
+    const SLIDE_PICTURE: (&str, &[u8]) = ("ppt/media/image1.png", b"png");
+
+    #[test]
+    fn an_internal_target_outside_the_package_is_refused() {
+        let modes = ["", " TargetMode=\"Internal\"", " TargetMode=\"external\"", " x:TargetMode=\"External\""];
+        for target in [
+            "../../outside.png",
+            "/../outside.png",
+            "..\\..\\outside.png",
+            "media/../../../outside.png",
+            "../word/../../outside.png",
+            "file:///../../../outside.png",
+        ] {
+            for mode in modes {
+                let rels = internal(target, mode).replace("<Relationships ", "<Relationships xmlns:x=\"urn:x\" ");
+                let bytes = package(&[("word/_rels/document.xml.rels", rels.as_bytes()), ("outside.png", b"png")]);
+                assert!(!allowed(bytes), "{target}{mode}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_picture_in_the_media_folder_of_a_presentation_is_accepted() {
+        for target in ["../media/image1.png", "/ppt/media/image1.png", "..\\media\\image1.png", "./../media/image1.png"] {
+            let rels = internal(target, "");
+            let bytes = package(&[(SLIDE_RELS, rels.as_bytes()), SLIDE_PICTURE]);
+            assert!(allowed(bytes), "{target}");
+        }
+    }
+
+    #[test]
+    fn a_part_that_is_not_there_is_also_looked_for_from_the_package_root() {
+        let missing = internal("../media/image2.png", "");
+        assert!(!allowed(package(&[(SLIDE_RELS, missing.as_bytes()), SLIDE_PICTURE])));
+        let deep = internal("../../../../home/picture.png", "");
+        assert!(!allowed(package(&[("a/b/c/d/e/f/_rels/x.xml.rels", deep.as_bytes())])));
+        let from_root = internal("media/image2.png", "");
+        assert!(allowed(package(&[(SLIDE_RELS, from_root.as_bytes()), SLIDE_PICTURE])));
+    }
+
+    // CPath::Normalize removes "./" with the ".." after it, as it would a folder.
+    #[test]
+    fn a_dot_segment_is_a_folder_for_the_dot_dot_after_it() {
+        let rels = internal("./../../outside.png", "");
+        assert!(allowed(package(&[("word/_rels/document.xml.rels", rels.as_bytes()), ("outside.png", b"png")])));
+        assert!(!allowed(package(&[("word/_rels/document.xml.rels", rels.as_bytes())])));
+    }
+
+    #[test]
+    fn an_external_target_is_not_resolved_in_the_package() {
+        let hyperlink = HYPERLINK_TYPES[0];
+        assert!(rels_allowed(&external(hyperlink, "../../../Reports/other.docx")));
+        assert!(rels_allowed(&external(IMAGE, "file:///../../../a.png")));
     }
 
     // The relationship is judged the same way however the picture refers to it.
