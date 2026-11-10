@@ -437,58 +437,35 @@ async fn open_file_inner(
         ),
     );
 
-    // A TXT or CSV is read from a copy made for x2t. current_file and the recent
-    // list keep the original path, and saving keeps the original's options; only
-    // the conversion sees the copy.
-    let read_copy = match crate::text_import::prepare_read_copy(
+    // x2t reads a checked copy in the temp dir. current_file and the recent list
+    // keep the original path, and saving keeps the original's options; only the
+    // conversion sees the copy.
+    let input_copy = super::converter::prepare_editor_input(
         Path::new(&source),
         &state.temp_dir,
         text_kind,
         text_options,
-    ) {
-        Ok(copy) => copy,
-        Err(e) => {
-            log_event(
-                &state,
-                &format!("[OPEN] failed file={} error=read copy: {}", file_name, e),
-            );
-            return Err(e.to_string());
-        }
-    };
-    let rtf_copy = match crate::text_import::rtf_read_copy(Path::new(&source), &state.temp_dir) {
-        Ok(copy) => copy,
-        Err(e) => {
-            log_event(
-                &state,
-                &format!("[OPEN] failed file={} error=read copy: {}", file_name, e),
-            );
-            return Err(e.to_string());
-        }
-    };
-    let copy_path = read_copy
-        .as_ref()
-        .map(|copy| copy.path.clone())
-        .or(rtf_copy);
-    let convert_from = copy_path
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_else(|| source.clone());
-    let convert_options = read_copy.as_ref().map(|copy| copy.options).or(text_options);
+    )
+    .map_err(|error| {
+        log_event(
+            &state,
+            &format!("[OPEN] failed file={} error={}", file_name, error),
+        );
+        error
+    })?;
 
     let converted = super::converter::convert_file(
         &app,
-        &convert_from,
+        &input_copy.path().to_string_lossy(),
         &output.to_string_lossy(),
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
         &crate::temp_layout::fontdata_dir(&state.font_root),
-        convert_options,
+        input_copy.options.or(text_options),
     )
     .await;
-    if let Some(path) = &copy_path {
-        let _ = std::fs::remove_file(path);
-    }
+    drop(input_copy);
     converted.map_err(|error| {
         log_event(
             &state,
@@ -1178,9 +1155,8 @@ pub async fn convert_for_insert(
     token: String,
 ) -> Result<serde_json::Value, String> {
     let input = state.grants.resolve(&token, GrantKind::Insert)?;
-    let path = input.to_string_lossy().to_string();
-    let insert_dir = state.temp_dir.join("insert_tmp");
-    let _ = std::fs::create_dir_all(&insert_dir);
+    let insert = InsertDir::create(&state.temp_dir).map_err(|e| e.to_string())?;
+    let insert_dir = insert.0.clone();
 
     let output = insert_dir.join("Editor.bin");
 
@@ -1197,22 +1173,12 @@ pub async fn convert_for_insert(
         }
         None => None,
     };
-    let read_copy =
-        crate::text_import::prepare_read_copy(&input, &insert_dir, text_kind, text_options)
-            .map_err(|e| e.to_string())?;
-    let rtf_copy =
-        crate::text_import::rtf_read_copy(&input, &insert_dir).map_err(|e| e.to_string())?;
-    let copy_path = read_copy
-        .as_ref()
-        .map(|copy| copy.path.clone())
-        .or(rtf_copy);
-    let convert_from = copy_path
-        .as_ref()
-        .map_or_else(|| path.clone(), |copy| copy.to_string_lossy().to_string());
+    let input_copy =
+        super::converter::prepare_editor_input(&input, &insert_dir, text_kind, text_options)?;
 
     let converted = super::converter::convert_file(
         &app,
-        &convert_from,
+        &input_copy.path().to_string_lossy(),
         &output.to_string_lossy(),
         format_from,
         format_to,
@@ -1221,9 +1187,7 @@ pub async fn convert_for_insert(
         None,
     )
     .await;
-    if let Some(copy) = &copy_path {
-        let _ = std::fs::remove_file(copy);
-    }
+    drop(input_copy);
     converted?;
 
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
@@ -1250,11 +1214,55 @@ pub async fn convert_for_insert(
         );
         images.insert(name, serde_json::Value::String(img_url));
     }
+    keep_insert_media(&insert_dir.join("media"), &state.temp_dir.join("insert_tmp").join("media"));
 
     Ok(serde_json::json!({
         "data": b64,
         "images": images
     }))
+}
+
+// Each insert converts in a folder of its own under insert_tmp/, so two inserts
+// at the same time never share the copy, Editor.bin or x2t's scratch files.
+// The folder is removed when this is dropped.
+struct InsertDir(PathBuf);
+
+impl InsertDir {
+    fn create(temp_dir: &Path) -> std::io::Result<InsertDir> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let parent = temp_dir.join("insert_tmp");
+        std::fs::create_dir_all(&parent)?;
+        loop {
+            let dir = parent.join(format!("convert-{}", NEXT.fetch_add(1, Ordering::Relaxed)));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(InsertDir(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+impl Drop for InsertDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+// copy-to-media resolves a bare image name against insert_tmp/media/ (main.rs,
+// copy_source), so the images of the last insert stay there once its own
+// folder is gone, as they did when every insert used insert_tmp/ itself.
+fn keep_insert_media(insert_media_dir: &Path, kept_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(insert_media_dir) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(kept_dir);
+    for entry in entries.flatten() {
+        let kept = kept_dir.join(entry.file_name());
+        let _ = std::fs::remove_file(&kept);
+        let _ = std::fs::rename(entry.path(), &kept);
+    }
 }
 
 // A sync command runs on the main thread, so it never waits for the build:
@@ -1742,6 +1750,40 @@ mod tests {
             "the second request must not add a third file"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_inserts_at_the_same_time_convert_in_different_folders() {
+        let dir = staging_dir();
+
+        let first = InsertDir::create(&dir).unwrap();
+        let second = InsertDir::create(&dir).unwrap();
+
+        assert_ne!(first.0, second.0);
+        assert!(first.0.is_dir() && second.0.is_dir());
+        assert_eq!(first.0.parent(), Some(dir.join("insert_tmp").as_path()));
+        let (first_dir, second_dir) = (first.0.clone(), second.0.clone());
+        drop(first);
+        drop(second);
+        assert!(!first_dir.exists() && !second_dir.exists(), "each folder goes with its insert");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_images_of_an_insert_stay_where_a_bare_name_is_resolved() {
+        let dir = staging_dir();
+        let insert = InsertDir::create(&dir).unwrap();
+        std::fs::create_dir_all(insert.0.join("media")).unwrap();
+        std::fs::write(insert.0.join("media/image1.png"), b"inserted").unwrap();
+        let kept = dir.join("insert_tmp/media");
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::write(kept.join("image1.png"), b"earlier insert").unwrap();
+
+        keep_insert_media(&insert.0.join("media"), &kept);
+        drop(insert);
+
+        assert_eq!(std::fs::read(kept.join("image1.png")).unwrap(), b"inserted");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

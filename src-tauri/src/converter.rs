@@ -4,6 +4,8 @@ use tauri_plugin_shell::ShellExt;
 
 use crate::x2t_task::{self, convert_params_xml, params_path, write_file, FONT_CACHE_ERROR};
 
+// A conversion to Editor.bin (8192) takes the path of an EditorInput: the copy
+// prepare_editor_input checked.
 pub async fn convert_file(
     app: &AppHandle,
     input: &str,
@@ -16,15 +18,6 @@ pub async fn convert_file(
     fontdata_dir: &std::path::Path,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<String, String> {
-    // Removed when this function returns, whichever way it does.
-    let mut package_copy = TempCopy(None);
-    if format_to == 8192 {
-        check_container_content(input)?;
-        package_copy.0 = package_images_copy(input, temp_dir)?;
-    }
-    let copy_input = package_copy.0.as_ref().map(|path| path.to_string_lossy().into_owned());
-    let input = copy_input.as_deref().unwrap_or(input);
-
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let binaries_dir = resource_dir.join("binaries");
 
@@ -202,8 +195,67 @@ fn ensure_pdf_font_cache(
     }
 }
 
+// What x2t converts to Editor.bin when a document is opened or inserted: a copy
+// in the instance's folder, made from one read of the user's file. The checks
+// read that copy, and x2t reads the same bytes. Every copy is removed when this
+// is dropped, whether the conversion worked or not.
+pub struct EditorInput {
+    copies: Vec<std::path::PathBuf>,
+    // The options x2t reads a TXT or CSV copy with.
+    pub options: Option<crate::text_import::TextOptions>,
+}
+
+impl EditorInput {
+    // The last copy made: an ODF package's references are emptied in a copy of
+    // the first one.
+    pub fn path(&self) -> &std::path::Path {
+        self.copies.last().expect("an EditorInput holds at least one copy")
+    }
+}
+
+impl Drop for EditorInput {
+    fn drop(&mut self) {
+        for copy in &self.copies {
+            let _ = std::fs::remove_file(copy);
+        }
+    }
+}
+
+// The TXT and CSV copy (text_import::prepare_read_copy) is already one; every
+// other document gets a copy of its own.
+pub fn prepare_editor_input(
+    source: &std::path::Path,
+    work_dir: &std::path::Path,
+    text_kind: Option<crate::text_import::TextKind>,
+    text_options: Option<crate::text_import::TextOptions>,
+) -> Result<EditorInput, String> {
+    let mut input = read_copy(source, work_dir, text_kind, text_options)?;
+    let checked = input.path().to_string_lossy().into_owned();
+    check_container_content(&checked)?;
+    if let Some(package_copy) = package_images_copy(&checked, &work_dir.to_string_lossy())? {
+        input.copies.push(package_copy);
+    }
+    Ok(input)
+}
+
+fn read_copy(
+    source: &std::path::Path,
+    work_dir: &std::path::Path,
+    text_kind: Option<crate::text_import::TextKind>,
+    text_options: Option<crate::text_import::TextOptions>,
+) -> Result<EditorInput, String> {
+    let text_copy = crate::text_import::prepare_read_copy(source, work_dir, text_kind, text_options)
+        .map_err(|e| format!("read copy: {}", e))?;
+    if let Some(copy) = text_copy {
+        return Ok(EditorInput { copies: vec![copy.path], options: Some(copy.options) });
+    }
+    let copy = crate::text_import::document_read_copy(source, work_dir)
+        .map_err(|e| format!("read copy: {}", e))?;
+    Ok(EditorInput { copies: vec![copy], options: None })
+}
+
 // The copy x2t reads an ODF package from when one of its picture references has
-// been emptied, or None to read the original.
+// been emptied, or None to read the one it was given.
 fn package_images_copy(
     input: &str,
     temp_dir: &str,
@@ -215,16 +267,6 @@ fn package_images_copy(
         PackageImages::Unchanged => Ok(None),
         PackageImages::Copy(copy) => Ok(Some(copy)),
         PackageImages::NotAllowed => Err(not_valid_error(path)),
-    }
-}
-
-struct TempCopy(Option<std::path::PathBuf>);
-
-impl Drop for TempCopy {
-    fn drop(&mut self) {
-        if let Some(path) = &self.0 {
-            let _ = std::fs::remove_file(path);
-        }
     }
 }
 
@@ -327,6 +369,75 @@ mod tests {
     fn a_real_word_97_doc_passes_the_content_check() {
         let doc = include_bytes!("../../tests/fixtures/word97.doc");
         assert_eq!(content_check("word97.doc", doc), Ok(()));
+    }
+
+    // The original in one folder, the instance's work folder next to it.
+    fn original_and_work_dir(name: &str, content: &[u8]) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = scratch_root();
+        let original = root.join(name);
+        std::fs::write(&original, content).unwrap();
+        let work_dir = root.join("work");
+        std::fs::create_dir_all(&work_dir).unwrap();
+        (original, work_dir)
+    }
+
+    fn files_in(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(dir).unwrap().count()
+    }
+
+    const DOCX: &[u8] = include_bytes!("../../tests/corpus/rich.docx");
+
+    #[test]
+    fn the_conversion_reads_a_copy_in_the_work_folder_not_the_original() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_ne!(input.path(), original.as_path());
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        assert_eq!(std::fs::read(input.path()).unwrap(), DOCX);
+        assert_eq!(input.options, None);
+    }
+
+    #[test]
+    fn the_copy_is_removed_when_the_conversion_ends_whatever_its_outcome() {
+        for outcome in [Ok(()), Err("x2t conversion failed (exit code 89)")] {
+            let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+            let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+            let copy = input.path().to_path_buf();
+
+            assert!(copy.exists());
+            // What open_file and convert_for_insert do once x2t returns.
+            let converted: Result<(), &str> = outcome;
+            drop(input);
+
+            assert!(!copy.exists(), "{:?}", converted);
+            assert_eq!(files_in(&work_dir), 0, "{:?}", converted);
+            assert_eq!(std::fs::read(&original).unwrap(), DOCX, "the original stays");
+        }
+    }
+
+    #[test]
+    fn no_copy_stays_when_the_copy_is_refused() {
+        let (original, work_dir) = original_and_work_dir("fake.doc", b"Hello, plain text.\n");
+
+        let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+        assert_eq!(refused.err(), Some("This file is not a valid .doc".to_string()));
+        assert_eq!(files_in(&work_dir), 0);
+    }
+
+    #[test]
+    fn a_txt_is_read_from_its_utf32_copy_only() {
+        use crate::text_import::{detect_file, TextKind, ENCODING_UTF32_LE};
+        let (original, work_dir) = original_and_work_dir("notes.txt", b"line one\nline two\n");
+        let options = detect_file(&original, TextKind::Txt).unwrap();
+
+        let input = prepare_editor_input(&original, &work_dir, Some(TextKind::Txt), Some(options)).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        assert_eq!(input.options.map(|o| o.encoding), Some(ENCODING_UTF32_LE));
+        assert_eq!(files_in(&work_dir), 1, "no second copy");
     }
 
     // A temp root whose font cache is missing, next to an app folder whose
