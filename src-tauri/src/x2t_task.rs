@@ -964,6 +964,16 @@ impl ContentSample {
         Ok(ContentSample { head, tail })
     }
 
+    // minizip opens a file that starts like a ZIP or has the end of a central
+    // directory in its tail: only such a file can hold a package.
+    pub fn may_hold_a_package(&self) -> bool {
+        is_zip(&self.head) || has_zip_end(&self.tail)
+    }
+
+    pub fn starts_like_a_cfb(&self) -> bool {
+        is_cfb(&self.head)
+    }
+
     #[cfg(test)]
     pub fn of(bytes: &[u8]) -> ContentSample {
         ContentSample {

@@ -237,7 +237,7 @@ pub fn prepare_editor_input(
     let copy = input.path().to_path_buf();
     let content = x2t_task::ContentSample::read(&copy).map_err(|e| e.to_string())?;
     check_container_content(&copy, &content)?;
-    if let Some(package_copy) = package_images_copy(&copy, &content.head, work_dir)? {
+    if let Some(package_copy) = package_images_copy(&copy, &content, work_dir)? {
         input.copies.push(package_copy);
     }
     Ok(input)
@@ -263,11 +263,11 @@ fn read_copy(
 // been emptied, or None to read the one it was given.
 fn package_images_copy(
     path: &std::path::Path,
-    head: &[u8],
+    content: &x2t_task::ContentSample,
     temp_dir: &std::path::Path,
 ) -> Result<Option<std::path::PathBuf>, String> {
     use crate::odf_links::PackageImages;
-    match crate::odf_links::prepare(path, head, temp_dir) {
+    match crate::odf_links::prepare(path, content, temp_dir) {
         PackageImages::Unchanged => Ok(None),
         PackageImages::Copy(copy) => Ok(Some(copy)),
         PackageImages::NotAllowed => Err(not_valid_error(path)),
@@ -288,7 +288,7 @@ fn check_container_content(
     let matches_format = x2t_task::content_matches_extension(path, content);
     if matches_format
         && opens_if_it_starts_like_a_zip(path, &content.head)
-        && crate::package_relationships::relationships_are_allowed(path, &content.head)
+        && crate::package_relationships::relationships_are_allowed(path, content)
     {
         return Ok(());
     }

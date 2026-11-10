@@ -13,8 +13,8 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::package_relationships::{declares_utf8, has_allowed_scheme, part_names_are_unique, percent_decoded};
+use crate::x2t_task::ContentSample;
 
-const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
 const MANIFEST: &str = "META-INF/manifest.xml";
 
 struct Limits {
@@ -42,10 +42,11 @@ pub enum PackageImages {
 
 struct NotAnalysable;
 
-// A ZIP whose central directory cannot be opened never gets here: the content
-// check (converter.rs) refuses it first.
-pub fn prepare(path: &Path, head: &[u8], temp_dir: &Path) -> PackageImages {
-    if !head.starts_with(ZIP_SIGNATURE) {
+// Any file the zip library opens as a package, whatever it starts like. A ZIP
+// whose central directory cannot be opened never gets here: the content check
+// (converter.rs) refuses it first.
+pub fn prepare(path: &Path, content: &ContentSample, temp_dir: &Path) -> PackageImages {
+    if !content.may_hold_a_package() {
         return PackageImages::Unchanged;
     }
     let Ok(file) = std::fs::File::open(path) else {
@@ -495,7 +496,7 @@ mod tests {
         let (dir, temp) = scratch(name);
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
-        let outcome = prepare(&path, &bytes[..256.min(bytes.len())], &temp);
+        let outcome = prepare(&path, &ContentSample::of(bytes), &temp);
         (dir, temp, outcome)
     }
 
@@ -620,7 +621,7 @@ mod tests {
             }
             let bytes = std::fs::read(&path).unwrap();
             let (dir, temp) = scratch("corpus-ooxml");
-            assert_eq!(prepare(&path, &bytes[..256], &temp), PackageImages::Unchanged, "{}", path.display());
+            assert_eq!(prepare(&path, &ContentSample::of(&bytes), &temp), PackageImages::Unchanged, "{}", path.display());
             let _ = std::fs::remove_dir_all(&dir);
             checked += 1;
         }
@@ -662,6 +663,16 @@ mod tests {
             assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy");
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    #[test]
+    fn an_odf_package_after_a_cfb_start_is_neutralized_too() {
+        let mut bytes = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1".to_vec();
+        bytes.extend_from_slice(&[0; 504]);
+        bytes.extend_from_slice(&odt("../near.png"));
+        let (dir, _, outcome) = prepared("behind.odt", &bytes);
+        assert!(matches!(outcome, PackageImages::Copy(_)), "{outcome:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn manifest(entries: &str) -> String {
@@ -795,7 +806,7 @@ mod tests {
         let bytes = odt("../near.png");
         std::fs::write(&path, &bytes).unwrap();
         let missing = temp.join("gone");
-        assert_eq!(prepare(&path, &bytes[..256], &missing), PackageImages::NotAllowed);
+        assert_eq!(prepare(&path, &ContentSample::of(&bytes), &missing), PackageImages::NotAllowed);
         assert!(!missing.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -830,7 +841,7 @@ mod tests {
             }
             let bytes = std::fs::read(&path).unwrap();
             let (dir, temp) = scratch("corpus");
-            assert_eq!(prepare(&path, &bytes[..256], &temp), PackageImages::Unchanged, "{}", path.display());
+            assert_eq!(prepare(&path, &ContentSample::of(&bytes), &temp), PackageImages::Unchanged, "{}", path.display());
             let _ = std::fs::remove_dir_all(&dir);
             checked += 1;
         }

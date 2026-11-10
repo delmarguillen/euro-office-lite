@@ -9,9 +9,8 @@ use std::path::Path;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
-use crate::x2t_task::ZIP_END_SEARCH_LEN;
+use crate::x2t_task::{ContentSample, ZIP_END_SEARCH_LEN};
 
-const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
 const ALLOWED_SCHEMES: [&str; 5] = ["http", "https", "mailto", "ftp", "file"];
 
 // x2t 10.0.0.169 only follows image relationships: these two Types never read
@@ -40,18 +39,21 @@ const LIMITS: Limits = Limits {
     total_rels_bytes: 64 * 1024 * 1024,
 };
 
-// Whether the file's relationships are all acceptable. A file that is not a ZIP
-// has none, and one whose central directory cannot be opened is refused by the
-// content check (converter.rs) whatever this says.
-pub fn relationships_are_allowed(path: &Path, head: &[u8]) -> bool {
-    if !head.starts_with(ZIP_SIGNATURE) {
+// Whether the file's relationships are all acceptable, for any file the zip
+// library opens as a package, whatever it starts like. A file that cannot hold a
+// package has none. One that starts like a ZIP and does not open is refused by
+// the content check (converter.rs) whatever this says. One that starts like a
+// CFB, has the end of a central directory in its tail and does not open is not
+// accepted: its parts cannot be checked.
+pub fn relationships_are_allowed(path: &Path, content: &ContentSample) -> bool {
+    if !content.may_hold_a_package() {
         return true;
     }
     let Ok(file) = std::fs::File::open(path) else {
         return true;
     };
     let Ok(mut archive) = zip::ZipArchive::new(file) else {
-        return true;
+        return !content.starts_like_a_cfb();
     };
     let Ok(mut raw) = std::fs::File::open(path) else {
         return false;
@@ -648,7 +650,7 @@ mod tests {
     fn a_zip_whose_central_directory_cannot_be_opened_is_left_to_x2t() {
         let bytes = b"PK\x03\x04 not a real archive";
         let path = scratch_file("broken.docx", bytes);
-        assert!(relationships_are_allowed(&path, bytes));
+        assert!(relationships_are_allowed(&path, &ContentSample::of(bytes)));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -656,7 +658,7 @@ mod tests {
     fn a_file_that_is_not_a_zip_has_no_relationships_to_check() {
         let bytes = b"\xD0\xCF\x11\xE0 something";
         let path = scratch_file("old.doc", bytes);
-        assert!(relationships_are_allowed(&path, bytes));
+        assert!(relationships_are_allowed(&path, &ContentSample::of(bytes)));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -665,7 +667,7 @@ mod tests {
         let rels = external(IMAGE, ABS);
         let bytes = package(&[("word/_rels/document.xml.rels", rels.as_bytes())]);
         let path = scratch_file("renamed.doc", &bytes);
-        assert!(!relationships_are_allowed(&path, &bytes[..256.min(bytes.len())]));
+        assert!(!relationships_are_allowed(&path, &ContentSample::of(&bytes)));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -679,7 +681,7 @@ mod tests {
     // The whole check, on a file holding `bytes`.
     fn package_accepted(bytes: &[u8]) -> bool {
         let path = unique_scratch_file("package.docx", bytes);
-        let accepted = relationships_are_allowed(&path, &bytes[..256.min(bytes.len())]);
+        let accepted = relationships_are_allowed(&path, &ContentSample::of(bytes));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
         accepted
     }
@@ -835,6 +837,42 @@ mod tests {
         assert!(!within(DirectoryLimits { entries: 2, bytes: size - 1 }));
     }
 
+    const WORD97_DOC: &[u8] = include_bytes!("../../tests/fixtures/word97.doc");
+
+    fn followed_by(first: &[u8], then: &[u8]) -> Vec<u8> {
+        let mut bytes = first.to_vec();
+        bytes.extend_from_slice(then);
+        bytes
+    }
+
+    #[test]
+    fn a_package_after_a_cfb_start_is_checked_like_any_other() {
+        let rels = external(IMAGE, ABS);
+        let linked = package(&[("word/_rels/document.xml.rels", rels.as_bytes())]);
+        let bytes = followed_by(WORD97_DOC, &linked);
+        assert!(opens(&bytes));
+        assert!(!package_accepted(&bytes));
+    }
+
+    #[test]
+    fn a_cfb_with_the_end_of_a_package_the_zip_library_cannot_open_is_refused() {
+        // An end record for a directory of one entry, with no entry before it.
+        let mut end = EMPTY_END.to_vec();
+        end[8] = 1;
+        end[10] = 1;
+        end[12] = 46;
+        let bytes = followed_by(WORD97_DOC, &end);
+        assert!(!opens(&bytes));
+        assert!(!package_accepted(&bytes));
+    }
+
+    #[test]
+    fn a_word_97_doc_is_accepted_with_or_without_an_embedded_package() {
+        assert!(package_accepted(WORD97_DOC));
+        let embedded = followed_by(WORD97_DOC, &package(&[("embedded.xml", b"<a/>")]));
+        assert!(package_accepted(&embedded));
+    }
+
     fn corpus_documents(folder: &Path, found: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(folder).unwrap() {
             let path = entry.unwrap().path();
@@ -856,8 +894,8 @@ mod tests {
         corpus_documents(&root, &mut documents);
         assert!(!documents.is_empty(), "no corpus found at {}", root.display());
         for document in documents {
-            let bytes = std::fs::read(&document).unwrap();
-            assert!(relationships_are_allowed(&document, &bytes), "{}", document.display());
+            let content = ContentSample::read(&document).unwrap();
+            assert!(relationships_are_allowed(&document, &content), "{}", document.display());
         }
     }
 }
