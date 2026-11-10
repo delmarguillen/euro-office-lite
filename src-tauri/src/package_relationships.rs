@@ -127,11 +127,15 @@ struct DirectoryLimits {
 
 const DIRECTORY_LIMITS: DirectoryLimits = DirectoryLimits { entries: 20_000, bytes: 16 * 1024 * 1024 };
 
-// Where a central directory ends, its size and how many entries it says it has.
+// Where a central directory ends, its size, where it says it starts and how
+// many entries it says it has. `strays` are the other end records and Zip64
+// locators in the tail, where they are in the file.
 struct DirectoryEnd {
     end: u64,
     size: u64,
+    offset: u64,
     entries: u64,
+    strays: Vec<u64>,
 }
 
 fn unique_names_within<R: Read + Seek>(reader: &mut R, library_start: u64, limits: &DirectoryLimits) -> bool {
@@ -147,36 +151,50 @@ fn unique_names_within<R: Read + Seek>(reader: &mut R, library_start: u64, limit
     let Some(directory) = read_at(reader, library_start, end.size as usize) else {
         return false;
     };
-    let Some(names) = entry_names(&directory) else {
+    let Some(entries) = directory_entries(&directory) else {
         return false;
     };
-    names.len() as u64 == end.entries && no_two_alike(&names)
+    let names: Vec<&[u8]> = entries.iter().map(|entry| entry_name(entry)).collect();
+    if names.len() as u64 != end.entries || !no_two_alike(&names) {
+        return false;
+    }
+    end.strays.is_empty() || strays_are_inside_entries(reader, &entries, &end)
 }
 
-// The end of the central directory minizip finds. A tail with more than one end
-// record, or with a Zip64 locator anywhere but right before it, could lead the
-// zip library and minizip to different directories, so it has none.
+// The end of the central directory minizip finds: it looks back from the end of
+// the file and takes the first end record it meets, and the first Zip64
+// locator it meets the same way (unz64local_SearchCentralDir and
+// unz64local_SearchCentralDir64 in minizip's unzip.c). That locator has to be
+// right before that end record.
 fn directory_end<R: Read + Seek>(reader: &mut R) -> Option<DirectoryEnd> {
     let len = reader.seek(SeekFrom::End(0)).ok()?;
     let tail_start = len.saturating_sub(ZIP_END_SEARCH_LEN as u64);
     let tail = read_at(reader, tail_start, (len - tail_start) as usize)?;
     let ends = positions(&tail, END_SIGNATURE);
     let locators = positions(&tail, ZIP64_LOCATOR_SIGNATURE);
-    let [end] = ends[..] else {
-        return None;
+    let (&end, other_ends) = ends.split_last()?;
+    let mut directory = match locators.split_last() {
+        None => zip32_end(&tail[end..], tail_start + end as u64)?,
+        Some((&locator, _)) if locator + ZIP64_LOCATOR_LEN == end => zip64_end(reader, &tail[locator..end])?,
+        Some(_) => return None,
     };
-    match locators[..] {
-        [] => zip32_end(&tail[end..], tail_start + end as u64),
-        [locator] if locator + ZIP64_LOCATOR_LEN == end => zip64_end(reader, &tail[locator..end]),
-        _ => None,
-    }
+    let other_locators = locators.split_last().map_or(&[][..], |(_, others)| others);
+    let strays = other_ends.iter().chain(other_locators);
+    directory.strays = strays.map(|at| tail_start + *at as u64).collect();
+    Some(directory)
 }
 
 fn zip32_end(record: &[u8], at: u64) -> Option<DirectoryEnd> {
     if record.len() < END_LEN {
         return None;
     }
-    Some(DirectoryEnd { end: at, size: u32_at(record, 12) as u64, entries: u16_at(record, 10) as u64 })
+    Some(DirectoryEnd {
+        end: at,
+        size: u32_at(record, 12) as u64,
+        offset: u32_at(record, 16) as u64,
+        entries: u16_at(record, 10) as u64,
+        strays: Vec::new(),
+    })
 }
 
 // minizip reads the Zip64 end record where the locator says, from the start of
@@ -187,27 +205,148 @@ fn zip64_end<R: Read + Seek>(reader: &mut R, locator: &[u8]) -> Option<Directory
     if !record.starts_with(ZIP64_END_SIGNATURE) {
         return None;
     }
-    Some(DirectoryEnd { end: at, size: u64_at(&record, 40), entries: u64_at(&record, 32) })
+    Some(DirectoryEnd {
+        end: at,
+        size: u64_at(&record, 40),
+        offset: u64_at(&record, 48),
+        entries: u64_at(&record, 32),
+        strays: Vec::new(),
+    })
 }
 
-// The name of every entry of a central directory, in order. None when it holds
+// Every entry of a central directory, whole, in order. None when it holds
 // anything but whole entries.
-fn entry_names(directory: &[u8]) -> Option<Vec<&[u8]>> {
-    let mut names = Vec::new();
+fn directory_entries(directory: &[u8]) -> Option<Vec<&[u8]>> {
+    let mut entries = Vec::new();
     let mut rest = directory;
     while !rest.is_empty() {
         if rest.len() < ENTRY_LEN || !rest.starts_with(ENTRY_SIGNATURE) {
             return None;
         }
-        let name_len = u16_at(rest, 28) as usize;
-        let entry_len = ENTRY_LEN + name_len + u16_at(rest, 30) as usize + u16_at(rest, 32) as usize;
+        let entry_len = ENTRY_LEN + u16_at(rest, 28) as usize + u16_at(rest, 30) as usize + u16_at(rest, 32) as usize;
         if rest.len() < entry_len {
             return None;
         }
-        names.push(&rest[ENTRY_LEN..ENTRY_LEN + name_len]);
+        entries.push(&rest[..entry_len]);
         rest = &rest[entry_len..];
     }
-    Some(names)
+    Some(entries)
+}
+
+fn entry_name(entry: &[u8]) -> &[u8] {
+    &entry[ENTRY_LEN..ENTRY_LEN + u16_at(entry, 28) as usize]
+}
+
+// A document can hold another package, stored as it is, with an end record of
+// its own. An end record or Zip64 locator found inside an entry is that entry's
+// data: minizip and the zip library both look back from the end of the file and
+// meet the one after the central directory first. Any other one is not
+// accepted, nor an entry that does not fit between the start of the file and
+// the central directory without overlapping another.
+fn strays_are_inside_entries<R: Read + Seek>(reader: &mut R, entries: &[&[u8]], end: &DirectoryEnd) -> bool {
+    let directory_start = end.end - end.size;
+    // minizip adds what comes before the package to every offset
+    // (byte_before_the_zipfile in unzOpenInternal).
+    let Some(before) = directory_start.checked_sub(end.offset) else {
+        return false;
+    };
+    let mut ranges = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let Some(range) = entry_range(reader, entry, before) else {
+            return false;
+        };
+        ranges.push(range);
+    }
+    ranges.sort_by_key(|range| range.start);
+    if !ranges_fit_before(&ranges, directory_start) {
+        return false;
+    }
+    end.strays.iter().all(|at| ranges.iter().any(|range| range.start <= *at && *at + 4 <= range.end))
+}
+
+fn ranges_fit_before(sorted: &[std::ops::Range<u64>], limit: u64) -> bool {
+    let overlapping = sorted.windows(2).any(|pair| pair[0].end > pair[1].start);
+    let past_limit = sorted.last().is_some_and(|last| last.end > limit);
+    !overlapping && !past_limit
+}
+
+const LOCAL_SIGNATURE: &[u8] = b"PK\x03\x04";
+const DESCRIPTOR_SIGNATURE: &[u8] = b"PK\x07\x08";
+const LOCAL_LEN: usize = 30;
+const ZIP64_EXTRA_ID: u16 = 0x0001;
+const IN_ZIP64: u32 = 0xFFFF_FFFF;
+const HAS_DESCRIPTOR: u16 = 1 << 3;
+
+// Where an entry lies in the file: from its local header to the end of its
+// data, and of its data descriptor when it has one. The sizes are those of the
+// central directory, or of its Zip64 extra field, as minizip reads them
+// (unz64local_GetCurrentFileInfoInternal); the data starts after the name and
+// extra field of the local header (unz64local_CheckCurrentFileCoherencyHeader).
+fn entry_range<R: Read + Seek>(reader: &mut R, entry: &[u8], before: u64) -> Option<std::ops::Range<u64>> {
+    let sizes = entry_sizes(entry)?;
+    let start = before.checked_add(sizes.local_offset)?;
+    let header = read_at(reader, start, LOCAL_LEN)?;
+    if !header.starts_with(LOCAL_SIGNATURE) {
+        return None;
+    }
+    let header_len = (LOCAL_LEN + u16_at(&header, 26) as usize + u16_at(&header, 28) as usize) as u64;
+    let data_end = start.checked_add(header_len)?.checked_add(sizes.compressed)?;
+    if u16_at(entry, 8) & HAS_DESCRIPTOR == 0 {
+        return Some(start..data_end);
+    }
+    let end = data_end.checked_add(descriptor_len(reader, data_end, sizes.zip64)?)?;
+    Some(start..end)
+}
+
+struct EntrySizes {
+    compressed: u64,
+    local_offset: u64,
+    zip64: bool,
+}
+
+// The Zip64 extra field holds, in this order, each of the uncompressed size,
+// the compressed size and the local header offset whose field in the entry is
+// 0xFFFFFFFF.
+fn entry_sizes(entry: &[u8]) -> Option<EntrySizes> {
+    let uncompressed = u32_at(entry, 24);
+    let compressed = u32_at(entry, 20);
+    let local_offset = u32_at(entry, 42);
+    let zip64 = uncompressed == IN_ZIP64 || compressed == IN_ZIP64;
+    if !zip64 && local_offset != IN_ZIP64 {
+        return Some(EntrySizes { compressed: compressed as u64, local_offset: local_offset as u64, zip64 });
+    }
+    let mut values = zip64_extra(entry)?.chunks_exact(8).map(|value| u64_at(value, 0));
+    if uncompressed == IN_ZIP64 {
+        values.next()?;
+    }
+    let compressed = if compressed == IN_ZIP64 { values.next()? } else { compressed as u64 };
+    let local_offset = if local_offset == IN_ZIP64 { values.next()? } else { local_offset as u64 };
+    Some(EntrySizes { compressed, local_offset, zip64 })
+}
+
+fn zip64_extra(entry: &[u8]) -> Option<&[u8]> {
+    let name_len = u16_at(entry, 28) as usize;
+    let extra_len = u16_at(entry, 30) as usize;
+    let mut rest = &entry[ENTRY_LEN + name_len..ENTRY_LEN + name_len + extra_len];
+    while rest.len() >= 4 {
+        let id = u16_at(rest, 0);
+        let len = u16_at(rest, 2) as usize;
+        let block = rest.get(4..4 + len)?;
+        if id == ZIP64_EXTRA_ID {
+            return Some(block);
+        }
+        rest = &rest[4 + len..];
+    }
+    None
+}
+
+// A data descriptor: an optional signature, the CRC and both sizes, of 8 bytes
+// each for a Zip64 entry.
+fn descriptor_len<R: Read + Seek>(reader: &mut R, at: u64, zip64: bool) -> Option<u64> {
+    let signature = read_at(reader, at, DESCRIPTOR_SIGNATURE.len())?;
+    let signature_len = if signature == DESCRIPTOR_SIGNATURE { 4 } else { 0 };
+    let size_len = if zip64 { 8 } else { 4 };
+    Some(signature_len + 4 + 2 * size_len)
 }
 
 fn no_two_alike(names: &[&[u8]]) -> bool {
@@ -1279,6 +1418,141 @@ mod tests {
         assert!(within(DirectoryLimits { entries: 2, bytes: size }));
         assert!(!within(DirectoryLimits { entries: 1, bytes: size }));
         assert!(!within(DirectoryLimits { entries: 2, bytes: size - 1 }));
+    }
+
+    // A workbook as Office stores one inside a document that holds a chart.
+    fn workbook() -> Vec<u8> {
+        package(&[("[Content_Types].xml", b"<Types/>"), ("xl/workbook.xml", b"<workbook/>")])
+    }
+
+    // A package whose `stored` parts are kept as they are, the others deflated.
+    fn package_storing(parts: &[(&str, &[u8])], stored: &[&str]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, content) in parts {
+            let method = if stored.contains(name) { zip::CompressionMethod::Stored } else { zip::CompressionMethod::Deflated };
+            writer.start_file(*name, SimpleFileOptions::default().compression_method(method)).unwrap();
+            writer.write_all(content).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    const DOCX_WORKBOOK: &str = "word/embeddings/Microsoft_Excel_Worksheet.xlsx";
+    const PPTX_WORKBOOKS: [&str; 3] = [
+        "ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx",
+        "ppt/embeddings/Microsoft_Excel_Worksheet2.xlsx",
+        "ppt/embeddings/Microsoft_Excel_Worksheet3.xlsx",
+    ];
+
+    fn docx_with_a_workbook() -> Vec<u8> {
+        let book = workbook();
+        package_storing(&[DOCUMENT, (DOCX_WORKBOOK, &book), ("word/styles.xml", b"<w:styles/>")], &[DOCX_WORKBOOK])
+    }
+
+    fn pptx_with_workbooks(count: usize) -> Vec<u8> {
+        let book = workbook();
+        let picture = internal("../media/image1.png", "");
+        let mut parts: Vec<(&str, &[u8])> = vec![("ppt/presentation.xml", b"<p:presentation/>")];
+        parts.extend(PPTX_WORKBOOKS[..count].iter().map(|name| (*name, book.as_slice())));
+        parts.extend([(SLIDE_RELS, picture.as_bytes()), SLIDE_PICTURE]);
+        package_storing(&parts, &PPTX_WORKBOOKS)
+    }
+
+    #[test]
+    fn documents_holding_stored_workbooks_with_their_own_end_record_are_accepted() {
+        for (case, bytes) in [
+            ("a docx with one workbook", docx_with_a_workbook()),
+            ("a pptx with one workbook", pptx_with_workbooks(1)),
+            ("a pptx with three workbooks", pptx_with_workbooks(3)),
+            ("a pptx with three workbooks and Zip64 end records", with_zip64_end(pptx_with_workbooks(3))),
+            ("a docx whose workbook has a data descriptor", with_descriptor(docx_with_a_workbook(), DOCX_WORKBOOK)),
+        ] {
+            assert!(occurrences(&bytes, END_SIGNATURE).len() > 1, "{case}");
+            assert!(package_accepted(&bytes), "{case}");
+        }
+    }
+
+    // The central directory entry of `name`, whose name comes after its local
+    // header's.
+    fn directory_entry_of(bytes: &[u8], name: &str) -> usize {
+        let found = occurrences(bytes, name.as_bytes());
+        found[found.len() - 1] - ENTRY_LEN
+    }
+
+    // The package with a data descriptor after the data of `name`, the offsets
+    // of what follows moved to make room for it.
+    fn with_descriptor(bytes: Vec<u8>, name: &str) -> Vec<u8> {
+        let entry = directory_entry_of(&bytes, name);
+        let local = u32_at(&bytes, entry + 42) as usize;
+        let header_len = LOCAL_LEN + u16_at(&bytes, local + 26) as usize + u16_at(&bytes, local + 28) as usize;
+        let data_end = local + header_len + u32_at(&bytes, entry + 20) as usize;
+        let mut descriptor = DESCRIPTOR_SIGNATURE.to_vec();
+        descriptor.extend_from_slice(&bytes[entry + 16..entry + 28]);
+        let shift = descriptor.len() as u32;
+        let mut out = bytes.clone();
+        out[local + 6] |= HAS_DESCRIPTOR as u8;
+        out[entry + 8] |= HAS_DESCRIPTOR as u8;
+        let directory = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap().central_directory_start() as usize;
+        let entries = directory_entries(&bytes[directory..bytes.len() - END_LEN]).unwrap();
+        let mut at = directory;
+        for other in entries {
+            if u32_at(other, 42) as usize > local {
+                out = with_u32(out, at + 42, u32_at(other, 42) + shift);
+            }
+            at += other.len();
+        }
+        let end_offset = bytes.len() - END_LEN + 16;
+        out = with_u32(out, end_offset, u32_at(&bytes, end_offset) + shift);
+        out.splice(data_end..data_end, descriptor);
+        out
+    }
+
+    fn with_u32(mut bytes: Vec<u8>, at: usize, value: u32) -> Vec<u8> {
+        bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn an_end_record_outside_every_entry_is_refused() {
+        let docx = docx_with_a_workbook();
+        let entry = directory_entry_of(&docx, DOCX_WORKBOOK);
+        let size = u32_at(&docx, entry + 20);
+        // The workbook's own end record is left between its entry and the next.
+        let shortened = with_u32(docx.clone(), entry + 20, size - END_LEN as u32);
+        let mut appended = docx.clone();
+        appended.extend_from_slice(EMPTY_END);
+        let book = workbook();
+        let named = "word/PK\u{5}\u{6}.xml";
+        let in_directory = package_storing(&[DOCUMENT, (DOCX_WORKBOOK, &book), (named, b"<a/>")], &[DOCX_WORKBOOK]);
+        let mut in_comment = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        in_comment.start_file(DOCX_WORKBOOK, SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).unwrap();
+        in_comment.write_all(&book).unwrap();
+        in_comment.set_raw_comment(EMPTY_END.into());
+        let in_comment = in_comment.finish().unwrap().into_inner();
+        for (case, bytes) in [
+            ("between two entries", shortened),
+            ("in the central directory", in_directory),
+            ("in the comment", in_comment),
+            ("after the package", appended),
+        ] {
+            assert!(opens(&bytes), "{case}");
+            assert!(!package_accepted(&bytes), "{case}");
+        }
+    }
+
+    #[test]
+    fn an_entry_that_cannot_lie_where_it_says_is_refused() {
+        let docx = docx_with_a_workbook();
+        let entry = directory_entry_of(&docx, DOCX_WORKBOOK);
+        let size = u32_at(&docx, entry + 20);
+        let len = docx.len() as u32;
+        for (case, bytes) in [
+            ("over the next entry", with_u32(docx.clone(), entry + 20, size + 8)),
+            ("over the central directory", with_u32(docx.clone(), entry + 20, len)),
+            ("past the end of the file", with_u32(docx.clone(), entry + 42, len)),
+        ] {
+            assert!(opens(&bytes), "{case}");
+            assert!(!package_accepted(&bytes), "{case}");
+        }
     }
 
     const WORD97_DOC: &[u8] = include_bytes!("../../tests/fixtures/word97.doc");

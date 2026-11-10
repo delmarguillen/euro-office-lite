@@ -566,6 +566,21 @@ mod tests {
     }
 
     #[test]
+    fn a_package_holding_a_stored_workbook_with_its_own_end_record_is_left_as_it_is() {
+        let workbook = package(&[("xl/workbook.xml", b"<workbook/>", DEFLATED)]);
+        let bytes = package(&[
+            ("mimetype", MIMETYPE, STORED),
+            ("META-INF/manifest.xml", b"<manifest/>", DEFLATED),
+            ("content.xml", with_image("Pictures/a.png").as_bytes(), DEFLATED),
+            ("Pictures/a.png", b"png bytes", STORED),
+            ("Embedded/book.xlsx", &workbook, STORED),
+        ]);
+        let (dir, _, outcome) = prepared("embedded.odt", &bytes);
+        assert_eq!(outcome, PackageImages::Unchanged);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_package_without_outside_references_is_left_as_it_is() {
         let (dir, temp, outcome) = prepared("clean.odt", &odt("Pictures/a.png"));
         assert_eq!(outcome, PackageImages::Unchanged);
