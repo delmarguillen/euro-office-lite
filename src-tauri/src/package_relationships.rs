@@ -27,6 +27,37 @@ const ALT_CHUNK_TYPES: [&str; 2] = [
     "http://purl.oclc.org/ooxml/officeDocument/relationships/aFChunk",
 ];
 
+// A link to another workbook, and the template a document is attached to, are
+// ordinary things for a document to have. Their relationships are accepted
+// whatever their target, and only in the .rels part of the part that holds them
+// while that part plays its usual role (LinkedFileRole). x2t keeps the target of
+// the workbook ones as it is (OOX::Spreadsheet::CreateFile,
+// OOXML/XlsxFormat/FileFactory_Spreadsheet.cpp) and does not read the template
+// one (OOX::CreateFile, OOXML/DocxFormat/FileFactory.cpp, falls to
+// UnknowTypeFile). The Microsoft ones are those of MS-OI29500 2.1.13, also in
+// OOXML/DocxFormat/FileTypes.cpp.
+const EXTERNAL_LINK_PATH_TYPES: [&str; 6] = [
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/externalLinkPath",
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlPathMissing",
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlLibrary",
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlStartup",
+    "http://schemas.microsoft.com/office/2006/relationships/xlExternalLinkPath/xlAlternateStartup",
+];
+const ATTACHED_TEMPLATE_TYPES: [&str; 2] = [
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/attachedTemplate",
+];
+// The relationships that give those parts their role.
+const EXTERNAL_LINK_TYPES: [&str; 2] = [
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/externalLink",
+];
+const SETTINGS_TYPES: [&str; 2] = [
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/settings",
+];
+
 // Office writes this target for a linked picture or media file it has lost: it
 // names no part and no URL. x2t takes a video or sound with this target for one
 // without a linked file (Pic::GetMediaLink, PPTXFormat/Logic/Pic.cpp at
@@ -242,11 +273,99 @@ fn all_rels_allowed<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, limits: &L
         };
         parts.push(RelsPart { name, relationships });
     }
-    let entries: HashSet<&str> = archive.file_names().collect();
+    let package = Package { entries: archive.file_names().collect(), links: internal_links(&parts) };
     parts.iter().all(|part| {
-        let folder = source_folder(&part.name);
-        part.relationships.iter().all(|relationship| relationship_allowed(relationship, folder, &entries))
+        part.relationships.iter().all(|relationship| relationship_allowed(relationship, part, &package))
     })
+}
+
+// What a relationship is judged against: the entries of the package and every
+// internal relationship in it.
+struct Package<'a> {
+    entries: HashSet<&'a str>,
+    links: Vec<Link<'a>>,
+}
+
+// An internal relationship and a part it reaches, its name in lower case as a
+// case-insensitive file system sees it.
+struct Link<'a> {
+    from: &'a str,
+    kinds: &'a [String],
+    to: String,
+}
+
+// Each target counts from the folder of its part and from the package root,
+// where presentations look too (target_stays_in_package).
+fn internal_links(parts: &[RelsPart]) -> Vec<Link<'_>> {
+    let mut links = Vec::new();
+    for part in parts {
+        let folder = source_folder(&part.name);
+        for relationship in part.relationships.iter().filter(|relationship| !relationship.x2t_external) {
+            for target in &relationship.targets {
+                for base in [folder, ""] {
+                    let Some(to) = resolved_target(base, target) else {
+                        continue;
+                    };
+                    links.push(Link { from: &part.name, kinds: &relationship.kinds, to: to.to_lowercase() });
+                }
+            }
+        }
+    }
+    links
+}
+
+// A part whose .rels may hold the relationships of a few Types to another file,
+// and how it is reached when it plays its usual role.
+struct LinkedFileRole {
+    part: String,
+    kinds: &'static [&'static str],
+    reached_from: &'static str,
+    reached_as: &'static [&'static str],
+}
+
+// The role of the part a .rels belongs to, by the exact name of the .rels:
+// xl/externalLinks/_rels/externalLinkN.xml.rels, N in decimal, or
+// word/_rels/settings.xml.rels.
+fn linked_file_role(rels_name: &str) -> Option<LinkedFileRole> {
+    if rels_name == "word/_rels/settings.xml.rels" {
+        return Some(LinkedFileRole {
+            part: "word/settings.xml".to_string(),
+            kinds: &ATTACHED_TEMPLATE_TYPES,
+            reached_from: "word/_rels/document.xml.rels",
+            reached_as: &SETTINGS_TYPES,
+        });
+    }
+    let number = rels_name.strip_prefix("xl/externalLinks/_rels/externalLink")?.strip_suffix(".xml.rels")?;
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(LinkedFileRole {
+        part: format!("xl/externalLinks/externalLink{number}.xml"),
+        kinds: &EXTERNAL_LINK_PATH_TYPES,
+        reached_from: "xl/_rels/workbook.xml.rels",
+        reached_as: &EXTERNAL_LINK_TYPES,
+    })
+}
+
+fn is_accepted_link_to_another_file(relationship: &Relationship, rels_name: &str, links: &[Link]) -> bool {
+    let Some(role) = linked_file_role(rels_name) else {
+        return false;
+    };
+    let kinds = &relationship.kinds;
+    !kinds.is_empty() && kinds.iter().all(|kind| role.kinds.contains(&kind.as_str())) && plays_its_usual_role(&role, links)
+}
+
+// The part is reached, and only with one of its usual Types from its usual
+// place: not from another .rels, nor as the main document of _rels/.rels.
+fn plays_its_usual_role(role: &LinkedFileRole, links: &[Link]) -> bool {
+    let part = role.part.to_lowercase();
+    let mut reaching = links.iter().filter(|link| link.to == part).peekable();
+    let is_usual = |link: &Link| {
+        link.from == role.reached_from
+            && !link.kinds.is_empty()
+            && link.kinds.iter().all(|kind| role.reached_as.contains(&kind.as_str()))
+    };
+    reaching.peek().is_some() && reaching.all(|link| is_usual(link))
 }
 
 // A .rels part and the relationships it declares.
@@ -354,12 +473,13 @@ fn relationship(element: &BytesStart) -> Option<Option<Relationship>> {
     Some(Some(relationship))
 }
 
-fn relationship_allowed(relationship: &Relationship, folder: &str, entries: &HashSet<&str>) -> bool {
+fn relationship_allowed(relationship: &Relationship, part: &RelsPart, package: &Package) -> bool {
     let Relationship { kinds, targets, modes, x2t_external } = relationship;
     if kinds.iter().any(|kind| is_alt_chunk(kind)) {
         return false;
     }
-    let in_package = |target: &String| target_stays_in_package(folder, target, entries);
+    let folder = source_folder(&part.name);
+    let in_package = |target: &String| target_stays_in_package(folder, target, &package.entries);
     if !x2t_external && !targets.iter().all(in_package) {
         return false;
     }
@@ -367,6 +487,9 @@ fn relationship_allowed(relationship: &Relationship, folder: &str, entries: &Has
         return true;
     }
     if !kinds.is_empty() && kinds.iter().all(|kind| HYPERLINK_TYPES.contains(&kind.as_str())) {
+        return true;
+    }
+    if is_accepted_link_to_another_file(relationship, &part.name, &package.links) {
         return true;
     }
     !targets.is_empty() && targets.iter().all(|target| target == MISSING_TARGET || has_allowed_scheme(target))
@@ -678,6 +801,160 @@ mod tests {
         let hyperlink = HYPERLINK_TYPES[0];
         assert!(rels_allowed(&external(hyperlink, "../../../Reports/other.docx")));
         assert!(rels_allowed(&external(IMAGE, "file:///../../../a.png")));
+    }
+
+    fn one_relationship(kind: &str, target: &str, mode: &str) -> String {
+        rels_xml(&format!("<Relationship Id=\"rId1\" Type=\"{kind}\" Target=\"{target}\"{mode}/>"))
+    }
+
+    fn package_of(parts: &[(&str, String)]) -> Vec<u8> {
+        let parts: Vec<(&str, &[u8])> = parts.iter().map(|(name, xml)| (*name, xml.as_bytes())).collect();
+        package(&parts)
+    }
+
+    const EXTERNAL_LINK: &str = EXTERNAL_LINK_TYPES[0];
+    const SETTINGS: &str = SETTINGS_TYPES[0];
+    const EXTERNAL_LINK_PATH: &str = EXTERNAL_LINK_PATH_TYPES[0];
+    const ATTACHED_TEMPLATE: &str = ATTACHED_TEMPLATE_TYPES[0];
+    const WORKBOOK_RELS: &str = "xl/_rels/workbook.xml.rels";
+    const EXTERNAL_LINK_RELS: &str = "xl/externalLinks/_rels/externalLink1.xml.rels";
+    const SETTINGS_RELS: &str = "word/_rels/settings.xml.rels";
+    const DOCUMENT_RELS: &str = "word/_rels/document.xml.rels";
+    const OTHER_BOOK: &str = "../Budget/Book2.xlsx";
+    const TEMPLATE: &str = "Macintosh HD:Users:me:Templates:Report.dotx";
+    const WORKSHEET: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+    const OFFICE_DOCUMENT: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
+
+    // A workbook with a link to another one in externalLink1, and `more` parts.
+    fn linked_workbook(kind: &str, target: &str, more: &[(&str, String)]) -> Vec<u8> {
+        let mut parts = vec![
+            (WORKBOOK_RELS, one_relationship(EXTERNAL_LINK, "externalLinks/externalLink1.xml", "")),
+            ("xl/externalLinks/externalLink1.xml", "<externalLink/>".to_string()),
+            (EXTERNAL_LINK_RELS, external(kind, target)),
+        ];
+        parts.extend(more.iter().cloned());
+        package_of(&parts)
+    }
+
+    // A document attached to a template, and `more` parts.
+    fn attached_document(kind: &str, more: &[(&str, String)]) -> Vec<u8> {
+        let mut parts = vec![
+            (DOCUMENT_RELS, one_relationship(SETTINGS, "settings.xml", "")),
+            ("word/settings.xml", "<w:settings/>".to_string()),
+            (SETTINGS_RELS, external(kind, TEMPLATE)),
+        ];
+        parts.extend(more.iter().cloned());
+        package_of(&parts)
+    }
+
+    #[test]
+    fn links_to_other_workbooks_are_accepted_with_each_type() {
+        for kind in EXTERNAL_LINK_PATH_TYPES {
+            for target in [OTHER_BOOK, "Book2.xlsx", "/Users/me/Book2.xlsx", "C:\\Data\\Book2.xlsx"] {
+                assert!(allowed(linked_workbook(kind, target, &[])), "{kind} {target}");
+            }
+        }
+        let strict = one_relationship(EXTERNAL_LINK_TYPES[1], "/xl/externalLinks/externalLink12.xml", "");
+        let twelve = package_of(&[
+            (WORKBOOK_RELS, strict),
+            ("xl/externalLinks/_rels/externalLink12.xml.rels", external(EXTERNAL_LINK_PATH, OTHER_BOOK)),
+        ]);
+        assert!(allowed(twelve));
+    }
+
+    #[test]
+    fn an_attached_template_is_accepted_with_each_type() {
+        for kind in ATTACHED_TEMPLATE_TYPES {
+            assert!(allowed(attached_document(kind, &[])), "{kind}");
+        }
+        let strict = package_of(&[
+            (DOCUMENT_RELS, one_relationship(SETTINGS_TYPES[1], "settings.xml", "")),
+            (SETTINGS_RELS, external(ATTACHED_TEMPLATE, "C:\\Templates\\Report.dotx")),
+        ]);
+        assert!(allowed(strict));
+    }
+
+    #[test]
+    fn the_same_types_in_another_part_are_refused() {
+        let slide = package_of(&[("ppt/slides/_rels/slide1.xml.rels", external(EXTERNAL_LINK_PATH, OTHER_BOOK))]);
+        assert!(!allowed(slide));
+        let document = package_of(&[(DOCUMENT_RELS, external(ATTACHED_TEMPLATE, TEMPLATE))]);
+        assert!(!allowed(document));
+        let pivot = package_of(&[("xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels", external(EXTERNAL_LINK_PATH, OTHER_BOOK))]);
+        assert!(!allowed(pivot));
+        for (rels, part) in [
+            ("xl/externalLinks/_rels/ExternalLink1.xml.rels", "ExternalLink1.xml"),
+            ("xl/externallinks/_rels/externalLink1.xml.rels", "externalLink1.xml"),
+            ("xl/externalLinks/_rels/externalLinkA.xml.rels", "externalLinkA.xml"),
+            ("xl/externalLinks/_rels/externalLink.xml.rels", "externalLink.xml"),
+            ("xl/externalLinks/_rels/externalLink1.XML.rels", "externalLink1.XML"),
+            ("a/xl/externalLinks/_rels/externalLink1.xml.rels", "externalLink1.xml"),
+        ] {
+            let bytes = package_of(&[
+                (WORKBOOK_RELS, one_relationship(EXTERNAL_LINK, &format!("externalLinks/{part}"), "")),
+                (rels, external(EXTERNAL_LINK_PATH, OTHER_BOOK)),
+            ]);
+            assert!(!allowed(bytes), "{rels}");
+        }
+        assert!(!allowed(linked_workbook(ATTACHED_TEMPLATE, TEMPLATE, &[])));
+        assert!(!allowed(attached_document(EXTERNAL_LINK_PATH, &[])));
+    }
+
+    #[test]
+    fn a_part_reached_from_another_rels_or_as_the_main_document_loses_its_exemption() {
+        for target in [
+            "../externalLinks/externalLink1.xml",
+            "../externalLinks/./externalLink1.xml",
+            "../EXTERNALLINKS/externalLink1.xml",
+            "/xl/externalLinks/externalLink1.xml",
+            "xl/externalLinks/externalLink1.xml",
+        ] {
+            let sheet = ("xl/worksheets/_rels/sheet1.xml.rels", one_relationship(WORKSHEET, target, ""));
+            assert!(!allowed(linked_workbook(EXTERNAL_LINK_PATH, OTHER_BOOK, &[sheet])), "{target}");
+        }
+        let main = ("_rels/.rels", one_relationship(OFFICE_DOCUMENT, "xl/externalLinks/externalLink1.xml", ""));
+        assert!(!allowed(linked_workbook(EXTERNAL_LINK_PATH, OTHER_BOOK, &[main])));
+        let main = ("_rels/.rels", one_relationship(OFFICE_DOCUMENT, "/word/settings.xml", ""));
+        assert!(!allowed(attached_document(ATTACHED_TEMPLATE, &[main])));
+        let footer = ("word/_rels/footer1.xml.rels", one_relationship(SETTINGS, "settings.xml", ""));
+        assert!(!allowed(attached_document(ATTACHED_TEMPLATE, &[footer])));
+    }
+
+    #[test]
+    fn a_part_reached_otherwise_than_with_its_usual_type_loses_its_exemption() {
+        let both = rels_xml(&format!(
+            "<Relationship Id=\"rId1\" Type=\"{EXTERNAL_LINK}\" Target=\"externalLinks/externalLink1.xml\"/><Relationship Id=\"rId2\" Type=\"{WORKSHEET}\" Target=\"externalLinks/externalLink1.xml\"/>"
+        ));
+        let other_type = one_relationship(WORKSHEET, "externalLinks/externalLink1.xml", "");
+        for workbook in [both, other_type] {
+            let bytes = package_of(&[(WORKBOOK_RELS, workbook), (EXTERNAL_LINK_RELS, external(EXTERNAL_LINK_PATH, OTHER_BOOK))]);
+            assert!(!allowed(bytes));
+        }
+        let unreached = package_of(&[(EXTERNAL_LINK_RELS, external(EXTERNAL_LINK_PATH, OTHER_BOOK))]);
+        assert!(!allowed(unreached));
+    }
+
+    #[test]
+    fn a_linked_picture_next_to_an_accepted_link_is_refused() {
+        let picture = format!(
+            "<Relationship Id=\"rId2\" Type=\"{IMAGE}\" Target=\"{ABS}\" TargetMode=\"External\"/>"
+        );
+        let link = format!(
+            "<Relationship Id=\"rId1\" Type=\"{EXTERNAL_LINK_PATH}\" Target=\"{OTHER_BOOK}\" TargetMode=\"External\"/>"
+        );
+        let workbook = package_of(&[
+            (WORKBOOK_RELS, one_relationship(EXTERNAL_LINK, "externalLinks/externalLink1.xml", "")),
+            (EXTERNAL_LINK_RELS, rels_xml(&format!("{link}{picture}"))),
+        ]);
+        assert!(!allowed(workbook));
+        let template = format!(
+            "<Relationship Id=\"rId1\" Type=\"{ATTACHED_TEMPLATE}\" Target=\"{TEMPLATE}\" TargetMode=\"External\"/>"
+        );
+        let document = package_of(&[
+            (DOCUMENT_RELS, one_relationship(SETTINGS, "settings.xml", "")),
+            (SETTINGS_RELS, rels_xml(&format!("{template}{picture}"))),
+        ]);
+        assert!(!allowed(document));
     }
 
     // The relationship is judged the same way however the picture refers to it.
