@@ -428,6 +428,32 @@ mod tests {
     }
 
     #[test]
+    fn an_rtf_or_a_doc_after_blank_space_or_a_bom_is_converted_from_its_first_brace() {
+        let rtf = b"{\\rtf1\\ansi Some text\\par}";
+        for prefix in [&b"  \r\n"[..], b"\xEF\xBB\xBF", b"\xEF\xBB\xBF\t "] {
+            for name in ["a.rtf", "a.doc"] {
+                let mut content = prefix.to_vec();
+                content.extend_from_slice(rtf);
+                let (original, work_dir) = original_and_work_dir(name, &content);
+
+                let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+                assert_eq!(std::fs::read(input.path()).unwrap(), rtf, "{name} {prefix:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_word_97_doc_is_converted_from_a_copy_as_it_is() {
+        let doc = include_bytes!("../../tests/fixtures/word97.doc");
+        let (original, work_dir) = original_and_work_dir("word97.doc", doc);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_eq!(std::fs::read(input.path()).unwrap(), doc);
+    }
+
+    #[test]
     fn a_txt_is_read_from_its_utf32_copy_only() {
         use crate::text_import::{detect_file, TextKind, ENCODING_UTF32_LE};
         let (original, work_dir) = original_and_work_dir("notes.txt", b"line one\nline two\n");

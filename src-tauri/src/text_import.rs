@@ -624,32 +624,34 @@ pub fn prepare_read_copy(
 
 const RTF_START: &[u8] = b"{\\rtf";
 
-// Where the RTF begins in a file that starts with a UTF-8 BOM and has only
-// blank space between the BOM and the "{\rtf". None for anything else.
-fn rtf_start_after_bom(head: &[u8]) -> Option<usize> {
-    let after_bom = head.strip_prefix(UTF8_BOM)?;
-    let blanks = after_bom
+// Where the RTF begins in a file that starts with an optional UTF-8 BOM and
+// blank space, then "{\rtf". None for anything else.
+fn rtf_start(head: &[u8]) -> Option<usize> {
+    let bom = if head.starts_with(UTF8_BOM) { UTF8_BOM.len() } else { 0 };
+    let blanks = head[bom..]
         .iter()
         .take_while(|byte| byte.is_ascii_whitespace())
         .count();
-    let is_rtf = after_bom[blanks..].starts_with(RTF_START);
-    is_rtf.then_some(UTF8_BOM.len() + blanks)
+    let start = bom + blanks;
+    head[start..].starts_with(RTF_START).then_some(start)
 }
 
-fn is_rtf_path(path: &Path) -> bool {
+// The two extensions the content check accepts RTF under.
+fn may_hold_rtf(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("rtf"))
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rtf") || ext.eq_ignore_ascii_case("doc"))
 }
 
 // How many of the first bytes the copy leaves out. x2t reads a file as RTF only
-// when "{\rtf" are its first bytes. After a UTF-8 BOM it takes the file for
-// plain text: the document opens as RTF code and saving it loses the content.
+// when "{\rtf" are its first bytes. After a UTF-8 BOM or blank space it takes
+// the file for something else: an .rtf opens as RTF code and saving it loses
+// the content.
 fn skipped_before_rtf(source: &Path, head: &[u8]) -> usize {
-    if !is_rtf_path(source) {
+    if !may_hold_rtf(source) {
         return 0;
     }
-    rtf_start_after_bom(head).unwrap_or(0)
+    rtf_start(head).unwrap_or(0)
 }
 
 // Same name as the original's, so the copy keeps its extension.
@@ -670,7 +672,8 @@ fn write_copy(head: &[u8], rest: &mut std::fs::File, copy: &Path) -> std::io::Re
 
 // The copy in `temp_dir` that x2t reads any document but a TXT or CSV from,
 // written from one read of `source`: it holds exactly the bytes the checks
-// before x2t see. An .rtf that starts with a BOM is copied from its "{\rtf".
+// before x2t see. An .rtf or a .doc that holds RTF after a BOM or blank space
+// is copied from its "{\rtf".
 pub fn document_read_copy(source: &Path, temp_dir: &Path) -> std::io::Result<std::path::PathBuf> {
     let mut input = std::fs::File::open(source)?;
     let mut head = Vec::new();
@@ -1618,6 +1621,21 @@ mod tests {
     }
 
     #[test]
+    fn blank_space_without_a_bom_stays_out_of_the_copy() {
+        let (content, _) = document_copy_of("rtf-space", "a.rtf", &with_prefix(b"\r\n \t"));
+        assert_eq!(content, RTF_DOCUMENT);
+    }
+
+    #[test]
+    fn a_doc_holding_rtf_is_copied_from_its_first_brace() {
+        for prefix in [UTF8_BOM, b"  \r\n", b"\xEF\xBB\xBF\n"] {
+            let (content, name) = document_copy_of("doc-rtf", "a.DOC", &with_prefix(prefix));
+            assert_eq!(content, RTF_DOCUMENT, "{:?}", prefix);
+            assert_eq!(name, "eo-read-copy.doc");
+        }
+    }
+
+    #[test]
     fn an_rtf_that_starts_with_its_first_brace_is_copied_as_it_is() {
         let (content, _) = document_copy_of("rtf-plain", "a.rtf", RTF_DOCUMENT);
         assert_eq!(content, RTF_DOCUMENT);
@@ -1633,7 +1651,13 @@ mod tests {
     #[test]
     fn other_documents_are_copied_as_they_are_under_their_own_extension() {
         let bytes = with_prefix(UTF8_BOM);
-        for (name, copy_name) in [("a.odt", "eo-read-copy.odt"), ("B.DOCX", "eo-read-copy.docx"), ("rtf", "eo-read-copy")] {
+        let cases = [
+            ("a.odt", "eo-read-copy.odt"),
+            ("B.DOCX", "eo-read-copy.docx"),
+            ("a.txt", "eo-read-copy.txt"),
+            ("rtf", "eo-read-copy"),
+        ];
+        for (name, copy_name) in cases {
             let (content, written) = document_copy_of("other", name, &bytes);
             assert_eq!(content, bytes, "{}", name);
             assert_eq!(written, copy_name, "{}", name);
