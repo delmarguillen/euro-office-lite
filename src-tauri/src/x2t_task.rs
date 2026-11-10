@@ -292,6 +292,15 @@ pub fn x2t_options_xml() -> &'static str {
 </options>\n"
 }
 
+// Windows takes "/" as a separator too. On Linux and macOS "\" is an ordinary
+// character of a file name, so the path stays as it is.
+fn x2t_path(path: &str) -> String {
+    if cfg!(target_os = "windows") {
+        return path.replace('\\', "/");
+    }
+    path.to_string()
+}
+
 // Paths are passed raw and escaped here, once. `extra` is already XML: the
 // numeric CSV/TXT elements from TextOptions::xml_elements.
 pub fn convert_params_xml(
@@ -310,10 +319,10 @@ pub fn convert_params_xml(
 <m_nFormatTo>{}</m_nFormatTo>
 <m_sTempDir>{}</m_sTempDir>
 {}{}</TaskQueueDataConvert>"#,
-        xml_escape(&input.replace('\\', "/")),
-        xml_escape(&output.replace('\\', "/")),
+        xml_escape(&x2t_path(input)),
+        xml_escape(&x2t_path(output)),
         format_to,
-        xml_escape(&temp_dir.replace('\\', "/")),
+        xml_escape(&x2t_path(temp_dir)),
         extra,
         x2t_options_xml(),
     )
@@ -2018,6 +2027,7 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn plain_paths_give_the_same_convert_params_as_before() {
         let xml = convert_params_xml(
@@ -2043,6 +2053,21 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 </options>\n\
 </TaskQueueDataConvert>"
         );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn convert_params_keep_a_backslash_that_is_part_of_a_name() {
+        let xml = convert_params_xml(
+            "/home/u/a\\b.docx",
+            "/tmp/eo\\1/Editor.bin",
+            8192,
+            "/tmp/eo\\1",
+            "",
+        );
+        assert!(xml.contains("<m_sFileFrom>/home/u/a\\b.docx</m_sFileFrom>"), "{}", xml);
+        assert!(xml.contains("<m_sFileTo>/tmp/eo\\1/Editor.bin</m_sFileTo>"), "{}", xml);
+        assert!(xml.contains("<m_sTempDir>/tmp/eo\\1</m_sTempDir>"), "{}", xml);
     }
 
     #[test]
