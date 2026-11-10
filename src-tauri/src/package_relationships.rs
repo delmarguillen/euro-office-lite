@@ -927,6 +927,21 @@ mod tests {
         assert!(allowed(package(&[(SLIDE_RELS, from_root.as_bytes()), SLIDE_PICTURE])));
     }
 
+    const CUSTOM_XML: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
+
+    // x2t joins the targets of _rels/.rels to the folder it extracts the package
+    // into, and CPath::Normalize lets a ".." take that folder off.
+    #[test]
+    fn a_package_root_target_going_up_one_folder_is_refused() {
+        let root = one_relationship(CUSTOM_XML, "../customXml/item1.xml", "");
+        let item: (&str, String) = ("customXml/item1.xml", "<a/>".to_string());
+        assert!(!allowed(package_of(&[("_rels/.rels", root), item.clone()])));
+        let from_slide = internal("../media/image1.png", "");
+        assert!(allowed(package(&[(SLIDE_RELS, from_slide.as_bytes()), SLIDE_PICTURE])));
+        let from_folder = one_relationship(CUSTOM_XML, "../../customXml/item1.xml", "");
+        assert!(!allowed(package_of(&[("xl/_rels/workbook.xml.rels", from_folder), item])));
+    }
+
     // CPath::Normalize removes "./" with the ".." after it, as it would a folder.
     #[test]
     fn a_dot_segment_is_a_folder_for_the_dot_dot_after_it() {
