@@ -2,11 +2,14 @@
 // of a document has to match its format, and a package holds its own parts:
 // what it points to outside itself has to be a URL.
 
-use std::io::{Read, Seek};
+use std::collections::HashSet;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+
+use crate::x2t_task::ZIP_END_SEARCH_LEN;
 
 const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
 const ALLOWED_SCHEMES: [&str; 5] = ["http", "https", "mailto", "ftp", "file"];
@@ -50,7 +53,160 @@ pub fn relationships_are_allowed(path: &Path, head: &[u8]) -> bool {
     let Ok(mut archive) = zip::ZipArchive::new(file) else {
         return true;
     };
-    all_rels_allowed(&mut archive, &LIMITS)
+    let Ok(mut raw) = std::fs::File::open(path) else {
+        return false;
+    };
+    part_names_are_unique(&mut raw, archive.central_directory_start())
+        && all_rels_allowed(&mut archive, &LIMITS)
+}
+
+// Each part of a package has a name of its own. x2t extracts a package into a
+// folder (OfficeUtils/src/ZipUtilsCP.cpp), where on Windows and macOS two names
+// that differ only in case, or in "/" and "\", are one file; and the zip library
+// keeps one entry per name (SharedBuilder::build in zip 2.4.2). So the names are
+// read here from the central directory minizip reads (unzOpenInternal in
+// OfficeUtils/src/zlib-1.2.11/contrib/minizip/unzip.c): the one that ends where
+// the end record in the last 0xFFFF bytes begins, the Zip64 one first. It has to
+// be the one the zip library read, `library_start` being where that one starts.
+pub(crate) fn part_names_are_unique<R: Read + Seek>(reader: &mut R, library_start: u64) -> bool {
+    unique_names_within(reader, library_start, &DIRECTORY_LIMITS)
+}
+
+const END_SIGNATURE: &[u8] = b"PK\x05\x06";
+const ZIP64_LOCATOR_SIGNATURE: &[u8] = b"PK\x06\x07";
+const ZIP64_END_SIGNATURE: &[u8] = b"PK\x06\x06";
+const ENTRY_SIGNATURE: &[u8] = b"PK\x01\x02";
+const END_LEN: usize = 22;
+const ZIP64_LOCATOR_LEN: usize = 20;
+const ZIP64_END_LEN: usize = 56;
+const ENTRY_LEN: usize = 46;
+
+struct DirectoryLimits {
+    entries: u64,
+    bytes: u64,
+}
+
+const DIRECTORY_LIMITS: DirectoryLimits = DirectoryLimits { entries: 20_000, bytes: 16 * 1024 * 1024 };
+
+// Where a central directory ends, its size and how many entries it says it has.
+struct DirectoryEnd {
+    end: u64,
+    size: u64,
+    entries: u64,
+}
+
+fn unique_names_within<R: Read + Seek>(reader: &mut R, library_start: u64, limits: &DirectoryLimits) -> bool {
+    let Some(end) = directory_end(reader) else {
+        return false;
+    };
+    if end.size > limits.bytes || end.entries > limits.entries {
+        return false;
+    }
+    if end.end.checked_sub(end.size) != Some(library_start) {
+        return false;
+    }
+    let Some(directory) = read_at(reader, library_start, end.size as usize) else {
+        return false;
+    };
+    let Some(names) = entry_names(&directory) else {
+        return false;
+    };
+    names.len() as u64 == end.entries && no_two_alike(&names)
+}
+
+// The end of the central directory minizip finds. A tail with more than one end
+// record, or with a Zip64 locator anywhere but right before it, could lead the
+// zip library and minizip to different directories, so it has none.
+fn directory_end<R: Read + Seek>(reader: &mut R) -> Option<DirectoryEnd> {
+    let len = reader.seek(SeekFrom::End(0)).ok()?;
+    let tail_start = len.saturating_sub(ZIP_END_SEARCH_LEN as u64);
+    let tail = read_at(reader, tail_start, (len - tail_start) as usize)?;
+    let ends = positions(&tail, END_SIGNATURE);
+    let locators = positions(&tail, ZIP64_LOCATOR_SIGNATURE);
+    let [end] = ends[..] else {
+        return None;
+    };
+    match locators[..] {
+        [] => zip32_end(&tail[end..], tail_start + end as u64),
+        [locator] if locator + ZIP64_LOCATOR_LEN == end => zip64_end(reader, &tail[locator..end]),
+        _ => None,
+    }
+}
+
+fn zip32_end(record: &[u8], at: u64) -> Option<DirectoryEnd> {
+    if record.len() < END_LEN {
+        return None;
+    }
+    Some(DirectoryEnd { end: at, size: u32_at(record, 12) as u64, entries: u16_at(record, 10) as u64 })
+}
+
+// minizip reads the Zip64 end record where the locator says, from the start of
+// the file.
+fn zip64_end<R: Read + Seek>(reader: &mut R, locator: &[u8]) -> Option<DirectoryEnd> {
+    let at = u64_at(locator, 8);
+    let record = read_at(reader, at, ZIP64_END_LEN)?;
+    if !record.starts_with(ZIP64_END_SIGNATURE) {
+        return None;
+    }
+    Some(DirectoryEnd { end: at, size: u64_at(&record, 40), entries: u64_at(&record, 32) })
+}
+
+// The name of every entry of a central directory, in order. None when it holds
+// anything but whole entries.
+fn entry_names(directory: &[u8]) -> Option<Vec<&[u8]>> {
+    let mut names = Vec::new();
+    let mut rest = directory;
+    while !rest.is_empty() {
+        if rest.len() < ENTRY_LEN || !rest.starts_with(ENTRY_SIGNATURE) {
+            return None;
+        }
+        let name_len = u16_at(rest, 28) as usize;
+        let entry_len = ENTRY_LEN + name_len + u16_at(rest, 30) as usize + u16_at(rest, 32) as usize;
+        if rest.len() < entry_len {
+            return None;
+        }
+        names.push(&rest[ENTRY_LEN..ENTRY_LEN + name_len]);
+        rest = &rest[entry_len..];
+    }
+    Some(names)
+}
+
+fn no_two_alike(names: &[&[u8]]) -> bool {
+    let mut seen = HashSet::new();
+    names.iter().all(|name| seen.insert(folded_name(name)))
+}
+
+// A name as a case-insensitive file system sees it. A name that is not UTF-8 is
+// compared byte by byte, ASCII letters folded.
+fn folded_name(name: &[u8]) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(name) else {
+        return name.iter().map(|byte| if *byte == b'\\' { b'/' } else { byte.to_ascii_lowercase() }).collect();
+    };
+    text.to_lowercase().replace('\\', "/").into_bytes()
+}
+
+fn read_at<R: Read + Seek>(reader: &mut R, at: u64, len: usize) -> Option<Vec<u8>> {
+    reader.seek(SeekFrom::Start(at)).ok()?;
+    let mut bytes = Vec::with_capacity(len);
+    reader.take(len as u64).read_to_end(&mut bytes).ok()?;
+    (bytes.len() == len).then_some(bytes)
+}
+
+fn positions(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
+    let windows = haystack.windows(needle.len()).enumerate();
+    windows.filter(|(_, window)| *window == needle).map(|(at, _)| at).collect()
+}
+
+fn u16_at(bytes: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([bytes[at], bytes[at + 1]])
+}
+
+fn u32_at(bytes: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+}
+
+fn u64_at(bytes: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
 }
 
 fn all_rels_allowed<R: Read + Seek>(archive: &mut zip::ZipArchive<R>, limits: &Limits) -> bool {
@@ -511,6 +667,172 @@ mod tests {
         let path = scratch_file("renamed.doc", &bytes);
         assert!(!relationships_are_allowed(&path, &bytes[..256.min(bytes.len())]));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    // A file of its own for each call: tests run side by side.
+    fn unique_scratch_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        scratch_file(&format!("{}-{}", COUNTER.fetch_add(1, Ordering::Relaxed), name), bytes)
+    }
+
+    // The whole check, on a file holding `bytes`.
+    fn package_accepted(bytes: &[u8]) -> bool {
+        let path = unique_scratch_file("package.docx", bytes);
+        let accepted = relationships_are_allowed(&path, &bytes[..256.min(bytes.len())]);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        accepted
+    }
+
+    fn occurrences(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
+        let windows = haystack.windows(needle.len()).enumerate();
+        windows.filter(|(_, window)| *window == needle).map(|(at, _)| at).collect()
+    }
+
+    // The package with each `from` replaced by `to`, of the same length: the zip
+    // library does not write two entries with one name.
+    fn renamed(mut bytes: Vec<u8>, from: &str, to: &str) -> Vec<u8> {
+        assert_eq!(from.len(), to.len());
+        let found = occurrences(&bytes, from.as_bytes());
+        assert_eq!(found.len(), 2, "a local header and a directory entry");
+        for at in found {
+            bytes[at..at + to.len()].copy_from_slice(to.as_bytes());
+        }
+        bytes
+    }
+
+    fn opens(bytes: &[u8]) -> bool {
+        zip::ZipArchive::new(Cursor::new(bytes.to_vec())).is_ok()
+    }
+
+    const DOCUMENT: (&str, &[u8]) = ("word/document.xml", b"<w:document/>");
+
+    #[test]
+    fn exact_duplicate_parts_are_refused() {
+        let bytes = renamed(package(&[DOCUMENT, ("word/documenX.xml", b"<w:document/>")]), "word/documenX.xml", "word/document.xml");
+        let archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
+        assert_eq!(archive.len(), 1, "the zip library shows one of the two");
+        assert!(!package_accepted(&bytes));
+    }
+
+    #[test]
+    fn case_colliding_parts_are_refused() {
+        for (first, second) in [
+            ("word/document.xml", "word/Document.xml"),
+            ("word/media/a.png", "WORD/MEDIA/A.PNG"),
+            ("word/m\u{e9}dia.png", "word/M\u{c9}DIA.png"),
+        ] {
+            let bytes = package(&[(first, b"a"), (second, b"b")]);
+            assert!(!package_accepted(&bytes), "{second}");
+        }
+        assert!(package_accepted(&package(&[("word/a.png", b"a"), ("word/b.png", b"b")])));
+    }
+
+    #[test]
+    fn names_that_only_differ_in_the_separator_are_refused() {
+        let bytes = package(&[("word/media/a.png", b"a"), ("word\\media\\a.png", b"b")]);
+        assert!(!package_accepted(&bytes));
+    }
+
+    #[test]
+    fn a_duplicate_does_not_hide_an_unaccepted_relationship() {
+        let linked = external(IMAGE, ABS);
+        let clean = rels_xml("");
+        let parts: &[(&str, &[u8])] = &[
+            ("word/_rels/document.xml.rels", linked.as_bytes()),
+            ("word/_rels/documenX.xml.rels", clean.as_bytes()),
+        ];
+        let bytes = renamed(package(parts), "word/_rels/documenX.xml.rels", "word/_rels/document.xml.rels");
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
+        assert!(all_rels_allowed(&mut archive, &LIMITS), "the zip library reads only one of them");
+        assert!(!package_accepted(&bytes));
+    }
+
+    fn package_with_comment(comment: &[u8]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer.start_file(DOCUMENT.0, SimpleFileOptions::default()).unwrap();
+        writer.write_all(DOCUMENT.1).unwrap();
+        writer.set_raw_comment(comment.into());
+        writer.finish().unwrap().into_inner()
+    }
+
+    const EMPTY_END: &[u8] = b"PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
+    #[test]
+    fn a_tail_with_more_than_one_end_of_central_directory_is_refused() {
+        let clean = package(&[DOCUMENT]);
+        let mut twice = clean.clone();
+        twice.extend_from_slice(&clean);
+        let mut appended = clean.clone();
+        appended.extend_from_slice(EMPTY_END);
+        let locator = b"PK\x06\x07\0\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0";
+        for (case, bytes) in [
+            ("an end record in the comment", package_with_comment(EMPTY_END)),
+            ("two packages one after the other", twice),
+            ("an end record after the package", appended),
+            ("a Zip64 locator in the comment", package_with_comment(locator)),
+        ] {
+            assert!(opens(&bytes), "{case}");
+            assert!(!package_accepted(&bytes), "{case}");
+        }
+        assert!(package_accepted(&package_with_comment(b"a comment")));
+    }
+
+    // The end records some writers add to every package, whatever its size.
+    fn with_zip64_end(bytes: Vec<u8>) -> Vec<u8> {
+        let end = bytes.len() - EMPTY_END.len();
+        assert_eq!(&bytes[end..end + 4], b"PK\x05\x06");
+        let field = |at: usize, len: usize| {
+            let mut value = [0u8; 8];
+            value[..len].copy_from_slice(&bytes[end + at..end + at + len]);
+            u64::from_le_bytes(value)
+        };
+        let (entries, size, offset) = (field(10, 2), field(12, 4), field(16, 4));
+        let mut out = bytes[..end].to_vec();
+        let zip64_end_at = out.len() as u64;
+        out.extend_from_slice(b"PK\x06\x06");
+        out.extend_from_slice(&44u64.to_le_bytes());
+        out.extend_from_slice(&[45, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        for value in [entries, entries, size, offset] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out.extend_from_slice(b"PK\x06\x07\0\0\0\0");
+        out.extend_from_slice(&zip64_end_at.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(b"PK\x05\x06\0\0\0\0");
+        out.extend_from_slice(&[0xFF; 12]);
+        out.extend_from_slice(&[0, 0]);
+        out
+    }
+
+    #[test]
+    fn one_end_of_central_directory_is_accepted_with_or_without_zip64() {
+        let clean = package(&[DOCUMENT, ("word/styles.xml", b"<w:styles/>")]);
+        assert!(package_accepted(&clean));
+        let zip64 = with_zip64_end(clean);
+        assert!(opens(&zip64));
+        assert!(package_accepted(&zip64));
+    }
+
+    #[test]
+    fn the_directory_minizip_reads_is_the_one_the_zip_library_read() {
+        let mut bytes = package(&[DOCUMENT]);
+        let size_at = bytes.len() - EMPTY_END.len() + 12;
+        bytes[size_at] += 1;
+        assert!(opens(&bytes));
+        assert!(!package_accepted(&bytes));
+    }
+
+    #[test]
+    fn going_over_a_directory_limit_is_refused() {
+        let bytes = package(&[DOCUMENT, ("word/styles.xml", b"<w:styles/>")]);
+        let archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
+        let start = archive.central_directory_start();
+        let size = (bytes.len() - EMPTY_END.len()) as u64 - start;
+        let within = |limits: DirectoryLimits| unique_names_within(&mut Cursor::new(bytes.clone()), start, &limits);
+        assert!(within(DirectoryLimits { entries: 2, bytes: size }));
+        assert!(!within(DirectoryLimits { entries: 1, bytes: size }));
+        assert!(!within(DirectoryLimits { entries: 2, bytes: size - 1 }));
     }
 
     fn corpus_documents(folder: &Path, found: &mut Vec<std::path::PathBuf>) {

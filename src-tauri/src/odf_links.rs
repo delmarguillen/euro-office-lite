@@ -12,7 +12,7 @@ use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
-use crate::package_relationships::{declares_utf8, has_allowed_scheme, percent_decoded};
+use crate::package_relationships::{declares_utf8, has_allowed_scheme, part_names_are_unique, percent_decoded};
 
 const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
 const MANIFEST: &str = "META-INF/manifest.xml";
@@ -56,6 +56,12 @@ pub fn prepare(path: &Path, head: &[u8], temp_dir: &Path) -> PackageImages {
     };
     if !has_open_document_extension(path) && !archive.file_names().any(is_open_document) {
         return PackageImages::Unchanged;
+    }
+    let Ok(mut raw) = std::fs::File::open(path) else {
+        return PackageImages::NotAllowed;
+    };
+    if !part_names_are_unique(&mut raw, archive.central_directory_start()) {
+        return PackageImages::NotAllowed;
     }
     let Ok(rewritten) = rewritten_parts(&mut archive, &LIMITS) else {
         return PackageImages::NotAllowed;
@@ -619,6 +625,43 @@ mod tests {
             checked += 1;
         }
         assert!(checked >= 3, "{checked}");
+    }
+
+    // The package with each `from` replaced by `to`, of the same length: the zip
+    // library does not write two entries with one name.
+    fn renamed(mut bytes: Vec<u8>, from: &str, to: &str) -> Vec<u8> {
+        assert_eq!(from.len(), to.len());
+        let found: Vec<usize> = bytes.windows(from.len()).enumerate().filter(|(_, w)| *w == from.as_bytes()).map(|(at, _)| at).collect();
+        assert_eq!(found.len(), 2, "a local header and a directory entry");
+        for at in found {
+            bytes[at..at + to.len()].copy_from_slice(to.as_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn parts_with_the_same_name_or_one_only_differing_in_case_are_not_allowed() {
+        let linked = with_image("../near.png");
+        let clean = with_image("Pictures/a.png");
+        let two = package(&[
+            ("mimetype", MIMETYPE, STORED),
+            ("content.xml", linked.as_bytes(), DEFLATED),
+            ("contenX.xml", clean.as_bytes(), DEFLATED),
+            ("Pictures/a.png", b"png", STORED),
+        ]);
+        let same_name = renamed(two, "contenX.xml", "content.xml");
+        let other_case = package(&[
+            ("mimetype", MIMETYPE, STORED),
+            ("content.xml", clean.as_bytes(), DEFLATED),
+            ("Content.xml", linked.as_bytes(), DEFLATED),
+            ("Pictures/a.png", b"png", STORED),
+        ]);
+        for (name, bytes) in [("same-name.odt", same_name), ("other-case.odt", other_case)] {
+            let (dir, temp, outcome) = prepared(name, &bytes);
+            assert_eq!(outcome, PackageImages::NotAllowed, "{name}");
+            assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     fn manifest(entries: &str) -> String {
