@@ -27,6 +27,12 @@ const ALT_CHUNK_TYPES: [&str; 2] = [
     "http://purl.oclc.org/ooxml/officeDocument/relationships/aFChunk",
 ];
 
+// Office writes this target for a linked picture or media file it has lost: it
+// names no part and no URL. x2t takes a video or sound with this target for one
+// without a linked file (Pic::GetMediaLink, PPTXFormat/Logic/Pic.cpp at
+// v10.0.0.169).
+const MISSING_TARGET: &str = "NULL";
+
 struct Limits {
     entries: usize,
     rels_bytes: u64,
@@ -334,7 +340,7 @@ fn relationship_allowed(element: &BytesStart) -> bool {
     if !types.is_empty() && types.iter().all(|kind| HYPERLINK_TYPES.contains(&kind.as_str())) {
         return true;
     }
-    !targets.is_empty() && targets.iter().all(|target| has_allowed_scheme(target))
+    !targets.is_empty() && targets.iter().all(|target| target == MISSING_TARGET || has_allowed_scheme(target))
 }
 
 fn is_alt_chunk(kind: &str) -> bool {
@@ -510,6 +516,16 @@ mod tests {
             IMAGE,
         ] {
             assert!(!rels_allowed(&external(kind, ABS)), "{kind}");
+        }
+    }
+
+    #[test]
+    fn a_lost_linked_picture_written_as_null_is_accepted() {
+        let video = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/video";
+        assert!(image_target_allowed("NULL"));
+        assert!(rels_allowed(&external(video, "NULL")));
+        for target in ["null", "NULL ", "NULL/a.png", "/NULL"] {
+            assert!(!image_target_allowed(target), "{target}");
         }
     }
 
