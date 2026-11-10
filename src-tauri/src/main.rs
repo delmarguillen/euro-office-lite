@@ -2,6 +2,7 @@
 
 mod app_quit;
 mod bridge;
+mod cfb_directory;
 mod clipboard;
 mod converter;
 mod dictionaries;

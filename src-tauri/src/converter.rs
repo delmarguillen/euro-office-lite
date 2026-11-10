@@ -274,6 +274,11 @@ fn package_images_copy(
     }
 }
 
+// What open_file and convert_for_insert reject an OOXML document with a
+// password with, before x2t. The bridge shows the same dialog for every failed
+// open (_eoShowOpenError) and only logs a failed insert.
+const PASSWORD_ERROR: &str = "This file has a password";
+
 fn not_valid_error(path: &std::path::Path) -> String {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
     format!("This file is not a valid .{}", ext.to_lowercase())
@@ -286,6 +291,9 @@ fn check_container_content(
     content: &x2t_task::ContentSample,
 ) -> Result<(), String> {
     let matches_format = x2t_task::content_matches_extension(path, content);
+    if matches_format && is_encrypted_ooxml(path, content) {
+        return Err(PASSWORD_ERROR.to_string());
+    }
     if matches_format
         && opens_if_it_starts_like_a_zip(path, &content.head)
         && crate::package_relationships::relationships_are_allowed(path, content)
@@ -293,6 +301,16 @@ fn check_container_content(
         return Ok(());
     }
     Err(not_valid_error(path))
+}
+
+// An OOXML document with a password: a CFB with EncryptionInfo and
+// EncryptedPackage at its root. x2t opens one without being given a password
+// when it has Excel's default one (OfficeCryptReader/source/ECMACryptFile.cpp:973),
+// and then converts the package inside whatever the extension
+// (X2tConverter/src/lib/crypt.h:57-133); with any other password it fails with
+// exit 90. Refusing it here treats it the same whichever password it has.
+fn is_encrypted_ooxml(path: &std::path::Path, content: &x2t_task::ContentSample) -> bool {
+    content.starts_like_a_cfb() && crate::cfb_directory::holds_encrypted_package(path)
 }
 
 // x2t picks the format of a file that starts like a ZIP but does not open as
@@ -412,6 +430,77 @@ mod tests {
             content_check("linked.docx", &bytes),
             Err("This file is not a valid .docx".to_string())
         );
+    }
+
+    const ENCRYPTED_DOCX: &[u8] = include_bytes!("../../tests/fixtures/encrypted-test.docx");
+
+    // Every extension that takes a CFB, as x2t converts what it decrypts
+    // whatever the extension.
+    const CFB_EXTENSIONS: [&str; 17] = [
+        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx",
+        "potm", "ppsx", "ppsm", "doc", "xls", "ppt",
+    ];
+
+    #[test]
+    fn a_document_with_a_password_gets_the_password_error_under_every_cfb_extension() {
+        for ext in CFB_EXTENSIONS {
+            let name = format!("protected.{ext}");
+            assert_eq!(content_check(&name, ENCRYPTED_DOCX), Err(PASSWORD_ERROR.to_string()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_document_with_a_password_gets_the_password_error_whatever_the_case_of_its_extension() {
+        for name in ["protected.XLSX", "protected.Pptx", "protected.DOCX", "protected.XLS"] {
+            assert_eq!(content_check(name, ENCRYPTED_DOCX), Err(PASSWORD_ERROR.to_string()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_document_with_a_password_is_refused_before_x2t_and_leaves_no_copy() {
+        for name in ["protected.xlsx", "protected.pptx", "protected.docx"] {
+            let (original, work_dir) = original_and_work_dir(name, ENCRYPTED_DOCX);
+
+            let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+            assert_eq!(refused.err(), Some(PASSWORD_ERROR.to_string()), "{name}");
+            assert_eq!(files_in(&work_dir), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_document_with_a_password_under_an_odf_extension_stays_not_valid() {
+        assert_eq!(
+            content_check("protected.odt", ENCRYPTED_DOCX),
+            Err("This file is not a valid .odt".to_string())
+        );
+    }
+
+    #[test]
+    fn a_cfb_with_only_one_of_the_two_streams_is_left_to_x2t() {
+        use crate::cfb_directory::test_cfb::with_root_streams;
+        for streams in [["EncryptionInfo", "Other"], ["EncryptedPackage", "Other"]] {
+            for name in ["one.xlsx", "one.doc"] {
+                assert_eq!(content_check(name, &with_root_streams(&streams)), Ok(()), "{name} {streams:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cfb_whose_directory_cannot_be_read_is_left_to_x2t() {
+        use crate::cfb_directory::test_cfb::with_root_streams;
+        let header_only = with_root_streams(&["EncryptionInfo", "EncryptedPackage"])[..512].to_vec();
+        for name in ["unreadable.xlsx", "unreadable.pptx", "unreadable.doc"] {
+            assert_eq!(content_check(name, &header_only), Ok(()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_word_97_doc_without_those_streams_passes_under_its_cfb_extensions() {
+        let doc = include_bytes!("../../tests/fixtures/word97.doc");
+        for name in ["word97.doc", "word97.xls", "word97.ppt", "WORD97.DOC"] {
+            assert_eq!(content_check(name, doc), Ok(()), "{name}");
+        }
     }
 
     #[test]
