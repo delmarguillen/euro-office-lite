@@ -236,7 +236,9 @@ pub fn prepare_editor_input(
     let mut input = read_copy(source, work_dir, text_kind, text_options)?;
     let copy = input.path().to_path_buf();
     let content = x2t_task::ContentSample::read(&copy).map_err(|e| e.to_string())?;
-    check_container_content(&copy, &content)?;
+    if check_container_content(&copy, &content)? == PackageFilters::Skipped {
+        return Ok(input);
+    }
     if let Some(package_copy) = package_images_copy(&copy, &content, work_dir)? {
         input.copies.push(package_copy);
     }
@@ -284,20 +286,32 @@ fn not_valid_error(path: &std::path::Path) -> String {
     format!("This file is not a valid .{}", ext.to_lowercase())
 }
 
+// Whether the package checks (package_relationships, odf_links) apply to a
+// file the content check accepts.
+#[derive(Debug, PartialEq)]
+enum PackageFilters {
+    Applied,
+    // A Word, Excel or PowerPoint 97-2003 document: x2t converts it as one and
+    // never opens it as a package, whatever documents its streams hold.
+    Skipped,
+}
+
 // Opening and inserting convert the user's file to Editor.bin (8192); this runs
 // on the copy x2t reads, before x2t is launched for them.
 fn check_container_content(
     path: &std::path::Path,
     content: &x2t_task::ContentSample,
-) -> Result<(), String> {
+) -> Result<PackageFilters, String> {
     if !x2t_task::content_matches_extension(path, content) {
         return Err(not_valid_error(path));
     }
-    check_cfb_directory(path)?;
+    if check_cfb_directory(path)?.is_some() {
+        return Ok(PackageFilters::Skipped);
+    }
     if opens_if_it_starts_like_a_zip(path, &content.head)
         && crate::package_relationships::relationships_are_allowed(path, content)
     {
-        return Ok(());
+        return Ok(PackageFilters::Applied);
     }
     Err(not_valid_error(path))
 }
@@ -309,13 +323,16 @@ fn check_container_content(
 // (OfficeCryptReader/source/ECMACryptFile.cpp:973), and then converts the
 // package inside whatever the extension (X2tConverter/src/lib/crypt.h:57-133);
 // with any other password it fails with exit 90. Refusing it here treats it the
-// same whichever password it has.
-fn check_cfb_directory(path: &std::path::Path) -> Result<(), String> {
+// same whichever password it has. Any other readable CFB gives the binary
+// format x2t takes it for, if any.
+fn check_cfb_directory(
+    path: &std::path::Path,
+) -> Result<Option<crate::cfb_directory::BinaryFormat>, String> {
     use crate::cfb_directory::CfbDirectory;
     match crate::cfb_directory::read(path) {
-        CfbDirectory::NotCfb => Ok(()),
-        CfbDirectory::Readable { holds_encrypted_package: false } => Ok(()),
-        CfbDirectory::Readable { holds_encrypted_package: true } => Err(PASSWORD_ERROR.to_string()),
+        CfbDirectory::NotCfb => Ok(None),
+        CfbDirectory::Readable { holds_encrypted_package: true, .. } => Err(PASSWORD_ERROR.to_string()),
+        CfbDirectory::Readable { holds_encrypted_package: false, binary_format } => Ok(binary_format),
         CfbDirectory::Unreadable => Err(not_valid_error(path)),
     }
 }
@@ -356,7 +373,7 @@ mod tests {
     fn content_check(name: &str, content: &[u8]) -> Result<(), String> {
         let path = scratch_root().join(name);
         std::fs::write(&path, content).unwrap();
-        check_container_content(&path, &x2t_task::ContentSample::read(&path).unwrap())
+        check_container_content(&path, &x2t_task::ContentSample::read(&path).unwrap()).map(|_| ())
     }
 
     fn zip_with(name: &str, content: &[u8]) -> Vec<u8> {
@@ -548,6 +565,105 @@ mod tests {
     fn a_real_word_97_doc_passes_the_content_check() {
         let doc = include_bytes!("../../tests/fixtures/word97.doc");
         assert_eq!(content_check("word97.doc", doc), Ok(()));
+    }
+
+    // A package with a picture linked from a local path: the relationship
+    // check refuses it.
+    fn package_with_a_local_link() -> Vec<u8> {
+        zip_with(
+            "word/_rels/document.xml.rels",
+            b"<Relationships><Relationship Id=\"r\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"/a/b.png\" TargetMode=\"External\"/></Relationships>",
+        )
+    }
+
+    // A stream of 4096 bytes or more that ends with the package, so the
+    // package is the last thing in the file.
+    fn stream_ending_with(package: &[u8]) -> Vec<u8> {
+        let len = package.len().div_ceil(512).max(8) * 512;
+        let mut stream = vec![0u8; len - package.len()];
+        stream.extend_from_slice(package);
+        stream
+    }
+
+    const BINARY_STREAMS: [(&str, &str); 3] =
+        [("book.xls", "Workbook"), ("slides.ppt", "PowerPoint Document"), ("letter.doc", "WordDocument")];
+
+    fn cfb_holding(binary_stream: &str, package: &[u8]) -> Vec<u8> {
+        use crate::cfb_directory::test_cfb::with_root_stream_contents;
+        let binary = vec![1u8; 4096];
+        with_root_stream_contents(&[(binary_stream, &binary), ("Embedded", &stream_ending_with(package))])
+    }
+
+    // empty.xls from Apache POI's test-data: Excel keeps its theme as a
+    // package in a stream.
+    #[test]
+    fn a_real_excel_97_2003_workbook_with_its_theme_in_a_stream_opens() {
+        let xls = include_bytes!("../../tests/fixtures/poi-empty.xls");
+        assert_eq!(content_check("empty.xls", xls), Ok(()));
+    }
+
+    #[test]
+    fn a_97_2003_document_holding_a_package_in_a_stream_opens() {
+        for (name, binary_stream) in BINARY_STREAMS {
+            let cfb = cfb_holding(binary_stream, &package_with_a_local_link());
+            assert_eq!(content_check(name, &cfb), Ok(()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cfb_without_a_97_2003_stream_holding_that_package_is_refused() {
+        for (name, _) in BINARY_STREAMS {
+            let cfb = cfb_holding("Other", &package_with_a_local_link());
+            assert_eq!(content_check(name, &cfb), Err(not_valid_error(std::path::Path::new(name))), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cfb_without_a_97_2003_stream_followed_by_that_package_is_refused() {
+        use crate::cfb_directory::test_cfb::with_root_streams;
+        let mut joined = with_root_streams(&["Other"]);
+        joined.extend_from_slice(&package_with_a_local_link());
+        for name in ["joined.doc", "joined.xls", "joined.ppt", "joined.docx"] {
+            assert_eq!(content_check(name, &joined), Err(not_valid_error(std::path::Path::new(name))), "{name}");
+        }
+    }
+
+    // x2t takes a CFB with an Ole and a LinkInfo stream, and no CompObj, for a
+    // linked object, whatever other streams it has.
+    #[test]
+    fn a_linked_object_with_a_word_stream_holding_that_package_is_refused() {
+        use crate::cfb_directory::test_cfb::with_root_stream_contents;
+        let binary = vec![1u8; 4096];
+        let cfb = with_root_stream_contents(&[
+            ("WordDocument", &binary),
+            ("\u{1}Ole", &binary),
+            ("LinkInfo", &binary),
+            ("Embedded", &stream_ending_with(&package_with_a_local_link())),
+        ]);
+        assert_eq!(content_check("letter.doc", &cfb), Err("This file is not a valid .doc".to_string()));
+    }
+
+    #[test]
+    fn a_97_2003_document_holding_an_odf_package_is_converted_as_it_is() {
+        let odt = {
+            use std::io::Write;
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("mimetype", options).unwrap();
+            writer.write_all(b"application/vnd.oasis.opendocument.text").unwrap();
+            writer.start_file("content.xml", options).unwrap();
+            writer
+                .write_all(b"<office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"><draw:image xlink:href=\"../near.png\"/></office:document-content>")
+                .unwrap();
+            writer.finish().unwrap().into_inner()
+        };
+        let cfb = cfb_holding("WordDocument", &odt);
+        let (original, work_dir) = original_and_work_dir("letter.doc", &cfb);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_eq!(std::fs::read(input.path()).unwrap(), cfb);
+        assert_eq!(files_in(&work_dir), 1, "no package copy");
     }
 
     // The original in one folder, the instance's work folder next to it.

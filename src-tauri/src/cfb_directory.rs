@@ -1,7 +1,8 @@
-// Reads the names at the root of a CFB's directory the way x2t reads them
+// Reads the entries at the root of a CFB's directory the way x2t reads them
 // (POLE, core/Common/3dParty/pole/pole.cpp at v10.0.0.169), to tell an OOXML
-// document with a password from any other CFB, and a CFB whose directory can
-// be read whole from one whose directory cannot.
+// document with a password from any other CFB, a Word, Excel or PowerPoint
+// 97-2003 document from any other CFB, and a CFB whose directory can be read
+// whole from one whose directory cannot.
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
 
@@ -12,6 +13,32 @@ use std::io::{Read, Seek, SeekFrom};
 // root, and POLE compares names exactly, in their case (DirEntry::compare).
 const ENCRYPTION_INFO: &str = "EncryptionInfo";
 const ENCRYPTED_PACKAGE: &str = "EncryptedPackage";
+
+// The streams x2t picks a binary format from, in the order
+// COfficeFileFormatChecker::isOfficeFile tries them
+// (OfficeFileFormatChecker2.cpp:723-747): isDocFormatFile (:408-443),
+// isXlsFormatFile (:485-520) and isPptFormatFile (:544-556). Each one takes
+// the file for its format when its stream gives at least one byte.
+const WORD_DOCUMENT: &str = "WordDocument";
+const WORKBOOK_STREAMS: [&str; 5] = ["Workbook", "Book", "WORKBOOK", "BOOK", "book"];
+const POWERPOINT_DOCUMENT: &str = "PowerPoint Document";
+// isDocFormatFile does not take a file whose "DataSpaces" storage has entries
+// (:421-423).
+const DATA_SPACES: &str = "DataSpaces";
+// isOleObjectFile runs before them (:717-722). With an "Ole" stream and a
+// "CompObj" stream of COMP_OBJ_HEADER bytes or more, it decides the file from
+// the names in CompObj (:326-384) and x2t tries nothing else; with an "Ole"
+// stream and a "LinkInfo" one, it converts nothing (:385-398).
+const OLE: &str = "Ole";
+const COMP_OBJ: &str = "CompObj";
+const COMP_OBJ_HEADER: u32 = 28;
+const LINK_INFO: &str = "LinkInfo";
+// With a "Package" stream, x2t converts the package that stream holds
+// (:356-359).
+const PACKAGE: &str = "Package";
+// POLE reads a stream smaller than this from the mini FAT (StreamIO::StreamIO,
+// pole.cpp:2010-2013); the header gives no other value (Cfb::open).
+const MINI_STREAM_CUTOFF: u32 = 4096;
 
 // A CFB whose directory is longer than this cannot be read whole.
 const MAX_DIRECTORY_ENTRIES: usize = 1 << 16;
@@ -33,7 +60,7 @@ pub enum CfbDirectory {
     NotCfb,
     // Every sector of the header, the FAT, the DIFAT and the directory read to
     // find the names at the root is in the file.
-    Readable { holds_encrypted_package: bool },
+    Readable { holds_encrypted_package: bool, binary_format: Option<BinaryFormat> },
     // The file starts with the CFB signature, but its header is shorter than
     // 512 bytes or is one POLE refuses, its DIFAT is not the length POLE reads,
     // one of those sectors or a FAT sector is not whole in the file, or the
@@ -41,8 +68,18 @@ pub enum CfbDirectory {
     Unreadable,
 }
 
-// Whether the file is a CFB, and whether its root holds both entries x2t
-// decrypts an OOXML package from.
+// The format x2t converts a CFB as when a stream at its root decides it. When
+// it picks one, x2t returns before it tries the file as a ZIP
+// (OfficeFileFormatChecker2.cpp:715-790), and converts it as that format.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum BinaryFormat {
+    Doc,
+    Xls,
+    Ppt,
+}
+
+// Whether the file is a CFB, whether its root holds both entries x2t decrypts
+// an OOXML package from, and the binary format x2t takes it for.
 pub fn read(path: &std::path::Path) -> CfbDirectory {
     let Ok(file) = std::fs::File::open(path) else {
         return CfbDirectory::Unreadable;
@@ -58,27 +95,182 @@ fn read_from<R: Read + Seek>(mut reader: R) -> CfbDirectory {
     if !header.starts_with(SIGNATURE) {
         return CfbDirectory::NotCfb;
     }
-    let Ok(names) = root_names(reader, &header) else {
+    let Ok(root) = read_root(reader, &header) else {
         return CfbDirectory::Unreadable;
     };
-    let has = |wanted: &str| names.iter().any(|name| name == wanted);
-    CfbDirectory::Readable { holds_encrypted_package: has(ENCRYPTION_INFO) && has(ENCRYPTED_PACKAGE) }
+    CfbDirectory::Readable {
+        holds_encrypted_package: root.has(ENCRYPTION_INFO) && root.has(ENCRYPTED_PACKAGE),
+        binary_format: binary_format(&root),
+    }
+}
+
+// The entries at the root, as x2t looks them up by name.
+struct Root {
+    entries: Vec<RootEntry>,
+    comp_obj: CompObj,
+}
+
+struct RootEntry {
+    name: String,
+    is_stream: bool,
+    // A stream POLE reads at least one byte of.
+    gives_data: bool,
+}
+
+// The names isOleObjectFile reads from the "CompObj" stream (:337-354).
+enum CompObj {
+    // No CompObj stream of COMP_OBJ_HEADER bytes or more.
+    Short,
+    // The user type and the program, as bytes.
+    Names { user_type: Vec<u8>, program: Vec<u8> },
+    // A CompObj this reader does not read as x2t does.
+    NotRead,
+}
+
+impl Root {
+    fn named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a RootEntry> + 'a {
+        self.entries.iter().filter(move |entry| entry.name == name)
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.named(name).next().is_some()
+    }
+
+    // POLE finds one of the entries with a name; when there are several, all
+    // of them have to give data.
+    fn gives_data(&self, name: &str) -> bool {
+        self.has(name) && self.named(name).all(|entry| entry.gives_data)
+    }
+
+    fn has_only_streams_named(&self, name: &str) -> bool {
+        self.has(name) && self.named(name).all(|entry| entry.is_stream)
+    }
+
+    fn takes_for_a_doc(&self) -> bool {
+        self.gives_data(WORD_DOCUMENT) && !self.has(DATA_SPACES)
+    }
+
+    fn takes_for_an_xls(&self) -> bool {
+        WORKBOOK_STREAMS.iter().any(|name| self.gives_data(name))
+    }
+
+    fn takes_for_a_ppt(&self) -> bool {
+        self.gives_data(POWERPOINT_DOCUMENT)
+    }
+}
+
+fn binary_format(root: &Root) -> Option<BinaryFormat> {
+    if !root.has(OLE) {
+        return format_from_streams(root);
+    }
+    if !root.has_only_streams_named(OLE) {
+        return None;
+    }
+    embedded_object_format(root)
+}
+
+fn format_from_streams(root: &Root) -> Option<BinaryFormat> {
+    if root.takes_for_a_doc() {
+        return Some(BinaryFormat::Doc);
+    }
+    if root.takes_for_an_xls() {
+        return Some(BinaryFormat::Xls);
+    }
+    if root.takes_for_a_ppt() {
+        return Some(BinaryFormat::Ppt);
+    }
+    None
+}
+
+// isOleObjectFile with an "Ole" stream: the first name in CompObj's user type
+// or program among "Excel", "Word" and "PowerPoint" says which stream it
+// looks for (:360-381).
+fn embedded_object_format(root: &Root) -> Option<BinaryFormat> {
+    let (user_type, program) = match &root.comp_obj {
+        CompObj::Short if root.has(LINK_INFO) => return None,
+        CompObj::Short => return format_from_streams(root),
+        CompObj::NotRead => return None,
+        CompObj::Names { user_type, program } => (user_type, program),
+    };
+    if root.has(PACKAGE) {
+        return None;
+    }
+    let names = |word: &[u8]| contains(user_type, word) || contains(program, word);
+    if names(b"Excel") {
+        return root.takes_for_an_xls().then_some(BinaryFormat::Xls);
+    }
+    if names(b"Word") {
+        return root.takes_for_a_doc().then_some(BinaryFormat::Doc);
+    }
+    if names(b"PowerPoint") {
+        return root.takes_for_a_ppt().then_some(BinaryFormat::Ppt);
+    }
+    None
+}
+
+fn contains(bytes: &[u8], word: &[u8]) -> bool {
+    bytes.windows(word.len()).any(|window| window == word)
 }
 
 // A sector, or the header, that cannot be read whole, or a limit passed.
 struct Unreadable;
 
-fn root_names<R: Read + Seek>(reader: R, header: &[u8]) -> Result<Vec<String>, Unreadable> {
+fn read_root<R: Read + Seek>(reader: R, header: &[u8]) -> Result<Root, Unreadable> {
     let mut cfb = Cfb::open(reader, header)?;
     cfb.check_fat_sectors_whole()?;
     let chain = cfb.directory_chain()?;
-    cfb.names_under_root(&chain)
+    let entries = cfb.entries_under_root(&chain)?;
+    let mini_fat_entries = cfb.mini_fat_entries()?;
+    let comp_obj = cfb.comp_obj(&chain, &entries, mini_fat_entries);
+    let entries = entries
+        .into_iter()
+        .map(|entry| RootEntry {
+            is_stream: entry.is_stream,
+            gives_data: entry.gives_data(&cfb, mini_fat_entries),
+            name: entry.name,
+        })
+        .collect();
+    Ok(Root { entries, comp_obj })
+}
+
+// As ReadStringFromOle (OfficeFileFormatChecker2.cpp:57-101) reads the strings
+// of CompObj after its header, while more than 4 bytes are left: a length,
+// that many bytes, then 2 more skipped. With a length past what is left, the
+// string is empty and the reading goes on after the first zero byte that
+// follows the length; None when there is none, as x2t then reads past what
+// the stream gave.
+fn comp_obj_names(stream: &[u8]) -> Option<CompObj> {
+    let mut position = COMP_OBJ_HEADER as usize;
+    let mut strings = Vec::new();
+    for _ in 0..3 {
+        let left = stream.len().saturating_sub(position);
+        if left <= 4 {
+            strings.push(Vec::new());
+            continue;
+        }
+        let length = u32_at(stream, position) as usize;
+        position += 4;
+        if length > left {
+            let zero = stream[position..].iter().position(|&byte| byte == 0)?;
+            strings.push(Vec::new());
+            position += zero + 1;
+            continue;
+        }
+        let end = (position + length).min(stream.len());
+        strings.push(stream[position..end].to_vec());
+        position = end + 2;
+    }
+    let program = strings.pop()?;
+    let _clipboard_format = strings.pop()?;
+    let user_type = strings.pop()?;
+    Some(CompObj::Names { user_type, program })
 }
 
 struct Cfb<R> {
     reader: R,
     file_len: u64,
     sector_shift: u32,
+    mini_sector_shift: u32,
     // The number of FAT sectors the header declares: POLE reads no FAT entry
     // past them.
     fat_sectors: u64,
@@ -86,6 +278,7 @@ struct Cfb<R> {
     // that many.
     difat_sectors: u64,
     directory_start: u32,
+    mini_fat_start: u32,
     header_difat: Vec<u32>,
     first_difat_sector: u32,
     // The DIFAT sectors found so far, in chain order.
@@ -95,9 +288,29 @@ struct Cfb<R> {
 struct Entry {
     name: String,
     valid: bool,
+    is_stream: bool,
     left: u32,
     right: u32,
     child: u32,
+    start: u32,
+    size: u32,
+}
+
+impl Entry {
+    // StreamIO::read gives as many bytes as asked, up to the size, as soon as
+    // the stream's first sector has an entry in the table it is read from
+    // (pole.cpp:2123-2184): what is in the sectors does not count.
+    // AllocTable::follow gives no sector for a start past the table
+    // (pole.cpp:533-540).
+    fn gives_data<R: Read + Seek>(&self, cfb: &Cfb<R>, mini_fat_entries: u64) -> bool {
+        if !self.is_stream || self.size == 0 {
+            return false;
+        }
+        if self.size < MINI_STREAM_CUTOFF {
+            return (self.start as u64) < mini_fat_entries;
+        }
+        cfb.in_fat(self.start)
+    }
 }
 
 impl<R: Read + Seek> Cfb<R> {
@@ -117,9 +330,11 @@ impl<R: Read + Seek> Cfb<R> {
             reader,
             file_len,
             sector_shift,
+            mini_sector_shift: u16_at(header, 0x20) as u32,
             fat_sectors: u32_at(header, 0x2C) as u64,
             difat_sectors: u32_at(header, 0x48) as u64,
             directory_start: u32_at(header, 0x30),
+            mini_fat_start: u32_at(header, 0x3C),
             header_difat,
             first_difat_sector: u32_at(header, 0x44),
             difat_chain: Vec::new(),
@@ -233,6 +448,89 @@ impl<R: Read + Seek> Cfb<R> {
         Ok(chain)
     }
 
+    // The entries POLE loads into the mini FAT: as many as its chain of sectors
+    // holds (StorageIO::load, pole.cpp:1419-1426), followed as
+    // directory_chain follows the directory.
+    fn mini_fat_entries(&mut self) -> Result<u64, Unreadable> {
+        let mut sectors = 0;
+        let mut seen = HashSet::new();
+        let mut sector = self.mini_fat_start;
+        while self.in_fat(sector) && seen.insert(sector) {
+            sectors += 1;
+            sector = self.next_sector(sector)?;
+        }
+        Ok(sectors * self.u32s_per_sector())
+    }
+
+    // The CompObj stream at the root, as POLE reads it.
+    fn comp_obj(&mut self, chain: &[u32], entries: &[Entry], mini_fat_entries: u64) -> CompObj {
+        let named: Vec<&Entry> = entries.iter().filter(|entry| entry.name == COMP_OBJ).collect();
+        let [entry] = named.as_slice() else {
+            return if named.is_empty() { CompObj::Short } else { CompObj::NotRead };
+        };
+        if !entry.is_stream || entry.size < COMP_OBJ_HEADER {
+            return CompObj::Short;
+        }
+        if entry.size >= MINI_STREAM_CUTOFF {
+            return CompObj::NotRead;
+        }
+        let Ok(stream) = self.mini_stream_bytes(chain, entry, mini_fat_entries) else {
+            return CompObj::NotRead;
+        };
+        comp_obj_names(&stream).unwrap_or(CompObj::NotRead)
+    }
+
+    // A stream smaller than MINI_STREAM_CUTOFF, from the mini stream: the
+    // chain of sectors that starts at the first sector of the root entry
+    // (StorageIO::load, pole.cpp:1441-1445; StorageIO::loadSmallBlocks,
+    // pole.cpp:1771-1807). Every sector it needs has to be in the file.
+    fn mini_stream_bytes(&mut self, chain: &[u32], entry: &Entry, mini_fat_entries: u64) -> Result<Vec<u8>, Unreadable> {
+        let container_start = self.entry(chain, 0)?.start;
+        let mini_len = 1u64 << self.mini_sector_shift;
+        let sector_len = 1u64 << self.sector_shift;
+        let mut bytes = Vec::new();
+        let mut seen = HashSet::new();
+        let mut mini_sector = entry.start;
+        while bytes.len() < entry.size as usize {
+            if mini_sector as u64 >= mini_fat_entries || !seen.insert(mini_sector) {
+                return Err(Unreadable);
+            }
+            let position = mini_sector as u64 * mini_len;
+            let sector = self.nth_sector(container_start, position / sector_len)?;
+            let offset = self.sector_offset(sector)? + position % sector_len;
+            let mut mini = vec![0u8; mini_len as usize];
+            self.read_bytes(offset, &mut mini)?;
+            bytes.extend_from_slice(&mini);
+            mini_sector = self.next_mini_sector(mini_sector)?;
+        }
+        bytes.truncate(entry.size as usize);
+        Ok(bytes)
+    }
+
+    fn next_mini_sector(&mut self, mini_sector: u32) -> Result<u32, Unreadable> {
+        let per_sector = self.u32s_per_sector();
+        let sector = self.nth_sector(self.mini_fat_start, mini_sector as u64 / per_sector)?;
+        let offset = self.sector_offset(sector)? + (mini_sector as u64 % per_sector) * 4;
+        self.read_u32(offset)
+    }
+
+    // The nth sector of the chain that starts at `start`, as
+    // AllocTable::follow gives the chain.
+    fn nth_sector(&mut self, start: u32, n: u64) -> Result<u32, Unreadable> {
+        let mut seen = HashSet::new();
+        let mut sector = start;
+        for _ in 0..n {
+            if !self.in_fat(sector) || !seen.insert(sector) {
+                return Err(Unreadable);
+            }
+            sector = self.next_sector(sector)?;
+        }
+        if !self.in_fat(sector) || seen.contains(&sector) {
+            return Err(Unreadable);
+        }
+        Ok(sector)
+    }
+
     fn next_sector(&mut self, sector: u32) -> Result<u32, Unreadable> {
         let per_sector = self.u32s_per_sector();
         let fat_sector = self.fat_sector(sector as u64 / per_sector)?;
@@ -281,20 +579,20 @@ impl<R: Read + Seek> Cfb<R> {
         Ok(parse_entry(&bytes))
     }
 
-    // The names of the root's children: every entry reachable through the
-    // siblings of the root's child, which holds every one POLE's search from
-    // the root can reach (dirtree_find_sibling). An invalid entry ends a
-    // branch, as it ends POLE's search.
-    fn names_under_root(&mut self, chain: &[u32]) -> Result<Vec<String>, Unreadable> {
+    // The root's children: every entry reachable through the siblings of the
+    // root's child, which holds every one POLE's search from the root can
+    // reach (dirtree_find_sibling). An invalid entry ends a branch, as it ends
+    // POLE's search.
+    fn entries_under_root(&mut self, chain: &[u32]) -> Result<Vec<Entry>, Unreadable> {
         let count = chain.len() * self.entries_per_sector();
         let in_directory = |index: u32| (index as usize) < count;
-        let mut names = Vec::new();
+        let mut entries = Vec::new();
         if chain.is_empty() {
-            return Ok(names);
+            return Ok(entries);
         }
         let root = self.entry(chain, 0)?;
         if !root.valid || !in_directory(root.child) {
-            return Ok(names);
+            return Ok(entries);
         }
         let mut seen = HashSet::new();
         let mut pending = vec![root.child];
@@ -306,14 +604,14 @@ impl<R: Read + Seek> Cfb<R> {
             if !entry.valid {
                 continue;
             }
-            names.push(entry.name);
             for sibling in [entry.left, entry.right] {
                 if sibling > 0 && in_directory(sibling) {
                     pending.push(sibling);
                 }
             }
+            entries.push(entry);
         }
-        Ok(names)
+        Ok(entries)
     }
 }
 
@@ -337,8 +635,9 @@ fn pole_accepts_header(header: &[u8]) -> bool {
     mini_sector_shift <= sector_shift && (7..=30).contains(&sector_shift)
 }
 
-// As DirTree::load reads an entry: at most 32 UTF-16 units of name, without
-// the terminating one, and without a first unit below 32.
+// As DirTree::load reads an entry (pole.cpp:963-1022): at most 32 UTF-16
+// units of name, without the terminating one, and without a first unit below
+// 32; only a stream is not a directory, and the size is 32 bits.
 fn parse_entry(bytes: &[u8]) -> Entry {
     let name_len = (u16_at(bytes, 0x40) as usize).min(64);
     let units_len = if name_len > 1 { name_len / 2 - 1 } else { 0 };
@@ -351,9 +650,12 @@ fn parse_entry(bytes: &[u8]) -> Entry {
     Entry {
         name: String::from_utf16_lossy(&units),
         valid: matches!(object_type, 1 | 2 | 5) && name_len >= 1,
+        is_stream: object_type == 2,
         left: u32_at(bytes, 0x44),
         right: u32_at(bytes, 0x48),
         child: u32_at(bytes, 0x4C),
+        start: u32_at(bytes, 0x74),
+        size: u32_at(bytes, 0x78),
     }
 }
 
@@ -507,6 +809,33 @@ pub mod test_cfb {
         with_entries(&entries)
     }
 
+    // A root whose children are streams with these names and contents, each in
+    // its own run of sectors after the directory. Each content is 4096 bytes
+    // or more, so it is read through the FAT.
+    pub fn with_root_stream_contents(streams: &[(&str, &[u8])]) -> Vec<u8> {
+        let names: Vec<&str> = streams.iter().map(|(name, _)| *name).collect();
+        let mut bytes = with_root_streams(&names);
+        let mut sector = (bytes.len() / 512 - 1) as u32;
+        for (i, (_, content)) in streams.iter().enumerate() {
+            assert!(content.len() >= 4096);
+            let sectors = content.len().div_ceil(512) as u32;
+            let entry = 1024 + (i + 1) * 128;
+            bytes[entry + 0x74..entry + 0x78].copy_from_slice(&sector.to_le_bytes());
+            bytes[entry + 0x78..entry + 0x7C].copy_from_slice(&(content.len() as u32).to_le_bytes());
+            let last = sector + sectors - 1;
+            for run in sector..=last {
+                let next = if run == last { 0xFFFF_FFFE } else { run + 1 };
+                let fat_entry = 512 + run as usize * 4;
+                bytes[fat_entry..fat_entry + 4].copy_from_slice(&next.to_le_bytes());
+            }
+            bytes.extend_from_slice(content);
+            bytes.resize(bytes.len().div_ceil(512) * 512, 0);
+            sector = last + 1;
+        }
+        assert!(sector <= 128, "one FAT sector");
+        bytes
+    }
+
     fn raw_entry(&(name, object_type, left, right, child): &RawEntry) -> [u8; 128] {
         let mut entry = [0u8; 128];
         let units: Vec<u16> = name.encode_utf16().collect();
@@ -527,8 +856,8 @@ pub mod test_cfb {
 mod tests {
     use super::test_cfb::{
         directory_behind_difat_sector, directory_found_through_the_difat, directory_of_sectors,
-        directory_past_the_end, header_only, with_entries, with_root_streams, FIRST_DIFAT_LINK, NONE,
-        STORAGE, STREAM,
+        directory_past_the_end, header_only, with_entries, with_root_stream_contents, with_root_streams,
+        FIRST_DIFAT_LINK, NONE, STORAGE, STREAM,
     };
     use super::*;
 
@@ -550,7 +879,7 @@ mod tests {
     }
 
     fn holds(bytes: &[u8]) -> bool {
-        read_bytes(bytes) == CfbDirectory::Readable { holds_encrypted_package: true }
+        matches!(read_bytes(bytes), CfbDirectory::Readable { holds_encrypted_package: true, .. })
     }
 
     #[test]
@@ -561,6 +890,225 @@ mod tests {
     #[test]
     fn a_real_word_97_doc_does_not() {
         assert!(!holds(WORD97_DOC));
+    }
+
+    fn binary_format_of(bytes: &[u8]) -> Option<BinaryFormat> {
+        match read_bytes(bytes) {
+            CfbDirectory::Readable { binary_format, .. } => binary_format,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    const STREAM_DATA: &[u8] = &[1; 4096];
+
+    // The offset of the first child's entry in the CFBs test_cfb builds.
+    const FIRST_CHILD: usize = 1024 + 128;
+
+    fn set_start_and_size(bytes: &mut [u8], entry: usize, start: u32, size: u32) {
+        bytes[entry + 0x74..entry + 0x78].copy_from_slice(&start.to_le_bytes());
+        bytes[entry + 0x78..entry + 0x7C].copy_from_slice(&size.to_le_bytes());
+    }
+
+    #[test]
+    fn a_real_word_97_doc_is_converted_as_a_doc() {
+        assert_eq!(binary_format_of(WORD97_DOC), Some(BinaryFormat::Doc));
+    }
+
+    #[test]
+    fn a_real_document_with_a_password_is_not_converted_as_a_binary_format() {
+        assert_eq!(binary_format_of(ENCRYPTED_DOCX), None);
+    }
+
+    #[test]
+    fn each_97_2003_stream_with_data_decides_its_format() {
+        let cases = [
+            ("WordDocument", BinaryFormat::Doc),
+            ("Workbook", BinaryFormat::Xls),
+            ("Book", BinaryFormat::Xls),
+            ("WORKBOOK", BinaryFormat::Xls),
+            ("BOOK", BinaryFormat::Xls),
+            ("book", BinaryFormat::Xls),
+            ("PowerPoint Document", BinaryFormat::Ppt),
+        ];
+        for (name, format) in cases {
+            let cfb = with_root_stream_contents(&[("Other", STREAM_DATA), (name, STREAM_DATA)]);
+            assert_eq!(binary_format_of(&cfb), Some(format), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_word_stream_is_tried_before_the_excel_one_and_that_before_the_powerpoint_one() {
+        let all = with_root_stream_contents(&[
+            ("PowerPoint Document", STREAM_DATA),
+            ("Workbook", STREAM_DATA),
+            ("WordDocument", STREAM_DATA),
+        ]);
+        assert_eq!(binary_format_of(&all), Some(BinaryFormat::Doc));
+        let two = with_root_stream_contents(&[("PowerPoint Document", STREAM_DATA), ("Book", STREAM_DATA)]);
+        assert_eq!(binary_format_of(&two), Some(BinaryFormat::Xls));
+    }
+
+    #[test]
+    fn an_empty_stream_or_a_storage_with_that_name_decides_nothing() {
+        assert_eq!(binary_format_of(&with_root_streams(&["WordDocument", "Workbook", "PowerPoint Document"])), None);
+        let storage = with_entries(&[("Root Entry", 5, NONE, NONE, 1), ("Workbook", STORAGE, NONE, NONE, NONE)]);
+        assert_eq!(binary_format_of(&storage), None);
+    }
+
+    #[test]
+    fn a_stream_that_starts_past_the_fat_decides_nothing() {
+        let mut bytes = with_root_stream_contents(&[("Workbook", STREAM_DATA)]);
+        set_start_and_size(&mut bytes, FIRST_CHILD, 128, 4096);
+        assert_eq!(binary_format_of(&bytes), None);
+    }
+
+    #[test]
+    fn stream_names_are_compared_in_their_case() {
+        for name in ["worddocument", "Powerpoint Document", "WorkBook"] {
+            assert_eq!(binary_format_of(&with_root_stream_contents(&[(name, STREAM_DATA)])), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_stream_inside_a_storage_decides_nothing() {
+        let mut nested = with_entries(&[
+            ("Root Entry", 5, NONE, NONE, 1),
+            ("ObjectPool", STORAGE, NONE, NONE, 2),
+            ("WordDocument", STREAM, NONE, NONE, NONE),
+        ]);
+        set_start_and_size(&mut nested, FIRST_CHILD + 128, 0, 4096);
+        nested.resize(nested.len() + 4096, 1);
+        assert_eq!(binary_format_of(&nested), None);
+    }
+
+    // Puts the content, under 4096 bytes, in the mini stream as the stream of
+    // the root's child number `child`: a mini FAT sector and a mini stream
+    // sector after what is there.
+    fn with_small_stream(mut bytes: Vec<u8>, child: usize, content: &[u8]) -> Vec<u8> {
+        let mini_sectors = content.len().div_ceil(64);
+        assert!(mini_sectors <= 8, "one mini stream sector");
+        let mini_fat = (bytes.len() / 512 - 1) as u32;
+        let container = mini_fat + 1;
+        for sector in [mini_fat, container] {
+            let fat_entry = 512 + sector as usize * 4;
+            bytes[fat_entry..fat_entry + 4].copy_from_slice(&END_OF_CHAIN.to_le_bytes());
+        }
+        bytes[0x3C..0x40].copy_from_slice(&mini_fat.to_le_bytes());
+        bytes[1024 + 0x74..1024 + 0x78].copy_from_slice(&container.to_le_bytes());
+        set_start_and_size(&mut bytes, 1024 + child * 128, 0, content.len() as u32);
+        let mut mini_fat_sector = vec![NONE; 128];
+        for mini in 0..mini_sectors {
+            mini_fat_sector[mini] = if mini + 1 == mini_sectors { END_OF_CHAIN } else { mini as u32 + 1 };
+        }
+        bytes.extend(mini_fat_sector.iter().flat_map(|entry| entry.to_le_bytes()));
+        let mut mini_stream = content.to_vec();
+        mini_stream.resize(512, 0);
+        bytes.extend(mini_stream);
+        bytes
+    }
+
+    // A CompObj as ReadStringFromOle reads it: its header, then each string
+    // after its length and followed by 2 bytes.
+    fn comp_obj(user_type: &str, program: &str) -> Vec<u8> {
+        let mut bytes = vec![0u8; 28];
+        for string in [user_type, "", program] {
+            bytes.extend((string.len() as u32).to_le_bytes());
+            bytes.extend(string.as_bytes());
+            bytes.extend([0, 0]);
+        }
+        bytes
+    }
+
+    // WordDocument and Workbook with data, an Ole stream, and the CompObj,
+    // the root's fourth child.
+    fn with_ole_and_comp_obj(extra: &[(&str, &[u8])], comp_obj: &[u8]) -> Vec<u8> {
+        let mut streams: Vec<(&str, &[u8])> =
+            vec![("WordDocument", STREAM_DATA), ("Workbook", STREAM_DATA), ("\u{1}Ole", STREAM_DATA), ("\u{1}CompObj", STREAM_DATA)];
+        streams.extend_from_slice(extra);
+        with_small_stream(with_root_stream_contents(&streams), 4, comp_obj)
+    }
+
+    #[test]
+    fn with_an_ole_stream_the_names_in_comp_obj_pick_the_stream() {
+        let cases = [
+            ("Microsoft Word 97-2003 Document", "Word.Document.8", Some(BinaryFormat::Doc)),
+            ("Microsoft Excel 97-2003 Worksheet", "Excel.Sheet.8", Some(BinaryFormat::Xls)),
+            ("Microsoft PowerPoint Presentation", "PowerPoint.Show.8", None),
+            ("Some Drawing", "Draw.1", None),
+        ];
+        for (user_type, program, format) in cases {
+            let cfb = with_ole_and_comp_obj(&[], &comp_obj(user_type, program));
+            assert_eq!(binary_format_of(&cfb), format, "{user_type}");
+        }
+    }
+
+    #[test]
+    fn with_an_ole_stream_a_package_stream_leaves_the_format_undecided() {
+        let cfb = with_ole_and_comp_obj(&[("Package", STREAM_DATA)], &comp_obj("Microsoft Word 97-2003 Document", "Word.Document.8"));
+        assert_eq!(binary_format_of(&cfb), None);
+    }
+
+    #[test]
+    fn with_an_ole_stream_and_a_short_comp_obj_the_streams_decide_unless_there_is_a_link() {
+        let short = with_ole_and_comp_obj(&[], &[0u8; 27]);
+        assert_eq!(binary_format_of(&short), Some(BinaryFormat::Doc));
+        let linked = with_ole_and_comp_obj(&[("LinkInfo", STREAM_DATA)], &[0u8; 27]);
+        assert_eq!(binary_format_of(&linked), None);
+    }
+
+    #[test]
+    fn a_comp_obj_whose_mini_stream_is_past_the_end_leaves_the_format_undecided() {
+        let mut cfb = with_ole_and_comp_obj(&[], &comp_obj("Microsoft Word 97-2003 Document", "Word.Document.8"));
+        cfb[1024 + 0x74..1024 + 0x78].copy_from_slice(&127u32.to_le_bytes());
+        assert_eq!(binary_format_of(&cfb), None);
+    }
+
+    #[test]
+    fn a_comp_obj_length_past_its_end_is_skipped_to_the_next_zero_byte() {
+        let mut bytes = vec![0u8; 28];
+        bytes.extend(1000u32.to_le_bytes());
+        bytes.extend(b"ab\0");
+        bytes.extend(15u32.to_le_bytes());
+        bytes.extend(b"Word.Document.8\0\0");
+        bytes.extend(0u32.to_le_bytes());
+        let Some(CompObj::Names { user_type, program }) = comp_obj_names(&bytes) else {
+            panic!("not read");
+        };
+        assert!(user_type.is_empty());
+        assert!(program.is_empty(), "the clipboard format is read first");
+        let mut no_zero = vec![0u8; 28];
+        no_zero.extend(1000u32.to_le_bytes());
+        no_zero.extend(b"abc");
+        assert!(comp_obj_names(&no_zero).is_none());
+    }
+
+    #[test]
+    fn a_data_spaces_entry_rules_out_only_the_doc() {
+        let doc = with_root_stream_contents(&[("WordDocument", STREAM_DATA), ("\u{6}DataSpaces", STREAM_DATA)]);
+        assert_eq!(binary_format_of(&doc), None);
+        let xls = with_root_stream_contents(&[
+            ("WordDocument", STREAM_DATA),
+            ("\u{6}DataSpaces", STREAM_DATA),
+            ("Workbook", STREAM_DATA),
+        ]);
+        assert_eq!(binary_format_of(&xls), Some(BinaryFormat::Xls));
+    }
+
+    #[test]
+    fn a_small_stream_gives_data_when_the_mini_fat_holds_its_start() {
+        let mut bytes = with_root_streams(&["WordDocument"]);
+        set_start_and_size(&mut bytes, FIRST_CHILD, 5, 100);
+        assert_eq!(binary_format_of(&bytes), None, "no mini FAT");
+
+        let mini_fat = (bytes.len() / 512 - 1) as u32;
+        let fat_entry = 512 + mini_fat as usize * 4;
+        bytes[fat_entry..fat_entry + 4].copy_from_slice(&END_OF_CHAIN.to_le_bytes());
+        bytes[0x3C..0x40].copy_from_slice(&mini_fat.to_le_bytes());
+        bytes.resize(bytes.len() + 512, 0);
+        assert_eq!(binary_format_of(&bytes), Some(BinaryFormat::Doc));
+
+        set_start_and_size(&mut bytes, FIRST_CHILD, 128, 100);
+        assert_eq!(binary_format_of(&bytes), None, "past the mini FAT");
     }
 
     #[test]
@@ -650,10 +1198,10 @@ mod tests {
     fn a_directory_chain_that_ends_normally_is_readable() {
         let mut no_directory = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
         no_directory[0x30..0x34].copy_from_slice(&END_OF_CHAIN.to_le_bytes());
-        assert_eq!(read_bytes(&no_directory), CfbDirectory::Readable { holds_encrypted_package: false });
+        assert_eq!(read_bytes(&no_directory), CfbDirectory::Readable { holds_encrypted_package: false, binary_format: None });
         let mut outside_the_fat = with_root_streams(&["EncryptionInfo", "EncryptedPackage"]);
         outside_the_fat[0x30..0x34].copy_from_slice(&128u32.to_le_bytes());
-        assert_eq!(read_bytes(&outside_the_fat), CfbDirectory::Readable { holds_encrypted_package: false });
+        assert_eq!(read_bytes(&outside_the_fat), CfbDirectory::Readable { holds_encrypted_package: false, binary_format: None });
     }
 
     #[test]
@@ -695,7 +1243,7 @@ mod tests {
     #[test]
     fn a_directory_past_the_limit_is_unreadable() {
         let at_limit = (MAX_DIRECTORY_ENTRIES / 32) as u32;
-        let readable = CfbDirectory::Readable { holds_encrypted_package: false };
+        let readable = CfbDirectory::Readable { holds_encrypted_package: false, binary_format: None };
         assert_eq!(read_bytes(&directory_of_sectors(at_limit)), readable);
         assert_eq!(read_bytes(&directory_of_sectors(at_limit + 1)), CfbDirectory::Unreadable);
     }
