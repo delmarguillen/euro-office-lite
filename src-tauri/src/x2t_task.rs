@@ -932,8 +932,51 @@ pub fn is_converted_extension(path: &std::path::Path) -> bool {
     CONVERTED_EXTENSIONS.contains(&ext.to_lowercase().as_str())
 }
 
+// x2t picks the format of a file that is not a CFB from its first
+// MIN_SIZE_BUFFER (4096) bytes, and looks for the end of an HTML document in
+// its last 4096 (core/Common/OfficeFileFormatChecker2.cpp at v10.0.0.169,
+// isOfficeFile).
+pub const X2T_HEAD_LEN: usize = 4096;
+// minizip looks for the end of a ZIP's central directory in the last 0xFFFF
+// bytes of a file (core/OfficeUtils/src/zlib-1.2.11/contrib/minizip/unzip.c,
+// unz64local_SearchCentralDir), plus the 22 bytes of the record itself.
+pub const ZIP_END_SEARCH_LEN: usize = 0xFFFF + 22;
+
+// The bytes of a file the content check reads: those x2t reads to pick its
+// format.
+pub struct ContentSample {
+    // The first X2T_HEAD_LEN bytes.
+    pub head: Vec<u8>,
+    // The last ZIP_END_SEARCH_LEN bytes, the whole file when it is shorter.
+    pub tail: Vec<u8>,
+}
+
+impl ContentSample {
+    pub fn read(path: &std::path::Path) -> std::io::Result<ContentSample> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(path)?;
+        let mut head = Vec::new();
+        (&mut file).take(X2T_HEAD_LEN as u64).read_to_end(&mut head)?;
+        let size = file.metadata()?.len();
+        file.seek(SeekFrom::Start(size.saturating_sub(ZIP_END_SEARCH_LEN as u64)))?;
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail)?;
+        Ok(ContentSample { head, tail })
+    }
+
+    #[cfg(test)]
+    pub fn of(bytes: &[u8]) -> ContentSample {
+        ContentSample {
+            head: bytes[..bytes.len().min(X2T_HEAD_LEN)].to_vec(),
+            tail: bytes[bytes.len().saturating_sub(ZIP_END_SEARCH_LEN)..].to_vec(),
+        }
+    }
+}
+
 const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
 const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+const ZIP_END_SIGNATURE: &[u8] = b"PK\x05\x06";
+const ZIP64_END_LOCATOR_SIGNATURE: &[u8] = b"PK\x06\x07";
 
 // A container format must start like one; x2t would otherwise pick the format
 // from the content. OOXML is a ZIP, or a CFB when it has a password; xlsb is
@@ -944,25 +987,32 @@ const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 // accepted, because x2t picks the format from the content. An .rtf starts
 // like one, after an optional BOM and blank space. A TXT or CSV is read from
 // its UTF-32 copy (text_import::prepare_read_copy). An extension outside
-// CONVERTED_EXTENSIONS, or none, is refused.
-pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
+// CONVERTED_EXTENSIONS, or none, is refused. A file that starts like a ZIP
+// must also open as one (converter.rs). Content that is neither a CFB nor a
+// ZIP must not hold what x2t would read as another format first.
+pub fn content_matches_extension(path: &std::path::Path, content: &ContentSample) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
+    let head = content.head.as_slice();
     let zip = is_zip(head);
     let cfb = is_cfb(head);
+    let text = !zip && !cfb && !x2t_finds_another_format(content);
     match ext.to_lowercase().as_str() {
         "docx" | "docm" | "dotx" | "dotm" => zip || cfb,
         "xlsx" | "xlsm" | "xltx" => zip || cfb,
         "pptx" | "pptm" | "potx" | "ppsx" => zip || cfb,
         "xlsb" => zip,
         "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => zip,
-        "rtf" => starts_with_rtf(head),
-        "doc" => is_legacy_doc(head),
-        "xls" => is_legacy_xls(head),
-        "ppt" => is_legacy_ppt(head),
-        "fodt" | "fods" | "fodp" => is_flat_odf(head),
-        "txt" | "csv" => true,
+        // Word 97-2003 (CFB), a DOCX renamed to .doc (ZIP) or an RTF saved as .doc.
+        "doc" => cfb || zip || (text && starts_with_rtf(head)),
+        // Excel 97-2003 (CFB), an XLSX renamed to .xls (ZIP) or Excel 2003 XML.
+        "xls" => cfb || zip || (text && is_spreadsheet_ml(head)),
+        // PowerPoint 97-2003 (CFB) or a PPTX renamed to .ppt (ZIP).
+        "ppt" => cfb || zip,
+        "rtf" => text && starts_with_rtf(head),
+        "fodt" | "fods" | "fodp" => text && is_flat_odf(head),
+        "txt" | "csv" => text,
         _ => false,
     }
 }
@@ -975,19 +1025,16 @@ fn is_cfb(head: &[u8]) -> bool {
     head.starts_with(CFB_SIGNATURE)
 }
 
-// .doc: Word 97-2003 (CFB), a DOCX renamed to .doc (ZIP) or an RTF saved as .doc.
-fn is_legacy_doc(head: &[u8]) -> bool {
-    is_cfb(head) || is_zip(head) || starts_with_rtf(head)
+// What x2t looks for before it gets to the format the extension names, in a
+// file that is neither a CFB nor a ZIP: a ZIP after other data.
+fn x2t_finds_another_format(content: &ContentSample) -> bool {
+    has_zip_end(&content.tail)
 }
 
-// .xls: Excel 97-2003 (CFB), an XLSX renamed to .xls (ZIP) or Excel 2003 XML.
-fn is_legacy_xls(head: &[u8]) -> bool {
-    is_cfb(head) || is_zip(head) || is_spreadsheet_ml(head)
-}
-
-// .ppt: PowerPoint 97-2003 (CFB) or a PPTX renamed to .ppt (ZIP).
-fn is_legacy_ppt(head: &[u8]) -> bool {
-    is_cfb(head) || is_zip(head)
+// minizip opens a file as a ZIP when it finds the end of a central directory,
+// or the Zip64 locator of one, in its last bytes, whatever comes before it.
+fn has_zip_end(tail: &[u8]) -> bool {
+    contains(tail, ZIP_END_SIGNATURE) || contains(tail, ZIP64_END_LOCATOR_SIGNATURE)
 }
 
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
@@ -2218,8 +2265,48 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     ];
     const ODF_EXTENSIONS: &[&str] = &["odt", "ods", "odp", "ott", "ots", "otp"];
 
-    fn matches(name: &str, head: &[u8]) -> bool {
-        content_matches_extension(std::path::Path::new(name), head)
+    fn matches(name: &str, bytes: &[u8]) -> bool {
+        content_matches_extension(std::path::Path::new(name), &ContentSample::of(bytes))
+    }
+
+    // The smallest end of a central directory: an empty ZIP.
+    const EMPTY_ZIP: &[u8] = b"PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
+    fn followed_by(first: &[u8], then: &[u8]) -> Vec<u8> {
+        let mut bytes = first.to_vec();
+        bytes.extend_from_slice(then);
+        bytes
+    }
+
+    #[test]
+    fn an_rtf_or_a_flat_odf_with_a_zip_after_it_is_refused() {
+        let rtf = b"{\\rtf1\\ansi Some text\\par}".as_slice();
+        let fodt = b"<?xml version=\"1.0\"?><office:document office:version=\"1.3\"/>".as_slice();
+        let zip64_locator = b"PK\x06\x07\0\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0".as_slice();
+        for (name, start) in [("/d/a.rtf", rtf), ("/d/a.doc", rtf), ("/d/a.fodt", fodt)] {
+            assert!(matches(name, start), "{name}");
+            assert!(!matches(name, &followed_by(start, EMPTY_ZIP)), "{name}");
+            assert!(!matches(name, &followed_by(start, zip64_locator)), "{name}");
+        }
+        assert!(!matches("/d/a.txt", &followed_by(b"text", EMPTY_ZIP)));
+    }
+
+    #[test]
+    fn a_zip_end_further_back_than_minizip_looks_is_not_a_zip() {
+        let rtf = followed_by(b"{\\rtf1\\ansi ", EMPTY_ZIP);
+        let mut far = rtf.clone();
+        far.extend(std::iter::repeat(b' ').take(ZIP_END_SEARCH_LEN));
+        assert!(matches("/d/a.rtf", &far));
+        let mut near = rtf;
+        near.extend(std::iter::repeat(b' ').take(0xFFFF - EMPTY_ZIP.len()));
+        assert!(!matches("/d/a.rtf", &near));
+    }
+
+    #[test]
+    fn a_cfb_with_a_zip_inside_is_still_accepted() {
+        let doc = followed_by(WORD97_DOC, EMPTY_ZIP);
+        assert!(matches("/d/a.doc", &doc));
+        assert!(matches("/d/a.docx", &followed_by(CFB_SIGNATURE, EMPTY_ZIP)));
     }
 
     #[test]
@@ -2413,11 +2500,6 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     const FLAT_ODF_EXTENSIONS: [&str; 4] = ["fodt", "fods", "fodp", "FODT"];
     const ROOT_ELEMENT: &str = "<office:document xmlns:office=\"urn:x\" office:version=\"1.3\">";
 
-    // The start of a flat ODF, as much of it as the content check reads.
-    fn check_head(bytes: &[u8]) -> &[u8] {
-        &bytes[..bytes.len().min(256)]
-    }
-
     #[test]
     fn flat_odf_extensions_accept_an_office_document_root() {
         let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
@@ -2471,7 +2553,7 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
             ("/d/a.fodp", include_bytes!("../../tests/corpus/src/basic.fodp")),
         ];
         for (name, bytes) in documents {
-            assert!(matches(name, check_head(bytes)), "{name}");
+            assert!(matches(name, bytes), "{name}");
         }
     }
 

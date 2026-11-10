@@ -42,7 +42,8 @@ pub enum PackageImages {
 
 struct NotAnalysable;
 
-// A ZIP whose central directory cannot be opened is left to x2t.
+// A ZIP whose central directory cannot be opened never gets here: the content
+// check (converter.rs) refuses it first.
 pub fn prepare(path: &Path, head: &[u8], temp_dir: &Path) -> PackageImages {
     if !head.starts_with(ZIP_SIGNATURE) {
         return PackageImages::Unchanged;

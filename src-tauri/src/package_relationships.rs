@@ -38,7 +38,8 @@ const LIMITS: Limits = Limits {
 };
 
 // Whether the file's relationships are all acceptable. A file that is not a ZIP
-// has none, and a ZIP whose central directory cannot be opened is left to x2t.
+// has none, and one whose central directory cannot be opened is refused by the
+// content check (converter.rs) whatever this says.
 pub fn relationships_are_allowed(path: &Path, head: &[u8]) -> bool {
     if !head.starts_with(ZIP_SIGNATURE) {
         return true;

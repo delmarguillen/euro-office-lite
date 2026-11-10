@@ -234,9 +234,10 @@ pub fn prepare_editor_input(
         return Err(not_valid_error(source));
     }
     let mut input = read_copy(source, work_dir, text_kind, text_options)?;
-    let checked = input.path().to_string_lossy().into_owned();
-    check_container_content(&checked)?;
-    if let Some(package_copy) = package_images_copy(&checked, &work_dir.to_string_lossy())? {
+    let copy = input.path().to_path_buf();
+    let content = x2t_task::ContentSample::read(&copy).map_err(|e| e.to_string())?;
+    check_container_content(&copy, &content)?;
+    if let Some(package_copy) = package_images_copy(&copy, &content.head, work_dir)? {
         input.copies.push(package_copy);
     }
     Ok(input)
@@ -261,13 +262,12 @@ fn read_copy(
 // The copy x2t reads an ODF package from when one of its picture references has
 // been emptied, or None to read the one it was given.
 fn package_images_copy(
-    input: &str,
-    temp_dir: &str,
+    path: &std::path::Path,
+    head: &[u8],
+    temp_dir: &std::path::Path,
 ) -> Result<Option<std::path::PathBuf>, String> {
     use crate::odf_links::PackageImages;
-    let path = std::path::Path::new(input);
-    let head = read_head(path).map_err(|e| e.to_string())?;
-    match crate::odf_links::prepare(path, &head, std::path::Path::new(temp_dir)) {
+    match crate::odf_links::prepare(path, head, temp_dir) {
         PackageImages::Unchanged => Ok(None),
         PackageImages::Copy(copy) => Ok(Some(copy)),
         PackageImages::NotAllowed => Err(not_valid_error(path)),
@@ -280,27 +280,31 @@ fn not_valid_error(path: &std::path::Path) -> String {
 }
 
 // Opening and inserting convert the user's file to Editor.bin (8192); this runs
-// before x2t is launched for them.
-fn check_container_content(input: &str) -> Result<(), String> {
-    let path = std::path::Path::new(input);
-    let head = read_head(path).map_err(|e| e.to_string())?;
-    let matches_format = x2t_task::content_matches_extension(path, &head);
-    if matches_format && crate::package_relationships::relationships_are_allowed(path, &head) {
+// on the copy x2t reads, before x2t is launched for them.
+fn check_container_content(
+    path: &std::path::Path,
+    content: &x2t_task::ContentSample,
+) -> Result<(), String> {
+    let matches_format = x2t_task::content_matches_extension(path, content);
+    if matches_format
+        && opens_if_it_starts_like_a_zip(path, &content.head)
+        && crate::package_relationships::relationships_are_allowed(path, &content.head)
+    {
         return Ok(());
     }
     Err(not_valid_error(path))
 }
 
-// Enough for the 8-byte CFB signature, for a flat ODF's "<?xml" after a BOM
-// and some leading whitespace, and for the progid and namespace Excel 2003
-// writes in the first 127 bytes of an XML Spreadsheet.
-const HEAD_LEN: u64 = 256;
-
-fn read_head(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
-    use std::io::Read;
-    let mut head = Vec::new();
-    std::fs::File::open(path)?.take(HEAD_LEN).read_to_end(&mut head)?;
-    Ok(head)
+// x2t picks the format of a file that starts like a ZIP but does not open as
+// one from the rest of its bytes.
+fn opens_if_it_starts_like_a_zip(path: &std::path::Path, head: &[u8]) -> bool {
+    if !head.starts_with(b"PK\x03\x04") {
+        return true;
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    zip::ZipArchive::new(file).is_ok()
 }
 
 #[cfg(test)]
@@ -327,7 +331,48 @@ mod tests {
     fn content_check(name: &str, content: &[u8]) -> Result<(), String> {
         let path = scratch_root().join(name);
         std::fs::write(&path, content).unwrap();
-        check_container_content(path.to_str().unwrap())
+        check_container_content(&path, &x2t_task::ContentSample::read(&path).unwrap())
+    }
+
+    fn zip_with(name: &str, content: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(content).unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn a_file_that_starts_like_a_zip_but_does_not_open_as_one_is_refused() {
+        let mut broken = b"PK\x03\x04".to_vec();
+        broken.extend_from_slice(&[0u8; 60]);
+        broken.extend_from_slice(b"<html><body>text</body></html>");
+        for name in ["broken.docx", "broken.odt", "broken.xlsb", "broken.doc"] {
+            assert!(content_check(name, &broken).is_err(), "{name}");
+        }
+        assert_eq!(content_check("whole.docx", &zip_with("word/document.xml", b"<w:document/>")), Ok(()));
+    }
+
+    #[test]
+    fn an_rtf_or_a_flat_odf_followed_by_a_zip_is_refused() {
+        let package = zip_with("[Content_Types].xml", b"<Types/>");
+        let starts: [(&str, &[u8]); 2] = [
+            ("joined.rtf", b"{\\rtf1\\ansi Some text\\par}\n"),
+            ("joined.fodt", b"<?xml version=\"1.0\"?><office:document office:version=\"1.3\"></office:document>\n"),
+        ];
+        for (name, start) in starts {
+            assert_eq!(content_check(name, start), Ok(()), "{name}");
+            let mut joined = start.to_vec();
+            joined.extend_from_slice(&package);
+            assert!(content_check(name, &joined).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_word_97_doc_holding_a_zip_is_accepted() {
+        let mut doc = include_bytes!("../../tests/fixtures/word97.doc").to_vec();
+        doc.extend_from_slice(&zip_with("embedded.xml", b"<a/>"));
+        assert_eq!(content_check("embedded.doc", &doc), Ok(()));
     }
 
     #[test]
