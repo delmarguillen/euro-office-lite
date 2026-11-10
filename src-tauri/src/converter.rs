@@ -518,6 +518,22 @@ mod tests {
     }
 
     #[test]
+    fn a_flat_odf_is_converted_from_a_copy_with_its_local_references_emptied() {
+        let image = |href: &str| {
+            format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document xmlns:office=\"o\" xmlns:draw=\"d\" xmlns:xlink=\"x\"><draw:image xlink:href=\"{href}\"/></office:document>")
+        };
+        let (original, work_dir) = original_and_work_dir("linked.fodt", image("Pictures/a.png").as_bytes());
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        assert_eq!(std::fs::read_to_string(input.path()).unwrap(), image(""));
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), image("Pictures/a.png"), "the original stays");
+        drop(input);
+        assert_eq!(files_in(&work_dir), 0);
+    }
+
+    #[test]
     fn a_txt_is_read_from_its_utf32_copy_only() {
         use crate::text_import::{detect_file, TextKind, ENCODING_UTF32_LE};
         let (original, work_dir) = original_and_work_dir("notes.txt", b"line one\nline two\n");

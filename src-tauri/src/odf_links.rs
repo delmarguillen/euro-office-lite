@@ -1,8 +1,9 @@
 // The pictures an OpenDocument package refers to. The content of a document has
 // to match its format: a picture comes from the package or from a URL. When a
 // reference is neither, it is emptied in a copy of the package in the temp
-// folder, so the document still opens with everything else it holds. The
-// original file is never touched.
+// folder, so the document still opens with everything else it holds. The same
+// goes for a flat ODF, a single XML document. The original file is never
+// touched.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, Write};
@@ -46,6 +47,9 @@ struct NotAnalysable;
 // whose central directory cannot be opened never gets here: the content check
 // (converter.rs) refuses it first.
 pub fn prepare(path: &Path, content: &ContentSample, temp_dir: &Path) -> PackageImages {
+    if has_flat_odf_extension(path) {
+        return prepare_flat(path, temp_dir);
+    }
     if !content.may_hold_a_package() {
         return PackageImages::Unchanged;
     }
@@ -76,6 +80,33 @@ pub fn prepare(path: &Path, content: &ContentSample, temp_dir: &Path) -> Package
         return PackageImages::NotAllowed;
     }
     PackageImages::Copy(copy)
+}
+
+// A flat ODF has no parts: every reference that is not a URL on the list, a
+// fragment or empty is emptied. The content check (converter.rs) only lets a
+// flat ODF extension through with a flat ODF in it.
+fn prepare_flat(path: &Path, temp_dir: &Path) -> PackageImages {
+    let Some(xml) = read_file(path, LIMITS.part_bytes) else {
+        return PackageImages::NotAllowed;
+    };
+    let new_xml = match neutralized_xml(&xml, &HashSet::new(), "") {
+        Ok(Some(new_xml)) => new_xml,
+        Ok(None) => return PackageImages::Unchanged,
+        Err(NotAnalysable) => return PackageImages::NotAllowed,
+    };
+    let copy = copy_path(path, temp_dir);
+    if std::fs::write(&copy, new_xml).is_err() {
+        let _ = std::fs::remove_file(&copy);
+        return PackageImages::NotAllowed;
+    }
+    PackageImages::Copy(copy)
+}
+
+fn read_file(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= limit).then_some(bytes)
 }
 
 fn copy_path(source: &Path, temp_dir: &Path) -> PathBuf {
@@ -143,12 +174,18 @@ fn is_open_document(name: &str) -> bool {
 }
 
 fn has_open_document_extension(path: &Path) -> bool {
+    has_extension(path, &["odt", "ott", "ods", "ots", "odp", "otp"])
+}
+
+fn has_flat_odf_extension(path: &Path) -> bool {
+    has_extension(path, &["fodt", "fods", "fodp"])
+}
+
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     let Some(extension) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
-    ["odt", "ott", "ods", "ots", "odp", "otp"]
-        .iter()
-        .any(|known| extension.eq_ignore_ascii_case(known))
+    extensions.iter().any(|known| extension.eq_ignore_ascii_case(known))
 }
 
 // Every entry of the package and every folder above one.
@@ -673,6 +710,54 @@ mod tests {
         let (dir, _, outcome) = prepared("behind.odt", &bytes);
         assert!(matches!(outcome, PackageImages::Copy(_)), "{outcome:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn flat(body: &str) -> String {
+        format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document {XLINK} xmlns:office=\"o\" xmlns:draw=\"d\" xmlns:text=\"t\" office:version=\"1.3\"><office:body>{body}</office:body></office:document>")
+    }
+
+    fn flat_image(href: &str) -> String {
+        flat(&format!("<draw:image xlink:href=\"{href}\" xlink:type=\"simple\"/><text:p>kept text</text:p>"))
+    }
+
+    #[test]
+    fn a_flat_odf_has_its_local_references_emptied_in_a_copy() {
+        for href in ["Pictures/a.png", "./Pictures/a.png", "../near.png", "/home/a.png", "C:\\images\\a.png", "Object 1"] {
+            for name in ["flat.fodt", "flat.FODS", "flat.fodp"] {
+                let (dir, _, outcome) = prepared(name, flat_image(href).as_bytes());
+                let PackageImages::Copy(copy) = outcome else {
+                    panic!("{name} {href}: {outcome:?}");
+                };
+                assert_eq!(std::fs::read_to_string(&copy).unwrap(), flat_image(""), "{href}");
+                assert_eq!(copy.extension(), Path::new(name).extension());
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+        }
+    }
+
+    #[test]
+    fn urls_fragments_and_hyperlinks_stay_in_a_flat_odf() {
+        for href in ["http://example.com/a.png", "file:///home/a.png", "#Object 1", ""] {
+            let (dir, temp, outcome) = prepared("flat.fodt", flat_image(href).as_bytes());
+            assert_eq!(outcome, PackageImages::Unchanged, "{href}");
+            assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        let hyperlink = flat("<text:p><text:a xlink:href=\"../other.odt\">link</text:a></text:p>");
+        let (dir, _, outcome) = prepared("link.fodt", hyperlink.as_bytes());
+        assert_eq!(outcome, PackageImages::Unchanged);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_flat_odf_documents_of_the_corpus_are_read() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/corpus/src");
+        for name in ["basic.fodt", "basic.fods", "basic.fodp"] {
+            let bytes = std::fs::read(root.join(name)).unwrap();
+            let (dir, _, outcome) = prepared(name, &bytes);
+            assert_ne!(outcome, PackageImages::NotAllowed, "{name}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     fn manifest(entries: &str) -> String {
