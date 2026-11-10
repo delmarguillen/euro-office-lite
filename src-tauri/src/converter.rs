@@ -229,6 +229,10 @@ pub fn prepare_editor_input(
     text_kind: Option<crate::text_import::TextKind>,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<EditorInput, String> {
+    // Nothing is copied under an extension the app does not convert.
+    if !x2t_task::is_converted_extension(source) {
+        return Err(not_valid_error(source));
+    }
     let mut input = read_copy(source, work_dir, text_kind, text_options)?;
     let checked = input.path().to_string_lossy().into_owned();
     check_container_content(&checked)?;
@@ -441,6 +445,21 @@ mod tests {
                 assert_eq!(std::fs::read(input.path()).unwrap(), rtf, "{name} {prefix:?}");
             }
         }
+    }
+
+    #[test]
+    fn an_extension_outside_the_list_is_refused_before_any_copy() {
+        for name in ["data.xml", "page.html", "Book.xltm", "noextension"] {
+            let (original, work_dir) = original_and_work_dir(name, DOCX);
+
+            let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+            assert!(refused.is_err(), "{name}");
+            assert_eq!(files_in(&work_dir), 0, "{name}");
+        }
+        let (original, work_dir) = original_and_work_dir("data.xml", b"<?xml version=\"1.0\"?><a/>");
+        let refused = prepare_editor_input(&original, &work_dir, None, None);
+        assert_eq!(refused.err(), Some("This file is not a valid .xml".to_string()));
     }
 
     #[test]

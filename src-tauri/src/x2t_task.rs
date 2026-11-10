@@ -916,6 +916,22 @@ pub fn is_empty_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+// The extensions the app converts to Editor.bin: those the open dialog offers,
+// but PDF (open_pdf reads it as it is), and those the insert, compare and
+// merge dialogs offer (file_dialogs.rs). A file under any other is refused.
+pub const CONVERTED_EXTENSIONS: [&str; 27] = [
+    "docx", "doc", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "txt",
+    "xlsx", "xls", "xlsm", "xltx", "xlsb", "ods", "ots", "fods", "csv",
+    "pptx", "ppt", "pptm", "ppsx", "potx", "odp", "otp", "fodp",
+];
+
+pub fn is_converted_extension(path: &std::path::Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    CONVERTED_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+}
+
 const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
 const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
@@ -926,18 +942,19 @@ const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 // CFB; the legacy extensions also take the other content x2t converts under
 // them: see is_legacy_doc, is_legacy_xls and is_legacy_ppt. HTML is never
 // accepted, because x2t picks the format from the content. An .rtf starts
-// like one, after an optional BOM and blank space. Other extensions (txt,
-// csv...) are left to x2t.
+// like one, after an optional BOM and blank space. A TXT or CSV is read from
+// its UTF-32 copy (text_import::prepare_read_copy). An extension outside
+// CONVERTED_EXTENSIONS, or none, is refused.
 pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return true;
+        return false;
     };
     let zip = is_zip(head);
     let cfb = is_cfb(head);
     match ext.to_lowercase().as_str() {
         "docx" | "docm" | "dotx" | "dotm" => zip || cfb,
-        "xlsx" | "xlsm" | "xltx" | "xltm" => zip || cfb,
-        "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => zip || cfb,
+        "xlsx" | "xlsm" | "xltx" => zip || cfb,
+        "pptx" | "pptm" | "potx" | "ppsx" => zip || cfb,
         "xlsb" => zip,
         "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => zip,
         "rtf" => starts_with_rtf(head),
@@ -945,7 +962,8 @@ pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
         "xls" => is_legacy_xls(head),
         "ppt" => is_legacy_ppt(head),
         "fodt" | "fods" | "fodp" => is_flat_odf(head),
-        _ => true,
+        "txt" | "csv" => true,
+        _ => false,
     }
 }
 
@@ -2196,8 +2214,7 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 
     const HTML_HEAD: &[u8] = b"<html><body>";
     const OOXML_EXTENSIONS: &[&str] = &[
-        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx",
-        "potm", "ppsx", "ppsm",
+        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "pptx", "pptm", "potx", "ppsx",
     ];
     const ODF_EXTENSIONS: &[&str] = &["odt", "ods", "odp", "ott", "ots", "otp"];
 
@@ -2237,9 +2254,38 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
-    fn text_formats_are_left_to_x2t() {
-        for name in ["/d/a.txt", "/d/a.csv", "/d/a"] {
-            assert!(matches(name, HTML_HEAD), "{name}");
+    fn txt_and_csv_take_any_text() {
+        for name in ["/d/a.txt", "/d/a.CSV"] {
+            assert!(matches(name, b"a,b\n1,2\n"), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_extension_outside_the_list_is_refused() {
+        let contents: [&[u8]; 4] = [b"PK\x03\x04rest", CFB_SIGNATURE, b"just some text\n", b"<?xml version=\"1.0\"?><a/>"];
+        for name in ["/d/a.xml", "/d/a.html", "/d/a.mht", "/d/a.xltm", "/d/a.ppsm", "/d/a.pdf", "/d/a"] {
+            assert!(!is_converted_extension(std::path::Path::new(name)), "{name}");
+            for content in contents {
+                assert!(!matches(name, content), "{name}");
+            }
+        }
+    }
+
+    // One content each listed extension takes, so none falls to the refusal.
+    #[test]
+    fn every_listed_extension_has_a_content_it_takes() {
+        let contents: [&[u8]; 6] = [
+            b"PK\x03\x04rest",
+            CFB_SIGNATURE,
+            b"{\\rtf1\\ansi",
+            b"<?xml version=\"1.0\"?><office:document>",
+            EXCEL_2003_XML_HEAD,
+            b"just some text\n",
+        ];
+        for ext in CONVERTED_EXTENSIONS {
+            let name = format!("/d/a.{ext}");
+            assert!(is_converted_extension(std::path::Path::new(&name)), "{ext}");
+            assert!(contents.iter().any(|content| matches(&name, content)), "{ext}");
         }
     }
 
