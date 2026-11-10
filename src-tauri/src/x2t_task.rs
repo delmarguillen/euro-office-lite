@@ -997,8 +997,9 @@ pub fn content_matches_extension(path: &std::path::Path, content: &ContentSample
     let head = content.head.as_slice();
     let zip = is_zip(head);
     let cfb = is_cfb(head);
-    let text = !zip && !cfb && !x2t_finds_another_format(content);
-    match ext.to_lowercase().as_str() {
+    let ext = ext.to_lowercase();
+    let text = !zip && !cfb && !x2t_finds_another_format(&ext, content);
+    match ext.as_str() {
         "docx" | "docm" | "dotx" | "dotm" => zip || cfb,
         "xlsx" | "xlsm" | "xltx" => zip || cfb,
         "pptx" | "pptm" | "potx" | "ppsx" => zip || cfb,
@@ -1026,9 +1027,69 @@ fn is_cfb(head: &[u8]) -> bool {
 }
 
 // What x2t looks for before it gets to the format the extension names, in a
-// file that is neither a CFB nor a ZIP: a ZIP after other data.
-fn x2t_finds_another_format(content: &ContentSample) -> bool {
-    has_zip_end(&content.tail)
+// file that is neither a CFB nor a ZIP: a ZIP after other data, then an Office
+// document in a single XML, which only an .xls of Excel 2003 XML may be.
+fn x2t_finds_another_format(ext: &str, content: &ContentSample) -> bool {
+    if has_zip_end(&content.tail) {
+        return true;
+    }
+    match x2t_flat_ooxml(&content.head) {
+        None => false,
+        Some(FlatOoxml::Excel2003) => ext != "xls",
+        Some(_) => true,
+    }
+}
+
+// The Office documents in a single XML isOOXFlatFormatFile finds
+// (OfficeFileFormatChecker2.cpp:1656), in the order it looks for them.
+#[derive(Debug, PartialEq, Eq)]
+enum FlatOoxml {
+    Word2003,
+    Excel2003,
+    // An OOXML package (Flat OPC) of Word, Excel or PowerPoint.
+    Package,
+}
+
+const WORD_2003_LINE: &[u8] = b"xmlns:w=\"http://schemas.microsoft.com/office/word/2003/wordml\"";
+const EXCEL_2003_LINE: &[u8] = b"xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\"";
+const PACKAGE_LINE: &[u8] = b"xmlns:pkg=\"http://schemas.microsoft.com/office/2006/xmlPackage\"";
+const PACKAGE_PROGIDS: [&[u8]; 3] = [
+    b"progid=\"Word.Document\"",
+    b"progid=\"Excel.Sheet\"",
+    b"progid=\"PowerPoint.Show\"",
+];
+
+// isOOXFlatFormatFile on the first X2T_HEAD_LEN bytes: the strings it looks
+// for anywhere in them, read as UTF-16 after a UTF-16 BOM.
+fn x2t_flat_ooxml(head: &[u8]) -> Option<FlatOoxml> {
+    if head.len() < 8 {
+        return None;
+    }
+    let text = text_x2t_searches(head);
+    if contains(&text, WORD_2003_LINE) {
+        return Some(FlatOoxml::Word2003);
+    }
+    let workbook = contains(&text, b"<Workbook") || !contains(&text, b"<html");
+    if contains(&text, EXCEL_2003_LINE) && workbook {
+        return Some(FlatOoxml::Excel2003);
+    }
+    let packaged = PACKAGE_PROGIDS.iter().any(|progid| contains(&text, progid));
+    if contains(&text, PACKAGE_LINE) && packaged {
+        return Some(FlatOoxml::Package);
+    }
+    None
+}
+
+// x2t turns the bytes into UTF-8 when they start with a UTF-16 BOM, and takes
+// them as they are otherwise.
+fn text_x2t_searches(head: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let units = head.chunks_exact(2);
+    let decoded: Vec<u16> = match head {
+        [0xFF, 0xFE, ..] => units.map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect(),
+        [0xFE, 0xFF, ..] => units.map(|pair| u16::from_be_bytes([pair[0], pair[1]])).collect(),
+        _ => return std::borrow::Cow::Borrowed(head),
+    };
+    std::borrow::Cow::Owned(String::from_utf16_lossy(&decoded).into_bytes())
 }
 
 // minizip opens a file as a ZIP when it finds the end of a central directory,
@@ -1096,14 +1157,43 @@ fn starts_with_rtf(head: &[u8]) -> bool {
     skip_bom_and_space(head).starts_with(RTF_START)
 }
 
-// Excel 2003 XML (SpreadsheetML): an XML document whose first bytes carry the
-// <?mso-application progid="Excel.Sheet"?> instruction or the SpreadsheetML
-// namespace on the root <Workbook>. Any other XML, XHTML included, is not.
+// Excel 2003 XML (SpreadsheetML): an XML document whose root element is
+// <Workbook>, with the <?mso-application progid="Excel.Sheet"?> instruction or
+// the SpreadsheetML namespace in its first bytes. Any other XML, XHTML
+// included, is not.
 fn is_spreadsheet_ml(head: &[u8]) -> bool {
     if !starts_with_xml_declaration(head) {
         return false;
     }
-    contains(head, SPREADSHEET_ML_PROGID) || contains(head, SPREADSHEET_ML_NAMESPACE)
+    let marked = contains(head, SPREADSHEET_ML_PROGID) || contains(head, SPREADSHEET_ML_NAMESPACE);
+    marked && root_element_is(head, b"Workbook")
+}
+
+// Whether the first element of an XML document is `name`, past the BOM, the
+// declaration, processing instructions, comments and blank space before it.
+fn root_element_is(head: &[u8], name: &[u8]) -> bool {
+    let mut rest = skip_bom_and_space(head);
+    loop {
+        let skipped = match rest {
+            [b'<', b'?', ..] => skip_past(&rest[2..], b"?>"),
+            [b'<', b'!', b'-', b'-', ..] => skip_past(&rest[4..], b"-->"),
+            _ => break,
+        };
+        let Some(after) = skipped else {
+            return false;
+        };
+        rest = skip_space(after);
+    }
+    let Some(after_name) = rest.strip_prefix(b"<").and_then(|tag| tag.strip_prefix(name)) else {
+        return false;
+    };
+    matches!(after_name.first(), Some(b' ' | b'\t' | b'\r' | b'\n' | b'>' | b'/'))
+}
+
+// The bytes after the first `end`.
+fn skip_past<'a>(bytes: &'a [u8], end: &[u8]) -> Option<&'a [u8]> {
+    let position = bytes.windows(end.len()).position(|window| window == end)?;
+    Some(&bytes[position + end.len()..])
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -2477,6 +2567,52 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         let other_xml = b"<?xml version=\"1.0\"?><root/>";
         assert!(!matches("/d/a.xls", xhtml));
         assert!(!matches("/d/a.xls", other_xml));
+    }
+
+    const FLAT_OPC: &str = "<?xml version=\"1.0\" standalone=\"yes\"?>\r\n\
+<?mso-application progid=\"Excel.Sheet\"?>\r\n\
+<pkg:package xmlns:pkg=\"http://schemas.microsoft.com/office/2006/xmlPackage\">\
+<pkg:part pkg:name=\"/xl/workbook.xml\"/></pkg:package>";
+
+    #[test]
+    fn a_flat_opc_package_is_refused_under_any_extension() {
+        for name in ["/d/a.xls", "/d/a.xml", "/d/a.fods", "/d/a.txt", "/d/a.rtf"] {
+            assert!(!matches(name, FLAT_OPC.as_bytes()), "{name}");
+        }
+        let word = FLAT_OPC.replace("Excel.Sheet", "Word.Document");
+        assert!(!matches("/d/a.doc", word.as_bytes()));
+        assert_eq!(x2t_flat_ooxml(FLAT_OPC.as_bytes()), Some(FlatOoxml::Package));
+    }
+
+    #[test]
+    fn the_flat_opc_strings_are_found_past_the_first_256_bytes() {
+        let padding = " ".repeat(3000);
+        let rtf = format!("{{\\rtf1\\ansi{padding} {}", FLAT_OPC.replace("Excel.Sheet", "PowerPoint.Show"));
+        assert!(!matches("/d/a.rtf", rtf.as_bytes()));
+        let fodt = format!("<?xml version=\"1.0\"?><office:document>{padding}<!-- {EXCEL_2003_LINE_TEXT} -->");
+        assert!(!matches("/d/a.fodt", fodt.as_bytes()));
+    }
+
+    const EXCEL_2003_LINE_TEXT: &str = "xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\"";
+
+    #[test]
+    fn a_flat_opc_package_is_found_in_utf16_too() {
+        let utf16: Vec<u8> = "\u{FEFF}".chars().chain(FLAT_OPC.chars())
+            .flat_map(|c| (c as u16).to_le_bytes())
+            .collect();
+        assert_eq!(x2t_flat_ooxml(&utf16), Some(FlatOoxml::Package));
+    }
+
+    #[test]
+    fn a_spreadsheet_ml_marker_in_a_comment_of_another_root_is_refused() {
+        let commented = b"<?xml version=\"1.0\"?>\n\
+<!-- <Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\"> progid=\"Excel.Sheet\" -->\n\
+<root><item/></root>";
+        assert!(!matches("/d/a.xls", commented));
+        let instruction_then_other_root = b"<?xml version=\"1.0\"?><?mso-application progid=\"Excel.Sheet\"?><Book/>";
+        assert!(!matches("/d/a.xls", instruction_then_other_root));
+        let commented_then_workbook = b"<?xml version=\"1.0\"?><!-- note --><?mso-application progid=\"Excel.Sheet\"?>\n<Workbook>";
+        assert!(matches("/d/a.xls", commented_then_workbook));
     }
 
     #[test]
