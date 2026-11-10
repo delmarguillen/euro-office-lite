@@ -983,7 +983,7 @@ const ZIP64_END_LOCATOR_SIGNATURE: &[u8] = b"PK\x06\x07";
 // always a ZIP. ODF is always a ZIP, flat ODF an XML document whose root is
 // office:document. Word 97-2003, Excel 97-2003 and PowerPoint 97-2003 are
 // CFB; the legacy extensions also take the other content x2t converts under
-// them: see is_legacy_doc, is_legacy_xls and is_legacy_ppt. HTML is never
+// them, noted on their lines below. HTML is never
 // accepted, because x2t picks the format from the content. An .rtf starts
 // like one, after an optional BOM and blank space. A TXT or CSV is read from
 // its UTF-32 copy (text_import::prepare_read_copy). An extension outside

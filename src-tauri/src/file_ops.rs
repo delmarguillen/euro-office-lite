@@ -1193,8 +1193,8 @@ pub async fn convert_for_insert(
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
     let b64 = STANDARD.encode(&bin_data);
 
-    // x2t drops the inserted document's images in insert_tmp/media/, but the
-    // exporter only ever looks in temp_dir/media/, so anything left here came out
+    // x2t drops the inserted document's images in media/ of the insert's folder,
+    // but the exporter only ever looks in temp_dir/media/, so anything left there came out
     // of the PDF as a black rectangle: the same #31 mechanism through another
     // door. Staging them into media/ is what makes them exportable, and it has to
     // go through the collision-safe primitive rather than copy under the original
