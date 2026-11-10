@@ -460,6 +460,8 @@ struct LinkedFileRole {
     kinds: &'static [&'static str],
     reached_from: &'static str,
     reached_as: &'static [&'static str],
+    // Excel keeps a link part the workbook no longer uses, and nothing reads it.
+    may_be_unreached: bool,
 }
 
 // The role of the part a .rels belongs to, by the exact name of the .rels:
@@ -472,6 +474,7 @@ fn linked_file_role(rels_name: &str) -> Option<LinkedFileRole> {
             kinds: &ATTACHED_TEMPLATE_TYPES,
             reached_from: "word/_rels/document.xml.rels",
             reached_as: &SETTINGS_TYPES,
+            may_be_unreached: false,
         });
     }
     let number = rels_name.strip_prefix("xl/externalLinks/_rels/externalLink")?.strip_suffix(".xml.rels")?;
@@ -483,6 +486,7 @@ fn linked_file_role(rels_name: &str) -> Option<LinkedFileRole> {
         kinds: &EXTERNAL_LINK_PATH_TYPES,
         reached_from: "xl/_rels/workbook.xml.rels",
         reached_as: &EXTERNAL_LINK_TYPES,
+        may_be_unreached: true,
     })
 }
 
@@ -494,8 +498,9 @@ fn is_accepted_link_to_another_file(relationship: &Relationship, rels_name: &str
     !kinds.is_empty() && kinds.iter().all(|kind| role.kinds.contains(&kind.as_str())) && plays_its_usual_role(&role, links)
 }
 
-// The part is reached, and only with one of its usual Types from its usual
-// place: not from another .rels, nor as the main document of _rels/.rels.
+// The part is reached, or may go unreached, and whatever reaches it does so only
+// with one of its usual Types from its usual place: not from another .rels, nor
+// as the main document of _rels/.rels.
 fn plays_its_usual_role(role: &LinkedFileRole, links: &[Link]) -> bool {
     let part = role.part.to_lowercase();
     let mut reaching = links.iter().filter(|link| link.to == part).peekable();
@@ -504,7 +509,7 @@ fn plays_its_usual_role(role: &LinkedFileRole, links: &[Link]) -> bool {
             && !link.kinds.is_empty()
             && link.kinds.iter().all(|kind| role.reached_as.contains(&kind.as_str()))
     };
-    reaching.peek().is_some() && reaching.all(|link| is_usual(link))
+    (reaching.peek().is_some() || role.may_be_unreached) && reaching.all(|link| is_usual(link))
 }
 
 // A .rels part and the relationships it declares.
@@ -1084,7 +1089,38 @@ mod tests {
             let bytes = package_of(&[(WORKBOOK_RELS, workbook), (EXTERNAL_LINK_RELS, external(EXTERNAL_LINK_PATH, OTHER_BOOK))]);
             assert!(!allowed(bytes));
         }
-        let unreached = package_of(&[(EXTERNAL_LINK_RELS, external(EXTERNAL_LINK_PATH, OTHER_BOOK))]);
+    }
+
+    #[test]
+    fn an_external_link_part_no_relationship_reaches_keeps_its_exemption() {
+        let unreached = package_of(&[
+            ("xl/externalLinks/externalLink0.xml", "<externalLink/>".to_string()),
+            ("xl/externalLinks/_rels/externalLink0.xml.rels", external(EXTERNAL_LINK_PATH, OTHER_BOOK)),
+        ]);
+        assert!(allowed(unreached));
+    }
+
+    #[test]
+    fn an_unreached_external_link_part_is_refused_once_another_part_reaches_it() {
+        let parts = [
+            ("xl/externalLinks/externalLink0.xml", "<externalLink/>".to_string()),
+            ("xl/externalLinks/_rels/externalLink0.xml.rels", external(EXTERNAL_LINK_PATH, OTHER_BOOK)),
+        ];
+        let sheet = one_relationship(EXTERNAL_LINK, "../externalLinks/externalLink0.xml", "");
+        let other_type = one_relationship(WORKSHEET, "externalLinks/externalLink0.xml", "");
+        for (rels, xml) in [("xl/worksheets/_rels/sheet1.xml.rels", sheet), (WORKBOOK_RELS, other_type)] {
+            let mut with_link = parts.to_vec();
+            with_link.push((rels, xml));
+            assert!(!allowed(package_of(&with_link)), "{rels}");
+        }
+    }
+
+    #[test]
+    fn an_unreached_settings_part_keeps_refusing_its_attached_template() {
+        let unreached = package_of(&[
+            ("word/settings.xml", "<w:settings/>".to_string()),
+            (SETTINGS_RELS, external(ATTACHED_TEMPLATE, TEMPLATE)),
+        ]);
         assert!(!allowed(unreached));
     }
 
