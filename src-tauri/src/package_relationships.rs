@@ -18,6 +18,13 @@ const HYPERLINK_TYPES: [&str; 2] = [
     "http://purl.oclc.org/ooxml/officeDocument/relationships/hyperlink",
 ];
 
+// A relationship of these types brings another whole document into this one,
+// stored in a part of the package or not: a document only uses its own parts.
+const ALT_CHUNK_TYPES: [&str; 2] = [
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/aFChunk",
+];
+
 struct Limits {
     entries: usize,
     rels_bytes: u64,
@@ -159,6 +166,9 @@ fn relationship_allowed(element: &BytesStart) -> bool {
             _ => {}
         }
     }
+    if types.iter().any(|kind| is_alt_chunk(kind)) {
+        return false;
+    }
     if modes.iter().all(|mode| mode == "Internal") {
         return true;
     }
@@ -166,6 +176,10 @@ fn relationship_allowed(element: &BytesStart) -> bool {
         return true;
     }
     !targets.is_empty() && targets.iter().all(|target| has_allowed_scheme(target))
+}
+
+fn is_alt_chunk(kind: &str) -> bool {
+    ALT_CHUNK_TYPES.iter().any(|alt_chunk| kind.eq_ignore_ascii_case(alt_chunk))
 }
 
 // The target, with its XML entities already decoded, is percent-decoded before
@@ -341,6 +355,21 @@ mod tests {
     }
 
     // The relationship is judged the same way however the picture refers to it.
+    #[test]
+    fn a_document_with_an_alt_chunk_relationship_is_not_allowed() {
+        for kind in ALT_CHUNK_TYPES {
+            let internal = format!("<Relationship Id=\"r\" Type=\"{kind}\" Target=\"afchunk.mht\"/>");
+            let rels = rels_xml(&internal);
+            assert!(!rels_allowed(&rels), "{kind}");
+            let docx = package(&[
+                ("word/document.xml", b"<w:document/>"),
+                ("word/afchunk.mht", b"MIME-Version: 1.0"),
+                ("word/_rels/document.xml.rels", rels.as_bytes()),
+            ]);
+            assert!(!allowed(docx), "{kind}");
+        }
+    }
+
     fn picture_package(picture: &str, kind: &str) -> Vec<u8> {
         let rels = external(kind, ABS);
         package(&[
