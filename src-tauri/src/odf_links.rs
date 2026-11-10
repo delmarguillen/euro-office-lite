@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::{NsReader, Reader, Writer};
 
 use crate::package_relationships::{declares_utf8, has_allowed_scheme, part_names_are_unique, percent_decoded};
 use crate::x2t_task::ContentSample;
@@ -114,8 +115,14 @@ fn copy_path(source: &Path, temp_dir: &Path) -> PathBuf {
     temp_dir.join(format!("eo-package-copy.{}", extension))
 }
 
-// The parts the manifest declares encrypted: the full-path of each file-entry
-// that holds an encryption-data element. Empty when the manifest cannot be read.
+// The parts x2t takes for encrypted: the manifest:full-path of each
+// manifest:file-entry right under the manifest:manifest root that holds a
+// manifest:encryption-data right under it (manifest_entry,
+// OdfFile/Reader/Format/office_document.cpp; parse_manifests,
+// OdfFile/Reader/Format/odf_document_impl.cpp). x2t goes by the prefix written
+// in each name, "manifest" (read_doc_element passes namespacePrefix() to
+// CP_CHECK_NAME, OdfFile/Common/readdocelement.cpp); here the prefix also has to
+// stand for the manifest namespace. Empty when the manifest cannot be read.
 fn encrypted_parts<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> HashSet<String> {
     let Ok(xml) = read_part(archive, MANIFEST, LIMITS.part_bytes) else {
         return HashSet::new();
@@ -123,36 +130,57 @@ fn encrypted_parts<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> HashSet<
     let Ok(text) = std::str::from_utf8(&xml) else {
         return HashSet::new();
     };
-    let mut reader = Reader::from_str(text.strip_prefix('\u{FEFF}').unwrap_or(text));
+    let mut reader = NsReader::from_str(text.strip_prefix('\u{FEFF}').unwrap_or(text));
     let mut parts = HashSet::new();
-    let mut current = None;
+    let mut depth = 0usize;
+    let mut in_manifest = false;
+    let mut entry = None;
     loop {
-        match reader.read_event() {
-            Ok(Event::Eof) => return parts,
-            Ok(Event::Start(element)) if is_file_entry(&element) => current = full_path(&element),
-            Ok(Event::End(end)) if end.local_name().as_ref() == b"file-entry" => current = None,
-            Ok(Event::Start(element)) | Ok(Event::Empty(element)) if is_encryption_data(&element) => {
-                parts.extend(current.clone());
+        let Ok((namespace, event)) = reader.read_resolved_event() else {
+            return HashSet::new();
+        };
+        match event {
+            Event::Eof => return parts,
+            Event::Start(element) => {
+                match depth {
+                    0 => in_manifest = is_manifest_element(&namespace, &element, b"manifest:manifest"),
+                    1 => entry = file_entry_path(in_manifest, &namespace, &element),
+                    2 if is_manifest_element(&namespace, &element, ENCRYPTION_DATA) => parts.extend(entry.clone()),
+                    _ => {}
+                }
+                depth += 1;
             }
-            Ok(_) => {}
-            Err(_) => return HashSet::new(),
+            Event::Empty(element) => {
+                if depth == 2 && is_manifest_element(&namespace, &element, ENCRYPTION_DATA) {
+                    parts.extend(entry.clone());
+                }
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 1 {
+                    entry = None;
+                }
+            }
+            _ => {}
         }
     }
 }
 
-fn is_file_entry(element: &BytesStart) -> bool {
-    element.local_name().as_ref() == b"file-entry"
+const MANIFEST_NAMESPACE: &[u8] = b"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0";
+const ENCRYPTION_DATA: &[u8] = b"manifest:encryption-data";
+
+fn is_manifest_element(namespace: &ResolveResult, element: &BytesStart, name: &[u8]) -> bool {
+    let in_namespace = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if *uri == MANIFEST_NAMESPACE);
+    in_namespace && element.name().as_ref() == name
 }
 
-fn is_encryption_data(element: &BytesStart) -> bool {
-    element.local_name().as_ref() == b"encryption-data"
-}
-
-fn full_path(element: &BytesStart) -> Option<String> {
-    element.attributes().flatten().find_map(|attribute| {
-        let is_full_path = attribute.key.local_name().as_ref() == b"full-path";
-        is_full_path.then(|| attribute.unescape_value().ok().map(|value| value.into_owned())).flatten()
-    })
+// The full-path of a manifest:file-entry, by that exact attribute name.
+fn file_entry_path(in_manifest: bool, namespace: &ResolveResult, element: &BytesStart) -> Option<String> {
+    if !in_manifest || !is_manifest_element(namespace, element, b"manifest:file-entry") {
+        return None;
+    }
+    let attribute = element.attributes().flatten().find(|attribute| attribute.key.as_ref() == b"manifest:full-path")?;
+    attribute.unescape_value().ok().map(|value| value.into_owned())
 }
 
 fn last_segment(name: &str) -> &str {
@@ -855,6 +883,28 @@ mod tests {
         after.by_name("styles.xml").unwrap().read_to_end(&mut styles).unwrap();
         assert_eq!(styles, CIPHERTEXT, "an encrypted part is copied as it is");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_part_declared_encrypted_otherwise_than_x2t_reads_it_is_not_allowed_when_unreadable() {
+        let ns = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0";
+        let data = "<manifest:encryption-data manifest:checksum=\"AA==\"/>";
+        for declared in [
+            format!("<m:manifest xmlns:m=\"{ns}\"><m:file-entry m:full-path=\"content.xml\"><m:encryption-data/></m:file-entry></m:manifest>"),
+            format!("<manifest:manifest xmlns:manifest=\"urn:other\"><manifest:file-entry manifest:full-path=\"content.xml\">{data}</manifest:file-entry></manifest:manifest>"),
+            manifest(&format!("<manifest:file-entry manifest:full-path=\"content.xml\"><manifest:x>{data}</manifest:x></manifest:file-entry>")),
+            manifest(&format!("<manifest:x><manifest:file-entry manifest:full-path=\"content.xml\">{data}</manifest:file-entry></manifest:x>")),
+            manifest(&format!("<manifest:file-entry xmlns:m=\"{ns}\" m:full-path=\"content.xml\">{data}</manifest:file-entry>")),
+            format!("<manifest:other xmlns:manifest=\"{ns}\"><manifest:file-entry manifest:full-path=\"content.xml\">{data}</manifest:file-entry></manifest:other>"),
+        ] {
+            let bytes = package(&[
+                ("META-INF/manifest.xml", declared.as_bytes(), DEFLATED),
+                ("content.xml", CIPHERTEXT, DEFLATED),
+            ]);
+            let (dir, _, outcome) = prepared("declared.odt", &bytes);
+            assert_eq!(outcome, PackageImages::NotAllowed, "{declared}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
