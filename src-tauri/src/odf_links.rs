@@ -537,7 +537,10 @@ mod tests {
     }
 
     fn scratch(name: &str) -> (PathBuf, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("eo-odf-{}-{}", name, std::process::id()));
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let unique = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("eo-odf-{}-{}-{}", name, std::process::id(), unique));
         let _ = std::fs::remove_dir_all(&dir);
         let temp = dir.join("temp");
         std::fs::create_dir_all(&temp).unwrap();
