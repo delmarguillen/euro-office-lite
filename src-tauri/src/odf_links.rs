@@ -746,6 +746,18 @@ mod tests {
     }
 
     #[test]
+    fn each_part_is_read_by_the_name_the_converter_reads() {
+        use crate::package_relationships::tests::package_with_unicode_path;
+        let linked = with_image("../near.png");
+        let parts: &[(&str, &[u8])] = &[("mimetype", MIMETYPE), ("content.xml", linked.as_bytes())];
+        let bytes = package_with_unicode_path(parts, "content.xml", "ignored.bin");
+        let (dir, temp, outcome) = prepared("unicode-path.odt", &bytes);
+        assert_eq!(outcome, PackageImages::NotAllowed);
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn an_odf_package_after_a_cfb_start_is_neutralized_too() {
         let mut bytes = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1".to_vec();
         bytes.extend_from_slice(&[0; 504]);

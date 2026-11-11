@@ -154,6 +154,9 @@ fn unique_names_within<R: Read + Seek>(reader: &mut R, library_start: u64, limit
     let Some(entries) = directory_entries(&directory) else {
         return false;
     };
+    if !entries.iter().all(|entry| unicode_path_is_the_name(entry)) {
+        return false;
+    }
     let names: Vec<&[u8]> = entries.iter().map(|entry| entry_name(entry)).collect();
     if names.len() as u64 != end.entries || !no_two_alike(&names) {
         return false;
@@ -235,6 +238,21 @@ fn directory_entries(directory: &[u8]) -> Option<Vec<&[u8]>> {
 
 fn entry_name(entry: &[u8]) -> &[u8] {
     &entry[ENTRY_LEN..ENTRY_LEN + u16_at(entry, 28) as usize]
+}
+
+const UNICODE_PATH_EXTRA_ID: u16 = 0x7075;
+
+// x2t extracts each entry under the name stored in its central directory entry
+// (unzGetCurrentFileInfo in do_extract_currentfile, OfficeUtils/src/ZipUtilsCP.cpp),
+// and minizip reads no Info-ZIP Unicode Path extra field (0x7075). The zip
+// library takes the name in that field instead when its CRC-32 matches the
+// stored name (parse_single_extra_field in zip 2.4.2). So the name in such a
+// field has to be the stored name, byte for byte. The field holds a version
+// byte, that CRC-32 and the name.
+fn unicode_path_is_the_name(entry: &[u8]) -> bool {
+    let name = entry_name(entry);
+    let mut unicode_paths = extra_blocks(entry).into_iter().filter(|(id, _)| *id == UNICODE_PATH_EXTRA_ID);
+    unicode_paths.all(|(_, block)| block.get(5..) == Some(name))
 }
 
 // A document can hold another package, stored as it is, with an end record of
@@ -325,19 +343,27 @@ fn entry_sizes(entry: &[u8]) -> Option<EntrySizes> {
 }
 
 fn zip64_extra(entry: &[u8]) -> Option<&[u8]> {
+    let mut blocks = extra_blocks(entry).into_iter();
+    blocks.find(|(id, _)| *id == ZIP64_EXTRA_ID).map(|(_, block)| block)
+}
+
+// The blocks of an entry's extra field, with their ids, up to the first one
+// that does not fit in it: the zip library does not apply that one either.
+fn extra_blocks(entry: &[u8]) -> Vec<(u16, &[u8])> {
     let name_len = u16_at(entry, 28) as usize;
     let extra_len = u16_at(entry, 30) as usize;
     let mut rest = &entry[ENTRY_LEN + name_len..ENTRY_LEN + name_len + extra_len];
+    let mut blocks = Vec::new();
     while rest.len() >= 4 {
         let id = u16_at(rest, 0);
         let len = u16_at(rest, 2) as usize;
-        let block = rest.get(4..4 + len)?;
-        if id == ZIP64_EXTRA_ID {
-            return Some(block);
-        }
+        let Some(block) = rest.get(4..4 + len) else {
+            break;
+        };
+        blocks.push((id, block));
         rest = &rest[4 + len..];
     }
-    None
+    blocks
 }
 
 // A data descriptor: an optional signature, the CRC and both sizes, of 8 bytes
@@ -740,7 +766,7 @@ fn percent_byte(bytes: &[u8]) -> Option<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
@@ -1640,6 +1666,82 @@ mod tests {
         assert!(package_accepted(WORD97_DOC));
         let embedded = followed_by(WORD97_DOC, &package(&[("embedded.xml", b"<a/>")]));
         assert!(package_accepted(&embedded));
+    }
+
+    // The CRC-32 of the zip format.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for byte in bytes {
+            crc ^= *byte as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+
+    // A package whose part `named` has an Info-ZIP Unicode Path extra field
+    // (0x7075) holding `unicode`, with the CRC-32 of the stored name. The zip
+    // library writes no such field, so it is written under another id first.
+    pub(crate) fn package_with_unicode_path(parts: &[(&str, &[u8])], named: &str, unicode: &str) -> Vec<u8> {
+        const PLACEHOLDER_ID: u16 = 0x6666;
+        let mut field = vec![1];
+        field.extend_from_slice(&crc32(named.as_bytes()).to_le_bytes());
+        field.extend_from_slice(unicode.as_bytes());
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, content) in parts {
+            let mut options = zip::write::FullFileOptions::default();
+            if *name == named {
+                options.add_extra_data(PLACEHOLDER_ID, field.clone().into_boxed_slice(), false).unwrap();
+            }
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(content).unwrap();
+        }
+        let mut bytes = writer.finish().unwrap().into_inner();
+        let mut placed = PLACEHOLDER_ID.to_le_bytes().to_vec();
+        placed.extend_from_slice(&(field.len() as u16).to_le_bytes());
+        placed.extend_from_slice(&field);
+        let found = occurrences(&bytes, &placed);
+        assert_eq!(found.len(), 2, "a local header and a directory entry");
+        for at in found {
+            bytes[at..at + 2].copy_from_slice(&UNICODE_PATH_EXTRA_ID.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn each_part_is_read_by_the_name_the_converter_reads() {
+        let rels = external(IMAGE, ABS);
+        let parts: &[(&str, &[u8])] = &[DOCUMENT, (DOCUMENT_RELS, rels.as_bytes())];
+        let bytes = package_with_unicode_path(parts, DOCUMENT_RELS, "word/_rels/ignored.bin");
+        let archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
+        assert_eq!(archive.name_for_index(1), Some("word/_rels/ignored.bin"), "the zip library reads the field");
+        assert!(!package_accepted(&bytes));
+    }
+
+    #[test]
+    fn a_unicode_path_with_the_stored_name_is_accepted() {
+        let rels = one_relationship(IMAGE, "media/a.png", "");
+        let parts: &[(&str, &[u8])] = &[DOCUMENT, (DOCUMENT_RELS, rels.as_bytes()), ("word/media/a.png", b"png")];
+        assert!(package_accepted(&package_with_unicode_path(parts, DOCUMENT_RELS, DOCUMENT_RELS)));
+        let picture = "word/media/im\u{e1}gen.png";
+        let parts: &[(&str, &[u8])] = &[DOCUMENT, (picture, b"png")];
+        assert!(package_accepted(&package_with_unicode_path(parts, picture, picture)));
+    }
+
+    #[test]
+    fn names_that_are_not_ascii_are_accepted_with_or_without_the_utf8_flag() {
+        let utf8 = package(&[DOCUMENT, ("word/media/im\u{e1}gen.png", b"png")]);
+        let flags = directory_entry_of(&utf8, "word/media/im\u{e1}gen.png") + 8;
+        assert_eq!(u16_at(&utf8, flags) & (1 << 11), 1 << 11);
+        assert!(package_accepted(&utf8));
+        let mut cp437 = package(&[DOCUMENT, ("word/media/imXgen.png", b"png")]);
+        for at in occurrences(&cp437, b"imXgen") {
+            cp437[at + 2] = 0xA0;
+        }
+        let archive = zip::ZipArchive::new(Cursor::new(cp437.clone())).unwrap();
+        assert!(archive.file_names().any(|name| name == "word/media/im\u{e1}gen.png"), "read as CP437");
+        assert!(package_accepted(&cp437));
     }
 
     fn corpus_documents(folder: &Path, found: &mut Vec<std::path::PathBuf>) {
