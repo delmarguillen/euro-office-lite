@@ -761,6 +761,42 @@ mod tests {
     }
 
     #[test]
+    fn disk_aliases_and_equivalent_names_are_refused_before_copying_odf() {
+        use crate::package_relationships::tests::{DISK_NAMES_TO_REFUSE, DISK_PAIRS_TO_REFUSE};
+        let clean = with_image("Pictures/a.png");
+        for name in DISK_NAMES_TO_REFUSE {
+            let bytes = package(&[("mimetype", MIMETYPE, STORED), ("content.xml", clean.as_bytes(), DEFLATED), (*name, b"<part/>", STORED)]);
+            let (dir, temp, outcome) = prepared("alias.odt", &bytes);
+            assert_eq!(outcome, PackageImages::NotAllowed, "{name:?}");
+            assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        for &(first, second) in DISK_PAIRS_TO_REFUSE {
+            for reverse in [false, true] {
+                let mut parts = [(first, b"a".as_slice(), STORED), (second, b"b".as_slice(), STORED)];
+                if reverse { parts.reverse(); }
+                let bytes = package(&[("mimetype", MIMETYPE, STORED), ("content.xml", clean.as_bytes(), DEFLATED), parts[0], parts[1]]);
+                let (dir, temp, outcome) = prepared("pair.odt", &bytes);
+                assert_eq!(outcome, PackageImages::NotAllowed, "{first:?}, {second:?}, reverse={reverse}");
+                assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_package_names_need_no_odf_copy() {
+        use crate::package_relationships::tests::DISK_NAMES_TO_KEEP;
+        for name in DISK_NAMES_TO_KEEP {
+            let bytes = package(&[(*name, b"<document/>", DEFLATED)]);
+            let (dir, temp, outcome) = prepared("ordinary.odt", &bytes);
+            assert_eq!(outcome, PackageImages::Unchanged, "{name:?}");
+            assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
     fn names_the_file_system_does_not_keep_as_written_are_not_allowed() {
         let linked = with_image("../near.png");
         let clean = with_image("Pictures/a.png");

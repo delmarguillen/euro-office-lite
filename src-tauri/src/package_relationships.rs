@@ -8,6 +8,7 @@ use std::path::Path;
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::x2t_task::{ContentSample, ZIP_END_SEARCH_LEN};
 
@@ -244,16 +245,67 @@ fn entry_name(entry: &[u8]) -> &[u8] {
 }
 
 // Whether every file system x2t runs on creates a file of this very name.
-// Windows drops the "." and " " that end a segment of a path, and writes what
-// follows a ":" to a stream of the file ("name::$DATA" being the file itself).
-// minizip gives the name to x2t as a C string, which ends at its first NUL. So
-// none of these is accepted, on any system, nor any other control character.
+// Windows drops the "." and " " that end a segment of a path, writes what
+// follows a ":" to a stream of the file, and opens a DOS device or an existing
+// file by its 8.3 short name. minizip gives the name to x2t as a C string, which
+// ends at its first NUL. So a name is a relative path with no empty segment
+// (a final separator declares a directory) and none of these.
 fn is_kept_as_written(name: &[u8]) -> bool {
     if name.iter().any(|byte| *byte == b':' || byte.is_ascii_control()) {
         return false;
     }
-    let mut segments = name.split(|byte| *byte == b'/' || *byte == b'\\');
-    segments.all(|segment| !segment.ends_with(b".") && !segment.ends_with(b" "))
+    let path = name.strip_suffix(b"/").or_else(|| name.strip_suffix(b"\\")).unwrap_or(name);
+    if path.is_empty() {
+        return false;
+    }
+    for segment in path.split(|byte| *byte == b'/' || *byte == b'\\') {
+        if segment.is_empty() || segment.ends_with(b".") || segment.ends_with(b" ") {
+            return false;
+        }
+        if is_dos_name(segment) || has_other_part_spelling(segment) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_dos_name(segment: &[u8]) -> bool {
+    let mut pieces = segment.split(|byte| *byte == b'.');
+    let base = pieces.next().unwrap_or_default();
+    let extension = pieces.next().unwrap_or_default();
+    let stem = String::from_utf8_lossy(base).trim_end_matches(' ').to_uppercase();
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(&stem.as_str()) {
+        return true;
+    }
+    if let Some(digit) = stem.strip_prefix("COM").or_else(|| stem.strip_prefix("LPT")) {
+        if ["1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³"].contains(&digit) {
+            return true;
+        }
+    }
+    if pieces.next().is_some() || base.is_empty() || base.len() > 32 {
+        return false;
+    }
+    let positions = std::str::from_utf8(base).map_or(base.len(), |s| s.chars().count());
+    let ext_positions = std::str::from_utf8(extension).map_or(extension.len(), |s| s.chars().count());
+    let Some(tilde) = base.iter().rposition(|byte| *byte == b'~') else {
+        return false;
+    };
+    let digits = &base[tilde + 1..];
+    positions <= 8 && ext_positions <= 3 && tilde > 0
+        && digits.first().is_some_and(|byte| (b'1'..=b'9').contains(byte))
+        && digits.iter().all(u8::is_ascii_digit)
+}
+
+// Keep ordinary non-ASCII media names, but not another spelling of a part the
+// readers select by an ASCII name or suffix. Comparison does not rewrite it.
+fn has_other_part_spelling(segment: &[u8]) -> bool {
+    let folded = folded_name(segment);
+    let ascii = segment.to_ascii_lowercase();
+    if folded == ascii {
+        return false;
+    }
+    folded.ends_with(b".rels")
+        || [b"_rels".as_slice(), b"content.xml", b"styles.xml", b"mimetype", b"meta-inf", b"manifest.xml"].contains(&folded.as_slice())
 }
 
 const UNICODE_PATH_EXTRA_ID: u16 = 0x7075;
@@ -392,17 +444,52 @@ fn descriptor_len<R: Read + Seek>(reader: &mut R, at: u64, zip64: bool) -> Optio
 }
 
 fn no_two_alike(names: &[&[u8]]) -> bool {
-    let mut seen = HashSet::new();
-    names.iter().all(|name| seen.insert(folded_name(name)))
+    let mut paths = Vec::with_capacity(names.len());
+    for &name in names {
+        let mut key = folded_name(without_directory_marker(name));
+        // Sort separators before every component character, keeping descendants
+        // next to their parent even when a sibling is named "parent.txt".
+        for byte in &mut key {
+            if *byte == b'/' { *byte = 0; }
+        }
+        paths.push((key, name));
+    }
+    paths.sort_by(|first, second| first.0.cmp(&second.0));
+    paths.windows(2).all(|pair| pair[0].0 != pair[1].0 && compatible_folders(pair[0].1, pair[1].1))
 }
 
-// A name as a case-insensitive file system sees it. A name that is not UTF-8 is
-// compared byte by byte, ASCII letters folded.
+fn without_directory_marker(name: &[u8]) -> &[u8] {
+    name.strip_suffix(b"/").or_else(|| name.strip_suffix(b"\\")).unwrap_or(name)
+}
+
+// Adjacent paths have every common folder spelled alike, and neither file is
+// the other's parent. Explicit directories may also be implied by children.
+fn compatible_folders(first: &[u8], second: &[u8]) -> bool {
+    let mut left = without_directory_marker(first).split(|b| *b == b'/' || *b == b'\\');
+    let mut right = without_directory_marker(second).split(|b| *b == b'/' || *b == b'\\');
+    loop {
+        match (left.next(), right.next()) {
+            (Some(a), Some(b)) => {
+                if folded_name(a) != folded_name(b) { return true; }
+                if a != b { return false; }
+            }
+            (None, Some(_)) => return first.ends_with(b"/") || first.ends_with(b"\\"),
+            (Some(_), None) => return second.ends_with(b"/") || second.ends_with(b"\\"),
+            (None, None) => return false,
+        }
+    }
+}
+
+// A conservative collision key, not a reproduction of a native filesystem's
+// versioned tables. Decomposition keeps accents; casing also groups long s,
+// dotless i and final sigma. Legacy byte names retain ASCII folding.
 fn folded_name(name: &[u8]) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(name) else {
         return name.iter().map(|byte| if *byte == b'\\' { b'/' } else { byte.to_ascii_lowercase() }).collect();
     };
-    text.to_lowercase().replace('\\', "/").into_bytes()
+    let decomposed: String = text.nfd().collect();
+    let cased = decomposed.to_lowercase().to_uppercase().to_lowercase();
+    cased.replace('\\', "/").nfd().collect::<String>().into_bytes()
 }
 
 fn read_at<R: Read + Seek>(reader: &mut R, at: u64, len: usize) -> Option<Vec<u8>> {
@@ -1777,6 +1864,88 @@ pub(crate) mod tests {
             let parts: &[(&str, &[u8])] = &[DOCUMENT, (name, rels.as_bytes()), ("x.png", b"png")];
             assert!(!package_accepted(&package(parts)), "{name:?}");
         }
+    }
+
+    pub(crate) const DISK_NAMES_TO_REFUSE: &[&str] = &[
+        "word/_rels/DOCUME~1.REL", "OBJECT~1/content.xml", "Pictures/éééééé~1.png",
+        "Pictures/NUL.png", "Pictures/CON .png", "AUX/part.bin", "Pictures/PRN",
+        "Pictures/COM1.bin", "LPT9/part.bin", "Pictures/COM¹.png", "Pictures/LPT².png",
+        "Pictures/LPT³.png", "Pictures/CONIN$", "Pictures/CONOUT$",
+        "word//document.xml", "word/\\document.xml", "/word/document.xml",
+        "\\word\\document.xml", "\\\\server\\share\\part.bin", "\\\\?\\UNC\\server\\part",
+        "word/_rels/document.xml.relſ", "word/_relſ/document.xml.rels", "styleſ.xml",
+    ];
+
+    pub(crate) const DISK_PAIRS_TO_REFUSE: &[(&str, &str)] = &[
+        ("Pictures/é.png", "Pictures/e\u{301}.png"),
+        ("Pictures/é/a.png", "Pictures/e\u{301}/a.png"),
+        ("Pictures/ı.png", "Pictures/I.png"), ("Pictures/ſ.png", "Pictures/S.png"),
+        ("Pictures/σ.png", "Pictures/ς.png"), ("Pictures/ẞ.png", "Pictures/ß.png"),
+        ("Pictures/a", "Pictures/a/b.png"), ("Pictures", "Pictures/a.png"),
+        ("Pictures/é/a.png", "Pictures/e\u{301}/b.png"),
+    ];
+
+    pub(crate) const DISK_NAMES_TO_KEEP: &[&str] = &[
+        "word/", "word/document.xml", "xl/workbook.xml", "ppt/presentation.xml",
+        "customXml/item1.xml", "docProps/core.xml", "[Content_Types].xml", "_rels/.rels",
+        "Pictures/", "Pictures/a.png", "Object 1/", "Object 12/content.xml",
+        "META-INF/manifest.xml", "Thumbnails/thumbnail.png", "mimetype", "content.xml", "styles.xml",
+        "Pictures/imágen.png", "Pictures/ima\u{301}gen.png", "Pictures/图片.png",
+        "Pictures/ı.png", "Pictures/ſ.png", "Pictures/a~b.png", "Pictures/image~1-long.png",
+        "Pictures/holiday~1.png", "Pictures/REPORT~1.xlsx", "Pictures/COM10.png", "Pictures/NULifier.png",
+        "word\\media\\a.png",
+    ];
+
+    #[test]
+    fn disk_alias_names_are_refused() {
+        assert!(!is_kept_as_written(b""));
+        for name in DISK_NAMES_TO_REFUSE {
+            assert!(!package_accepted(&package(&[(*name, b"<part/>")])), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn short_names_do_not_hide_unread_relationships() {
+        let clean = rels_xml("");
+        let linked = external(IMAGE, ABS);
+        for alias in ["word/_rels/DOCUME~1.REL", "word/_rels/docume~1.rel"] {
+            for reverse in [false, true] {
+                let mut parts = [(DOCUMENT_RELS, clean.as_bytes()), (alias, linked.as_bytes())];
+                if reverse { parts.reverse(); }
+                let bytes = package(&parts);
+                assert!(allowed(bytes.clone()), "the .REL entry is not inspected as relationships");
+                assert!(!package_accepted(&bytes), "{alias}, reverse={reverse}");
+            }
+        }
+    }
+
+    #[test]
+    fn equivalent_names_and_file_directory_conflicts_are_refused() {
+        for &(first, second) in DISK_PAIRS_TO_REFUSE {
+            for reverse in [false, true] {
+                let mut parts = [(first, b"a".as_slice()), (second, b"b".as_slice())];
+                if reverse { parts.reverse(); }
+                assert!(!package_accepted(&package(&parts)), "{first:?}, {second:?}, reverse={reverse}");
+            }
+        }
+        // An unrelated sibling must not hide the file used as a parent.
+        assert!(!package_accepted(&package(&[("a", b"x"), ("a.txt", b"y"), ("a/b", b"z")])));
+    }
+
+    #[test]
+    fn ordinary_names_and_distinct_non_ascii_names_are_kept() {
+        for name in DISK_NAMES_TO_KEEP {
+            assert!(package_accepted(&package(&[(*name, b"<part/>")])), "{name:?}");
+        }
+        for pair in [
+            [("Pictures/é.png", b"a".as_slice()), ("Pictures/e.png", b"b".as_slice())],
+            [("Pictures/Ａ.png", b"a".as_slice()), ("Pictures/A.png", b"b".as_slice())],
+            [("Pictures/图.png", b"a".as_slice()), ("Pictures/片.png", b"b".as_slice())],
+        ] {
+            assert!(package_accepted(&package(&pair)));
+        }
+        assert!(package_accepted(&package(&[("Pictures/", b""), ("Pictures/a.png", b"a")])));
+        assert!(package_accepted(&package(&[("Pictures/a.png", b"a"), ("Pictures/", b"")])));
     }
 
     fn corpus_documents(folder: &Path, found: &mut Vec<std::path::PathBuf>) {
