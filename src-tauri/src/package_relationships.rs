@@ -158,6 +158,9 @@ fn unique_names_within<R: Read + Seek>(reader: &mut R, library_start: u64, limit
         return false;
     }
     let names: Vec<&[u8]> = entries.iter().map(|entry| entry_name(entry)).collect();
+    if !names.iter().all(|name| is_kept_as_written(name)) {
+        return false;
+    }
     if names.len() as u64 != end.entries || !no_two_alike(&names) {
         return false;
     }
@@ -238,6 +241,19 @@ fn directory_entries(directory: &[u8]) -> Option<Vec<&[u8]>> {
 
 fn entry_name(entry: &[u8]) -> &[u8] {
     &entry[ENTRY_LEN..ENTRY_LEN + u16_at(entry, 28) as usize]
+}
+
+// Whether every file system x2t runs on creates a file of this very name.
+// Windows drops the "." and " " that end a segment of a path, and writes what
+// follows a ":" to a stream of the file ("name::$DATA" being the file itself).
+// minizip gives the name to x2t as a C string, which ends at its first NUL. So
+// none of these is accepted, on any system, nor any other control character.
+fn is_kept_as_written(name: &[u8]) -> bool {
+    if name.iter().any(|byte| *byte == b':' || byte.is_ascii_control()) {
+        return false;
+    }
+    let mut segments = name.split(|byte| *byte == b'/' || *byte == b'\\');
+    segments.all(|segment| !segment.ends_with(b".") && !segment.ends_with(b" "))
 }
 
 const UNICODE_PATH_EXTRA_ID: u16 = 0x7075;
@@ -1742,6 +1758,25 @@ pub(crate) mod tests {
         let archive = zip::ZipArchive::new(Cursor::new(cp437.clone())).unwrap();
         assert!(archive.file_names().any(|name| name == "word/media/im\u{e1}gen.png"), "read as CP437");
         assert!(package_accepted(&cp437));
+    }
+
+    #[test]
+    fn names_the_file_system_does_not_keep_as_written_are_refused() {
+        // From word/_rels the target leaves the package; from word/_rels. it is x.png.
+        let rels = one_relationship(IMAGE, "../../x.png", "");
+        let parts: &[(&str, &[u8])] = &[DOCUMENT, (DOCUMENT_RELS, rels.as_bytes()), ("x.png", b"png")];
+        assert!(!package_accepted(&package(parts)));
+        for name in [
+            "word/_rels/document.xml.rels.",
+            "word/_rels/document.xml.rels ",
+            "word/_rels./document.xml.rels",
+            "word/_rels/document.xml.rels::$DATA",
+            "word/_rels/document.xml.rels\u{0}",
+            "word/_rels/document.xml.rels\u{1}",
+        ] {
+            let parts: &[(&str, &[u8])] = &[DOCUMENT, (name, rels.as_bytes()), ("x.png", b"png")];
+            assert!(!package_accepted(&package(parts)), "{name:?}");
+        }
     }
 
     fn corpus_documents(folder: &Path, found: &mut Vec<std::path::PathBuf>) {

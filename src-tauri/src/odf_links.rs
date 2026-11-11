@@ -758,6 +758,24 @@ mod tests {
     }
 
     #[test]
+    fn names_the_file_system_does_not_keep_as_written_are_not_allowed() {
+        let linked = with_image("../near.png");
+        let clean = with_image("Pictures/a.png");
+        for name in ["content.xml.", "content.xml ", "Object 1./content.xml", "content.xml::$DATA", "content.xml\u{0}"] {
+            let bytes = package(&[
+                ("mimetype", MIMETYPE, STORED),
+                ("content.xml", clean.as_bytes(), DEFLATED),
+                (name, linked.as_bytes(), DEFLATED),
+                ("Pictures/a.png", b"png", STORED),
+            ]);
+            let (dir, temp, outcome) = prepared("odd-name.odt", &bytes);
+            assert_eq!(outcome, PackageImages::NotAllowed, "{name:?}");
+            assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
     fn an_odf_package_after_a_cfb_start_is_neutralized_too() {
         let mut bytes = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1".to_vec();
         bytes.extend_from_slice(&[0; 504]);
