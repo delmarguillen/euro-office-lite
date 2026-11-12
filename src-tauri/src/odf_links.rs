@@ -66,7 +66,7 @@ pub fn prepare(path: &Path, content: &ContentSample, temp_dir: &Path) -> Package
     let Ok(mut raw) = std::fs::File::open(path) else {
         return PackageImages::NotAllowed;
     };
-    if !part_names_are_unique(&mut raw, archive.central_directory_start()) {
+    if !part_names_are_unique(&mut raw, archive.central_directory_start(), archive.len()) {
         return PackageImages::NotAllowed;
     }
     let Ok(rewritten) = rewritten_parts(&mut archive, &LIMITS) else {
@@ -755,6 +755,26 @@ mod tests {
         let parts: &[(&str, &[u8])] = &[("mimetype", MIMETYPE), ("content.xml", linked.as_bytes())];
         let bytes = package_with_unicode_path(parts, "content.xml", "ignored.bin");
         let (dir, temp, outcome) = prepared("unicode-path.odt", &bytes);
+        assert_eq!(outcome, PackageImages::NotAllowed);
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn names_the_zip_library_reads_alike_are_not_allowed() {
+        use crate::package_relationships::tests::with_raw_name;
+        let linked = with_image("../near.png");
+        let clean = with_image("Pictures/a.png");
+        let bytes = package(&[
+            ("mimetype", MIMETYPE, STORED),
+            ("content.xml", clean.as_bytes(), DEFLATED),
+            ("\u{251c}\u{ed}/content.xml", linked.as_bytes(), DEFLATED),
+            ("XX/content.xml", clean.as_bytes(), DEFLATED),
+        ]);
+        let bytes = with_raw_name(bytes, "XX/content.xml", "\u{e1}/content.xml".as_bytes());
+        let archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
+        assert_eq!(archive.len(), 3, "the zip library shows one of the two");
+        let (dir, temp, outcome) = prepared("read-alike.odt", &bytes);
         assert_eq!(outcome, PackageImages::NotAllowed);
         assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy");
         let _ = std::fs::remove_dir_all(&dir);

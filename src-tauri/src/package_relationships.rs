@@ -96,7 +96,7 @@ pub fn relationships_are_allowed(path: &Path, content: &ContentSample) -> bool {
     let Ok(mut raw) = std::fs::File::open(path) else {
         return false;
     };
-    part_names_are_unique(&mut raw, archive.central_directory_start())
+    part_names_are_unique(&mut raw, archive.central_directory_start(), archive.len())
         && all_rels_allowed(&mut archive, &LIMITS)
 }
 
@@ -108,8 +108,11 @@ pub fn relationships_are_allowed(path: &Path, content: &ContentSample) -> bool {
 // OfficeUtils/src/zlib-1.2.11/contrib/minizip/unzip.c): the one that ends where
 // the end record in the last 0xFFFF bytes begins, the Zip64 one first. It has to
 // be the one the zip library read, `library_start` being where that one starts.
-pub(crate) fn part_names_are_unique<R: Read + Seek>(reader: &mut R, library_start: u64) -> bool {
-    unique_names_within(reader, library_start, &DIRECTORY_LIMITS)
+// The zip library reads a name as UTF-8 or CP437 depending on flag bit 11, so
+// two different names can read alike; each entry has to be one of the
+// `library_entries` it shows, the ones the checks read.
+pub(crate) fn part_names_are_unique<R: Read + Seek>(reader: &mut R, library_start: u64, library_entries: usize) -> bool {
+    unique_names_within(reader, library_start, library_entries, &DIRECTORY_LIMITS)
 }
 
 const END_SIGNATURE: &[u8] = b"PK\x05\x06";
@@ -139,7 +142,12 @@ struct DirectoryEnd {
     strays: Vec<u64>,
 }
 
-fn unique_names_within<R: Read + Seek>(reader: &mut R, library_start: u64, limits: &DirectoryLimits) -> bool {
+fn unique_names_within<R: Read + Seek>(
+    reader: &mut R,
+    library_start: u64,
+    library_entries: usize,
+    limits: &DirectoryLimits,
+) -> bool {
     let Some(end) = directory_end(reader) else {
         return false;
     };
@@ -163,6 +171,9 @@ fn unique_names_within<R: Read + Seek>(reader: &mut R, library_start: u64, limit
         return false;
     }
     if names.len() as u64 != end.entries || !no_two_alike(&names) {
+        return false;
+    }
+    if names.len() != library_entries {
         return false;
     }
     end.strays.is_empty() || strays_are_inside_entries(reader, &entries, &end)
@@ -1594,7 +1605,7 @@ pub(crate) mod tests {
         let archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
         let start = archive.central_directory_start();
         let size = (bytes.len() - EMPTY_END.len()) as u64 - start;
-        let within = |limits: DirectoryLimits| unique_names_within(&mut Cursor::new(bytes.clone()), start, &limits);
+        let within = |limits: DirectoryLimits| unique_names_within(&mut Cursor::new(bytes.clone()), start, 2, &limits);
         assert!(within(DirectoryLimits { entries: 2, bytes: size }));
         assert!(!within(DirectoryLimits { entries: 1, bytes: size }));
         assert!(!within(DirectoryLimits { entries: 2, bytes: size - 1 }));
@@ -1845,6 +1856,34 @@ pub(crate) mod tests {
         let archive = zip::ZipArchive::new(Cursor::new(cp437.clone())).unwrap();
         assert!(archive.file_names().any(|name| name == "word/media/im\u{e1}gen.png"), "read as CP437");
         assert!(package_accepted(&cp437));
+    }
+
+    // The package with the name `placeholder` written as the bytes `raw`, of the
+    // same length, in its local header and its directory entry. An ASCII
+    // placeholder leaves the UTF-8 flag unset.
+    pub(crate) fn with_raw_name(mut bytes: Vec<u8>, placeholder: &str, raw: &[u8]) -> Vec<u8> {
+        assert_eq!(placeholder.len(), raw.len());
+        let found = occurrences(&bytes, placeholder.as_bytes());
+        assert_eq!(found.len(), 2, "a local header and a directory entry");
+        for at in found {
+            bytes[at..at + raw.len()].copy_from_slice(raw);
+        }
+        bytes
+    }
+
+    #[test]
+    fn names_the_zip_library_reads_alike_are_refused() {
+        // "\u{251c}\u{ed}" is how CP437 reads the UTF-8 bytes of "\u{e1}".
+        let flagged = "word/\u{251c}\u{ed}/_rels/a.xml.rels";
+        let placeholder = "word/XX/_rels/a.xml.rels";
+        let linked = external(IMAGE, ABS);
+        let clean = rels_xml("");
+        let parts: &[(&str, &[u8])] = &[DOCUMENT, (flagged, linked.as_bytes()), (placeholder, clean.as_bytes())];
+        let bytes = with_raw_name(package(parts), placeholder, "word/\u{e1}/_rels/a.xml.rels".as_bytes());
+        let archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
+        assert_eq!(archive.len(), 2, "the zip library shows one of the two");
+        assert!(allowed(bytes.clone()), "the part it shows is the one without links");
+        assert!(!package_accepted(&bytes));
     }
 
     #[test]
