@@ -292,6 +292,15 @@ pub fn x2t_options_xml() -> &'static str {
 </options>\n"
 }
 
+// Windows takes "/" as a separator too. On Linux and macOS "\" is an ordinary
+// character of a file name, so the path stays as it is.
+fn x2t_path(path: &str) -> String {
+    if cfg!(target_os = "windows") {
+        return path.replace('\\', "/");
+    }
+    path.to_string()
+}
+
 // Paths are passed raw and escaped here, once. `extra` is already XML: the
 // numeric CSV/TXT elements from TextOptions::xml_elements.
 pub fn convert_params_xml(
@@ -310,10 +319,10 @@ pub fn convert_params_xml(
 <m_nFormatTo>{}</m_nFormatTo>
 <m_sTempDir>{}</m_sTempDir>
 {}{}</TaskQueueDataConvert>"#,
-        xml_escape(&input.replace('\\', "/")),
-        xml_escape(&output.replace('\\', "/")),
+        xml_escape(&x2t_path(input)),
+        xml_escape(&x2t_path(output)),
         format_to,
-        xml_escape(&temp_dir.replace('\\', "/")),
+        xml_escape(&x2t_path(temp_dir)),
         extra,
         x2t_options_xml(),
     )
@@ -864,6 +873,7 @@ pub fn detect_format(path: &std::path::Path) -> i32 {
         Some("csv") => 260,
         Some("xlsm") => 261,
         Some("xltx") => 262,
+        Some("xltm") => 263,
         Some("xlsb") => 264,
         Some("fods") => 265,
         Some("ots") => 266,
@@ -872,7 +882,9 @@ pub fn detect_format(path: &std::path::Path) -> i32 {
         Some("odp") => 131,
         Some("ppsx") => 132,
         Some("pptm") => 133,
+        Some("ppsm") => 134,
         Some("potx") => 135,
+        Some("potm") => 136,
         Some("fodp") => 137,
         Some("otp") => 138,
         Some("pdf") => 513,
@@ -907,34 +919,116 @@ pub fn is_empty_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+// The extensions the app converts to Editor.bin: those the open dialog offers,
+// but PDF (open_pdf reads it as it is), those the insert, compare and merge
+// dialogs offer (file_dialogs.rs), and xltm, potm and ppsm, which x2t converts
+// like the others of their family. A file under any other is refused.
+pub const CONVERTED_EXTENSIONS: [&str; 30] = [
+    "docx", "doc", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "txt",
+    "xlsx", "xls", "xlsm", "xltx", "xltm", "xlsb", "ods", "ots", "fods", "csv",
+    "pptx", "ppt", "pptm", "ppsx", "ppsm", "potx", "potm", "odp", "otp", "fodp",
+];
+
+pub fn is_converted_extension(path: &std::path::Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    CONVERTED_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+}
+
+// x2t picks the format of a file that is not a CFB from its first
+// MIN_SIZE_BUFFER (4096) bytes, and looks for the end of an HTML document in
+// its last 4096 (core/Common/OfficeFileFormatChecker2.cpp at v10.0.0.169,
+// isOfficeFile).
+pub const X2T_HEAD_LEN: usize = 4096;
+// minizip looks for the end of a ZIP's central directory in the last 0xFFFF
+// bytes of a file (core/OfficeUtils/src/zlib-1.2.11/contrib/minizip/unzip.c,
+// unz64local_SearchCentralDir), plus the 22 bytes of the record itself.
+pub const ZIP_END_SEARCH_LEN: usize = 0xFFFF + 22;
+
+// The bytes of a file the content check reads: those x2t reads to pick its
+// format.
+pub struct ContentSample {
+    // The first X2T_HEAD_LEN bytes.
+    pub head: Vec<u8>,
+    // The last ZIP_END_SEARCH_LEN bytes, the whole file when it is shorter.
+    pub tail: Vec<u8>,
+}
+
+impl ContentSample {
+    pub fn read(path: &std::path::Path) -> std::io::Result<ContentSample> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(path)?;
+        let mut head = Vec::new();
+        (&mut file).take(X2T_HEAD_LEN as u64).read_to_end(&mut head)?;
+        let size = file.metadata()?.len();
+        file.seek(SeekFrom::Start(size.saturating_sub(ZIP_END_SEARCH_LEN as u64)))?;
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail)?;
+        Ok(ContentSample { head, tail })
+    }
+
+    // minizip opens a file that starts like a ZIP or has the end of a central
+    // directory in its tail: only such a file can hold a package.
+    pub fn may_hold_a_package(&self) -> bool {
+        is_zip(&self.head) || has_zip_end(&self.tail)
+    }
+
+    pub fn starts_like_a_cfb(&self) -> bool {
+        is_cfb(&self.head)
+    }
+
+    #[cfg(test)]
+    pub fn of(bytes: &[u8]) -> ContentSample {
+        ContentSample {
+            head: bytes[..bytes.len().min(X2T_HEAD_LEN)].to_vec(),
+            tail: bytes[bytes.len().saturating_sub(ZIP_END_SEARCH_LEN)..].to_vec(),
+        }
+    }
+}
+
 const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
 const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+const ZIP_END_SIGNATURE: &[u8] = b"PK\x05\x06";
+const ZIP64_END_LOCATOR_SIGNATURE: &[u8] = b"PK\x06\x07";
 
 // A container format must start like one; x2t would otherwise pick the format
 // from the content. OOXML is a ZIP, or a CFB when it has a password; xlsb is
-// always a ZIP. ODF is always a ZIP, flat ODF an XML document. Word 97-2003,
-// Excel 97-2003 and PowerPoint 97-2003 are CFB; the legacy extensions also
-// take the other content x2t converts under them: see is_legacy_doc,
-// is_legacy_xls and is_legacy_ppt. HTML is never accepted, because x2t picks
-// the format from the content. Other extensions (rtf, txt, csv...) are left to
-// x2t.
-pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
+// always a ZIP. ODF is always a ZIP, flat ODF an XML document whose root is
+// office:document. Word 97-2003, Excel 97-2003 and PowerPoint 97-2003 are
+// CFB; the legacy extensions also take the other content x2t converts under
+// them, noted on their lines below. HTML is never
+// accepted, because x2t picks the format from the content. An .rtf starts
+// like one, after an optional BOM and blank space. A TXT or CSV is read from
+// its UTF-32 copy (text_import::prepare_read_copy). An extension outside
+// CONVERTED_EXTENSIONS, or none, is refused. A file that starts like a ZIP
+// must also open as one (converter.rs). Content that is neither a CFB nor a
+// ZIP must not hold what x2t would read as another format first.
+pub fn content_matches_extension(path: &std::path::Path, content: &ContentSample) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return true;
+        return false;
     };
+    let head = content.head.as_slice();
     let zip = is_zip(head);
     let cfb = is_cfb(head);
-    match ext.to_lowercase().as_str() {
+    let ext = ext.to_lowercase();
+    let text = !zip && !cfb && !x2t_finds_another_format(&ext, content);
+    match ext.as_str() {
         "docx" | "docm" | "dotx" | "dotm" => zip || cfb,
         "xlsx" | "xlsm" | "xltx" | "xltm" => zip || cfb,
         "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => zip || cfb,
         "xlsb" => zip,
         "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => zip,
-        "doc" => is_legacy_doc(head),
-        "xls" => is_legacy_xls(head),
-        "ppt" => is_legacy_ppt(head),
-        "fodt" | "fods" | "fodp" => starts_with_xml_declaration(head),
-        _ => true,
+        // Word 97-2003 (CFB), a DOCX renamed to .doc (ZIP) or an RTF saved as .doc.
+        "doc" => cfb || zip || (text && starts_with_rtf(head)),
+        // Excel 97-2003 (CFB), an XLSX renamed to .xls (ZIP) or Excel 2003 XML.
+        "xls" => cfb || zip || (text && is_spreadsheet_ml(head)),
+        // PowerPoint 97-2003 (CFB) or a PPTX renamed to .ppt (ZIP).
+        "ppt" => cfb || zip,
+        "rtf" => text && starts_with_rtf(head),
+        "fodt" | "fods" | "fodp" => text && is_flat_odf(head),
+        "txt" | "csv" => text,
+        _ => false,
     }
 }
 
@@ -946,23 +1040,130 @@ fn is_cfb(head: &[u8]) -> bool {
     head.starts_with(CFB_SIGNATURE)
 }
 
-// .doc: Word 97-2003 (CFB), a DOCX renamed to .doc (ZIP) or an RTF saved as .doc.
-fn is_legacy_doc(head: &[u8]) -> bool {
-    is_cfb(head) || is_zip(head) || starts_with_rtf(head)
+// What x2t looks for before it gets to the format the extension names, in a
+// file that is neither a CFB nor a ZIP: a ZIP after other data, an Office
+// document in a single XML, which only an .xls of Excel 2003 XML may be, and
+// HTML or MHT, refused even where x2t would find RTF first.
+fn x2t_finds_another_format(ext: &str, content: &ContentSample) -> bool {
+    has_zip_end(&content.tail)
+        || flat_ooxml_under_another_extension(ext, &content.head)
+        || x2t_reads_as_html(content)
+        || x2t_reads_as_mht(&content.head)
 }
 
-// .xls: Excel 97-2003 (CFB), an XLSX renamed to .xls (ZIP) or Excel 2003 XML.
-fn is_legacy_xls(head: &[u8]) -> bool {
-    is_cfb(head) || is_zip(head) || is_spreadsheet_ml(head)
+fn flat_ooxml_under_another_extension(ext: &str, head: &[u8]) -> bool {
+    match x2t_flat_ooxml(head) {
+        None => false,
+        Some(FlatOoxml::Excel2003) => ext != "xls",
+        Some(_) => true,
+    }
 }
 
-// .ppt: PowerPoint 97-2003 (CFB) or a PPTX renamed to .ppt (ZIP).
-fn is_legacy_ppt(head: &[u8]) -> bool {
-    is_cfb(head) || is_zip(head)
+// x2t takes a file for HTML when isHtmlFormatFile (OfficeFileFormatChecker2.cpp:156)
+// finds an html tag in its first bytes, then a closing html or body tag in
+// its last X2T_HEAD_LEN bytes, the whole file when shorter (:887-899). It
+// checks this before flat ODF.
+fn x2t_reads_as_html(content: &ContentSample) -> bool {
+    let end = &content.tail[content.tail.len().saturating_sub(X2T_HEAD_LEN)..];
+    html_start(&content.head) && html_end(end)
+}
+
+// "html", in any case, inside a tag opened in the first 100 bytes.
+fn html_start(head: &[u8]) -> bool {
+    if head.len() < 4 {
+        return false;
+    }
+    let mut tag_open = false;
+    for i in 0..(head.len() - 4).min(100) {
+        match head[i] {
+            b'<' => tag_open = true,
+            b'>' => tag_open = false,
+            _ if tag_open && head[i..i + 4].eq_ignore_ascii_case(b"html") => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+// "</html" in any case, or "</body>" in lower case.
+fn html_end(bytes: &[u8]) -> bool {
+    if bytes.len() <= 6 {
+        return false;
+    }
+    (0..bytes.len() - 6).any(|i| {
+        let window = &bytes[i..];
+        window[..6].eq_ignore_ascii_case(b"</html") || window.starts_with(b"</body>")
+    })
+}
+
+// isMultiPartsHtmlFormatFile (OfficeFileFormatChecker2.cpp:113): both headers
+// anywhere in the first X2T_HEAD_LEN bytes.
+fn x2t_reads_as_mht(head: &[u8]) -> bool {
+    contains(head, b"Content-Type: multipart/related") && contains(head, b"Content-Type: text/html")
+}
+
+// The Office documents in a single XML isOOXFlatFormatFile finds
+// (OfficeFileFormatChecker2.cpp:1656), in the order it looks for them.
+#[derive(Debug, PartialEq, Eq)]
+enum FlatOoxml {
+    Word2003,
+    Excel2003,
+    // An OOXML package (Flat OPC) of Word, Excel or PowerPoint.
+    Package,
+}
+
+const WORD_2003_LINE: &[u8] = b"xmlns:w=\"http://schemas.microsoft.com/office/word/2003/wordml\"";
+const EXCEL_2003_LINE: &[u8] = b"xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\"";
+const PACKAGE_LINE: &[u8] = b"xmlns:pkg=\"http://schemas.microsoft.com/office/2006/xmlPackage\"";
+const PACKAGE_PROGIDS: [&[u8]; 3] = [
+    b"progid=\"Word.Document\"",
+    b"progid=\"Excel.Sheet\"",
+    b"progid=\"PowerPoint.Show\"",
+];
+
+// isOOXFlatFormatFile on the first X2T_HEAD_LEN bytes: the strings it looks
+// for anywhere in them, read as UTF-16 after a UTF-16 BOM.
+fn x2t_flat_ooxml(head: &[u8]) -> Option<FlatOoxml> {
+    if head.len() < 8 {
+        return None;
+    }
+    let text = text_x2t_searches(head);
+    if contains(&text, WORD_2003_LINE) {
+        return Some(FlatOoxml::Word2003);
+    }
+    let workbook = contains(&text, b"<Workbook") || !contains(&text, b"<html");
+    if contains(&text, EXCEL_2003_LINE) && workbook {
+        return Some(FlatOoxml::Excel2003);
+    }
+    let packaged = PACKAGE_PROGIDS.iter().any(|progid| contains(&text, progid));
+    if contains(&text, PACKAGE_LINE) && packaged {
+        return Some(FlatOoxml::Package);
+    }
+    None
+}
+
+// x2t turns the bytes into UTF-8 when they start with a UTF-16 BOM, and takes
+// them as they are otherwise.
+fn text_x2t_searches(head: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let units = head.chunks_exact(2);
+    let decoded: Vec<u16> = match head {
+        [0xFF, 0xFE, ..] => units.map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect(),
+        [0xFE, 0xFF, ..] => units.map(|pair| u16::from_be_bytes([pair[0], pair[1]])).collect(),
+        _ => return std::borrow::Cow::Borrowed(head),
+    };
+    std::borrow::Cow::Owned(String::from_utf16_lossy(&decoded).into_bytes())
+}
+
+// minizip opens a file as a ZIP when it finds the end of a central directory,
+// or the Zip64 locator of one, in its last bytes, whatever comes before it.
+fn has_zip_end(tail: &[u8]) -> bool {
+    contains(tail, ZIP_END_SIGNATURE) || contains(tail, ZIP64_END_LOCATOR_SIGNATURE)
 }
 
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 const XML_DECLARATION: &[u8] = b"<?xml";
+const XML_DECLARATION_END: &[u8] = b"?>";
+const FLAT_ODF_ROOT: &[u8] = b"<office:document";
 const RTF_START: &[u8] = b"{\\rtf";
 const SPREADSHEET_ML_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:office:spreadsheet";
 const SPREADSHEET_ML_PROGID: &[u8] = b"progid=\"Excel.Sheet\"";
@@ -983,20 +1184,78 @@ fn starts_with_xml_declaration(head: &[u8]) -> bool {
     skip_bom_and_space(head).starts_with(XML_DECLARATION)
 }
 
+fn skip_space(bytes: &[u8]) -> &[u8] {
+    let first_non_space = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    &bytes[first_non_space..]
+}
+
+// A flat ODF's first bytes: an optional UTF-8 BOM and whitespace, the XML
+// declaration, whitespace, then the root element, as LibreOffice writes it.
+// Anything else between the declaration and the root is not a flat ODF.
+fn is_flat_odf(head: &[u8]) -> bool {
+    let document = skip_bom_and_space(head);
+    if !document.starts_with(XML_DECLARATION) {
+        return false;
+    }
+    let Some(end) = document
+        .windows(XML_DECLARATION_END.len())
+        .position(|window| window == XML_DECLARATION_END)
+    else {
+        return false;
+    };
+    let after_declaration = skip_space(&document[end + XML_DECLARATION_END.len()..]);
+    let Some(after_root) = after_declaration.strip_prefix(FLAT_ODF_ROOT) else {
+        return false;
+    };
+    matches!(after_root.first(), Some(b' ' | b'\t' | b'\r' | b'\n' | b'>' | b'/'))
+}
+
 // An RTF document's first bytes: an optional UTF-8 BOM, optional whitespace,
 // then "{\rtf".
 fn starts_with_rtf(head: &[u8]) -> bool {
     skip_bom_and_space(head).starts_with(RTF_START)
 }
 
-// Excel 2003 XML (SpreadsheetML): an XML document whose first bytes carry the
-// <?mso-application progid="Excel.Sheet"?> instruction or the SpreadsheetML
-// namespace on the root <Workbook>. Any other XML, XHTML included, is not.
+// Excel 2003 XML (SpreadsheetML): an XML document whose root element is
+// <Workbook>, with the <?mso-application progid="Excel.Sheet"?> instruction or
+// the SpreadsheetML namespace in its first bytes. Any other XML, XHTML
+// included, is not.
 fn is_spreadsheet_ml(head: &[u8]) -> bool {
     if !starts_with_xml_declaration(head) {
         return false;
     }
-    contains(head, SPREADSHEET_ML_PROGID) || contains(head, SPREADSHEET_ML_NAMESPACE)
+    let marked = contains(head, SPREADSHEET_ML_PROGID) || contains(head, SPREADSHEET_ML_NAMESPACE);
+    marked && root_element_is(head, b"Workbook")
+}
+
+// Whether the first element of an XML document is `name`, past the BOM, the
+// declaration, processing instructions, comments and blank space before it.
+fn root_element_is(head: &[u8], name: &[u8]) -> bool {
+    let mut rest = skip_bom_and_space(head);
+    loop {
+        let skipped = match rest {
+            [b'<', b'?', ..] => skip_past(&rest[2..], b"?>"),
+            [b'<', b'!', b'-', b'-', ..] => skip_past(&rest[4..], b"-->"),
+            _ => break,
+        };
+        let Some(after) = skipped else {
+            return false;
+        };
+        rest = skip_space(after);
+    }
+    let Some(after_name) = rest.strip_prefix(b"<").and_then(|tag| tag.strip_prefix(name)) else {
+        return false;
+    };
+    matches!(after_name.first(), Some(b' ' | b'\t' | b'\r' | b'\n' | b'>' | b'/'))
+}
+
+// The bytes after the first `end`.
+fn skip_past<'a>(bytes: &'a [u8], end: &[u8]) -> Option<&'a [u8]> {
+    let position = bytes.windows(end.len()).position(|window| window == end)?;
+    Some(&bytes[position + end.len()..])
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -1985,6 +2244,7 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn plain_paths_give_the_same_convert_params_as_before() {
         let xml = convert_params_xml(
@@ -2010,6 +2270,21 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 </options>\n\
 </TaskQueueDataConvert>"
         );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn convert_params_keep_a_backslash_that_is_part_of_a_name() {
+        let xml = convert_params_xml(
+            "/home/u/a\\b.docx",
+            "/tmp/eo\\1/Editor.bin",
+            8192,
+            "/tmp/eo\\1",
+            "",
+        );
+        assert!(xml.contains("<m_sFileFrom>/home/u/a\\b.docx</m_sFileFrom>"), "{}", xml);
+        assert!(xml.contains("<m_sFileTo>/tmp/eo\\1/Editor.bin</m_sFileTo>"), "{}", xml);
+        assert!(xml.contains("<m_sTempDir>/tmp/eo\\1</m_sTempDir>"), "{}", xml);
     }
 
     #[test]
@@ -2138,13 +2413,53 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 
     const HTML_HEAD: &[u8] = b"<html><body>";
     const OOXML_EXTENSIONS: &[&str] = &[
-        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx",
-        "potm", "ppsx", "ppsm",
+        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx", "potm",
+        "ppsx", "ppsm",
     ];
     const ODF_EXTENSIONS: &[&str] = &["odt", "ods", "odp", "ott", "ots", "otp"];
 
-    fn matches(name: &str, head: &[u8]) -> bool {
-        content_matches_extension(std::path::Path::new(name), head)
+    fn matches(name: &str, bytes: &[u8]) -> bool {
+        content_matches_extension(std::path::Path::new(name), &ContentSample::of(bytes))
+    }
+
+    // The smallest end of a central directory: an empty ZIP.
+    const EMPTY_ZIP: &[u8] = b"PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
+    fn followed_by(first: &[u8], then: &[u8]) -> Vec<u8> {
+        let mut bytes = first.to_vec();
+        bytes.extend_from_slice(then);
+        bytes
+    }
+
+    #[test]
+    fn an_rtf_or_a_flat_odf_with_a_zip_after_it_is_refused() {
+        let rtf = b"{\\rtf1\\ansi Some text\\par}".as_slice();
+        let fodt = b"<?xml version=\"1.0\"?><office:document office:version=\"1.3\"/>".as_slice();
+        let zip64_locator = b"PK\x06\x07\0\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0".as_slice();
+        for (name, start) in [("/d/a.rtf", rtf), ("/d/a.doc", rtf), ("/d/a.fodt", fodt)] {
+            assert!(matches(name, start), "{name}");
+            assert!(!matches(name, &followed_by(start, EMPTY_ZIP)), "{name}");
+            assert!(!matches(name, &followed_by(start, zip64_locator)), "{name}");
+        }
+        assert!(!matches("/d/a.txt", &followed_by(b"text", EMPTY_ZIP)));
+    }
+
+    #[test]
+    fn a_zip_end_further_back_than_minizip_looks_is_not_a_zip() {
+        let rtf = followed_by(b"{\\rtf1\\ansi ", EMPTY_ZIP);
+        let mut far = rtf.clone();
+        far.extend(std::iter::repeat(b' ').take(ZIP_END_SEARCH_LEN));
+        assert!(matches("/d/a.rtf", &far));
+        let mut near = rtf;
+        near.extend(std::iter::repeat(b' ').take(0xFFFF - EMPTY_ZIP.len()));
+        assert!(!matches("/d/a.rtf", &near));
+    }
+
+    #[test]
+    fn a_cfb_with_a_zip_inside_is_still_accepted() {
+        let doc = followed_by(WORD97_DOC, EMPTY_ZIP);
+        assert!(matches("/d/a.doc", &doc));
+        assert!(matches("/d/a.docx", &followed_by(CFB_SIGNATURE, EMPTY_ZIP)));
     }
 
     #[test]
@@ -2179,9 +2494,71 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
-    fn text_formats_are_left_to_x2t() {
-        for name in ["/d/a.rtf", "/d/a.txt", "/d/a.csv", "/d/a"] {
-            assert!(matches(name, HTML_HEAD), "{name}");
+    fn txt_and_csv_take_any_text() {
+        for name in ["/d/a.txt", "/d/a.CSV"] {
+            assert!(matches(name, b"a,b\n1,2\n"), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_extension_outside_the_list_is_refused() {
+        let contents: [&[u8]; 4] = [b"PK\x03\x04rest", CFB_SIGNATURE, b"just some text\n", b"<?xml version=\"1.0\"?><a/>"];
+        for name in ["/d/a.xml", "/d/a.html", "/d/a.mht", "/d/a.xlam", "/d/a.ppam", "/d/a.pdf", "/d/a"] {
+            assert!(!is_converted_extension(std::path::Path::new(name)), "{name}");
+            for content in contents {
+                assert!(!matches(name, content), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn xltm_potm_and_ppsm_are_converted_like_the_others_of_their_family() {
+        for ext in ["xltm", "potm", "ppsm", "XLTM"] {
+            let name = format!("/d/a.{ext}");
+            assert!(is_converted_extension(std::path::Path::new(&name)), "{ext}");
+            assert!(matches(&name, b"PK\x03\x04rest"), "{ext}");
+            assert!(matches(&name, CFB_SIGNATURE), "{ext}");
+            assert!(!matches(&name, b"just some text\n"), "{ext}");
+        }
+    }
+
+    // One content each listed extension takes, so none falls to the refusal.
+    #[test]
+    fn every_listed_extension_has_a_content_it_takes() {
+        let contents: [&[u8]; 6] = [
+            b"PK\x03\x04rest",
+            CFB_SIGNATURE,
+            b"{\\rtf1\\ansi",
+            b"<?xml version=\"1.0\"?><office:document>",
+            EXCEL_2003_XML_HEAD,
+            b"just some text\n",
+        ];
+        for ext in CONVERTED_EXTENSIONS {
+            let name = format!("/d/a.{ext}");
+            assert!(is_converted_extension(std::path::Path::new(&name)), "{ext}");
+            assert!(contents.iter().any(|content| matches(&name, content)), "{ext}");
+        }
+    }
+
+    #[test]
+    fn an_rtf_must_start_like_one() {
+        let heads: [&[u8]; 4] = [HTML_HEAD, b"just some text\n", b"", b"<!DOCTYPE html><html>"];
+        for head in heads {
+            assert!(!matches("/d/a.rtf", head), "{}", String::from_utf8_lossy(head));
+            assert!(!matches("/d/A.RTF", head), "{}", String::from_utf8_lossy(head));
+        }
+    }
+
+    #[test]
+    fn an_rtf_is_accepted_with_or_without_a_bom_and_blank_space() {
+        let heads: [&[u8]; 4] = [
+            b"{\\rtf1\\ansi\\deff0",
+            b"\xEF\xBB\xBF{\\rtf1\\ansi",
+            b"\xEF\xBB\xBF\r\n {\\rtf1\\ansi",
+            b"\r\n{\\rtf1\\ansi",
+        ];
+        for head in heads {
+            assert!(matches("/d/a.rtf", head), "{}", String::from_utf8_lossy(head));
         }
     }
 
@@ -2266,6 +2643,105 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert!(!matches("/d/a.xls", other_xml));
     }
 
+    const FLAT_OPC: &str = "<?xml version=\"1.0\" standalone=\"yes\"?>\r\n\
+<?mso-application progid=\"Excel.Sheet\"?>\r\n\
+<pkg:package xmlns:pkg=\"http://schemas.microsoft.com/office/2006/xmlPackage\">\
+<pkg:part pkg:name=\"/xl/workbook.xml\"/></pkg:package>";
+
+    #[test]
+    fn a_flat_opc_package_is_refused_under_any_extension() {
+        for name in ["/d/a.xls", "/d/a.xml", "/d/a.fods", "/d/a.txt", "/d/a.rtf"] {
+            assert!(!matches(name, FLAT_OPC.as_bytes()), "{name}");
+        }
+        let word = FLAT_OPC.replace("Excel.Sheet", "Word.Document");
+        assert!(!matches("/d/a.doc", word.as_bytes()));
+        assert_eq!(x2t_flat_ooxml(FLAT_OPC.as_bytes()), Some(FlatOoxml::Package));
+    }
+
+    #[test]
+    fn the_flat_opc_strings_are_found_past_the_first_256_bytes() {
+        let padding = " ".repeat(3000);
+        let rtf = format!("{{\\rtf1\\ansi{padding} {}", FLAT_OPC.replace("Excel.Sheet", "PowerPoint.Show"));
+        assert!(!matches("/d/a.rtf", rtf.as_bytes()));
+        let fodt = format!("<?xml version=\"1.0\"?><office:document>{padding}<!-- {EXCEL_2003_LINE_TEXT} -->");
+        assert!(!matches("/d/a.fodt", fodt.as_bytes()));
+    }
+
+    const EXCEL_2003_LINE_TEXT: &str = "xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\"";
+
+    #[test]
+    fn a_flat_opc_package_is_found_in_utf16_too() {
+        let utf16: Vec<u8> = "\u{FEFF}".chars().chain(FLAT_OPC.chars())
+            .flat_map(|c| (c as u16).to_le_bytes())
+            .collect();
+        assert_eq!(x2t_flat_ooxml(&utf16), Some(FlatOoxml::Package));
+    }
+
+    #[test]
+    fn a_spreadsheet_ml_marker_in_a_comment_of_another_root_is_refused() {
+        let commented = b"<?xml version=\"1.0\"?>\n\
+<!-- <Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\"> progid=\"Excel.Sheet\" -->\n\
+<root><item/></root>";
+        assert!(!matches("/d/a.xls", commented));
+        let instruction_then_other_root = b"<?xml version=\"1.0\"?><?mso-application progid=\"Excel.Sheet\"?><Book/>";
+        assert!(!matches("/d/a.xls", instruction_then_other_root));
+        let commented_then_workbook = b"<?xml version=\"1.0\"?><!-- note --><?mso-application progid=\"Excel.Sheet\"?>\n<Workbook>";
+        assert!(matches("/d/a.xls", commented_then_workbook));
+    }
+
+    #[test]
+    fn a_flat_odf_or_an_rtf_x2t_takes_for_html_is_refused() {
+        let fodt = b"<?xml version=\"1.0\"?><office:document xmlns:h=\"html\"><x/></office:document><!-- </html> -->";
+        let rtf = b"{\\rtf1\\ansi <html><body>Some text</body></html>}";
+        assert!(!matches("/d/a.fodt", fodt));
+        assert!(!matches("/d/a.rtf", rtf));
+        assert!(!matches("/d/a.doc", rtf));
+        assert!(!matches("/d/a.txt", rtf));
+    }
+
+    #[test]
+    fn html_is_only_what_x2t_takes_for_it() {
+        let late_tag = format!("{{\\rtf1\\ansi{}<html></html>}}", " ".repeat(100));
+        assert!(matches("/d/a.rtf", late_tag.as_bytes()), "the tag is past the first 100 bytes");
+        let unclosed = format!("{{\\rtf1 <HTML>{}}}", " ".repeat(5000));
+        assert!(matches("/d/a.rtf", unclosed.as_bytes()), "no closing tag in the last bytes");
+        let closed = format!("{}</Html>", unclosed);
+        assert!(!matches("/d/a.rtf", closed.as_bytes()));
+        let closed_far_back = format!("{{\\rtf1 <HTML></HTML>{}}}", " ".repeat(5000));
+        assert!(matches("/d/a.rtf", closed_far_back.as_bytes()), "the closing tag is before the last 4096 bytes");
+    }
+
+    #[test]
+    fn mht_headers_are_refused() {
+        let headers = "Content-Type: multipart/related; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/html\r\n";
+        let rtf = format!("{{\\rtf1\\ansi {headers}}}");
+        let fodt = format!("<?xml version=\"1.0\"?><office:document><!-- {headers} -->");
+        assert!(!matches("/d/a.rtf", rtf.as_bytes()));
+        assert!(!matches("/d/a.fodt", fodt.as_bytes()));
+        let one_header = format!("{{\\rtf1\\ansi Content-Type: text/html}}");
+        assert!(matches("/d/a.rtf", one_header.as_bytes()));
+    }
+
+    // The root LibreOffice writes: xmlns:xhtml is one of many namespaces, well
+    // past the first 100 bytes x2t looks for an html tag in.
+    const FLAT_ODF_WITH_XHTML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n\
+<office:document xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
+xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" \
+xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" \
+xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+xmlns:xhtml=\"http://www.w3.org/1999/xhtml\" xmlns:grddl=\"http://www.w3.org/2003/g/data-view#\" \
+office:version=\"1.3\" office:mimetype=\"application/vnd.oasis.opendocument.text\">\n\
+<office:body><office:text><text:p xhtml:about=\"#p1\">Text</text:p></office:text></office:body>\n\
+</office:document>\n";
+
+    #[test]
+    fn a_flat_odf_whose_root_declares_xhtml_is_accepted() {
+        assert!(!html_start(FLAT_ODF_WITH_XHTML.as_bytes()));
+        for name in ["/d/a.fodt", "/d/a.fods", "/d/a.fodp"] {
+            assert!(matches(name, FLAT_ODF_WITH_XHTML.as_bytes()), "{name}");
+        }
+    }
+
     #[test]
     fn spreadsheet_ml_markers_without_an_xml_declaration_are_rejected() {
         let html = b"<html><body>urn:schemas-microsoft-com:office:spreadsheet</body></html>";
@@ -2284,21 +2760,63 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert!(!matches("/d/a.xlsb", b"just some text\n"));
     }
 
+    const FLAT_ODF_EXTENSIONS: [&str; 4] = ["fodt", "fods", "fodp", "FODT"];
+    const ROOT_ELEMENT: &str = "<office:document xmlns:office=\"urn:x\" office:version=\"1.3\">";
+
     #[test]
-    fn flat_odf_extensions_need_an_xml_declaration() {
-        let with_bom = b"\xEF\xBB\xBF<?xml version=\"1.0\"?>";
-        let with_space = b" \r\n\t<?xml version=\"1.0\"?>";
-        let with_bom_and_space = b"\xEF\xBB\xBF\n<?xml version=\"1.0\"?>";
-        for ext in ["fodt", "fods", "fodp", "FODT"] {
+    fn flat_odf_extensions_accept_an_office_document_root() {
+        let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+        let accepted = [
+            format!("{declaration}{ROOT_ELEMENT}"),
+            format!("{declaration}\n{ROOT_ELEMENT}"),
+            format!("{declaration}\n\n{ROOT_ELEMENT}"),
+            format!("\u{FEFF}{declaration}\n{ROOT_ELEMENT}"),
+            format!(" \r\n\t{declaration}\r\n{ROOT_ELEMENT}"),
+            format!("{declaration}<office:document/>"),
+            format!("{declaration}<office:document>"),
+        ];
+        for ext in FLAT_ODF_EXTENSIONS {
             let name = format!("/d/a.{ext}");
-            assert!(matches(&name, b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"), "{ext}");
-            assert!(matches(&name, with_bom), "{ext}");
-            assert!(matches(&name, with_space), "{ext}");
-            assert!(matches(&name, with_bom_and_space), "{ext}");
-            assert!(!matches(&name, b"just some text\n"), "{ext}");
-            assert!(!matches(&name, b"PK\x03\x04rest"), "{ext}");
-            assert!(!matches(&name, b"\xEF\xBB\xBF"), "{ext}");
-            assert!(!matches(&name, b""), "{ext}");
+            for head in &accepted {
+                assert!(matches(&name, head.as_bytes()), "{ext}: {head}");
+            }
+        }
+    }
+
+    #[test]
+    fn flat_odf_extensions_refuse_anything_else() {
+        let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+        let refused = [
+            declaration.to_string(),
+            format!("{declaration}\n"),
+            format!("{declaration}<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>"),
+            format!("{declaration}<!-- padding --><office:document>"),
+            format!("{declaration}<!DOCTYPE html><office:document>"),
+            format!("{declaration}<office:document-content>"),
+            format!("{declaration}<other:document>"),
+            "<?xml version=\"1.0\" <office:document>".to_string(),
+            "just some text\n".to_string(),
+            "PK\u{3}\u{4}rest".to_string(),
+            "\u{FEFF}".to_string(),
+            String::new(),
+        ];
+        for ext in FLAT_ODF_EXTENSIONS {
+            let name = format!("/d/a.{ext}");
+            for head in &refused {
+                assert!(!matches(&name, head.as_bytes()), "{ext}: {head}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_flat_odf_documents_of_the_corpus_are_accepted() {
+        let documents: [(&str, &[u8]); 3] = [
+            ("/d/a.fodt", include_bytes!("../../tests/corpus/src/basic.fodt")),
+            ("/d/a.fods", include_bytes!("../../tests/corpus/src/basic.fods")),
+            ("/d/a.fodp", include_bytes!("../../tests/corpus/src/basic.fodp")),
+        ];
+        for (name, bytes) in documents {
+            assert!(matches(name, bytes), "{name}");
         }
     }
 
@@ -2347,6 +2865,18 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         for (ext, code) in cases {
             let path = std::path::PathBuf::from(format!("/tmp/a.{}", ext));
             assert_eq!(detect_format(&path), code, "{}", ext);
+        }
+    }
+
+    // AVS_OFFICESTUDIO_FILE_SPREADSHEET_XLTM, _PRESENTATION_POTM and
+    // _PRESENTATION_PPSM (core/Common/OfficeFileFormats.h at v10.0.0.169).
+    #[test]
+    fn detect_format_knows_the_macro_templates_and_shows_opened_another_way() {
+        let cases = [("xltm", 263), ("potm", 136), ("ppsm", 134)];
+        for (ext, code) in cases {
+            for name in [format!("/tmp/a.{}", ext), format!("/tmp/A.{}", ext.to_uppercase())] {
+                assert_eq!(detect_format(std::path::Path::new(&name)), code, "{}", name);
+            }
         }
     }
 

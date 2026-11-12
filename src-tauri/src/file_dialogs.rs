@@ -411,6 +411,23 @@ mod tests {
     }
 
     #[test]
+    fn every_document_the_dialogs_offer_is_converted_and_nothing_else() {
+        use crate::x2t_task::CONVERTED_EXTENSIONS;
+        let mut offered: Vec<&str> = OPEN_EXTENSIONS.into_iter().filter(|ext| *ext != "pdf").collect();
+        for kind in ["word", "cell", "csv/txt"] {
+            offered.extend(pick_kind(kind).extensions);
+        }
+        for ext in &offered {
+            assert!(CONVERTED_EXTENSIONS.contains(ext), "{}", ext);
+        }
+        // Converted when opened another way, as before the list was closed.
+        let not_offered = ["xltm", "potm", "ppsm"];
+        for ext in CONVERTED_EXTENSIONS {
+            assert!(offered.contains(&ext) || not_offered.contains(&ext), "{}", ext);
+        }
+    }
+
+    #[test]
     fn only_the_formats_save_as_writes_are_saved_in_place() {
         for name in ["a.docx", "a.DOCX", "a.xlsx", "a.pptx", "a.odt", "a.csv", "a.pdf"] {
             assert!(saves_in_place(Path::new(name)), "{}", name);

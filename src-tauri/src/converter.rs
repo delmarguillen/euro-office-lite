@@ -4,6 +4,8 @@ use tauri_plugin_shell::ShellExt;
 
 use crate::x2t_task::{self, convert_params_xml, params_path, write_file, FONT_CACHE_ERROR};
 
+// A conversion to Editor.bin (8192) takes the path of an EditorInput: the copy
+// prepare_editor_input checked.
 pub async fn convert_file(
     app: &AppHandle,
     input: &str,
@@ -16,10 +18,6 @@ pub async fn convert_file(
     fontdata_dir: &std::path::Path,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<String, String> {
-    if format_to == 8192 {
-        check_container_content(input)?;
-    }
-
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let binaries_dir = resource_dir.join("binaries");
 
@@ -197,28 +195,158 @@ fn ensure_pdf_font_cache(
     }
 }
 
-// Opening and inserting convert the user's file to Editor.bin (8192); this runs
-// before x2t is launched for them.
-fn check_container_content(input: &str) -> Result<(), String> {
-    let path = std::path::Path::new(input);
-    let head = read_head(path).map_err(|e| e.to_string())?;
-    if x2t_task::content_matches_extension(path, &head) {
-        return Ok(());
-    }
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
-    Err(format!("This file is not a valid .{}", ext.to_lowercase()))
+// What x2t converts to Editor.bin when a document is opened or inserted: a copy
+// in the instance's folder, made from one read of the user's file. The checks
+// read that copy, and x2t reads the same bytes. Every copy is removed when this
+// is dropped, whether the conversion worked or not.
+pub struct EditorInput {
+    copies: Vec<std::path::PathBuf>,
+    // The options x2t reads a TXT or CSV copy with.
+    pub options: Option<crate::text_import::TextOptions>,
 }
 
-// Enough for the 8-byte CFB signature, for a flat ODF's "<?xml" after a BOM
-// and some leading whitespace, and for the progid and namespace Excel 2003
-// writes in the first 127 bytes of an XML Spreadsheet.
-const HEAD_LEN: u64 = 256;
+impl EditorInput {
+    // The last copy made: an ODF package's references are emptied in a copy of
+    // the first one.
+    pub fn path(&self) -> &std::path::Path {
+        self.copies.last().expect("an EditorInput holds at least one copy")
+    }
+}
 
-fn read_head(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
-    use std::io::Read;
-    let mut head = Vec::new();
-    std::fs::File::open(path)?.take(HEAD_LEN).read_to_end(&mut head)?;
-    Ok(head)
+impl Drop for EditorInput {
+    fn drop(&mut self) {
+        for copy in &self.copies {
+            let _ = std::fs::remove_file(copy);
+        }
+    }
+}
+
+// The TXT and CSV copy (text_import::prepare_read_copy) is already one; every
+// other document gets a copy of its own.
+pub fn prepare_editor_input(
+    source: &std::path::Path,
+    work_dir: &std::path::Path,
+    text_kind: Option<crate::text_import::TextKind>,
+    text_options: Option<crate::text_import::TextOptions>,
+) -> Result<EditorInput, String> {
+    // Nothing is copied under an extension the app does not convert.
+    if !x2t_task::is_converted_extension(source) {
+        return Err(not_valid_error(source));
+    }
+    let mut input = read_copy(source, work_dir, text_kind, text_options)?;
+    let copy = input.path().to_path_buf();
+    let content = x2t_task::ContentSample::read(&copy).map_err(|e| e.to_string())?;
+    if check_container_content(&copy, &content)? == PackageFilters::Skipped {
+        return Ok(input);
+    }
+    if let Some(package_copy) = package_images_copy(&copy, &content, work_dir)? {
+        input.copies.push(package_copy);
+    }
+    Ok(input)
+}
+
+fn read_copy(
+    source: &std::path::Path,
+    work_dir: &std::path::Path,
+    text_kind: Option<crate::text_import::TextKind>,
+    text_options: Option<crate::text_import::TextOptions>,
+) -> Result<EditorInput, String> {
+    let text_copy = crate::text_import::prepare_read_copy(source, work_dir, text_kind, text_options)
+        .map_err(|e| format!("read copy: {}", e))?;
+    if let Some(copy) = text_copy {
+        return Ok(EditorInput { copies: vec![copy.path], options: Some(copy.options) });
+    }
+    let copy = crate::text_import::document_read_copy(source, work_dir)
+        .map_err(|e| format!("read copy: {}", e))?;
+    Ok(EditorInput { copies: vec![copy], options: None })
+}
+
+// The copy x2t reads an ODF package from when one of its picture references has
+// been emptied, or None to read the one it was given.
+fn package_images_copy(
+    path: &std::path::Path,
+    content: &x2t_task::ContentSample,
+    temp_dir: &std::path::Path,
+) -> Result<Option<std::path::PathBuf>, String> {
+    use crate::odf_links::PackageImages;
+    match crate::odf_links::prepare(path, content, temp_dir) {
+        PackageImages::Unchanged => Ok(None),
+        PackageImages::Copy(copy) => Ok(Some(copy)),
+        PackageImages::NotAllowed => Err(not_valid_error(path)),
+    }
+}
+
+// What open_file and convert_for_insert reject an OOXML document with a
+// password with, before x2t. The bridge shows the same dialog for every failed
+// open (_eoShowOpenError) and only logs a failed insert.
+const PASSWORD_ERROR: &str = "This file has a password";
+
+fn not_valid_error(path: &std::path::Path) -> String {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
+    format!("This file is not a valid .{}", ext.to_lowercase())
+}
+
+// Whether the package checks (package_relationships, odf_links) apply to a
+// file the content check accepts.
+#[derive(Debug, PartialEq)]
+enum PackageFilters {
+    Applied,
+    // A Word, Excel or PowerPoint 97-2003 document: x2t converts it as one and
+    // never opens it as a package, whatever documents its streams hold.
+    Skipped,
+}
+
+// Opening and inserting convert the user's file to Editor.bin (8192); this runs
+// on the copy x2t reads, before x2t is launched for them.
+fn check_container_content(
+    path: &std::path::Path,
+    content: &x2t_task::ContentSample,
+) -> Result<PackageFilters, String> {
+    if !x2t_task::content_matches_extension(path, content) {
+        return Err(not_valid_error(path));
+    }
+    if check_cfb_directory(path)?.is_some() {
+        return Ok(PackageFilters::Skipped);
+    }
+    if opens_if_it_starts_like_a_zip(path, &content.head)
+        && crate::package_relationships::relationships_are_allowed(path, content)
+    {
+        return Ok(PackageFilters::Applied);
+    }
+    Err(not_valid_error(path))
+}
+
+// A CFB whose directory cannot be read whole is not valid, whatever its
+// extension. An OOXML document with a password, a CFB with EncryptionInfo and
+// EncryptedPackage at its root, gets the password error: x2t opens one without
+// being given a password when it has Excel's default one
+// (OfficeCryptReader/source/ECMACryptFile.cpp:973), and then converts the
+// package inside whatever the extension (X2tConverter/src/lib/crypt.h:57-133);
+// with any other password it fails with exit 90. Refusing it here treats it the
+// same whichever password it has. Any other readable CFB gives the binary
+// format x2t takes it for, if any.
+fn check_cfb_directory(
+    path: &std::path::Path,
+) -> Result<Option<crate::cfb_directory::BinaryFormat>, String> {
+    use crate::cfb_directory::CfbDirectory;
+    match crate::cfb_directory::read(path) {
+        CfbDirectory::NotCfb => Ok(None),
+        CfbDirectory::Readable { holds_encrypted_package: true, .. } => Err(PASSWORD_ERROR.to_string()),
+        CfbDirectory::Readable { holds_encrypted_package: false, binary_format } => Ok(binary_format),
+        CfbDirectory::Unreadable => Err(not_valid_error(path)),
+    }
+}
+
+// x2t picks the format of a file that starts like a ZIP but does not open as
+// one from the rest of its bytes.
+fn opens_if_it_starts_like_a_zip(path: &std::path::Path, head: &[u8]) -> bool {
+    if !head.starts_with(b"PK\x03\x04") {
+        return true;
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    zip::ZipArchive::new(file).is_ok()
 }
 
 #[cfg(test)]
@@ -245,7 +373,48 @@ mod tests {
     fn content_check(name: &str, content: &[u8]) -> Result<(), String> {
         let path = scratch_root().join(name);
         std::fs::write(&path, content).unwrap();
-        check_container_content(path.to_str().unwrap())
+        check_container_content(&path, &x2t_task::ContentSample::read(&path).unwrap()).map(|_| ())
+    }
+
+    fn zip_with(name: &str, content: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(content).unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn a_file_that_starts_like_a_zip_but_does_not_open_as_one_is_refused() {
+        let mut broken = b"PK\x03\x04".to_vec();
+        broken.extend_from_slice(&[0u8; 60]);
+        broken.extend_from_slice(b"<html><body>text</body></html>");
+        for name in ["broken.docx", "broken.odt", "broken.xlsb", "broken.doc"] {
+            assert!(content_check(name, &broken).is_err(), "{name}");
+        }
+        assert_eq!(content_check("whole.docx", &zip_with("word/document.xml", b"<w:document/>")), Ok(()));
+    }
+
+    #[test]
+    fn an_rtf_or_a_flat_odf_followed_by_a_zip_is_refused() {
+        let package = zip_with("[Content_Types].xml", b"<Types/>");
+        let starts: [(&str, &[u8]); 2] = [
+            ("joined.rtf", b"{\\rtf1\\ansi Some text\\par}\n"),
+            ("joined.fodt", b"<?xml version=\"1.0\"?><office:document office:version=\"1.3\"></office:document>\n"),
+        ];
+        for (name, start) in starts {
+            assert_eq!(content_check(name, start), Ok(()), "{name}");
+            let mut joined = start.to_vec();
+            joined.extend_from_slice(&package);
+            assert!(content_check(name, &joined).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_word_97_doc_holding_a_zip_is_accepted() {
+        let mut doc = include_bytes!("../../tests/fixtures/word97.doc").to_vec();
+        doc.extend_from_slice(&zip_with("embedded.xml", b"<a/>"));
+        assert_eq!(content_check("embedded.doc", &doc), Ok(()));
     }
 
     #[test]
@@ -270,9 +439,357 @@ mod tests {
     }
 
     #[test]
+    fn a_package_with_a_local_image_link_is_refused_before_x2t() {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        writer.start_file("word/_rels/document.xml.rels", options).unwrap();
+        writer
+            .write_all(
+                b"<Relationships><Relationship Id=\"r\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"/a/b.png\" TargetMode=\"External\"/></Relationships>",
+            )
+            .unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        assert_eq!(
+            content_check("linked.docx", &bytes),
+            Err("This file is not a valid .docx".to_string())
+        );
+    }
+
+    const ENCRYPTED_DOCX: &[u8] = include_bytes!("../../tests/fixtures/encrypted-test.docx");
+
+    // Every extension that takes a CFB, as x2t converts what it decrypts
+    // whatever the extension.
+    const CFB_EXTENSIONS: [&str; 17] = [
+        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx",
+        "potm", "ppsx", "ppsm", "doc", "xls", "ppt",
+    ];
+
+    #[test]
+    fn a_document_with_a_password_gets_the_password_error_under_every_cfb_extension() {
+        for ext in CFB_EXTENSIONS {
+            let name = format!("protected.{ext}");
+            assert_eq!(content_check(&name, ENCRYPTED_DOCX), Err(PASSWORD_ERROR.to_string()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_document_with_a_password_gets_the_password_error_whatever_the_case_of_its_extension() {
+        for name in ["protected.XLSX", "protected.Pptx", "protected.DOCX", "protected.XLS"] {
+            assert_eq!(content_check(name, ENCRYPTED_DOCX), Err(PASSWORD_ERROR.to_string()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_document_with_a_password_is_refused_before_x2t_and_leaves_no_copy() {
+        for name in ["protected.xlsx", "protected.pptx", "protected.docx"] {
+            let (original, work_dir) = original_and_work_dir(name, ENCRYPTED_DOCX);
+
+            let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+            assert_eq!(refused.err(), Some(PASSWORD_ERROR.to_string()), "{name}");
+            assert_eq!(files_in(&work_dir), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_document_with_a_password_under_an_odf_extension_stays_not_valid() {
+        assert_eq!(
+            content_check("protected.odt", ENCRYPTED_DOCX),
+            Err("This file is not a valid .odt".to_string())
+        );
+    }
+
+    #[test]
+    fn a_cfb_with_only_one_of_the_two_streams_is_left_to_x2t() {
+        use crate::cfb_directory::test_cfb::with_root_streams;
+        for streams in [["EncryptionInfo", "Other"], ["EncryptedPackage", "Other"]] {
+            for name in ["one.xlsx", "one.doc"] {
+                assert_eq!(content_check(name, &with_root_streams(&streams)), Ok(()), "{name} {streams:?}");
+            }
+        }
+    }
+
+    fn assert_not_valid_before_x2t(content: &[u8]) {
+        for ext in ["xlsx", "doc"] {
+            let name = format!("unreadable.{ext}");
+            let (original, work_dir) = original_and_work_dir(&name, content);
+
+            let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+            assert_eq!(refused.err(), Some(format!("This file is not a valid .{ext}")), "{name}");
+            assert_eq!(files_in(&work_dir), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cfb_with_only_its_header_is_not_valid() {
+        assert_not_valid_before_x2t(&crate::cfb_directory::test_cfb::header_only());
+    }
+
+    #[test]
+    fn a_cfb_whose_index_has_more_entries_than_the_limit_is_not_valid() {
+        use crate::cfb_directory::test_cfb::directory_of_sectors;
+        assert_not_valid_before_x2t(&directory_of_sectors((1 << 16) / 32 + 1));
+    }
+
+    #[test]
+    fn a_cfb_whose_index_needs_more_difat_sectors_than_the_limit_is_not_valid() {
+        use crate::cfb_directory::test_cfb::directory_behind_difat_sector;
+        assert_not_valid_before_x2t(&directory_behind_difat_sector(1024));
+    }
+
+    #[test]
+    fn a_cfb_whose_index_starts_past_the_end_of_the_file_is_not_valid() {
+        assert_not_valid_before_x2t(&crate::cfb_directory::test_cfb::directory_past_the_end());
+    }
+
+    #[test]
+    fn a_cfb_whose_index_cannot_be_read_whole_is_not_valid_under_every_cfb_extension() {
+        let header_only = crate::cfb_directory::test_cfb::header_only();
+        for ext in CFB_EXTENSIONS {
+            let name = format!("unreadable.{ext}");
+            assert_eq!(content_check(&name, &header_only), Err(not_valid_error(std::path::Path::new(&name))), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_word_97_doc_without_those_streams_passes_under_its_cfb_extensions() {
+        let doc = include_bytes!("../../tests/fixtures/word97.doc");
+        for name in ["word97.doc", "word97.xls", "word97.ppt", "WORD97.DOC"] {
+            assert_eq!(content_check(name, doc), Ok(()), "{name}");
+        }
+    }
+
+    #[test]
     fn a_real_word_97_doc_passes_the_content_check() {
         let doc = include_bytes!("../../tests/fixtures/word97.doc");
         assert_eq!(content_check("word97.doc", doc), Ok(()));
+    }
+
+    // A package with a picture linked from a local path: the relationship
+    // check refuses it.
+    fn package_with_a_local_link() -> Vec<u8> {
+        zip_with(
+            "word/_rels/document.xml.rels",
+            b"<Relationships><Relationship Id=\"r\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"/a/b.png\" TargetMode=\"External\"/></Relationships>",
+        )
+    }
+
+    // A stream of 4096 bytes or more that ends with the package, so the
+    // package is the last thing in the file.
+    fn stream_ending_with(package: &[u8]) -> Vec<u8> {
+        let len = package.len().div_ceil(512).max(8) * 512;
+        let mut stream = vec![0u8; len - package.len()];
+        stream.extend_from_slice(package);
+        stream
+    }
+
+    const BINARY_STREAMS: [(&str, &str); 3] =
+        [("book.xls", "Workbook"), ("slides.ppt", "PowerPoint Document"), ("letter.doc", "WordDocument")];
+
+    fn cfb_holding(binary_stream: &str, package: &[u8]) -> Vec<u8> {
+        use crate::cfb_directory::test_cfb::with_root_stream_contents;
+        let binary = vec![1u8; 4096];
+        with_root_stream_contents(&[(binary_stream, &binary), ("Embedded", &stream_ending_with(package))])
+    }
+
+    // empty.xls from Apache POI's test-data: Excel keeps its theme as a
+    // package in a stream.
+    #[test]
+    fn a_real_excel_97_2003_workbook_with_its_theme_in_a_stream_opens() {
+        let xls = include_bytes!("../../tests/fixtures/poi-empty.xls");
+        assert_eq!(content_check("empty.xls", xls), Ok(()));
+    }
+
+    #[test]
+    fn a_97_2003_document_holding_a_package_in_a_stream_opens() {
+        for (name, binary_stream) in BINARY_STREAMS {
+            let cfb = cfb_holding(binary_stream, &package_with_a_local_link());
+            assert_eq!(content_check(name, &cfb), Ok(()), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cfb_without_a_97_2003_stream_holding_that_package_is_refused() {
+        for (name, _) in BINARY_STREAMS {
+            let cfb = cfb_holding("Other", &package_with_a_local_link());
+            assert_eq!(content_check(name, &cfb), Err(not_valid_error(std::path::Path::new(name))), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cfb_without_a_97_2003_stream_followed_by_that_package_is_refused() {
+        use crate::cfb_directory::test_cfb::with_root_streams;
+        let mut joined = with_root_streams(&["Other"]);
+        joined.extend_from_slice(&package_with_a_local_link());
+        for name in ["joined.doc", "joined.xls", "joined.ppt", "joined.docx"] {
+            assert_eq!(content_check(name, &joined), Err(not_valid_error(std::path::Path::new(name))), "{name}");
+        }
+    }
+
+    // x2t takes a CFB with an Ole and a LinkInfo stream, and no CompObj, for a
+    // linked object, whatever other streams it has.
+    #[test]
+    fn a_linked_object_with_a_word_stream_holding_that_package_is_refused() {
+        use crate::cfb_directory::test_cfb::with_root_stream_contents;
+        let binary = vec![1u8; 4096];
+        let cfb = with_root_stream_contents(&[
+            ("WordDocument", &binary),
+            ("\u{1}Ole", &binary),
+            ("LinkInfo", &binary),
+            ("Embedded", &stream_ending_with(&package_with_a_local_link())),
+        ]);
+        assert_eq!(content_check("letter.doc", &cfb), Err("This file is not a valid .doc".to_string()));
+    }
+
+    #[test]
+    fn a_97_2003_document_holding_an_odf_package_is_converted_as_it_is() {
+        let odt = {
+            use std::io::Write;
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("mimetype", options).unwrap();
+            writer.write_all(b"application/vnd.oasis.opendocument.text").unwrap();
+            writer.start_file("content.xml", options).unwrap();
+            writer
+                .write_all(b"<office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" xmlns:xlink=\"http://www.w3.org/1999/xlink\"><draw:image xlink:href=\"../near.png\"/></office:document-content>")
+                .unwrap();
+            writer.finish().unwrap().into_inner()
+        };
+        let cfb = cfb_holding("WordDocument", &odt);
+        let (original, work_dir) = original_and_work_dir("letter.doc", &cfb);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_eq!(std::fs::read(input.path()).unwrap(), cfb);
+        assert_eq!(files_in(&work_dir), 1, "no package copy");
+    }
+
+    // The original in one folder, the instance's work folder next to it.
+    fn original_and_work_dir(name: &str, content: &[u8]) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = scratch_root();
+        let original = root.join(name);
+        std::fs::write(&original, content).unwrap();
+        let work_dir = root.join("work");
+        std::fs::create_dir_all(&work_dir).unwrap();
+        (original, work_dir)
+    }
+
+    fn files_in(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(dir).unwrap().count()
+    }
+
+    const DOCX: &[u8] = include_bytes!("../../tests/corpus/rich.docx");
+
+    #[test]
+    fn the_conversion_reads_a_copy_in_the_work_folder_not_the_original() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_ne!(input.path(), original.as_path());
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        assert_eq!(std::fs::read(input.path()).unwrap(), DOCX);
+        assert_eq!(input.options, None);
+    }
+
+    #[test]
+    fn the_copy_is_removed_when_the_conversion_ends_whatever_its_outcome() {
+        for outcome in [Ok(()), Err("x2t conversion failed (exit code 89)")] {
+            let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+            let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+            let copy = input.path().to_path_buf();
+
+            assert!(copy.exists());
+            // What open_file and convert_for_insert do once x2t returns.
+            let converted: Result<(), &str> = outcome;
+            drop(input);
+
+            assert!(!copy.exists(), "{:?}", converted);
+            assert_eq!(files_in(&work_dir), 0, "{:?}", converted);
+            assert_eq!(std::fs::read(&original).unwrap(), DOCX, "the original stays");
+        }
+    }
+
+    #[test]
+    fn no_copy_stays_when_the_copy_is_refused() {
+        let (original, work_dir) = original_and_work_dir("fake.doc", b"Hello, plain text.\n");
+
+        let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+        assert_eq!(refused.err(), Some("This file is not a valid .doc".to_string()));
+        assert_eq!(files_in(&work_dir), 0);
+    }
+
+    #[test]
+    fn an_rtf_or_a_doc_after_blank_space_or_a_bom_is_converted_from_its_first_brace() {
+        let rtf = b"{\\rtf1\\ansi Some text\\par}";
+        for prefix in [&b"  \r\n"[..], b"\xEF\xBB\xBF", b"\xEF\xBB\xBF\t "] {
+            for name in ["a.rtf", "a.doc"] {
+                let mut content = prefix.to_vec();
+                content.extend_from_slice(rtf);
+                let (original, work_dir) = original_and_work_dir(name, &content);
+
+                let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+                assert_eq!(std::fs::read(input.path()).unwrap(), rtf, "{name} {prefix:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_extension_outside_the_list_is_refused_before_any_copy() {
+        for name in ["data.xml", "page.html", "Book.xlam", "noextension"] {
+            let (original, work_dir) = original_and_work_dir(name, DOCX);
+
+            let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+            assert!(refused.is_err(), "{name}");
+            assert_eq!(files_in(&work_dir), 0, "{name}");
+        }
+        let (original, work_dir) = original_and_work_dir("data.xml", b"<?xml version=\"1.0\"?><a/>");
+        let refused = prepare_editor_input(&original, &work_dir, None, None);
+        assert_eq!(refused.err(), Some("This file is not a valid .xml".to_string()));
+    }
+
+    #[test]
+    fn a_word_97_doc_is_converted_from_a_copy_as_it_is() {
+        let doc = include_bytes!("../../tests/fixtures/word97.doc");
+        let (original, work_dir) = original_and_work_dir("word97.doc", doc);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_eq!(std::fs::read(input.path()).unwrap(), doc);
+    }
+
+    #[test]
+    fn a_flat_odf_is_converted_from_a_copy_with_its_local_references_emptied() {
+        let image = |href: &str| {
+            format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document xmlns:office=\"o\" xmlns:draw=\"d\" xmlns:xlink=\"x\"><draw:image xlink:href=\"{href}\"/></office:document>")
+        };
+        let (original, work_dir) = original_and_work_dir("linked.fodt", image("Pictures/a.png").as_bytes());
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        assert_eq!(std::fs::read_to_string(input.path()).unwrap(), image(""));
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), image("Pictures/a.png"), "the original stays");
+        drop(input);
+        assert_eq!(files_in(&work_dir), 0);
+    }
+
+    #[test]
+    fn a_txt_is_read_from_its_utf32_copy_only() {
+        use crate::text_import::{detect_file, TextKind, ENCODING_UTF32_LE};
+        let (original, work_dir) = original_and_work_dir("notes.txt", b"line one\nline two\n");
+        let options = detect_file(&original, TextKind::Txt).unwrap();
+
+        let input = prepare_editor_input(&original, &work_dir, Some(TextKind::Txt), Some(options)).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        assert_eq!(input.options.map(|o| o.encoding), Some(ENCODING_UTF32_LE));
+        assert_eq!(files_in(&work_dir), 1, "no second copy");
     }
 
     // A temp root whose font cache is missing, next to an app folder whose

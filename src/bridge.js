@@ -1165,8 +1165,8 @@ window._eoOpeningFileText = _eoOpeningFileText;
 // the reopen-after-reload path and the recent files list all agree.
 function _eoDocTypeForPath(path) {
   var ext = String(path || '').split('.').pop().toLowerCase();
-  var cell = ['xlsx', 'xls', 'xlsm', 'xltx', 'xlsb', 'ods', 'ots', 'fods', 'csv'];
-  var slide = ['pptx', 'ppt', 'pptm', 'ppsx', 'potx', 'odp', 'otp', 'fodp'];
+  var cell = ['xlsx', 'xls', 'xlsm', 'xltx', 'xltm', 'xlsb', 'ods', 'ots', 'fods', 'csv'];
+  var slide = ['pptx', 'ppt', 'pptm', 'ppsx', 'ppsm', 'potx', 'potm', 'odp', 'otp', 'fodp'];
   if (cell.indexOf(ext) !== -1) return 'cell';
   if (slide.indexOf(ext) !== -1) return 'slide';
   if (ext === 'pdf') return 'pdf';
