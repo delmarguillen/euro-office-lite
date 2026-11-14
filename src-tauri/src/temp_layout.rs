@@ -551,6 +551,79 @@ fn canonical_or_given(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+// Under Flatpak, a file outside the sandbox's filesystem permissions arrives
+// through the document portal as <portal>/<doc-id>/<name>. The same file
+// handed over twice can get two doc-ids, and each doc-id gives it its own
+// inode number. xdg-desktop-portal 1.19.0 and later serve the file's host path
+// in this extended attribute; 1.19.0 to 1.19.2 end it with a NUL.
+#[cfg(target_os = "linux")]
+const PORTAL_HOST_PATH: &std::ffi::CStr = c"user.document-portal.host-path";
+
+// Where the document portal is mounted in this sandbox. None outside Flatpak.
+#[cfg(target_os = "linux")]
+fn document_portal() -> Option<PathBuf> {
+    if !Path::new("/.flatpak-info").exists() {
+        return None;
+    }
+    // Flatpak mounts the portal at /run/flatpak/doc and links this path to
+    // it. Resolved, it is the prefix of the canonical paths of its files.
+    let uid = unsafe { libc::getuid() };
+    let link = PathBuf::from(format!("/run/user/{uid}/doc"));
+    link.canonicalize().ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn document_portal() -> Option<PathBuf> {
+    None
+}
+
+// The host path the portal serves for one of its files. None when it serves
+// none: a portal older than 1.19.0, or an error.
+#[cfg(target_os = "linux")]
+fn portal_host_path(file: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let file = std::ffi::CString::new(file.as_os_str().as_bytes()).ok()?;
+    let mut value = vec![0u8; libc::PATH_MAX as usize];
+    let read = unsafe {
+        libc::getxattr(
+            file.as_ptr(),
+            PORTAL_HOST_PATH.as_ptr(),
+            value.as_mut_ptr().cast(),
+            value.len(),
+        )
+    };
+    if read <= 0 {
+        return None;
+    }
+    value.truncate(read as usize);
+    if value.last() == Some(&0) {
+        value.pop();
+    }
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(std::ffi::OsString::from_vec(value)))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn portal_host_path(_file: &Path) -> Option<PathBuf> {
+    None
+}
+
+// What two paths are compared by to tell whether they name one file: the
+// canonical path, or for a file inside `portal` the host path the portal
+// serves for it, when it serves one. None when the path does not resolve.
+fn file_identity(path: &Path, portal: Option<&Path>) -> Option<PathBuf> {
+    let canonical = path.canonicalize().ok()?;
+    let Some(portal) = portal else {
+        return Some(canonical);
+    };
+    if !canonical.starts_with(portal) {
+        return Some(canonical);
+    }
+    Some(portal_host_path(&canonical).unwrap_or(canonical))
+}
+
 // Written whole and renamed into place, so a reader never sees half a path.
 pub fn publish_open_document(dir: &Path, document: Option<&Path>) -> std::io::Result<()> {
     let target = dir.join(OPEN_DOCUMENT);
@@ -570,21 +643,30 @@ pub fn publish_open_document(dir: &Path, document: Option<&Path>) -> std::io::Re
     write_replacing(&target, text.as_bytes(), "write")
 }
 
-// The file another instance has published, resolved again now. None when
-// there is nothing readable or the file no longer exists.
-fn published_document(instance: &Path) -> Option<PathBuf> {
+// The identity of the file another instance has published, taken again now.
+// None when there is nothing readable or the file no longer exists.
+fn published_document(instance: &Path, portal: Option<&Path>) -> Option<PathBuf> {
     let text = std::fs::read_to_string(instance.join(OPEN_DOCUMENT)).ok()?;
     if text.is_empty() {
         return None;
     }
-    PathBuf::from(text).canonicalize().ok()
+    file_identity(Path::new(&text), portal)
 }
 
 // Whether a live instance other than `own_id` has `document` open. Any doubt
 // (an unreadable folder, a file that cannot be resolved) answers no: this
 // check must never stop a file from opening because of an error.
 pub fn open_in_another_instance(root: &Path, own_id: &str, document: &Path) -> bool {
-    let Ok(wanted) = document.canonicalize() else {
+    open_in_another_instance_with_portal(root, own_id, document, document_portal().as_deref())
+}
+
+fn open_in_another_instance_with_portal(
+    root: &Path,
+    own_id: &str,
+    document: &Path,
+    portal: Option<&Path>,
+) -> bool {
+    let Some(wanted) = file_identity(document, portal) else {
         return false;
     };
     let Ok(entries) = std::fs::read_dir(root.join(INSTANCES_DIR)) else {
@@ -598,7 +680,7 @@ pub fn open_in_another_instance(root: &Path, own_id: &str, document: &Path) -> b
         if !is_locked(&instance.join(INSTANCE_LOCK)) {
             continue;
         }
-        if published_document(&instance).as_deref() == Some(wanted.as_path()) {
+        if published_document(&instance, portal).as_deref() == Some(wanted.as_path()) {
             return true;
         }
     }

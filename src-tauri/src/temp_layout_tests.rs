@@ -1600,6 +1600,169 @@ fn publishing_replaces_the_previous_file() {
     assert!(open_in_another_instance(&root, &own.id, &second));
 }
 
+// A stand-in for the document portal: <portal>/<doc-id>/<name>, with the host
+// path in the extended attribute the portal serves it in.
+#[cfg(target_os = "linux")]
+fn portal_document(portal: &Path, doc_id: &str, host_path: Option<&[u8]>) -> PathBuf {
+    let dir = portal.join(doc_id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = document_in(&dir, "a.docx");
+    if let Some(value) = host_path {
+        set_portal_host_path(&file, value);
+    }
+    file
+}
+
+#[cfg(target_os = "linux")]
+fn set_portal_host_path(file: &Path, value: &[u8]) {
+    use std::os::unix::ffi::OsStrExt;
+    let file = std::ffi::CString::new(file.as_os_str().as_bytes()).unwrap();
+    let set = unsafe {
+        libc::setxattr(
+            file.as_ptr(),
+            PORTAL_HOST_PATH.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+        )
+    };
+    assert_eq!(set, 0, "setxattr: {}", std::io::Error::last_os_error());
+}
+
+#[cfg(target_os = "linux")]
+fn scratch_portal(root: &Path) -> PathBuf {
+    let portal = root.join("doc");
+    std::fs::create_dir_all(&portal).unwrap();
+    portal.canonicalize().unwrap()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn two_doc_ids_of_one_host_file_have_one_identity() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let first = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx"));
+    let second = portal_document(&portal, "5e6f7a8b", Some(b"/srv/data/a.docx"));
+
+    let host = Some(PathBuf::from("/srv/data/a.docx"));
+    assert_eq!(file_identity(&first, Some(&portal)), host);
+    assert_eq!(file_identity(&second, Some(&portal)), host);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_host_path_ending_in_nul_is_the_same_path() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let file = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx\0"));
+
+    assert_eq!(file_identity(&file, Some(&portal)), Some(PathBuf::from("/srv/data/a.docx")));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn two_host_files_have_two_identities() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let first = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx"));
+    let second = portal_document(&portal, "5e6f7a8b", Some(b"/srv/data/b.docx"));
+
+    assert_ne!(file_identity(&first, Some(&portal)), file_identity(&second, Some(&portal)));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_portal_file_without_a_host_path_is_its_canonical_path() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let file = portal_document(&portal, "1a2b3c4d", None);
+
+    assert_eq!(file_identity(&file, Some(&portal)), Some(file.canonicalize().unwrap()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_host_path_attribute_counts_only_inside_the_portal() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let outside = document_in(&root, "b.docx");
+    set_portal_host_path(&outside, b"/srv/data/b.docx");
+    let inside = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx"));
+
+    assert_eq!(file_identity(&outside, Some(&portal)), Some(outside.canonicalize().unwrap()));
+    // Outside Flatpak there is no portal.
+    assert_eq!(file_identity(&inside, None), Some(inside.canonicalize().unwrap()));
+}
+
+#[test]
+fn a_file_that_does_not_exist_has_no_identity() {
+    let root = scratch_root();
+    assert_eq!(file_identity(&root.join("gone.docx"), Some(&root)), None);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn another_doc_id_of_the_same_host_file_is_open() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let theirs = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx"));
+    let mine = portal_document(&portal, "5e6f7a8b", Some(b"/srv/data/a.docx"));
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&theirs)).unwrap();
+
+    assert!(open_in_another_instance_with_portal(&root, &own.id, &mine, Some(&portal)));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn another_doc_id_of_another_host_file_is_not_open() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let theirs = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx"));
+    let mine = portal_document(&portal, "5e6f7a8b", Some(b"/srv/data/b.docx"));
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&theirs)).unwrap();
+
+    assert!(!open_in_another_instance_with_portal(&root, &own.id, &mine, Some(&portal)));
+}
+
+// A portal older than 1.19.0 serves no host path: two doc-ids stay two files,
+// one doc-id stays one, as before.
+#[cfg(target_os = "linux")]
+#[test]
+fn without_host_paths_only_the_same_doc_id_is_open() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let theirs = portal_document(&portal, "1a2b3c4d", None);
+    let mine = portal_document(&portal, "5e6f7a8b", None);
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&theirs)).unwrap();
+
+    assert!(!open_in_another_instance_with_portal(&root, &own.id, &mine, Some(&portal)));
+    assert!(open_in_another_instance_with_portal(&root, &own.id, &theirs, Some(&portal)));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn files_outside_the_portal_compare_as_before() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let file = document_in(&root, "a.docx");
+    let different = document_in(&root, "b.docx");
+    let link = root.join("link.docx");
+    std::os::unix::fs::symlink(&file, &link).unwrap();
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&file)).unwrap();
+
+    assert!(open_in_another_instance_with_portal(&root, &own.id, &file, Some(&portal)));
+    assert!(open_in_another_instance_with_portal(&root, &own.id, &link, Some(&portal)));
+    assert!(!open_in_another_instance_with_portal(&root, &own.id, &different, Some(&portal)));
+}
+
 #[test]
 fn publishing_into_a_missing_folder_is_an_error_not_a_panic() {
     let root = scratch_root();
