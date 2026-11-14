@@ -13,9 +13,6 @@ pub async fn convert_file(
     _format_from: i32,
     format_to: i32,
     temp_dir: &str,
-    // The shared font cache: the PDF export reads it, every other conversion
-    // ignores it.
-    fontdata_dir: &std::path::Path,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<String, String> {
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
@@ -25,15 +22,14 @@ pub async fn convert_file(
         let input = input.to_string();
         let output = output.to_string();
         let temp_dir = std::path::PathBuf::from(temp_dir);
-        let fontdata = fontdata_dir.to_path_buf();
-        return run_pdf_job(app, binaries_dir, move |binaries_dir, exe_dir| {
+        return run_pdf_job(app, binaries_dir, move |binaries_dir, exe_dir, fontdata| {
             x2t_task::convert_to_pdf(
                 binaries_dir,
                 exe_dir,
                 &input,
                 &output,
                 &temp_dir,
-                &fontdata,
+                fontdata,
                 &log_pdf,
             )
         })
@@ -82,54 +78,56 @@ pub async fn apply_pdf_changes(
     source_pdf: &std::path::Path,
     output: &std::path::Path,
     temp_dir: &std::path::Path,
-    fontdata_dir: &std::path::Path,
 ) -> Result<String, String> {
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let source_pdf = source_pdf.to_string_lossy().into_owned();
     let output = output.to_string_lossy().into_owned();
     let temp_dir = temp_dir.to_path_buf();
-    let fontdata = fontdata_dir.to_path_buf();
-    run_pdf_job(app, resource_dir.join("binaries"), move |binaries_dir, exe_dir| {
+    run_pdf_job(app, resource_dir.join("binaries"), move |binaries_dir, exe_dir, fontdata| {
         x2t_task::apply_pdf_changes(
             binaries_dir,
             exe_dir,
             &source_pdf,
             &output,
             &temp_dir,
-            &fontdata,
+            fontdata,
             &log_pdf,
         )
     })
     .await
 }
 
-// Runs an x2t job that writes a PDF, once the font cache it reads exists.
+// Runs an x2t job that writes a PDF, handing it the font cache generation it
+// reads: the one this instance's editor shows, or else one held for this job.
 async fn run_pdf_job<F>(
     app: &AppHandle,
     binaries_dir: std::path::PathBuf,
     job: F,
 ) -> Result<String, String>
 where
-    F: FnOnce(&std::path::Path, Option<&std::path::Path>) -> Result<String, String>
+    F: FnOnce(&std::path::Path, Option<&std::path::Path>, &std::path::Path) -> Result<String, String>
         + Send
         + 'static,
 {
-    let (font_root, instance_id) = {
+    let (font_root, instance_id, fonts) = {
         let state = app.state::<crate::file_ops::AppState>();
-        (state.font_root.clone(), state.instance.id.clone())
+        (state.font_root.clone(), state.instance.id.clone(), state.fonts.clone())
     };
     let exe_dir = crate::app_exe_dir();
     // Building the font cache can wait up to FONT_CACHE_WAIT and x2t takes
     // seconds: neither should hold a thread of the async runtime.
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_pdf_font_cache(
+        if let Some(fontdata) = fonts.generation_dir() {
+            return job(&binaries_dir, exe_dir.as_deref(), &fontdata);
+        }
+        let generation = ensure_pdf_font_cache(
             &font_root,
             &instance_id,
-            |staging: &std::path::Path| crate::generate_fonts(staging, &binaries_dir),
+            |fontdata: &std::path::Path| crate::generate_fonts(fontdata, &binaries_dir),
             crate::FONT_CACHE_WAIT,
             crate::FONT_CACHE_POLL,
         )?;
-        job(&binaries_dir, exe_dir.as_deref())
+        job(&binaries_dir, exe_dir.as_deref(), generation.dir())
     })
     .await
     .map_err(|e| format!("PDF conversion task failed: {}", e))?
@@ -168,30 +166,29 @@ fn ensure_pdf_font_cache(
     generate: impl FnOnce(&std::path::Path) -> bool,
     wait: std::time::Duration,
     poll: std::time::Duration,
-) -> Result<(), String> {
-    if crate::temp_layout::fonts_ready(font_root) {
-        return Ok(());
+) -> Result<crate::temp_layout::FontGeneration, String> {
+    if let Some(generation) = crate::temp_layout::current_font_generation(font_root) {
+        return Ok(generation);
     }
     log_pdf("font cache missing, building it before the export");
     let outcome =
         crate::temp_layout::ensure_font_cache(font_root, instance_id, generate, wait, poll);
-    // A failed run can leave files that look complete next to an old marker,
-    // so the outcome has to say the cache is good too.
     use crate::temp_layout::FontCache;
-    let built = matches!(
-        outcome,
-        FontCache::Ready | FontCache::Generated | FontCache::GeneratedByOther
-    );
-    if built && crate::temp_layout::fonts_ready(font_root) {
-        log_pdf(&format!("font cache ready: {:?}", outcome));
-        Ok(())
-    } else {
-        let error = format!(
-            "{}: the font cache could not be built ({:?})",
-            FONT_CACHE_ERROR, outcome
-        );
-        log_pdf(&error);
-        Err(error)
+    match outcome {
+        FontCache::Ready(generation)
+        | FontCache::Generated(generation)
+        | FontCache::GeneratedByOther(generation) => {
+            log_pdf(&format!("font cache ready: {:?}", generation));
+            Ok(generation)
+        }
+        failed => {
+            let error = format!(
+                "{}: the font cache could not be built ({:?})",
+                FONT_CACHE_ERROR, failed
+            );
+            log_pdf(&error);
+            Err(error)
+        }
     }
 }
 
@@ -810,27 +807,44 @@ mod tests {
         std::fs::write(fontdata.join("font_selection.bin"), contents).unwrap();
     }
 
+    // A generation an earlier start built, no longer held. Returns its folder.
+    fn built_cache(root: &std::path::Path, contents: &[u8]) -> std::path::PathBuf {
+        let outcome = crate::temp_layout::ensure_font_cache(
+            root,
+            "0-1",
+            |dir: &std::path::Path| {
+                write_cache(dir, contents);
+                true
+            },
+            WAIT,
+            POLL,
+        );
+        let crate::temp_layout::FontCache::Generated(generation) = outcome else {
+            panic!("not built: {:?}", outcome);
+        };
+        generation.dir().to_path_buf()
+    }
+
     // What convert_file does before x2t runs: the font list the PDF would be
-    // made with, or the error that stops the export.
+    // made with, read, or the error that stops the export.
     fn pdf_list_for_export(
         root: &std::path::Path,
         generate: impl FnOnce(&std::path::Path) -> bool,
         wait: std::time::Duration,
-    ) -> Result<std::path::PathBuf, String> {
-        ensure_pdf_font_cache(root, "1-1", generate, wait, POLL)?;
-        pdf_font_list(&crate::temp_layout::fontdata_dir(root))
+    ) -> Result<Vec<u8>, String> {
+        let generation = ensure_pdf_font_cache(root, "1-1", generate, wait, POLL)?;
+        let list = pdf_font_list(generation.dir())?;
+        Ok(std::fs::read(list).unwrap())
     }
 
     #[test]
     fn an_existing_font_cache_is_used_without_building_it() {
         let (base, root) = root_without_cache();
-        write_cache(&crate::temp_layout::fontdata_dir(&root), b"cache");
-        let marker = root.join(crate::temp_layout::FONTS_MARKER);
-        std::fs::write(marker, crate::temp_layout::expected_marker()).unwrap();
+        built_cache(&root, b"cache");
 
         let list = pdf_list_for_export(&root, |_: &std::path::Path| panic!("built again"), WAIT);
 
-        assert_eq!(list, Ok(crate::temp_layout::fontdata_dir(&root).join("AllFonts.js")));
+        assert_eq!(list, Ok(b"cache".to_vec()));
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -840,16 +854,14 @@ mod tests {
 
         let list = pdf_list_for_export(
             &root,
-            |staging: &std::path::Path| {
-                write_cache(staging, b"new");
+            |fontdata: &std::path::Path| {
+                write_cache(fontdata, b"new");
                 true
             },
             WAIT,
         );
 
-        let expected = crate::temp_layout::fontdata_dir(&root).join("AllFonts.js");
-        assert_eq!(list, Ok(expected.clone()));
-        assert_eq!(std::fs::read(expected).unwrap(), b"new");
+        assert_eq!(list, Ok(b"new".to_vec()));
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -882,54 +894,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    // A marker that survived next to a cache missing font_selection.bin is a
-    // half-installed cache: it is rebuilt, not used.
+    // A generation that lost font_selection.bin is incomplete: a new one is
+    // built, not that one used.
     #[test]
     fn a_cache_without_its_selection_file_is_rebuilt() {
         let (base, root) = root_without_cache();
-        let fontdata = crate::temp_layout::fontdata_dir(&root);
-        std::fs::create_dir_all(&fontdata).unwrap();
-        std::fs::write(fontdata.join("AllFonts.js"), b"old").unwrap();
-        let marker = root.join(crate::temp_layout::FONTS_MARKER);
-        std::fs::write(marker, crate::temp_layout::expected_marker()).unwrap();
+        let old = built_cache(&root, b"old");
+        std::fs::remove_file(old.join("font_selection.bin")).unwrap();
 
-        assert!(!crate::temp_layout::fonts_ready(&root));
+        assert!(crate::temp_layout::current_font_generation(&root).is_none());
         let list = pdf_list_for_export(
             &root,
-            |staging: &std::path::Path| {
-                write_cache(staging, b"new");
+            |fontdata: &std::path::Path| {
+                write_cache(fontdata, b"new");
                 true
             },
             WAIT,
         );
 
-        assert_eq!(list, Ok(fontdata.join("AllFonts.js")));
-        assert_eq!(std::fs::read(fontdata.join("AllFonts.js")).unwrap(), b"new");
-        assert_eq!(std::fs::read(fontdata.join("font_selection.bin")).unwrap(), b"new");
+        assert_eq!(list, Ok(b"new".to_vec()));
+        let current = crate::temp_layout::current_font_generation(&root).unwrap();
+        assert_eq!(std::fs::read(current.dir().join("font_selection.bin")).unwrap(), b"new");
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    // The files land but the run still fails (here the new marker cannot be
-    // written): the marker of the earlier run went before the files did, so
-    // the cache does not pass for ready either.
+    // The files land but the run still fails (here its marker cannot be
+    // written): the generation is not published, so nothing passes for ready.
     #[test]
-    fn no_pdf_when_the_build_fails_next_to_an_old_marker() {
+    fn no_pdf_when_the_new_generation_cannot_be_published() {
         let (base, root) = root_without_cache();
-        let marker = root.join(crate::temp_layout::FONTS_MARKER);
-        std::fs::write(&marker, crate::temp_layout::expected_marker()).unwrap();
-        // write_replacing writes the marker through this file first.
-        std::fs::create_dir_all(marker.with_extension("tmp-1-1")).unwrap();
 
         let list = pdf_list_for_export(
             &root,
-            |staging: &std::path::Path| {
-                write_cache(staging, b"new");
+            |fontdata: &std::path::Path| {
+                write_cache(fontdata, b"new");
+                // The marker is renamed into place; a folder there refuses it.
+                std::fs::create_dir(fontdata.join(crate::temp_layout::FONTS_MARKER)).unwrap();
                 true
             },
             WAIT,
         );
 
-        assert!(!crate::temp_layout::fonts_ready(&root), "the old marker is gone");
+        assert!(crate::temp_layout::current_font_generation(&root).is_none());
         let error = list.expect_err("a failed build is not a usable cache");
         assert!(error.starts_with(FONT_CACHE_ERROR), "{}", error);
         assert!(error.contains("Failed"), "{}", error);

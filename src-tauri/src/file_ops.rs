@@ -461,7 +461,6 @@ async fn open_file_inner(
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.font_root),
         input_copy.options.or(text_options),
     )
     .await;
@@ -582,7 +581,6 @@ async fn save_editor_bin(
 ) -> Result<(), String> {
     let input = state.temp_dir.join("Editor.bin");
     let temp_dir = state.temp_dir.to_string_lossy().to_string();
-    let fontdata = crate::temp_layout::fontdata_dir(&state.font_root);
     let text_options = text_options_for_save(state, dest);
     let convert = |output: PathBuf| async move {
         super::converter::convert_file(
@@ -592,7 +590,6 @@ async fn save_editor_bin(
             8192,
             format_to,
             &temp_dir,
-            &fontdata,
             text_options,
         )
         .await
@@ -648,7 +645,6 @@ async fn save_pdf_inner(
         &work.source(),
         &work.output(),
         &state.temp_dir,
-        &crate::temp_layout::fontdata_dir(&state.font_root),
     )
     .await;
     finish_pdf_save(&work, applied, &dest)?;
@@ -883,7 +879,6 @@ pub async fn print_document(
         8192,
         513,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.font_root),
         None,
     )
     .await
@@ -924,7 +919,6 @@ async fn print_pdf(
         &work.source(),
         &work.output(),
         &state.temp_dir,
-        &crate::temp_layout::fontdata_dir(&state.font_root),
     )
     .await;
     finish_pdf_save(&work, applied, &pdf_path)?;
@@ -1183,7 +1177,6 @@ pub async fn convert_for_insert(
         format_from,
         format_to,
         &insert_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.font_root),
         None,
     )
     .await;
@@ -1270,14 +1263,9 @@ fn keep_insert_media(insert_media_dir: &Path, kept_dir: &Path) {
 // call gets this error and the bundled list (font-patches.js).
 #[tauri::command]
 pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
-    let path = crate::temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
-    generated_font_list(state.fonts.status(), &path)
-}
-
-fn generated_font_list(status: crate::fonts_state::FontsStatus, path: &Path) -> Result<String, String> {
-    if !crate::fonts_state::uses_generated_list(status) {
-        return Err(format!("The font cache is not usable: {:?}", status));
-    }
+    let Some(path) = state.fonts.generated_list() else {
+        return Err(format!("The font cache is not usable: {:?}", state.fonts.status()));
+    };
     std::fs::read_to_string(path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
 }
 
@@ -2141,20 +2129,6 @@ mod tests {
         assert!(pdf_to_open(&grants, &save.token).is_err());
         let insert = grants.grant(PathBuf::from("/home/u/c.pdf"), GrantKind::Insert);
         assert!(pdf_to_open(&grants, &insert.token).is_err());
-    }
-
-    #[test]
-    fn the_font_list_comes_from_the_cache_only_once_it_is_ready() {
-        use crate::fonts_state::FontsStatus;
-        let dir = std::env::temp_dir().join(format!("eo-font-list-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("AllFonts.js");
-        std::fs::write(&path, "old list").unwrap();
-
-        assert!(generated_font_list(FontsStatus::Pending, &path).is_err());
-        assert!(generated_font_list(FontsStatus::Failed, &path).is_err());
-        assert_eq!(generated_font_list(FontsStatus::Ready, &path), Ok("old list".to_string()));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

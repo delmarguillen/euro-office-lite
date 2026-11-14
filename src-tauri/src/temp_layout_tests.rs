@@ -321,54 +321,116 @@ fn write_fonts(dir: &Path, content: &[u8]) {
     std::fs::write(dir.join("font_selection.bin"), content).unwrap();
 }
 
+fn read_both(dir: &Path) -> (Vec<u8>, Vec<u8>) {
+    (
+        std::fs::read(dir.join("AllFonts.js")).unwrap(),
+        std::fs::read(dir.join("font_selection.bin")).unwrap(),
+    )
+}
+
+fn both(content: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    (content.to_vec(), content.to_vec())
+}
+
+// A published generation as a start built for `marker` leaves it, written by
+// hand so it can sit next to others. Returns its folder.
+fn published(root: &Path, name: &str, marker: &[u8], content: &[u8]) -> PathBuf {
+    let dir = generations_dir(root).join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    write_fonts(&dir, content);
+    std::fs::write(dir.join(GENERATION_IN_USE), b"").unwrap();
+    std::fs::write(dir.join(FONTS_MARKER), marker).unwrap();
+    dir
+}
+
+fn fonts_ready_for(root: &Path, expected: &str) -> bool {
+    adopt_generation(root, expected).is_some()
+}
+
+fn fonts_ready(root: &Path) -> bool {
+    current_font_generation(root).is_some()
+}
+
+fn build(dir: &Path, content: &[u8]) -> bool {
+    write_fonts(dir, content);
+    true
+}
+
 const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 const POLL: std::time::Duration = std::time::Duration::from_millis(20);
 
-// Another instance may be serving AllFonts.js while this one regenerates it,
-// so the generator works elsewhere and the result replaces the cache whole.
+// An instance reading a generation keeps reading that one, whole, while
+// another whose fonts changed builds and publishes the next one.
 #[test]
-fn the_generator_never_writes_into_the_live_cache() {
+fn a_reader_sees_only_its_generation_while_a_new_one_is_installed() {
     let root = scratch_root();
-    let live = fontdata_dir(&root);
-    std::fs::create_dir_all(&live).unwrap();
-    write_fonts(&live, b"old");
-    let reader = File::open(live.join("AllFonts.js")).unwrap();
+    published(&root, "1-1-0", b"before", b"old");
+    let reader = adopt_generation(&root, "before").unwrap();
+    let mut seen_meanwhile = None;
 
-    let outcome = ensure_font_cache(
+    let outcome = ensure_font_cache_for(
         &root,
-        "1-1",
+        "after",
+        "2-1",
         |dir: &Path| {
-            assert_ne!(dir, live.as_path(), "the generator got the live cache");
+            assert_ne!(dir, reader.dir(), "the generator got a folder in use");
             write_fonts(dir, b"new");
+            seen_meanwhile = Some(read_both(reader.dir()));
             true
         },
         WAIT,
         POLL,
     );
-    drop(reader);
 
-    assert_eq!(outcome, FontCache::Generated);
-    assert_eq!(std::fs::read(live.join("AllFonts.js")).unwrap(), b"new");
-    assert_eq!(
-        ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL),
-        FontCache::Ready
-    );
+    let FontCache::Generated(new) = outcome else {
+        panic!("not built: {:?}", outcome);
+    };
+    assert_eq!(seen_meanwhile, Some(both(b"old")));
+    assert_eq!(read_both(reader.dir()), both(b"old"), "after the new one is published");
+    assert_eq!(read_both(new.dir()), both(b"new"));
+    let again = ensure_font_cache_for(&root, "after", "3-1", |_: &Path| panic!("built twice"), WAIT, POLL);
+    assert!(matches!(again, FontCache::Ready(_)), "{:?}", again);
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// A run that fails must not leave half a cache behind for the next start to
-// take as good.
+// A folder whose generator died before the marker, or a generation that lost
+// one of its files, is never read: a complete generation is built instead.
 #[test]
-fn a_failed_generation_leaves_the_cache_as_it_was() {
+fn a_half_published_generation_is_not_used() {
     let root = scratch_root();
-    let live = fontdata_dir(&root);
-    std::fs::create_dir_all(&live).unwrap();
-    write_fonts(&live, b"old");
+    let unpublished = generations_dir(&root).join("1-1-0");
+    std::fs::create_dir_all(&unpublished).unwrap();
+    write_fonts(&unpublished, b"no marker yet");
+    let incomplete = published(&root, "1-2-0", expected_marker().as_bytes(), b"half");
+    std::fs::remove_file(incomplete.join("font_selection.bin")).unwrap();
 
-    let outcome = ensure_font_cache(
+    assert!(!fonts_ready(&root));
+    let outcome = ensure_font_cache(&root, "2-1", |dir: &Path| build(dir, b"new"), WAIT, POLL);
+
+    let FontCache::Generated(new) = outcome else {
+        panic!("not built: {:?}", outcome);
+    };
+    assert_eq!(read_both(new.dir()), both(b"new"));
+    assert!(!unpublished.exists());
+    assert!(!incomplete.exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// A run that fails leaves the earlier generation as it was, still read by the
+// instance holding it, and leaves nothing of its own.
+#[test]
+fn a_failed_generation_keeps_the_good_one() {
+    let root = scratch_root();
+    let good = published(&root, "1-1-0", b"before", b"old");
+    let reader = adopt_generation(&root, "before").unwrap();
+    let mut attempt = None;
+
+    let outcome = ensure_font_cache_for(
         &root,
-        "1-1",
+        "after",
+        "2-1",
         |dir: &Path| {
+            attempt = Some(dir.to_path_buf());
             std::fs::write(dir.join("AllFonts.js"), b"half").unwrap();
             false
         },
@@ -376,14 +438,98 @@ fn a_failed_generation_leaves_the_cache_as_it_was() {
         POLL,
     );
 
-    assert_eq!(outcome, FontCache::Failed);
-    assert_eq!(std::fs::read(live.join("AllFonts.js")).unwrap(), b"old");
-    assert!(!fonts_ready(&root));
+    assert!(matches!(outcome, FontCache::Failed), "{:?}", outcome);
+    assert!(!attempt.unwrap().exists(), "the failed run left its folder");
+    assert_eq!(reader.dir(), good.as_path());
+    assert_eq!(read_both(reader.dir()), both(b"old"));
+    assert!(!fonts_ready_for(&root, "after"));
+    drop(reader);
+    assert!(fonts_ready_for(&root, "before"), "the good generation is still published");
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// After a new generation is published, those no process holds go. One an
+// instance still reads stays until it lets go; the current one always stays.
+#[test]
+fn cleanup_keeps_a_generation_in_use_until_it_is_let_go() {
+    let root = scratch_root();
+    let unused = published(&root, "1-1-0", b"oldest", b"oldest");
+    let in_use = published(&root, "1-2-0", b"before", b"old");
+    let reader = adopt_generation(&root, "before").unwrap();
+
+    let outcome = ensure_font_cache(&root, "2-1", |dir: &Path| build(dir, b"new"), WAIT, POLL);
+    let FontCache::Generated(current) = outcome else {
+        panic!("not built: {:?}", outcome);
+    };
+
+    assert!(!unused.exists(), "a generation nobody holds is removed");
+    assert_eq!(read_both(reader.dir()), both(b"old"));
+    assert_eq!(remove_old_font_generations(&root), 0, "still held");
+    assert!(in_use.exists());
+    drop(reader);
+    assert_eq!(remove_old_font_generations(&root), 1);
+    assert!(!in_use.exists());
+    let current_dir = current.dir().to_path_buf();
+    drop(current);
+    assert_eq!(remove_old_font_generations(&root), 0, "the current one is kept unheld too");
+    assert!(current_dir.exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// A start that holds fonts.lock may be about to publish: nothing is removed
+// meanwhile, it cleans up itself afterwards.
+#[test]
+fn old_generations_stay_while_another_start_holds_the_fonts_lock() {
+    let root = scratch_root();
+    let unused = published(&root, "1-1-0", b"oldest", b"oldest");
+    let held = take_lock(&root.join(FONTS_LOCK)).unwrap();
+
+    assert_eq!(remove_old_font_generations(&root), 0);
+    assert!(unused.exists());
+    drop(held);
+    assert_eq!(remove_old_font_generations(&root), 1);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// A generation built for another version or from other fonts is not read: a
+// new one is built, and the next start reads that one.
+#[test]
+fn another_marker_or_fingerprint_builds_a_new_generation() {
+    let base = scratch_root();
+    let user_fonts = base.join("user-fonts");
+    std::fs::create_dir_all(&user_fonts).unwrap();
+    let binaries = base.join("binaries");
+    let before = marker_text("0.17.43-alpha", &sources_for(&binaries, &[user_fonts.clone()]));
+    std::fs::create_dir(user_fonts.join("new-family")).unwrap();
+    let after_sources = sources_for(&binaries, &[user_fonts.clone()]);
+    let expected = marker_text("0.17.43-alpha", &after_sources);
+    let other_version = marker_text("0.17.42-alpha", &after_sources);
+    assert_ne!(before, expected);
+
+    for stale in [before, other_version] {
+        let root = scratch_root();
+        let old = published(&root, "1-1-0", stale.as_bytes(), b"old");
+
+        let outcome = ensure_font_cache_for(&root, &expected, "2-1", |dir: &Path| build(dir, b"new"), WAIT, POLL);
+
+        let FontCache::Generated(new) = outcome else {
+            panic!("not built: {:?}", outcome);
+        };
+        assert_ne!(new.dir(), old.as_path());
+        drop(new);
+        let again = ensure_font_cache_for(&root, &expected, "3-1", |_: &Path| panic!("built twice"), WAIT, POLL);
+        let FontCache::Ready(generation) = again else {
+            panic!("not ready: {:?}", again);
+        };
+        assert_eq!(read_both(generation.dir()), both(b"new"));
+        drop(generation);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 // A second start while the first is generating waits for that run instead of
-// writing the same files at the same time.
+// building the same at the same time.
 #[test]
 fn a_start_during_generation_waits_and_does_not_generate_again() {
     let root = scratch_root();
@@ -391,18 +537,17 @@ fn a_start_during_generation_waits_and_does_not_generate_again() {
     let other_root = root.clone();
     let other = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(150));
-        let live = fontdata_dir(&other_root);
-        std::fs::create_dir_all(&live).unwrap();
-        write_fonts(&live, b"theirs");
-        std::fs::write(other_root.join(FONTS_MARKER), expected_marker()).unwrap();
+        published(&other_root, "1-1-0", expected_marker().as_bytes(), b"theirs");
         drop(held);
     });
 
     let outcome = ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL);
     other.join().unwrap();
 
-    assert_eq!(outcome, FontCache::GeneratedByOther);
-    assert_eq!(std::fs::read(fontdata_dir(&root).join("AllFonts.js")).unwrap(), b"theirs");
+    let FontCache::GeneratedByOther(theirs) = outcome else {
+        panic!("not waited for: {:?}", outcome);
+    };
+    assert_eq!(read_both(theirs.dir()), both(b"theirs"));
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -419,27 +564,18 @@ fn a_generator_that_never_finishes_is_not_waited_on_forever() {
         POLL,
     );
 
-    assert_eq!(outcome, FontCache::GaveUp);
+    assert!(matches!(outcome, FontCache::GaveUp), "{:?}", outcome);
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
-fn a_dead_generators_staging_folder_is_cleared() {
+fn a_dead_generators_folder_is_cleared() {
     let root = scratch_root();
-    let leftover = root.join(format!("{}1-9", FONTS_STAGING_PREFIX));
+    let leftover = generations_dir(&root).join("1-9-0");
     std::fs::create_dir_all(&leftover).unwrap();
     std::fs::write(leftover.join("AllFonts.js"), b"half").unwrap();
 
-    ensure_font_cache(
-        &root,
-        "2-1",
-        |dir: &Path| {
-            write_fonts(dir, b"new");
-            true
-        },
-        WAIT,
-        POLL,
-    );
+    ensure_font_cache(&root, "2-1", |dir: &Path| build(dir, b"new"), WAIT, POLL);
 
     assert!(!leftover.exists());
     let _ = std::fs::remove_dir_all(&root);
@@ -447,10 +583,7 @@ fn a_dead_generators_staging_folder_is_cleared() {
 
 fn root_with_marker(marker: &[u8]) -> PathBuf {
     let root = scratch_root();
-    let live = fontdata_dir(&root);
-    std::fs::create_dir_all(&live).unwrap();
-    write_fonts(&live, b"cache");
-    std::fs::write(root.join(FONTS_MARKER), marker).unwrap();
+    published(&root, "1-1-0", marker, b"cache");
     root
 }
 
@@ -490,56 +623,21 @@ fn a_cache_built_by_this_version_is_ready() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-// After an update the old cache is rebuilt once, and the new marker makes it
-// ready for the next start.
+// After an update the old generation is rebuilt once, and the new marker
+// makes the new one ready for the next start.
 #[test]
 fn a_cache_from_an_older_version_is_rebuilt_once() {
     let root = root_with_marker(b"generated");
 
-    let outcome = ensure_font_cache(
-        &root,
-        "1-1",
-        |dir: &Path| {
-            write_fonts(dir, b"new");
-            true
-        },
-        WAIT,
-        POLL,
-    );
+    let outcome = ensure_font_cache(&root, "1-1", |dir: &Path| build(dir, b"new"), WAIT, POLL);
 
-    assert_eq!(outcome, FontCache::Generated);
-    let marker = std::fs::read(root.join(FONTS_MARKER)).unwrap();
+    let FontCache::Generated(new) = outcome else {
+        panic!("not built: {:?}", outcome);
+    };
+    let marker = std::fs::read(new.dir().join(FONTS_MARKER)).unwrap();
     assert_eq!(marker, expected_marker().as_bytes());
-    assert_eq!(
-        ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL),
-        FontCache::Ready
-    );
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-// The app can die after the new files land but before the marker is written:
-// the cache must not pass for ready, and the next start builds it again.
-#[test]
-fn new_files_next_to_the_previous_versions_marker_are_rebuilt() {
-    let root = root_with_marker(b"0.17.41-alpha");
-    write_fonts(&fontdata_dir(&root), b"new, marker not written yet");
-
-    assert!(!fonts_ready_for(&root, "0.17.42-alpha"));
-    assert!(!fonts_ready(&root));
-    let outcome = ensure_font_cache(
-        &root,
-        "1-1",
-        |dir: &Path| {
-            write_fonts(dir, b"rebuilt");
-            true
-        },
-        WAIT,
-        POLL,
-    );
-
-    assert_eq!(outcome, FontCache::Generated);
-    let allfonts = std::fs::read(fontdata_dir(&root).join("AllFonts.js")).unwrap();
-    assert_eq!(allfonts, b"rebuilt");
+    let again = ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL);
+    assert!(matches!(again, FontCache::Ready(_)), "{:?}", again);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -563,7 +661,7 @@ fn write_cache(dir: &Path, allfonts: &[u8], selection: &[u8]) {
 #[test]
 fn extended_paths_are_found_in_either_cache_file() {
     let root = scratch_root();
-    let live = fontdata_dir(&root);
+    let live = root.join("generation");
 
     write_cache(&live, ALLFONTS_EXTENDED, SELECTION_PLAIN);
     assert!(has_extended_paths(&live), "AllFonts.js lists /?/C:/...");
@@ -586,9 +684,8 @@ fn extended_paths_are_found_in_either_cache_file() {
 #[test]
 fn a_windows_cache_with_extended_paths_is_rebuilt_once() {
     let root = scratch_root();
-    let live = fontdata_dir(&root);
-    write_cache(&live, ALLFONTS_EXTENDED, SELECTION_EXTENDED);
-    std::fs::write(root.join(FONTS_MARKER), expected_marker()).unwrap();
+    let old = published(&root, "1-1-0", expected_marker().as_bytes(), b"old");
+    write_cache(&old, ALLFONTS_EXTENDED, SELECTION_EXTENDED);
 
     let outcome = ensure_font_cache(
         &root,
@@ -601,19 +698,15 @@ fn a_windows_cache_with_extended_paths_is_rebuilt_once() {
         POLL,
     );
 
-    assert_eq!(outcome, FontCache::Generated);
+    let FontCache::Generated(new) = outcome else {
+        panic!("not built: {:?}", outcome);
+    };
     assert_eq!(
-        std::fs::read(live.join("AllFonts.js")).unwrap(),
-        ALLFONTS_PLAIN
+        read_both(new.dir()),
+        (ALLFONTS_PLAIN.to_vec(), SELECTION_PLAIN.to_vec())
     );
-    assert_eq!(
-        std::fs::read(live.join("font_selection.bin")).unwrap(),
-        SELECTION_PLAIN
-    );
-    assert_eq!(
-        ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL),
-        FontCache::Ready
-    );
+    let again = ensure_font_cache(&root, "1-2", |_: &Path| panic!("built twice"), WAIT, POLL);
+    assert!(matches!(again, FontCache::Ready(_)), "{:?}", again);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -1296,96 +1389,89 @@ fn a_linked_folder_is_not_followed() {
 }
 
 // ---------------------------------------------------------------------------
-// Font cache left in the temp root
+// Font cache earlier versions left
 // ---------------------------------------------------------------------------
 
-fn temp_root_with_old_cache() -> PathBuf {
-    let root = root_with_marker(b"0.17.43-alpha");
-    std::fs::create_dir_all(root.join(format!("{}1-1", FONTS_STAGING_PREFIX))).unwrap();
+// What versions before generations left: fontdata/ with the marker next to
+// it in the root, and a staging folder.
+fn root_with_legacy_cache(marker: &[u8]) -> PathBuf {
+    let root = scratch_root();
+    let fontdata = root.join(LEGACY_FONTDATA_DIR);
+    std::fs::create_dir_all(&fontdata).unwrap();
+    write_fonts(&fontdata, b"legacy");
+    std::fs::write(root.join(FONTS_MARKER), marker).unwrap();
+    std::fs::create_dir_all(root.join(format!("{}1-1", LEGACY_STAGING_PREFIX))).unwrap();
     root
+}
+
+fn legacy_cache_left(root: &Path) -> bool {
+    root.join(FONTS_MARKER).exists() && root.join(LEGACY_FONTDATA_DIR).join("AllFonts.js").exists()
+}
+
+// After an update over a version with a single cache, that cache is never
+// read, even with a marker that matches: a generation is built, and the old
+// cache goes once no other instance may be reading it.
+#[test]
+fn an_update_over_the_single_cache_builds_a_generation_and_drops_the_old_one() {
+    let root = root_with_legacy_cache(expected_marker().as_bytes());
+    let own = begin_instance(&root, now(), 2).unwrap();
+
+    assert!(!fonts_ready(&root));
+    let outcome = ensure_font_cache(&root, &own.id, |dir: &Path| build(dir, b"new"), WAIT, POLL);
+    let FontCache::Generated(generation) = outcome else {
+        panic!("not built: {:?}", outcome);
+    };
+    assert!(remove_legacy_font_cache(&root, &root, &own.id));
+
+    assert!(!root.join(FONTS_MARKER).exists());
+    assert!(!root.join(LEGACY_FONTDATA_DIR).exists());
+    assert!(!root.join(format!("{}1-1", LEGACY_STAGING_PREFIX)).exists());
+    assert_eq!(read_both(generation.dir()), both(b"new"));
+    drop(generation);
+    assert!(fonts_ready(&root));
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn the_old_cache_in_the_temp_root_is_removed_when_unused() {
-    let temp = temp_root_with_old_cache();
+    let temp = root_with_legacy_cache(b"0.17.43-alpha");
     let own = begin_instance(&temp, now(), 2).unwrap();
-    let fonts = scratch_root();
 
-    assert!(remove_old_font_cache(&temp, &fonts, &own.id));
+    assert!(remove_legacy_font_cache(&temp, &temp, &own.id));
 
     assert!(!temp.join(FONTS_MARKER).exists());
-    assert!(!fontdata_dir(&temp).exists());
-    assert!(!temp.join(format!("{}1-1", FONTS_STAGING_PREFIX)).exists());
+    assert!(!temp.join(LEGACY_FONTDATA_DIR).exists());
+    assert!(!temp.join(format!("{}1-1", LEGACY_STAGING_PREFIX)).exists());
     let _ = std::fs::remove_dir_all(&temp);
-    let _ = std::fs::remove_dir_all(&fonts);
 }
 
 #[test]
 fn the_old_cache_stays_while_an_earlier_version_holds_its_lock() {
-    let temp = temp_root_with_old_cache();
+    let temp = root_with_legacy_cache(b"0.17.43-alpha");
     let own = begin_instance(&temp, now(), 2).unwrap();
-    let fonts = scratch_root();
     let _held = take_lock(&temp.join(FONTS_LOCK)).unwrap();
 
-    assert!(!remove_old_font_cache(&temp, &fonts, &own.id));
+    assert!(!remove_legacy_font_cache(&temp, &temp, &own.id));
 
-    assert!(temp.join(FONTS_MARKER).exists());
-    assert!(fontdata_dir(&temp).join("AllFonts.js").exists());
-    let _ = std::fs::remove_dir_all(&temp);
-    let _ = std::fs::remove_dir_all(&fonts);
-}
-
-#[test]
-fn the_cache_is_kept_when_it_fell_back_to_the_temp_root() {
-    let temp = temp_root_with_old_cache();
-    let own = begin_instance(&temp, now(), 2).unwrap();
-
-    assert!(!remove_old_font_cache(&temp, &temp, &own.id));
-
-    assert!(temp.join(FONTS_MARKER).exists());
-    assert!(fontdata_dir(&temp).join("AllFonts.js").exists());
+    assert!(legacy_cache_left(&temp));
     let _ = std::fs::remove_dir_all(&temp);
 }
 
 #[test]
 fn the_old_cache_stays_while_another_instance_is_alive() {
-    let temp = temp_root_with_old_cache();
+    let temp = root_with_legacy_cache(b"0.17.43-alpha");
     let own = begin_instance(&temp, now(), 2).unwrap();
-    let fonts = scratch_root();
+    let fonts = root_with_legacy_cache(b"0.17.43-alpha");
     let other = begin_instance(&temp, now() - 1, 1).unwrap();
 
-    assert!(!remove_old_font_cache(&temp, &fonts, &own.id));
+    assert!(!remove_legacy_font_cache(&temp, &temp, &own.id));
+    assert!(!remove_legacy_font_cache(&fonts, &temp, &own.id));
 
-    assert!(temp.join(FONTS_MARKER).exists());
-    assert!(fontdata_dir(&temp).join("AllFonts.js").exists());
+    assert!(legacy_cache_left(&temp));
+    assert!(legacy_cache_left(&fonts));
     other.end();
     let _ = std::fs::remove_dir_all(&temp);
     let _ = std::fs::remove_dir_all(&fonts);
-}
-
-// A file that cannot replace its counterpart stops the install midway: the
-// old marker must already be gone, so no instance reads the mixed cache.
-#[test]
-fn an_install_failing_midway_leaves_no_marker() {
-    let root = root_with_marker(b"0.17.41-alpha");
-    let blocker = fontdata_dir(&root).join("blocker");
-    std::fs::create_dir_all(blocker.join("inside")).unwrap();
-
-    let outcome = ensure_font_cache(
-        &root,
-        "1-1",
-        |dir: &Path| {
-            write_fonts(dir, b"new");
-            std::fs::write(dir.join("blocker"), b"file over a folder").unwrap();
-            true
-        },
-        WAIT,
-        POLL,
-    );
-
-    assert_eq!(outcome, FontCache::Failed);
-    assert!(!root.join(FONTS_MARKER).exists());
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 // The Windows font folders x2t_task adds to the fingerprint (windows_font_dirs):
