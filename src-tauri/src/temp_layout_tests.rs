@@ -1769,3 +1769,139 @@ fn publishing_into_a_missing_folder_is_an_error_not_a_panic() {
     let file = document_in(&root, "a.docx");
     assert!(publish_open_document(&root.join("missing"), Some(&file)).is_err());
 }
+
+// ---------------------------------------------------------------------------
+// The file each instance is opening or saving to
+// ---------------------------------------------------------------------------
+
+fn claimed_text(instance: &Instance) -> Option<String> {
+    std::fs::read_to_string(instance.dir.join(CLAIMED_DOCUMENT)).ok()
+}
+
+fn open_document_text(instance: &Instance) -> Option<String> {
+    std::fs::read_to_string(instance.dir.join(OPEN_DOCUMENT)).ok()
+}
+
+fn canonical_text(path: &Path) -> String {
+    path.canonicalize().unwrap().to_str().unwrap().to_string()
+}
+
+#[test]
+fn an_announcement_is_the_canonical_path_and_goes_with_its_claim() {
+    let root = scratch_root();
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+
+    let claim = claim_document(&root, &own.id, &root.join("sub").join("..").join("a.docx")).unwrap();
+    assert_eq!(claimed_text(&own), Some(canonical_text(&file)));
+    let leftovers: Vec<_> = std::fs::read_dir(&own.dir)
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().contains("tmp"))
+        .collect();
+    assert!(leftovers.is_empty());
+
+    drop(claim);
+    assert_eq!(claimed_text(&own), None);
+    assert_eq!(open_document_text(&own), None);
+}
+
+#[test]
+fn a_file_another_instance_announced_cannot_be_claimed() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    let theirs = claim_document(&root, &other.id, &file).unwrap();
+
+    assert!(open_in_another_instance(&root, &own.id, &file));
+    assert!(claim_document(&root, &own.id, &file).is_none());
+    assert_eq!(claimed_text(&own), None);
+    drop(theirs);
+}
+
+#[test]
+fn a_withdrawn_claim_leaves_open_document_as_it_was() {
+    let root = scratch_root();
+    let opened = document_in(&root, "a.docx");
+    let failed = document_in(&root, "b.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&own.dir, Some(&opened)).unwrap();
+
+    let claim = claim_document(&root, &own.id, &failed).unwrap();
+    // The open or the save failed.
+    drop(claim);
+
+    assert_eq!(claimed_text(&own), None);
+    assert_eq!(open_document_text(&own), Some(canonical_text(&opened)));
+    assert!(claim_document(&root, &other.id, &failed).is_some());
+    assert!(claim_document(&root, &other.id, &opened).is_none());
+}
+
+#[test]
+fn a_dead_instances_announcement_does_not_count() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let dead = begin_instance(&root, 1000, 2).unwrap();
+    let claim = claim_document(&root, &dead.id, &file).unwrap();
+    // A crash during the conversion: the lock goes with the process, the
+    // folder and the announcement stay.
+    dead.lock.lock().unwrap().take();
+    std::mem::forget(claim);
+
+    assert!(claimed_text(&dead).is_some());
+    assert!(claim_document(&root, &own.id, &file).is_some());
+}
+
+#[test]
+fn of_two_instances_claiming_one_file_at_once_exactly_one_goes_on() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let first = begin_instance(&root, 1000, 1).unwrap();
+    let second = begin_instance(&root, 1000, 2).unwrap();
+    for _ in 0..200 {
+        let start = std::sync::Barrier::new(2);
+        let claims = std::thread::scope(|scope| {
+            let a = scope.spawn(|| {
+                start.wait();
+                claim_document(&root, &first.id, &file)
+            });
+            let b = scope.spawn(|| {
+                start.wait();
+                claim_document(&root, &second.id, &file)
+            });
+            [a.join().unwrap(), b.join().unwrap()]
+        });
+        assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
+    }
+}
+
+#[test]
+fn a_claim_that_cannot_be_announced_still_goes_on() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let without_folder = "1000-9";
+
+    let claim = claim_document(&root, without_folder, &file).unwrap();
+
+    assert!(claim.file.is_none());
+}
+
+#[test]
+fn a_documents_lock_nobody_releases_is_not_waited_on_forever() {
+    let root = scratch_root();
+    let free = document_in(&root, "a.docx");
+    let announced = document_in(&root, "b.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    let theirs = claim_document(&root, &other.id, &announced).unwrap();
+    let held = take_lock(&root.join(DOCUMENTS_LOCK)).unwrap();
+
+    assert!(claim_document(&root, &own.id, &free).is_some());
+    // Without the lock the announcement is still seen.
+    assert!(claim_document(&root, &own.id, &announced).is_none());
+    drop((held, theirs));
+}
