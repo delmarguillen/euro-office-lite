@@ -122,6 +122,9 @@ jobs:
       - name: PDF JavaScript action tests
         run: node scripts/test-sdkjs-pdf-no-javascript.mjs
 
+      - name: Cell style editing tests
+        run: node scripts/test-sdkjs-cell-styles.mjs
+
       - name: Bridge tests
         run: |
           for test in scripts/test-bridge-*.mjs; do
