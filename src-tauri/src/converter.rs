@@ -55,13 +55,27 @@ pub async fn convert_file(
     );
     write_file(&params_path, &xml)?;
 
-    let command = x2t_command(app, &binaries_dir)?
+    // The std command keeps what the shell plugin set up: the sidecar path and,
+    // on Windows, CREATE_NO_WINDOW.
+    let mut command: std::process::Command = x2t_command(app, &binaries_dir)?
         .current_dir(&binaries_dir)
         .args([params_path.to_string_lossy().as_ref()])
-        .envs(x2t_task::convert_env(&binaries_dir));
-    let result = command.output().await.map_err(|e| e.to_string())?;
+        .envs(x2t_task::convert_env(&binaries_dir))
+        .into();
+    // Waiting for x2t blocks, so it does not hold a thread of the async runtime.
+    let run = tauri::async_runtime::spawn_blocking(move || {
+        x2t_task::run_with_time_limit(&mut command, x2t_task::DOCUMENT_TIME_LIMIT)
+    })
+    .await
+    .map_err(|e| format!("x2t task failed: {}", e))?;
 
     let _ = std::fs::remove_file(&params_path);
+
+    let result = run.map_err(|error| {
+        let message = error.to_string();
+        crate::temp_layout::append_log(&format!("[X2T] {}", message));
+        message
+    })?;
 
     if result.status.success() {
         Ok("ok".to_string())
