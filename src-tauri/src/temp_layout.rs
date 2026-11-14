@@ -500,6 +500,15 @@ fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
     }
 }
 
+// Fails when the folder is already there, so the generator never writes into
+// a folder it did not make.
+fn create_generation_dir(dir: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir(dir)
+}
+
 // x2t writes straight into the generation's own folder, which never moves, so
 // any path it records there stays valid. The lock is held before the marker
 // is written: the generation is never published without a holder.
@@ -509,8 +518,6 @@ fn build_generation(
     tag: &str,
     generate: impl FnOnce(&Path) -> bool,
 ) -> Option<FontGeneration> {
-    std::fs::create_dir_all(dir.parent()?).ok()?;
-    std::fs::create_dir(dir).ok()?;
     if !generate(dir) {
         return None;
     }
@@ -626,6 +633,10 @@ fn ensure_font_cache_for(
     }
     remove_unpublished_generations(root);
     let dir = new_generation_dir(root, instance_id);
+    if create_generation_dir(&dir).is_err() {
+        drop(lock);
+        return FontCache::Failed;
+    }
     let Some(generation) = build_generation(&dir, expected, instance_id, generate) else {
         // Earlier generations stay as they were, and so do their readers.
         let _ = std::fs::remove_dir_all(&dir);

@@ -364,7 +364,7 @@ const POLL: std::time::Duration = std::time::Duration::from_millis(20);
 #[test]
 fn a_reader_sees_only_its_generation_while_a_new_one_is_installed() {
     let root = scratch_root();
-    published(&root, "1-1-0", b"before", b"old");
+    published(&root, "0-0-1", b"before", b"old");
     let reader = adopt_generation(&root, "before").unwrap();
     let mut seen_meanwhile = None;
 
@@ -398,10 +398,10 @@ fn a_reader_sees_only_its_generation_while_a_new_one_is_installed() {
 #[test]
 fn a_half_published_generation_is_not_used() {
     let root = scratch_root();
-    let unpublished = generations_dir(&root).join("1-1-0");
+    let unpublished = generations_dir(&root).join("0-0-1");
     std::fs::create_dir_all(&unpublished).unwrap();
     write_fonts(&unpublished, b"no marker yet");
-    let incomplete = published(&root, "1-2-0", expected_marker().as_bytes(), b"half");
+    let incomplete = published(&root, "0-0-2", expected_marker().as_bytes(), b"half");
     std::fs::remove_file(incomplete.join("font_selection.bin")).unwrap();
 
     assert!(!fonts_ready(&root));
@@ -421,7 +421,7 @@ fn a_half_published_generation_is_not_used() {
 #[test]
 fn a_failed_generation_keeps_the_good_one() {
     let root = scratch_root();
-    let good = published(&root, "1-1-0", b"before", b"old");
+    let good = published(&root, "0-0-1", b"before", b"old");
     let reader = adopt_generation(&root, "before").unwrap();
     let mut attempt = None;
 
@@ -453,8 +453,8 @@ fn a_failed_generation_keeps_the_good_one() {
 #[test]
 fn cleanup_keeps_a_generation_in_use_until_it_is_let_go() {
     let root = scratch_root();
-    let unused = published(&root, "1-1-0", b"oldest", b"oldest");
-    let in_use = published(&root, "1-2-0", b"before", b"old");
+    let unused = published(&root, "0-0-1", b"oldest", b"oldest");
+    let in_use = published(&root, "0-0-2", b"before", b"old");
     let reader = adopt_generation(&root, "before").unwrap();
 
     let outcome = ensure_font_cache(&root, "2-1", |dir: &Path| build(dir, b"new"), WAIT, POLL);
@@ -481,7 +481,7 @@ fn cleanup_keeps_a_generation_in_use_until_it_is_let_go() {
 #[test]
 fn old_generations_stay_while_another_start_holds_the_fonts_lock() {
     let root = scratch_root();
-    let unused = published(&root, "1-1-0", b"oldest", b"oldest");
+    let unused = published(&root, "0-0-1", b"oldest", b"oldest");
     let held = take_lock(&root.join(FONTS_LOCK)).unwrap();
 
     assert_eq!(remove_old_font_generations(&root), 0);
@@ -508,7 +508,7 @@ fn another_marker_or_fingerprint_builds_a_new_generation() {
 
     for stale in [before, other_version] {
         let root = scratch_root();
-        let old = published(&root, "1-1-0", stale.as_bytes(), b"old");
+        let old = published(&root, "0-0-1", stale.as_bytes(), b"old");
 
         let outcome = ensure_font_cache_for(&root, &expected, "2-1", |dir: &Path| build(dir, b"new"), WAIT, POLL);
 
@@ -537,7 +537,7 @@ fn a_start_during_generation_waits_and_does_not_generate_again() {
     let other_root = root.clone();
     let other = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(150));
-        published(&other_root, "1-1-0", expected_marker().as_bytes(), b"theirs");
+        published(&other_root, "0-0-1", expected_marker().as_bytes(), b"theirs");
         drop(held);
     });
 
@@ -568,10 +568,21 @@ fn a_generator_that_never_finishes_is_not_waited_on_forever() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// The generator writes into, and on failure removes, only a folder it made.
+#[test]
+fn a_generation_folder_that_already_exists_is_not_taken() {
+    let root = scratch_root();
+    let existing = published(&root, "0-0-1", b"theirs", b"theirs");
+
+    assert!(create_generation_dir(&existing).is_err());
+    assert_eq!(read_both(&existing), both(b"theirs"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_dead_generators_folder_is_cleared() {
     let root = scratch_root();
-    let leftover = generations_dir(&root).join("1-9-0");
+    let leftover = generations_dir(&root).join("0-0-9");
     std::fs::create_dir_all(&leftover).unwrap();
     std::fs::write(leftover.join("AllFonts.js"), b"half").unwrap();
 
@@ -583,7 +594,7 @@ fn a_dead_generators_folder_is_cleared() {
 
 fn root_with_marker(marker: &[u8]) -> PathBuf {
     let root = scratch_root();
-    published(&root, "1-1-0", marker, b"cache");
+    published(&root, "0-0-1", marker, b"cache");
     root
 }
 
@@ -684,7 +695,7 @@ fn extended_paths_are_found_in_either_cache_file() {
 #[test]
 fn a_windows_cache_with_extended_paths_is_rebuilt_once() {
     let root = scratch_root();
-    let old = published(&root, "1-1-0", expected_marker().as_bytes(), b"old");
+    let old = published(&root, "0-0-1", expected_marker().as_bytes(), b"old");
     write_cache(&old, ALLFONTS_EXTENDED, SELECTION_EXTENDED);
 
     let outcome = ensure_font_cache(
