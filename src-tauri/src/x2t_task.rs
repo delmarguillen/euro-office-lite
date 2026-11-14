@@ -1043,13 +1043,41 @@ fn is_cfb(head: &[u8]) -> bool {
 
 // What x2t looks for before it gets to the format the extension names, in a
 // file that is neither a CFB nor a ZIP: a ZIP after other data, an Office
-// document in a single XML, which only an .xls of Excel 2003 XML may be, and
-// HTML or MHT, refused even where x2t would find RTF first.
+// document in a single XML, which only an .xls of Excel 2003 XML may be, a
+// flat ODF, which only an .fodt, .fods or .fodp may be, and HTML or MHT,
+// refused even where x2t would find RTF first.
 fn x2t_finds_another_format(ext: &str, content: &ContentSample) -> bool {
     has_zip_end(&content.tail)
         || flat_ooxml_under_another_extension(ext, &content.head)
+        || flat_odf_under_another_extension(ext, &content.head)
         || x2t_reads_as_html(content)
         || x2t_reads_as_mht(&content.head)
+}
+
+fn flat_odf_under_another_extension(ext: &str, head: &[u8]) -> bool {
+    if matches!(ext, "fodt" | "fods" | "fodp") {
+        return false;
+    }
+    x2t_reads_as_flat_odf(head)
+}
+
+const FLAT_ODF_NAMESPACE: &[u8] = b"xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\"";
+const FLAT_ODF_MEDIA_TYPES: [&[u8]; 3] = [
+    b"application/vnd.oasis.opendocument.text",
+    b"application/vnd.oasis.opendocument.spreadsheet",
+    b"application/vnd.oasis.opendocument.presentation",
+];
+
+// isOpenOfficeFlatFormatFile (OfficeFileFormatChecker2.cpp:1597): at least 78
+// bytes with "office:document", the office namespace and one of the media
+// types anywhere in them. Neither an XML declaration nor the root comes first.
+fn x2t_reads_as_flat_odf(head: &[u8]) -> bool {
+    if head.len() < 78 {
+        return false;
+    }
+    contains(head, b"office:document")
+        && contains(head, FLAT_ODF_NAMESPACE)
+        && FLAT_ODF_MEDIA_TYPES.iter().any(|media_type| contains(head, media_type))
 }
 
 fn flat_ooxml_under_another_extension(ext: &str, head: &[u8]) -> bool {

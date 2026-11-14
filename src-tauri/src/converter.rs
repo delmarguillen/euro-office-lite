@@ -438,6 +438,40 @@ mod tests {
         assert_eq!(content_check("flat.fodt", &content), Ok(()));
     }
 
+    // A TXT with a character outside the BMP is read from a UTF-8 copy, where
+    // x2t would find the flat ODF it holds and read it as one.
+    #[test]
+    fn a_txt_holding_a_flat_odf_and_an_emoji_is_refused_before_x2t() {
+        use crate::text_import::{detect_file, TextKind};
+        let documents: [&[u8]; 2] = [
+            include_bytes!("../../tests/corpus/src/basic.fodt"),
+            include_bytes!("../../tests/corpus/src/basic.fods"),
+        ];
+        for document in documents {
+            let mut text = b"A note\n".to_vec();
+            text.extend_from_slice(document);
+            text.extend_from_slice("\u{1F600}\n".as_bytes());
+            let (original, work_dir) = original_and_work_dir("notes.txt", &text);
+            let options = detect_file(&original, TextKind::Txt).unwrap();
+
+            let refused = prepare_editor_input(&original, &work_dir, Some(TextKind::Txt), Some(options));
+
+            assert_eq!(refused.err(), Some("This file is not a valid .txt".to_string()));
+        }
+    }
+
+    #[test]
+    fn the_flat_odf_documents_of_the_corpus_pass_the_content_check() {
+        let documents: [(&str, &[u8]); 3] = [
+            ("basic.fodt", include_bytes!("../../tests/corpus/src/basic.fodt")),
+            ("basic.fods", include_bytes!("../../tests/corpus/src/basic.fods")),
+            ("basic.fodp", include_bytes!("../../tests/corpus/src/basic.fodp")),
+        ];
+        for (name, document) in documents {
+            assert_eq!(content_check(name, document), Ok(()), "{name}");
+        }
+    }
+
     #[test]
     fn a_package_with_a_local_image_link_is_refused_before_x2t() {
         use std::io::Write;
