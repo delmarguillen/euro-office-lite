@@ -269,7 +269,7 @@ pub async fn open_pdf(
     token: String,
 ) -> Result<String, String> {
     let input = pdf_to_open(&state.grants, &token)?;
-    crate::new_window::refuse_if_open_elsewhere(&state, &input)?;
+    let claim = crate::new_window::claim_for_open(&state, &input)?;
     let path = input.to_string_lossy().to_string();
     let file_name = input
         .file_name()
@@ -299,6 +299,7 @@ pub async fn open_pdf(
     );
 
     set_current_file(&state, Some(input));
+    drop(claim);
     *state.modified.lock().unwrap() = false;
     *state.text_options.lock().unwrap() = None;
     super::recent::record(&app, &path);
@@ -349,8 +350,11 @@ pub async fn open_file(
     token: String,
 ) -> Result<String, String> {
     let path = state.grants.resolve(&token, GrantKind::Open)?;
-    crate::new_window::refuse_if_open_elsewhere(&state, &path)?;
-    open_file_inner(app, state, path.to_string_lossy().to_string(), true).await
+    let claim = crate::new_window::claim_for_open(&state, &path)?;
+    let opened = open_file_inner(app, state, path.to_string_lossy().to_string(), true).await;
+    // On success open_file_inner has published the file by now.
+    drop(claim);
+    opened
 }
 
 // Every frontend open path funnels through open_file, so the recent list is fed
@@ -550,7 +554,7 @@ pub async fn save_file_as(
     token: String,
 ) -> Result<String, String> {
     let dest = state.grants.resolve(&token, GrantKind::Save)?;
-    crate::new_window::refuse_save_if_open_elsewhere(&state, &dest)?;
+    let claim = crate::new_window::claim_for_save(&state, &dest)?;
     crate::save_target::check_writable_destination(&dest)?;
     let path = dest.to_string_lossy().to_string();
     let format_to = detect_format(&dest);
@@ -567,6 +571,7 @@ pub async fn save_file_as(
         *state.modified.lock().unwrap() = false;
         super::recent::record(&app, &path);
     }
+    drop(claim);
     Ok("ok".to_string())
 }
 
@@ -633,9 +638,11 @@ async fn save_pdf_inner(
     let changes = decode_pdf_changes(data)?;
     let current = open_pdf_file(state)?;
     let dest = pdf_save_destination(&state.grants, token.as_deref(), &current)?;
-    if dest != current {
-        crate::new_window::refuse_save_if_open_elsewhere(state, &dest)?;
-    }
+    let claim = if dest != current {
+        Some(crate::new_window::claim_for_save(state, &dest)?)
+    } else {
+        None
+    };
     crate::protocol_limits::check_pdf_save_target(&dest)?;
     // Refused before x2t runs; write_beside_and_rename checks again.
     crate::save_target::check_writable_destination(&dest)?;
@@ -661,6 +668,7 @@ async fn save_pdf_inner(
         set_current_file(state, Some(dest.clone()));
         super::recent::record(app, &dest.to_string_lossy());
     }
+    drop(claim);
     *state.modified.lock().unwrap() = false;
     Ok("ok".to_string())
 }
