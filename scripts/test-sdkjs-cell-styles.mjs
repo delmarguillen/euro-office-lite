@@ -214,7 +214,7 @@ same('rejected names add no history point', run('historyPoints() - pointsBeforeR
 same('modify an unknown style: error', run("api.asc_modifyCellStyle('Nope', selectionXfs)"), errors.notFound);
 same('modify Normal: error', run("api.asc_modifyCellStyle('Normal', selectionXfs)"), errors.normal);
 
-// --- Applying a style is unchanged: font, fill, border and number format, not alignment ---
+// --- Applying a style: font, fill, border and number format; Totals has no alignment ---
 run(`
   select('B1:B3');
   api.asc_setCellStyle('Totals');
@@ -310,6 +310,67 @@ same('add, undo: the style goes away', run("[styleNames().length - stylesBeforeE
 run('AscCommon.History.Redo();');
 same('add, redo: the style is back', run("styleNames().indexOf('Extra') !== -1"), true);
 
+// --- Alignment of a style, applied as Excel applies cellStyleXfs applyAlignment ---
+run(`
+  function alignOf(ref) {
+    var align = (cellXfs(ref) || new AscCommonExcel.CellXfs()).getAlign2();
+    return [align.getAlignHorizontal(), align.getAlignVertical(), !!align.wrap, align.getIndent(), align.getAngle()];
+  }
+  var defaultAlign = alignOf('D1');
+  var centeredXfs = new AscCommonExcel.CellXfs();
+  centeredXfs.asc_setHorAlign(AscCommon.align_Center);
+  centeredXfs.asc_setVertAlign(Asc.c_oAscVAlign.Top);
+  centeredXfs.asc_setWrapText(true);
+  centeredXfs.align.setAngle(45);
+  api.asc_addCellStyle('Centered', centeredXfs);
+  api.asc_addCellStyle('No alignment', new AscCommonExcel.CellXfs());
+  select('D1:D3');
+  var pointsBeforeCentered = historyPoints();
+  api.asc_setCellStyle('Centered');
+`);
+const top = run('Asc.c_oAscVAlign.Top');
+const centeredAlign = [center, top, true, 0, 45];
+same('align flag: an added style applies alignment only when it has one', run("[api.wbModel.CellStyles.getStyleByName('Centered').ApplyAlignment, api.wbModel.CellStyles.getStyleByName('No alignment').ApplyAlignment]"), [true, false]);
+same('align flag: of the predefined styles only Normal applies alignment', run("api.wbModel.CellStyles.DefaultStyles.filter(function (s) { return false !== s.ApplyAlignment; }).map(function (s) { return s.Name; })"), ['Normal']);
+same('apply centered style: D1 is centered, top, wrapped, at 45 degrees', run("alignOf('D1')"), centeredAlign);
+same('apply centered style: one history point', run('historyPoints() - pointsBeforeCentered'), 1);
+run('AscCommon.History.Undo();');
+same('apply centered style, undo: D1 alignment is back', run("[describe('D1').style, alignOf('D1')]"), ['Normal', run('defaultAlign')]);
+run('AscCommon.History.Redo();');
+same('apply centered style, redo: D1 is centered again', run("alignOf('D1')"), centeredAlign);
+run(`
+  ws().getRange2('E1').setAlignHorizontal(AscCommon.align_Right);
+  ws().getRange2('E2').setAlignHorizontal(AscCommon.align_Right);
+  ws().getRange2('E2').setAngle(45);
+  var handAlignE2 = alignOf('E2');
+  select('E1'); api.asc_setCellStyle('Title');
+  select('E2'); api.asc_setCellStyle('Good');
+  select('E3'); api.asc_setCellStyle('No alignment');
+`);
+same('apply Title (no alignment): E1 keeps its right alignment', run("[describe('E1').style, alignOf('E1')[0]]"), ['Title', right]);
+same('apply Good (no alignment): E2 keeps alignment and angle', run("[describe('E2').style, alignOf('E2')]"), ['Good', run('handAlignE2')]);
+run("select('D3'); api.asc_setCellStyle('Normal');");
+same('apply Normal (applies alignment): D3 back to the default alignment', run("alignOf('D3')"), run('defaultAlign'));
+run("select('F1:F1048576'); api.asc_setCellStyle('Centered');");
+same('apply to a whole column: the column takes the alignment', run("(function (a) { return [a.getAlignHorizontal(), a.getAlignVertical()]; })(ws().aCols[5].xfs.getAlign2())"), [center, top]);
+run(`
+  ws().getRange2('D2').setAlignHorizontal(AscCommon.align_Right);
+  var centeredNew = api.asc_getCellStyleXfs('Centered');
+  centeredNew.asc_setHorAlign(AscCommon.align_Left);
+  centeredNew.asc_setVertAlign(Asc.c_oAscVAlign.Center);
+  api.asc_modifyCellStyle('Centered', centeredNew);
+`);
+const left = run('AscCommon.align_Left');
+const vcenter = run('Asc.c_oAscVAlign.Center');
+same('modify alignment: D1 takes the new alignment', run("alignOf('D1')"), [left, vcenter, true, 0, 45]);
+same('modify alignment: D2 keeps its right alignment, set by hand', run("alignOf('D2')"), [right, vcenter, true, 0, 45]);
+run(`
+  var badAlignXfs = api.asc_getCellStyleXfs('Good');
+  badAlignXfs.asc_setFontBold(true);
+  api.asc_modifyCellStyle('Good', badAlignXfs);
+`);
+same('modify without alignment: Good still does not apply it, E2 keeps its own', run("[api.wbModel.CellStyles.getStyleByName('Good').ApplyAlignment, alignOf('E2')]"), [false, run('handAlignE2')]);
+
 // --- Save and open again ---
 const saved = run('api.asc_nativeGetFile()');
 run = openEditor(saved);
@@ -325,6 +386,14 @@ run(`
   afterOpenXfs.asc_setFontBold(false);
   var afterOpenResult = api.asc_modifyCellStyle('Totals', afterOpenXfs);
 `);
+same('reopen: the applyAlignment flags stay', run("['Centered', 'No alignment', 'Totals', 'Good', 'Title'].map(function (n) { return api.wbModel.CellStyles.getStyleByName(n).ApplyAlignment; })"), [true, false, true, false, false]);
+same('reopen: D1 keeps the style alignment', run("[describe('D1').style, describe('D1').hor]"), ['Centered', left]);
+run(`
+  ws().getRange2('G1').setAlignHorizontal(AscCommon.align_Right);
+  select('G1'); api.asc_setCellStyle('Good');
+  select('G2'); api.asc_setCellStyle('Centered');
+`);
+same('reopen: Good leaves G1 alignment, Centered aligns G2', run("[describe('G1').hor, describe('G2').hor]"), [right, left]);
 same('reopen: modify still works and reaches B1', run("[afterOpenResult, describe('B1').bold]"), [No, false]);
 
 const failed = results.filter((r) => !r.ok).length;
