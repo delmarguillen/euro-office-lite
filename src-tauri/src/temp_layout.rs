@@ -624,6 +624,11 @@ fn file_identity(path: &Path, portal: Option<&Path>) -> Option<PathBuf> {
     Some(portal_host_path(&canonical).unwrap_or(canonical))
 }
 
+// file_identity with the document portal of this process, if it has one.
+pub fn document_identity(path: &Path) -> Option<PathBuf> {
+    file_identity(path, document_portal().as_deref())
+}
+
 // Written whole and renamed into place, so a reader never sees half a path.
 pub fn publish_open_document(dir: &Path, document: Option<&Path>) -> std::io::Result<()> {
     let target = dir.join(OPEN_DOCUMENT);

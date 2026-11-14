@@ -47,13 +47,18 @@ pub fn new_window_launch(
 }
 
 // Both paths are resolved by the file system when they can be, so a symlink,
-// a ".." or (on Windows) another letter case still names the same file.
+// a ".." or (on Windows) another letter case still names the same file, and
+// so do two document portal paths of one host file (temp_layout.rs).
 pub fn is_open_document(chosen: &Path, current: Option<&Path>) -> bool {
     let Some(current) = current else {
         return false;
     };
-    match (chosen.canonicalize(), current.canonicalize()) {
-        (Ok(chosen), Ok(current)) => chosen == current,
+    let identities = (
+        crate::temp_layout::document_identity(chosen),
+        crate::temp_layout::document_identity(current),
+    );
+    match identities {
+        (Some(chosen), Some(current)) => chosen == current,
         _ => chosen == current,
     }
 }
