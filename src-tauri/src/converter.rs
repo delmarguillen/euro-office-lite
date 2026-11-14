@@ -792,6 +792,30 @@ mod tests {
         assert_eq!(files_in(&work_dir), 1, "no second copy");
     }
 
+    fn txt_input(text: &str) -> Result<EditorInput, String> {
+        use crate::text_import::{detect_file, TextKind};
+        let (original, work_dir) = original_and_work_dir("notes.txt", text.as_bytes());
+        let options = detect_file(&original, TextKind::Txt).unwrap();
+        prepare_editor_input(&original, &work_dir, Some(TextKind::Txt), Some(options))
+    }
+
+    #[test]
+    fn a_txt_with_an_emoji_is_read_as_text_from_its_utf8_copy() {
+        use crate::text_import::ENCODING_UTF8;
+        let starts = ["", "PK\x03\x04", "\u{D0}\u{CF}\u{11}\u{E0}\u{A1}\u{B1}\u{1A}\u{E1}", "{\\rtf1 ", "<?xml "];
+        for start in starts {
+            let input = txt_input(&format!("{}a \u{1F600} b\n", start)).expect(start);
+            assert_eq!(input.options.map(|o| o.encoding), Some(ENCODING_UTF8), "{:?}", start);
+        }
+    }
+
+    // x2t reads HTML from the UTF-8 copy, so the content check refuses it.
+    #[test]
+    fn a_txt_holding_html_and_an_emoji_is_refused_before_x2t() {
+        let refused = txt_input("<html><body><b>x</b></body></html>\n\u{1F600}\n");
+        assert_eq!(refused.err(), Some("This file is not a valid .txt".to_string()));
+    }
+
     // A temp root whose font cache is missing, next to an app folder whose
     // binaries/ holds the bundled list, as an installed app has.
     fn root_without_cache() -> (std::path::PathBuf, std::path::PathBuf) {

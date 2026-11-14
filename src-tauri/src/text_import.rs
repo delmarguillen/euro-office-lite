@@ -555,6 +555,16 @@ fn decode_utf8_strict(bytes: &[u8]) -> std::io::Result<String> {
     })
 }
 
+fn write_utf8_text_with_bom(copy: &Path, text: &str) -> std::io::Result<()> {
+    let mut bytes = UTF8_BOM.to_vec();
+    bytes.extend_from_slice(text.as_bytes());
+    std::fs::write(copy, bytes)
+}
+
+fn has_characters_outside_the_bmp(text: &str) -> bool {
+    text.chars().any(|c| c as u32 > 0xFFFF)
+}
+
 fn write_utf32_text(copy: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut out = std::io::BufWriter::new(std::fs::File::create(copy)?);
@@ -589,7 +599,13 @@ pub struct ReadCopy {
 
 // x2t picks how to read a file from its first bytes, before its extension.
 // UTF-32 without a BOM does not start like any document format, so a TXT or CSV
-// is always read as the text it is. Only reading uses it: saving keeps the
+// is always read as the text it is. x2t 10.0.0.169 on Linux reads no text at
+// all from a UTF-32 TXT that holds a character outside the BMP (an emoji, CJK
+// extension B), and the whole text from UTF-8 with a BOM, so such a TXT gets
+// that copy instead. The BOM keeps it from starting like a ZIP, a CFB or RTF;
+// HTML still reads as HTML from it, and the content check before x2t
+// (x2t_task::content_matches_extension) refuses that copy. A CSV reads whole
+// from UTF-32 with the same characters. Only reading uses it: saving keeps the
 // encoding and delimiter of the original, from the options kept for the save.
 // Takes the folder instead of the app state so the corpus can open files the
 // same way. None for anything that is not a TXT or CSV.
@@ -613,6 +629,12 @@ pub fn prepare_read_copy(
     // document, and a file with nothing but a BOM is such a document.
     if text.is_empty() && !bytes.is_empty() {
         remove_if_failed(&copy, std::fs::write(&copy, UTF8_BOM))?;
+        let options = TextOptions { encoding: ENCODING_UTF8, ..options };
+        return Ok(Some(ReadCopy { path: copy, options }));
+    }
+
+    if kind == TextKind::Txt && has_characters_outside_the_bmp(text) {
+        remove_if_failed(&copy, write_utf8_text_with_bom(&copy, text))?;
         let options = TextOptions { encoding: ENCODING_UTF8, ..options };
         return Ok(Some(ReadCopy { path: copy, options }));
     }
@@ -1332,11 +1354,63 @@ mod tests {
         assert_eq!(copy_bytes("wide.csv", &utf16le_with_bom("a\tb\r\n1\t2\r\n")), utf32le("a\tb\r\n1\t2\r\n"));
     }
 
+    fn utf8_bom_and(text: &str) -> Vec<u8> {
+        [UTF8_BOM, text.as_bytes()].concat()
+    }
+
     #[test]
     fn a_txt_keeps_its_line_endings_and_characters_outside_the_bmp() {
         let text = "a\r\n\u{436} \u{4E2D} \u{1F600}\rb\n\n";
-        assert_eq!(copy_bytes("wide.txt", &utf16be_with_bom(text)), utf32le(text));
-        assert_eq!(copy_bytes("utf8.txt", text.as_bytes()), utf32le(text));
+        assert_eq!(copy_bytes("wide.txt", &utf16be_with_bom(text)), utf8_bom_and(text));
+        assert_eq!(copy_bytes("utf8.txt", text.as_bytes()), utf8_bom_and(text));
+    }
+
+    fn copy_encoding(name: &str, bytes: &[u8]) -> u32 {
+        let (dir, temp) = read_copy_dirs(name);
+        let source = dir.join(name);
+        std::fs::write(&source, bytes).unwrap();
+        let encoding = prepared(&source, &temp).expect(name).options.encoding;
+        let _ = std::fs::remove_dir_all(&dir);
+        encoding
+    }
+
+    #[test]
+    fn a_txt_with_an_emoji_is_read_whole_from_utf8_with_a_bom() {
+        for text in ["x\na \u{1F600} b\ny\n", "\u{1F600} first\nline\n"] {
+            assert_eq!(copy_bytes("emoji.txt", text.as_bytes()), utf8_bom_and(text), "{:?}", text);
+            assert_eq!(copy_encoding("emoji.txt", text.as_bytes()), ENCODING_UTF8, "{:?}", text);
+        }
+    }
+
+    #[test]
+    fn a_txt_with_cjk_extension_b_is_read_whole_from_utf8_with_a_bom() {
+        let text = "\u{20000} \u{1D11E}\r\nsecond \u{10348}\r\n";
+        assert_eq!(copy_bytes("cjk.txt", text.as_bytes()), utf8_bom_and(text));
+        assert_eq!(copy_bytes("cjk16.txt", &utf16le_with_bom(text)), utf8_bom_and(text));
+        assert_eq!(copy_encoding("cjk.txt", text.as_bytes()), ENCODING_UTF8);
+    }
+
+    #[test]
+    fn a_txt_within_the_bmp_is_still_read_from_utf32() {
+        let text = "caf\u{E9} \u{20AC} \u{436}\u{438}\u{437}\u{43D}\u{44C} \u{4E2D}\n";
+        assert_eq!(copy_bytes("bmp.txt", text.as_bytes()), utf32le(text));
+        assert_eq!(copy_encoding("bmp.txt", text.as_bytes()), ENCODING_UTF32_LE);
+    }
+
+    #[test]
+    fn a_txt_with_an_emoji_that_starts_like_a_document_format_still_starts_with_the_bom() {
+        let starts = ["PK\x03\x04", "\u{D0}\u{CF}\u{11}\u{E0}\u{A1}\u{B1}\u{1A}\u{E1}", "{\\rtf1 ", "<?xml "];
+        for start in starts {
+            let text = format!("{}rest\n\u{1F600}\n", start);
+            assert_eq!(copy_bytes("start.txt", text.as_bytes()), utf8_bom_and(&text), "{:?}", start);
+        }
+    }
+
+    #[test]
+    fn a_csv_with_characters_outside_the_bmp_is_still_read_from_utf32() {
+        let csv = "name,icon\nsmile,\u{1F600}\n\u{20000},2\n";
+        assert_eq!(copy_bytes("emoji.csv", csv.as_bytes()), utf32le("name,icon\nsmile,\u{1F600}\n\u{20000},2"));
+        assert_eq!(copy_encoding("emoji.csv", csv.as_bytes()), ENCODING_UTF32_LE);
     }
 
     #[test]
