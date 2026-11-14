@@ -325,8 +325,8 @@ static WORK_DIRS_IN_USE: std::sync::Mutex<std::collections::BTreeSet<std::path::
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 static WORK_DIR_RELEASED: std::sync::Condvar = std::sync::Condvar::new();
 
-// x2t runs without a time limit, so a hung one would hold the folder for good.
-// A run that waits longer than this fails instead of waiting with it.
+// A hung x2t holds the folder until DOCUMENT_TIME_LIMIT kills it. A run that
+// waits longer than this fails instead of waiting with it.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const WORK_DIR_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 
@@ -561,7 +561,17 @@ pub fn convert_to_pdf(
     fontdata_dir: &std::path::Path,
     log: &dyn Fn(&str),
 ) -> Result<String, String> {
-    run_x2t_to_pdf(binaries_dir, exe_dir, input, output, temp_dir, fontdata_dir, log, "")
+    run_x2t_to_pdf(
+        binaries_dir,
+        exe_dir,
+        input,
+        output,
+        temp_dir,
+        fontdata_dir,
+        log,
+        "",
+        DOCUMENT_TIME_LIMIT,
+    )
 }
 
 // Writes `source_pdf` with the editor's changes applied to `output`. The
@@ -586,6 +596,7 @@ pub fn apply_pdf_changes(
         fontdata_dir,
         log,
         &pdf_changes_params(&scratch.to_string_lossy()),
+        DOCUMENT_TIME_LIMIT,
     );
     let _ = std::fs::remove_dir_all(&scratch);
     result
@@ -608,6 +619,7 @@ fn run_x2t_to_pdf(
     fontdata_dir: &std::path::Path,
     log: &dyn Fn(&str),
     extra_params: &str,
+    limit: std::time::Duration,
 ) -> Result<String, String> {
     let binaries_dir = &strip_extended_prefix(binaries_dir);
     let output_name = std::path::Path::new(output)
@@ -706,14 +718,15 @@ fn run_x2t_to_pdf(
     write_file(&params_xml, &xml)?;
 
     let mut cmd = pdf_command(&run_x2t, &run_dir, &params_xml, binaries_dir);
-    let result = cmd.output().map_err(|error| {
-        let message = format!("Failed to spawn x2t: {}", error);
-        log(&message);
-        message
-    })?;
+    let run = run_with_time_limit(&mut cmd, limit);
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     drop(work_dir_hold);
     let _ = std::fs::remove_file(&params_xml);
+    let result = run.map_err(|error| {
+        let message = error.to_string();
+        log(&message);
+        message
+    })?;
     let code = result.status.code().unwrap_or(-999);
     let pdf_exists = std::path::Path::new(output).exists();
     let pdf_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
@@ -1680,7 +1693,7 @@ pub fn generate_fonts(
             symlink_dirs.len()
         ));
     }
-    match cmd.output() {
+    match run_with_time_limit(&mut cmd, FONT_SCAN_TIME_LIMIT) {
         Ok(result) => {
             let code = result.status.code().unwrap_or(-1);
             if result.status.success() {
@@ -2600,6 +2613,78 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert_eq!(second, Ok("ok".to_string()));
         assert!(root.join("first.pdf").exists());
         assert!(root.join("second.pdf").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Stands in for an x2t that hangs: writes its pid, says it started and
+    // sleeps as that same process.
+    #[cfg(target_os = "linux")]
+    fn hung_x2t(binaries: &std::path::Path, started: &std::path::Path, pid: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!(
+            "#!/bin/sh\necho $$ > '{}'\ntouch '{}'\nexec sleep 600\n",
+            pid.display(),
+            started.display()
+        );
+        let x2t = binaries.join("x2t");
+        std::fs::write(&x2t, script).unwrap();
+        std::fs::set_permissions(&x2t, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // A hung PDF run used to keep x2t-workdir for good, so every later PDF of
+    // the instance gave up after WORK_DIR_WAIT. Now the hung x2t is killed at
+    // its limit and the next PDF, already waiting, goes ahead.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn after_a_hung_pdf_run_the_next_one_does_not_wait_for_the_work_dir() {
+        let (root, binaries, fontdata) = installed_app("pdf-hung");
+        let started = root.join("hung-x2t-started");
+        let pid_file = root.join("hung-x2t-pid");
+        hung_x2t(&binaries, &started, &pid_file);
+        let temp = root.join("temp/1-1");
+        let limit = std::time::Duration::from_secs(2);
+
+        let hung = {
+            let (root, binaries, fontdata, temp) =
+                (root.clone(), binaries.clone(), fontdata.clone(), temp.clone());
+            std::thread::spawn(move || {
+                run_x2t_to_pdf(
+                    &binaries,
+                    None,
+                    "/d/in.docx",
+                    &root.join("hung.pdf").to_string_lossy(),
+                    &temp,
+                    &fontdata,
+                    &|_: &str| {},
+                    "",
+                    limit,
+                )
+            })
+        };
+        wait_for(&started);
+        // The hung x2t already runs; the next run starts this one.
+        let quick = root.join("quick");
+        std::fs::create_dir_all(&quick).unwrap();
+        fake_x2t(&quick, &root.join("next-x2t-started"), "0");
+        std::fs::rename(quick.join("x2t"), binaries.join("x2t")).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        {
+            let (root, binaries, fontdata, temp) =
+                (root.clone(), binaries.clone(), fontdata.clone(), temp.clone());
+            std::thread::spawn(move || {
+                let _ = sender.send(pdf_in(&root, &binaries, &fontdata, &temp, "next.pdf"));
+            });
+        }
+        let next = receiver
+            .recv_timeout(limit + std::time::Duration::from_secs(20))
+            .expect("the next PDF still waits for the work folder");
+        let hung = hung.join().unwrap();
+
+        assert_eq!(hung, Err("x2t timed out after 2 s".to_string()));
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        assert!(!is_running(pid.trim()), "the hung x2t is still running");
+        assert_eq!(next, Ok("ok".to_string()));
+        assert!(root.join("next.pdf").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
