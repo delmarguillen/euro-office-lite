@@ -476,6 +476,24 @@ fn cleanup_keeps_a_generation_in_use_until_it_is_let_go() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// The generation a start just built is held from before it is published, so
+// the cleanup of a start of another version leaves it alone.
+#[test]
+fn a_new_generation_is_held_by_the_start_that_built_it() {
+    let root = scratch_root();
+    let outcome = ensure_font_cache(&root, "2-1", |dir: &Path| build(dir, b"new"), WAIT, POLL);
+    let FontCache::Generated(new) = outcome else {
+        panic!("not built: {:?}", outcome);
+    };
+
+    let other_version = take_lock(&root.join(FONTS_LOCK)).unwrap();
+    assert_eq!(remove_unused_generations(&root, None), 0);
+    drop(other_version);
+
+    assert_eq!(read_both(new.dir()), both(b"new"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // A start that holds fonts.lock may be about to publish: nothing is removed
 // meanwhile, it cleans up itself afterwards.
 #[test]
