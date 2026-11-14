@@ -89,6 +89,104 @@ fn x2t_search_dirs(
     dirs
 }
 
+// The longest an x2t run may take before it is killed. The app also runs on a
+// Raspberry Pi 3 with 1 GB of RAM, so both are far above what a run needs.
+// A document conversion (open, save, export, print, PDF save) works on files
+// of up to 512 MB as Editor.bin and 256 MB as PDF (protocol_limits.rs), which
+// can take minutes there.
+pub const DOCUMENT_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+// The font scan takes about 30 s on a Raspberry Pi (main.rs), more with many
+// fonts installed.
+pub const FONT_SCAN_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+// How often a running x2t is checked for its end: std has no wait with a time
+// limit, so the wait polls.
+const X2T_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+#[derive(Debug)]
+pub enum X2tRunError {
+    Spawn(std::io::Error),
+    Wait(std::io::Error),
+    TimedOut(std::time::Duration),
+}
+
+impl std::fmt::Display for X2tRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            X2tRunError::Spawn(error) => write!(f, "Failed to spawn x2t: {}", error),
+            X2tRunError::Wait(error) => write!(f, "Failed to wait for x2t: {}", error),
+            X2tRunError::TimedOut(limit) => write!(f, "x2t timed out after {} s", limit.as_secs()),
+        }
+    }
+}
+
+// Runs `cmd` as Command::output does (empty stdin, stdout and stderr
+// collected, exit status), but kills it once it has run for `limit`. Each pipe
+// is read on its own thread, so x2t never blocks on a full pipe. A killed x2t
+// is reaped before this returns, so whatever the caller holds for the run (the
+// PDF work folder, fonts.lock) is released only once x2t is gone. Processes x2t
+// itself started are not killed.
+pub fn run_with_time_limit(
+    cmd: &mut std::process::Command,
+    limit: std::time::Duration,
+) -> Result<std::process::Output, X2tRunError> {
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(X2tRunError::Spawn)?;
+    let stdout = read_in_thread(child.stdout.take());
+    let stderr = read_in_thread(child.stderr.take());
+    // On an error the reader threads are left to end when the pipes close.
+    let status = wait_with_limit(&mut child, limit)?;
+    Ok(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
+fn read_in_thread<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    })
+}
+
+fn wait_with_limit(
+    child: &mut std::process::Child,
+    limit: std::time::Duration,
+) -> Result<std::process::ExitStatus, X2tRunError> {
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(error) => {
+                kill_and_reap(child);
+                return Err(X2tRunError::Wait(error));
+            }
+        }
+        if started.elapsed() >= limit {
+            kill_and_reap(child);
+            return Err(X2tRunError::TimedOut(limit));
+        }
+        std::thread::sleep(X2T_POLL);
+    }
+}
+
+// SIGKILL on Linux and macOS, TerminateProcess on Windows; wait() returns once
+// the process is gone.
+fn kill_and_reap(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Where to write the params file x2t is invoked with. Every path inside the
 /// XML is absolute, so the file does not need to sit next to the output; the
 /// print path has always written it into temp_dir and works on all three
@@ -1643,6 +1741,109 @@ mod tests {
         } else {
             "x2t"
         }
+    }
+
+    // A shell script that stands in for a slow, failing or hung x2t.
+    #[cfg(unix)]
+    fn script(dir: &std::path::Path, body: &str) -> std::process::Command {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("x2t.sh");
+        std::fs::write(&path, format!("#!/bin/sh\n{}\n", body)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::process::Command::new(path)
+    }
+
+    // run_with_time_limit on another thread: a run that does not return in
+    // time fails the test instead of hanging it.
+    #[cfg(unix)]
+    fn run_or_fail(
+        mut cmd: std::process::Command,
+        limit: std::time::Duration,
+    ) -> Result<std::process::Output, X2tRunError> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(run_with_time_limit(&mut cmd, limit));
+        });
+        receiver
+            .recv_timeout(limit + std::time::Duration::from_secs(10))
+            .expect("the x2t run did not return after its time limit")
+    }
+
+    #[cfg(unix)]
+    fn is_running(pid: &str) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+
+    #[cfg(unix)]
+    const TEST_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_that_ends_in_time_keeps_its_output_and_exit_code() {
+        let dir = scratch_dir("run-ok");
+        let body = "echo out; echo err >&2; exit 0";
+
+        let output = run_or_fail(script(&dir, body), TEST_LIMIT).unwrap();
+
+        assert_eq!(output, script(&dir, body).output().unwrap());
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"out\n");
+        assert_eq!(output.stderr, b"err\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_that_fails_in_time_reports_as_before() {
+        let dir = scratch_dir("run-fails");
+        let body = "echo out; echo err >&2; exit 89";
+
+        let output = run_or_fail(script(&dir, body), TEST_LIMIT).unwrap();
+
+        assert_eq!(output, script(&dir, body).output().unwrap());
+        assert_eq!(output.status.code(), Some(89));
+        assert_eq!(output.stdout, b"out\n");
+        assert_eq!(output.stderr, b"err\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_run_is_killed_at_its_limit() {
+        let dir = scratch_dir("run-hangs");
+        let pid_file = dir.join("pid");
+        let body = format!("echo $$ > '{}'; exec sleep 600", pid_file.display());
+        let limit = std::time::Duration::from_secs(1);
+        let started = std::time::Instant::now();
+
+        let error = run_or_fail(script(&dir, &body), limit).unwrap_err();
+
+        assert!(started.elapsed() >= limit);
+        assert_eq!(error.to_string(), "x2t timed out after 1 s");
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        assert!(!is_running(pid.trim()), "x2t is still running");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 1 MB on each pipe: far more than a pipe buffer (64 KB on Linux), so an
+    // unread pipe would stop x2t before it exits.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_with_more_output_than_a_pipe_holds_does_not_block() {
+        let dir = scratch_dir("run-chatty");
+        let body = "head -c 1048576 /dev/zero; head -c 1048576 /dev/zero >&2; exit 0";
+
+        let output = run_or_fail(script(&dir, body), TEST_LIMIT).unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 1048576);
+        assert_eq!(output.stderr.len(), 1048576);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // The #35 regression: convert_to_pdf used to drop the params file next to
