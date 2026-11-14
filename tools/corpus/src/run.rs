@@ -665,6 +665,8 @@ impl DocRun<'_> {
                 self.log.line(&prefix, line);
                 lines.borrow_mut().push(line.to_string());
             },
+            // No locale, as when the corpus baselines were taken.
+            None,
         );
         let output_size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
         let (status, exit, signal) = classify_pdf(&result, &lines.borrow(), output_size);
