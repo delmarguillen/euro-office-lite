@@ -73,6 +73,28 @@ index 3475e4b21a..10e07006cd 100644
  
  	window['AscCH'].historyitem_Worksheet_RemoveCell = 1;
  	window['AscCH'].historyitem_Worksheet_RemoveRows = 2;
+diff --git a/cell/model/Serialize.js b/cell/model/Serialize.js
+index 7a1fe8512e..85c8b8cc1a 100644
+--- a/cell/model/Serialize.js
++++ b/cell/model/Serialize.js
+@@ -14618,6 +14618,8 @@
+                 // ApplyNumberFormat (ToDo возможно это свойство должно быть в xfs)
+                 if (null !== oStyleObject.xfs.ApplyNumberFormat)
+                     oCellStyle.ApplyNumberFormat = oStyleObject.xfs.ApplyNumberFormat;
++                if (null !== oStyleObject.xfs.ApplyAlignment)
++                    oCellStyle.ApplyAlignment = oStyleObject.xfs.ApplyAlignment;
+                 oCellStyle.xfs = g_StyleCache.addXf(newXf);
+ 
+                 oOutput.push(oCellStyle);
+@@ -15225,6 +15227,8 @@
+             // ApplyNumberFormat (ToDo возможно это свойство должно быть в xfs)
+             if (null !== oCellStyleXfs.ApplyNumberFormat)
+                 oCellStyle.ApplyNumberFormat = oCellStyleXfs.ApplyNumberFormat;
++            if (null !== oCellStyleXfs.ApplyAlignment)
++                oCellStyle.ApplyAlignment = oCellStyleXfs.ApplyAlignment;
+ 
+             oCellStyle.xfs = g_StyleCache.addXf(newXf);
+             // ToDo при отсутствии имени все не очень хорошо будет!
 diff --git a/cell/model/UndoRedo.js b/cell/model/UndoRedo.js
 index 97bfa31cfb..8691859850 100644
 --- a/cell/model/UndoRedo.js
@@ -107,10 +129,10 @@ index 97bfa31cfb..8691859850 100644
  			if (!bUndo && wb.bCollaborativeChanges) {
  				wb.calculate(Data.elem, nSheetId);
 diff --git a/cell/model/Workbook.js b/cell/model/Workbook.js
-index eed6dbdcdb..2477be2ecd 100644
+index eed6dbdcdb..3a12b40787 100644
 --- a/cell/model/Workbook.js
 +++ b/cell/model/Workbook.js
-@@ -4339,6 +4339,190 @@
+@@ -4339,6 +4339,200 @@
  	Workbook.prototype.addDefName = function (name, ref, sheetId, hidden, isTable) {
  		return this.dependencyFormulas.addDefName(name, ref, sheetId, hidden, isTable);
  	};
@@ -132,6 +154,7 @@ index eed6dbdcdb..2477be2ecd 100644
 +		style.Name = name;
 +		style.XfId = this.CellStyles.getNextXfId();
 +		style.xfs = createCellStyleXfs(xfs);
++		style.ApplyAlignment = null !== style.xfs.align;
 +
 +		AscCommon.History.Create_NewPoint();
 +		AscCommon.History.StartTransaction();
@@ -158,6 +181,9 @@ index eed6dbdcdb..2477be2ecd 100644
 +		var newStyle = oldStyle.clone();
 +		newStyle.XfId = isInDocument ? oldStyle.XfId : this.CellStyles.getNextXfId();
 +		newStyle.xfs = createCellStyleXfs(xfs);
++		if (null !== newStyle.xfs.align) {
++			newStyle.ApplyAlignment = true;
++		}
 +
 +		AscCommon.History.Create_NewPoint();
 +		AscCommon.History.StartTransaction();
@@ -224,7 +250,11 @@ index eed6dbdcdb..2477be2ecd 100644
 +	var cellStyleAlignProperties = [
 +		{get: AscCommonExcel.Align.prototype.getAlignHorizontal, set: AscCommonExcel.Align.prototype.setAlignHorizontal},
 +		{get: AscCommonExcel.Align.prototype.getAlignVertical, set: AscCommonExcel.Align.prototype.setAlignVertical},
-+		{get: AscCommonExcel.Align.prototype.getWrap, set: AscCommonExcel.Align.prototype.setWrap}
++		{get: AscCommonExcel.Align.prototype.getWrap, set: AscCommonExcel.Align.prototype.setWrap},
++		{get: AscCommonExcel.Align.prototype.getShrinkToFit, set: AscCommonExcel.Align.prototype.setShrinkToFit},
++		{get: AscCommonExcel.Align.prototype.getIndent, set: AscCommonExcel.Align.prototype.setIndent},
++		{get: AscCommonExcel.Align.prototype.getReadingOrder, set: AscCommonExcel.Align.prototype.setReadingOrder},
++		{get: AscCommonExcel.Align.prototype.getAngle, set: AscCommonExcel.Align.prototype.setAngle}
 +	];
 +	// Returns the font with the new style's values, or null when nothing changes.
 +	function getFontForCellStyle(font, oldFont, newFont) {
@@ -289,10 +319,12 @@ index eed6dbdcdb..2477be2ecd 100644
 +			newXfs.num = newStyle.xfs.num;
 +			isChanged = true;
 +		}
-+		var align = getAlignForCellStyle(xfs.getAlign2(), oldStyle.getAlign(), newStyle.getAlign());
-+		if (align) {
-+			newXfs.align = align;
-+			isChanged = true;
++		if (newStyle.isAlignmentApplied()) {
++			var align = getAlignForCellStyle(xfs.getAlign2(), oldStyle.getAlign(), newStyle.getAlign());
++			if (align) {
++				newXfs.align = align;
++				isChanged = true;
++			}
 +		}
 +		if (isChanged) {
 +			item.setStyle(newXfs);
@@ -301,8 +333,17 @@ index eed6dbdcdb..2477be2ecd 100644
  	Workbook.prototype.getDefinesNames = function ( name, sheetId, isDirectSearch ) {
  		return this.dependencyFormulas.getDefNameByName( name, sheetId, isDirectSearch );
  	};
+@@ -15862,6 +16056,8 @@
+ 				this.setBorder(oStyle.getBorder());
+ 			if (oStyle.ApplyNumberFormat)
+ 				this.setNumFormat(oStyle.getNumFormatStr());
++			if (oStyle.isAlignmentApplied())
++				oStyle.setAlignTo(this);
+ 		}
+ 		return oStyle;
+ 	};
 diff --git a/cell/model/WorkbookElems.js b/cell/model/WorkbookElems.js
-index ca747b4de6..4f0c667bd7 100644
+index ca747b4de6..4e305422f9 100644
 --- a/cell/model/WorkbookElems.js
 +++ b/cell/model/WorkbookElems.js
 @@ -5073,6 +5073,25 @@ var g_oFontProperties = {
@@ -402,7 +443,23 @@ index ca747b4de6..4f0c667bd7 100644
  /** @constructor */
  function CCellStyle() {
  	this.BuiltinId = null;
-@@ -5551,6 +5634,95 @@ CCellStyle.prototype.getNumFormatStr = function () {
+@@ -5507,6 +5590,7 @@ function CCellStyle() {
+ 	this.ApplyFill = true;
+ 	this.ApplyFont = true;
+ 	this.ApplyNumberFormat = true;
++	this.ApplyAlignment = true;
+ }
+ CCellStyle.prototype.clone = function () {
+ 	var oNewStyle = new CCellStyle();
+@@ -5520,6 +5604,7 @@ CCellStyle.prototype.clone = function () {
+ 	oNewStyle.ApplyFill = this.ApplyFill;
+ 	oNewStyle.ApplyFont = this.ApplyFont;
+ 	oNewStyle.ApplyNumberFormat = this.ApplyNumberFormat;
++	oNewStyle.ApplyAlignment = this.ApplyAlignment;
+ 
+ 	oNewStyle.xfs = this.xfs.clone();
+ 	return oNewStyle;
+@@ -5551,6 +5636,125 @@ CCellStyle.prototype.getNumFormatStr = function () {
  		return this.xfs.num.getFormat();
  	return g_oDefaultFormat.Num.getFormat();
  };
@@ -410,6 +467,30 @@ index ca747b4de6..4f0c667bd7 100644
 +	if (null != this.xfs && null != this.xfs.align)
 +		return this.xfs.align;
 +	return g_oDefaultFormat.AlignAbs;
++};
++/**
++ * Whether applying the style sets the alignment. sdkjs did not keep the
++ * cellStyleXfs applyAlignment before, so the files it saved carry none and read
++ * as applying it. A style without alignment of its own therefore leaves the cell
++ * as it is, except Normal, which applies the default alignment.
++ */
++CCellStyle.prototype.isAlignmentApplied = function () {
++	return false !== this.ApplyAlignment && (null != this.xfs.align || 0 === this.BuiltinId);
++};
++/**
++ * Gives item (a cell, a row or a column) the style's alignment. Each setter adds
++ * its own history item. relativeIndent is left out: it only applies to dxf.
++ */
++CCellStyle.prototype.setAlignTo = function (item) {
++	var align = this.getAlign();
++	item.setAlignHorizontal(align.getAlignHorizontal());
++	item.setAlignVertical(align.getAlignVertical());
++	// getWrap reports true for justified text; the style's own value is copied.
++	item.setWrap(align.wrap);
++	item.setShrinkToFit(align.getShrinkToFit());
++	item.setIndent(align.getIndent());
++	item.setReadingOrder(align.getReadingOrder());
++	item.setAngle(AscCommonExcel.angleFormatToInterface2(align.angle));
 +};
 +// History and co-editing serialization of a cell style edit.
 +CCellStyle.prototype.Properties = {
@@ -423,7 +504,8 @@ index ca747b4de6..4f0c667bd7 100644
 +	ApplyBorder: 7,
 +	ApplyFill: 8,
 +	ApplyFont: 9,
-+	ApplyNumberFormat: 10
++	ApplyNumberFormat: 10,
++	ApplyAlignment: 11
 +};
 +CCellStyle.prototype.getType = function () {
 +	return UndoRedoDataTypes.CellStyle;
@@ -455,6 +537,8 @@ index ca747b4de6..4f0c667bd7 100644
 +			return this.ApplyFont;
 +		case this.Properties.ApplyNumberFormat:
 +			return this.ApplyNumberFormat;
++		case this.Properties.ApplyAlignment:
++			return this.ApplyAlignment;
 +	}
 +	return null;
 +};
@@ -493,12 +577,35 @@ index ca747b4de6..4f0c667bd7 100644
 +		case this.Properties.ApplyNumberFormat:
 +			this.ApplyNumberFormat = value;
 +			break;
++		case this.Properties.ApplyAlignment:
++			this.ApplyAlignment = value;
++			break;
 +	}
 +};
  /** @constructor */
  function StyleManager(){
  }
-@@ -22125,6 +22297,9 @@ function RangeDataManagerElem(bbox, data)
+@@ -6475,6 +6679,9 @@ StyleManager.prototype =
+ 			if (oStyle.ApplyNumberFormat) {
+ 				this.setNumFormat(oStyle.getNumFormatStr());
+ 			}
++			if (oStyle.isAlignmentApplied()) {
++				oStyle.setAlignTo(this);
++			}
+ 		}
+ 		return oStyle;
+ 	};
+@@ -6884,6 +7091,9 @@ StyleManager.prototype =
+ 			if (oStyle.ApplyNumberFormat) {
+ 				this.setNumFormat(oStyle.getNumFormatStr());
+ 			}
++			if (oStyle.isAlignmentApplied()) {
++				oStyle.setAlignTo(this);
++			}
+ 		}
+ 		return oStyle;
+ 	};
+@@ -22125,6 +22335,9 @@ function RangeDataManagerElem(bbox, data)
  	prot["asc_setFontSuperscript"] = prot.asc_setFontSuperscript;
  	prot["asc_setBorder"] = prot.asc_setBorder;
  	prot["asc_setNumFormatInfo"] = prot.asc_setNumFormatInfo;
