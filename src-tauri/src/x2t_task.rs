@@ -1743,14 +1743,16 @@ mod tests {
         }
     }
 
-    // A shell script that stands in for a slow, failing or hung x2t.
+    // A shell script that stands in for a slow, failing or hung x2t. sh reads
+    // it rather than the script being executed: executing a file just written
+    // fails now and then with "Text file busy" while other tests spawn.
     #[cfg(unix)]
     fn script(dir: &std::path::Path, body: &str) -> std::process::Command {
-        use std::os::unix::fs::PermissionsExt;
         let path = dir.join("x2t.sh");
-        std::fs::write(&path, format!("#!/bin/sh\n{}\n", body)).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::process::Command::new(path)
+        std::fs::write(&path, body).unwrap();
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.arg(path);
+        cmd
     }
 
     // run_with_time_limit on another thread: a run that does not return in
