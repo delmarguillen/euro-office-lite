@@ -58,6 +58,13 @@ pub fn mark_document_saved(state: &AppState) {
     *state.save_pending.lock().unwrap() = false;
 }
 
+// A document was just opened or created. A save of the previous one that
+// never ended (its page reloaded mid-save) must not keep it counted as unsaved.
+pub fn mark_document_clean(state: &AppState) {
+    *state.modified.lock().unwrap() = false;
+    *state.save_pending.lock().unwrap() = false;
+}
+
 // An exit the user confirmed: there were no changes, or they chose to discard
 // them. Clearing the flags is what tells on_exit to delete the recovery folder.
 pub fn mark_exit_confirmed(state: &AppState) {
@@ -368,6 +375,16 @@ mod tests {
 
         assert!(!dir.exists());
         assert!(!state.instance.dir.exists());
+    }
+
+    #[test]
+    fn opening_a_document_ends_a_save_that_never_finished() {
+        let state = test_state(&scratch("open-after-save"));
+        begin_save_after_a_change(&state);
+
+        mark_document_clean(&state);
+
+        assert!(!has_unsaved_changes(&state));
     }
 
     #[test]

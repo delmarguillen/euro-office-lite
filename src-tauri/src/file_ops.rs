@@ -303,7 +303,7 @@ pub async fn open_pdf(
     );
 
     set_current_file(&state, Some(input));
-    *state.modified.lock().unwrap() = false;
+    crate::app_quit::mark_document_clean(&state);
     *state.text_options.lock().unwrap() = None;
     super::recent::record(&app, &path);
 
@@ -505,7 +505,7 @@ async fn open_file_inner(
     let b64 = STANDARD.encode(&bin_data);
 
     set_current_file(&state, Some(input.clone()));
-    *state.modified.lock().unwrap() = false;
+    crate::app_quit::mark_document_clean(&state);
     // None for anything that is not CSV or TXT: the options of the previous
     // document must not leak into how this one is saved.
     *state.text_options.lock().unwrap() = text_options;
@@ -1139,7 +1139,7 @@ pub async fn create_new(
 
     set_current_file(&state, None);
     *state.save_suggestion.lock().unwrap() = None;
-    *state.modified.lock().unwrap() = false;
+    crate::app_quit::mark_document_clean(&state);
 
     let result = open_file_inner(
         app,
