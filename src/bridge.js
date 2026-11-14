@@ -978,6 +978,25 @@ function _eoBytesToBase64(bytes) {
   return btoa(binary);
 }
 
+// The locale chosen in the spreadsheet editor, for its PDF: without one x2t
+// formats numbers and dates for en-US. Null for the other editors, and while
+// asc_getLocale has no positive integer to give.
+function _eoSheetLocale(ref) {
+  if (window.AscDesktopEditor._currentDocType !== 'cell') return null;
+  if (typeof ref.editor.asc_getLocale !== 'function') return null;
+  var lcid = ref.editor.asc_getLocale();
+  if (!Number.isInteger(lcid) || lcid <= 0) return null;
+  return lcid;
+}
+
+// The arguments of a command that writes a PDF of the open document, with the
+// spreadsheet's locale when there is one.
+function _eoWithSheetLocale(ref, args) {
+  var lcid = _eoSheetLocale(ref);
+  if (lcid !== null) args.lcid = lcid;
+  return args;
+}
+
 // The PDF editor's changes to the open PDF, in base64. They describe the file
 // as it was opened; the backend applies them to it.
 function _eoPdfChanges(ref) {
@@ -3032,7 +3051,9 @@ window.AscDesktopEditor = {
         if (target) {
           var pathExt = target.name.split('.').pop().toLowerCase();
           try {
-            await invoke('save_file_as', { token: target.token });
+            var saveArgs = { token: target.token };
+            if (pathExt === 'pdf') saveArgs = _eoWithSheetLocale(ref, saveArgs);
+            await invoke('save_file_as', saveArgs);
             keepsDocument = pathExt === 'pdf';
             if (pathExt !== 'pdf') {
               // A Save As moves the document and the session follows it, so a
@@ -3359,7 +3380,7 @@ window.AscDesktopEditor = {
         await invoke('print_document', { pdfChanges: _eoPdfChanges(ref) });
       } else {
         await _eoWriteEditorBin(ref);
-        await invoke('print_document', {});
+        await invoke('print_document', _eoWithSheetLocale(ref, {}));
       }
 
       if (printerName) {

@@ -463,6 +463,7 @@ async fn open_file_inner(
         &state.temp_dir.to_string_lossy(),
         &crate::temp_layout::fontdata_dir(&state.font_root),
         input_copy.options.or(text_options),
+        None,
     )
     .await;
     drop(input_copy);
@@ -531,7 +532,7 @@ pub async fn save_file(
     crate::save_target::check_writable_destination(&dest)?;
 
     let format_to = detect_format(&dest);
-    save_editor_bin(&app, &state, &dest, format_to).await?;
+    save_editor_bin(&app, &state, &dest, format_to, None).await?;
 
     // The 0-byte file this document was opened from now holds a real document,
     // so it earns its place in the recent list (#33).
@@ -548,13 +549,16 @@ pub async fn save_file_as(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     token: String,
+    // The locale chosen in the spreadsheet editor, for a PDF export.
+    lcid: Option<i64>,
 ) -> Result<String, String> {
+    let lcid = crate::x2t_task::checked_lcid(lcid)?;
     let dest = state.grants.resolve(&token, GrantKind::Save)?;
     crate::new_window::refuse_save_if_open_elsewhere(&state, &dest)?;
     crate::save_target::check_writable_destination(&dest)?;
     let path = dest.to_string_lossy().to_string();
     let format_to = detect_format(&dest);
-    save_editor_bin(&app, &state, &dest, format_to).await?;
+    save_editor_bin(&app, &state, &dest, format_to, lcid).await?;
 
     // A PDF export leaves the document itself untouched (current_file keeps
     // pointing at the editable file), so it does not belong in the list either.
@@ -579,6 +583,7 @@ async fn save_editor_bin(
     state: &AppState,
     dest: &Path,
     format_to: i32,
+    pdf_lcid: Option<u32>,
 ) -> Result<(), String> {
     let input = state.temp_dir.join("Editor.bin");
     let temp_dir = state.temp_dir.to_string_lossy().to_string();
@@ -594,6 +599,7 @@ async fn save_editor_bin(
             &temp_dir,
             &fontdata,
             text_options,
+            pdf_lcid,
         )
         .await
     };
@@ -841,13 +847,16 @@ pub async fn write_editor_bin(
 }
 
 // `pdf_changes` is set when a PDF is open: what prints is that PDF with the
-// editor's changes applied. Otherwise the Editor.bin written before.
+// editor's changes applied. Otherwise the Editor.bin written before, with
+// `lcid`, the locale chosen in the spreadsheet editor, when there is one.
 #[tauri::command]
 pub async fn print_document(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     pdf_changes: Option<String>,
+    lcid: Option<i64>,
 ) -> Result<String, String> {
+    let lcid = crate::x2t_task::checked_lcid(lcid)?;
     // A failed print leaves nothing for the viewer to open.
     *state.last_print_pdf.lock().unwrap() = None;
 
@@ -885,6 +894,7 @@ pub async fn print_document(
         &state.temp_dir.to_string_lossy(),
         &crate::temp_layout::fontdata_dir(&state.font_root),
         None,
+        lcid,
     )
     .await
     .map_err(|error| {
@@ -1184,6 +1194,7 @@ pub async fn convert_for_insert(
         format_to,
         &insert_dir.to_string_lossy(),
         &crate::temp_layout::fontdata_dir(&state.font_root),
+        None,
         None,
     )
     .await;
