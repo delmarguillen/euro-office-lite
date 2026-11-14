@@ -217,6 +217,61 @@ fn reset_work_dir(work_dir: &std::path::Path) -> Result<(), String> {
     create_dir(work_dir)
 }
 
+// Every PDF run on Linux and macOS rebuilds <temp>/x2t-workdir, removing it
+// first, and its x2t then runs from that folder. Two runs in one instance (an
+// export and a print at once) would remove the folder from under the first
+// x2t, so the rebuild and the x2t run go one at a time per temp dir.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+static WORK_DIRS_IN_USE: std::sync::Mutex<std::collections::BTreeSet<std::path::PathBuf>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+static WORK_DIR_RELEASED: std::sync::Condvar = std::sync::Condvar::new();
+
+// x2t runs without a time limit, so a hung one would hold the folder for good.
+// A run that waits longer than this fails instead of waiting with it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const WORK_DIR_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct WorkDirHold {
+    temp_dir: std::path::PathBuf,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for WorkDirHold {
+    fn drop(&mut self) {
+        let mut in_use = WORK_DIRS_IN_USE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        in_use.remove(&self.temp_dir);
+        WORK_DIR_RELEASED.notify_all();
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn hold_work_dir(
+    temp_dir: &std::path::Path,
+    wait: std::time::Duration,
+) -> Result<WorkDirHold, String> {
+    let in_use = WORK_DIRS_IN_USE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut in_use, waited) = WORK_DIR_RELEASED
+        .wait_timeout_while(in_use, wait, |in_use| in_use.contains(temp_dir))
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if waited.timed_out() {
+        return Err(format!(
+            "PDF work directory in {} still in use by another conversion after {}s",
+            temp_dir.display(),
+            wait.as_secs()
+        ));
+    }
+    in_use.insert(temp_dir.to_path_buf());
+    Ok(WorkDirHold {
+        temp_dir: temp_dir.to_path_buf(),
+    })
+}
+
 const DOCTRENDERER_CONFIG_PARENT: &str = r#"<Settings>
 <file>../editors/sdkjs/common/Native/native.js</file>
 <file>../editors/sdkjs/common/Native/jquery_native.js</file>
@@ -494,6 +549,12 @@ fn run_x2t_to_pdf(
         error
     })?;
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let work_dir_hold = hold_work_dir(temp_dir, WORK_DIR_WAIT).map_err(|error| {
+        log(&format!("setup failed: {}", error));
+        error
+    })?;
+
     #[cfg(target_os = "linux")]
     let runtime = setup_linux_workdir(
         binaries_dir,
@@ -552,6 +613,8 @@ fn run_x2t_to_pdf(
         log(&message);
         message
     })?;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    drop(work_dir_hold);
     let _ = std::fs::remove_file(&params_xml);
     let code = result.status.code().unwrap_or(-999);
     let pdf_exists = std::path::Path::new(output).exists();
@@ -2241,6 +2304,150 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert_eq!(std::fs::read_link(work_fonts.join("font_selection.bin")).ok(), None);
         assert_eq!(std::fs::read(work_fonts.join("font_selection.bin")).unwrap(), b"selection");
         assert_eq!(std::fs::read(fonts.join("font_selection.bin")).unwrap(), b"installed");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Stands in for x2t: says it started, holds its run for `seconds`, then
+    // reads its work folder the way DoctRenderer does, relative to the folder
+    // it was started in, and writes the PDF only if the folder is still there.
+    #[cfg(target_os = "linux")]
+    fn fake_x2t(binaries: &std::path::Path, started: &std::path::Path, seconds: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!(
+            "#!/bin/sh\n\
+             touch '{}'\n\
+             sleep {}\n\
+             test -f DoctRenderer.config && test -f AllFonts.js || exit 1\n\
+             out=$(sed -n 's:.*<m_sFileTo>\\(.*\\)</m_sFileTo>.*:\\1:p' \"$1\")\n\
+             echo pdf > \"$out\"\n",
+            started.display(),
+            seconds
+        );
+        let x2t = binaries.join("x2t");
+        std::fs::write(&x2t, script).unwrap();
+        std::fs::set_permissions(&x2t, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wait_for(path: &std::path::Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !path.exists() {
+            assert!(std::time::Instant::now() < deadline, "{} never appeared", path.display());
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn pdf_in(
+        root: &std::path::Path,
+        binaries: &std::path::Path,
+        fontdata: &std::path::Path,
+        temp: &std::path::Path,
+        name: &str,
+    ) -> Result<String, String> {
+        let output = root.join(name);
+        convert_to_pdf(
+            binaries,
+            None,
+            "/d/in.docx",
+            &output.to_string_lossy(),
+            temp,
+            fontdata,
+            &|_: &str| {},
+        )
+    }
+
+    // An export and a print at once in the same instance: the second run used
+    // to remove x2t-workdir while the first x2t was still reading from it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_second_pdf_run_leaves_the_work_dir_of_the_first_alone() {
+        let (root, binaries, fontdata) = installed_app("pdf-overlap");
+        let started = root.join("first-x2t-started");
+        fake_x2t(&binaries, &started, "1");
+        let temp = root.join("temp/1-1");
+
+        let first = {
+            let (root, binaries, fontdata, temp) =
+                (root.clone(), binaries.clone(), fontdata.clone(), temp.clone());
+            std::thread::spawn(move || pdf_in(&root, &binaries, &fontdata, &temp, "first.pdf"))
+        };
+        wait_for(&started);
+        let second = pdf_in(&root, &binaries, &fontdata, &temp, "second.pdf");
+        let first = first.join().unwrap();
+
+        assert_eq!(first, Ok("ok".to_string()), "the first x2t lost its work folder");
+        assert_eq!(second, Ok("ok".to_string()));
+        assert!(root.join("first.pdf").exists());
+        assert!(root.join("second.pdf").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn two_pdf_runs_in_a_row_both_write_their_pdf() {
+        let (root, binaries, fontdata) = installed_app("pdf-in-a-row");
+        fake_x2t(&binaries, &root.join("started"), "0");
+        let temp = root.join("temp/1-1");
+
+        let first = pdf_in(&root, &binaries, &fontdata, &temp, "first.pdf");
+        let second = pdf_in(&root, &binaries, &fontdata, &temp, "second.pdf");
+
+        assert_eq!(first, Ok("ok".to_string()));
+        assert_eq!(second, Ok("ok".to_string()));
+        assert!(root.join("first.pdf").exists());
+        assert!(root.join("second.pdf").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // PDF runs leave one work folder in the instance, x2t-workdir, which the
+    // document cleanup keeps and the end of the instance removes with the rest.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_end_of_the_instance_leaves_no_work_folder() {
+        let (root, binaries, fontdata) = installed_app("pdf-instance-end");
+        fake_x2t(&binaries, &root.join("started"), "0");
+        let instance = crate::temp_layout::begin_instance(&root.join("temp"), 1, 1).unwrap();
+
+        pdf_in(&root, &binaries, &fontdata, &instance.dir, "first.pdf").unwrap();
+        pdf_in(&root, &binaries, &fontdata, &instance.dir, "second.pdf").unwrap();
+
+        let work_folders = |dir: &std::path::Path| -> Vec<String> {
+            std::fs::read_dir(dir)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                        .filter(|name| name.starts_with("x2t-workdir"))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(work_folders(&instance.dir), vec!["x2t-workdir".to_string()]);
+        instance.end();
+        assert!(!instance.dir.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // A hung x2t keeps the folder: the next run in that instance gives up after
+    // the wait, and a run in another instance does not wait at all.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_held_work_dir_makes_the_next_run_give_up_after_the_wait() {
+        let root = scratch_dir("work-dir-hold");
+        let instance = root.join("1-1");
+        let other = root.join("2-2");
+        let wait = std::time::Duration::from_millis(200);
+
+        let held = hold_work_dir(&instance, wait).unwrap();
+        let started = std::time::Instant::now();
+        let error = hold_work_dir(&instance, wait).err().expect("the folder is held");
+
+        assert!(started.elapsed() >= wait);
+        assert!(error.contains("still in use"), "{}", error);
+        assert!(hold_work_dir(&other, wait).is_ok(), "another instance does not wait");
+        drop(held);
+        assert!(hold_work_dir(&instance, wait).is_ok(), "the end of the run frees it");
         let _ = std::fs::remove_dir_all(&root);
     }
 
