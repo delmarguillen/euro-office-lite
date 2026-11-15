@@ -82,15 +82,23 @@ fn read_limited(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-// The Markdown file an Open token names, and its bytes.
-pub(crate) fn read_markdown_file(
-    grants: &PathGrants,
-    token: &str,
-) -> Result<(PathBuf, Vec<u8>), String> {
+// The Markdown file an Open token names.
+fn markdown_file_to_open(grants: &PathGrants, token: &str) -> Result<PathBuf, String> {
     let path = grants.resolve(token, GrantKind::Open)?;
     if !is_markdown(&path) {
         return Err("not a Markdown file".to_string());
     }
+    Ok(path)
+}
+
+// The Markdown file an Open token names, and its bytes, as open_markdown
+// reads them without the claim: the token and size checks in the tests.
+#[cfg(test)]
+pub(crate) fn read_markdown_file(
+    grants: &PathGrants,
+    token: &str,
+) -> Result<(PathBuf, Vec<u8>), String> {
+    let path = markdown_file_to_open(grants, token)?;
     let bytes = read_limited(&path, MARKDOWN_MAX_BYTES)?;
     Ok((path, bytes))
 }
@@ -218,10 +226,13 @@ fn start_markdown_document(state: &AppState, path: Option<PathBuf>) {
 
 // The Markdown file an Open token names becomes the open document, unless
 // another window has it open or is opening or saving to it: two windows
-// saving one file overwrite each other.
+// saving one file overwrite each other. The bytes are read with the claim
+// held: read before it, they could predate a save another window finished
+// and closed in between.
 fn open_markdown(state: &AppState, token: &str) -> Result<(PathBuf, Vec<u8>), String> {
-    let (path, bytes) = read_markdown_file(&state.grants, token)?;
+    let path = markdown_file_to_open(&state.grants, token)?;
     let claim = crate::new_window::claim_for_open(state, &path)?;
+    let bytes = read_limited(&path, MARKDOWN_MAX_BYTES)?;
     start_markdown_document(state, Some(path.clone()));
     // open-document names the file now.
     drop(claim);
@@ -596,6 +607,21 @@ mod tests {
         assert_eq!(result.err().as_deref(), Some(crate::new_window::OPEN_ELSEWHERE));
         drop(saving);
         assert!(open_markdown(&state, &token).is_ok());
+    }
+
+    #[test]
+    fn a_file_another_window_has_claimed_is_refused_before_it_is_read() {
+        let dir = test_dir("claimed-before-read");
+        let file = dir.join("big.md");
+        std::fs::File::create(&file).unwrap().set_len(MARKDOWN_MAX_BYTES + 1).unwrap();
+        let other = window_state(&dir, 2);
+        let saving = crate::new_window::claim_for_save(&other, &file).unwrap();
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        // Read first, the open would fail on the size instead.
+        let result = open_markdown(&state, &token);
+        assert_eq!(result.err().as_deref(), Some(crate::new_window::OPEN_ELSEWHERE));
+        drop(saving);
     }
 
     #[test]
