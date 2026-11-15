@@ -1,0 +1,16 @@
+# UTF-8 TXT with accents, Cyrillic, a CJK character and U+FFFD, all inside
+# the BMP. Ctrl+S on a document with no changes writes nothing, so the case
+# types Z at the end of the last line and the save must be the input with
+# that Z.
+description = "UTF-8 TXT inside the BMP: opens, and Ctrl+S after typing Z keeps every byte"
+generate = "mktxt.py bmp-utf8"
+input = "bmp.txt"
+input_sha256 = "0f28a1f822191c4fd319b37eebd9366e1dcf555d2a51f7dbedff8639098aa7e4"
+action = "open-edit-save"
+keys_before = "ctrl+End"
+type = "Z"
+check = "expected-bytes"
+expected_generate = "mktxt.py bmp-utf8 z"
+expected_sha256 = "2fa8da738a9c35d81a88185629852f68f24a07e009277e6fbdd9c1d6b1e14670"
+expect = "saved-as-expected"
+screenshot = "on-failure"

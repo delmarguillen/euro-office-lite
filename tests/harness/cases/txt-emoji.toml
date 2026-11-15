@@ -1,0 +1,12 @@
+# A UTF-8 TXT with a character above U+FFFF. x2t cannot read it, so the app
+# refuses it with the open error and leaves the file as it was. Builds that
+# let x2t read it open an empty document, and Ctrl+S leaves one line break.
+description = "TXT with an emoji: refused with the open error dialog, file unchanged"
+generate = "mktxt.py emoji-utf8"
+input = "emoji.txt"
+input_sha256 = "d57e531372c8ff050418868c762b4ebb734376612d67087b153123cb6f264066"
+action = "open-save"
+check = "same-text"
+expect = "rejected-with-dialog"
+control_expect = "opens-empty"
+screenshot = "on-failure"
