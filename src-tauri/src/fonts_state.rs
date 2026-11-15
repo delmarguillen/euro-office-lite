@@ -3,8 +3,11 @@
 // meanwhile; the frontend asks for this status and waits for "fonts-ready"
 // before it opens the editor (bridge.js, _eoWaitForFonts).
 
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::path::PathBuf;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
+
+use crate::temp_layout::FontGeneration;
 
 pub const FONTS_READY_EVENT: &str = "fonts-ready";
 
@@ -16,9 +19,9 @@ pub enum FontsStatus {
     Failed,
 }
 
-// Only a cache this start built or accepted holds a usable AllFonts.js. While
-// Pending the file is the one being replaced; after Failed it is the one the
-// start rejected. Either way the editor gets the bundled list.
+// Only the cache generation this start built or accepted holds a usable
+// AllFonts.js. While Pending there is none yet, and after Failed there is
+// none. Either way the editor gets the bundled list.
 pub fn uses_generated_list(status: FontsStatus) -> bool {
     status == FontsStatus::Ready
 }
@@ -26,6 +29,9 @@ pub fn uses_generated_list(status: FontsStatus) -> bool {
 pub struct FontsState {
     status: Mutex<FontsStatus>,
     settled: Condvar,
+    // The cache generation this process reads (temp_layout.rs). Held until the
+    // process ends, so no other instance removes it meanwhile.
+    generation: OnceLock<FontGeneration>,
 }
 
 impl FontsState {
@@ -33,11 +39,30 @@ impl FontsState {
         FontsState {
             status: Mutex::new(FontsStatus::Pending),
             settled: Condvar::new(),
+            generation: OnceLock::new(),
         }
     }
 
     pub fn status(&self) -> FontsStatus {
         *self.lock()
+    }
+
+    // Only the first generation is kept: the editor and the PDF export of one
+    // process read the same one.
+    pub fn adopt(&self, generation: FontGeneration) {
+        let _ = self.generation.set(generation);
+    }
+
+    pub fn generation_dir(&self) -> Option<PathBuf> {
+        self.generation.get().map(|generation| generation.dir().to_path_buf())
+    }
+
+    // The AllFonts.js the editor gets, None while it gets the bundled one.
+    pub fn generated_list(&self) -> Option<PathBuf> {
+        if !uses_generated_list(self.status()) {
+            return None;
+        }
+        self.generation_dir().map(|dir| dir.join("AllFonts.js"))
     }
 
     pub fn finish(&self, status: FontsStatus) {
@@ -110,6 +135,38 @@ mod tests {
         assert!(uses_generated_list(FontsStatus::Ready));
         assert!(!uses_generated_list(FontsStatus::Pending));
         assert!(!uses_generated_list(FontsStatus::Failed));
+    }
+
+    #[test]
+    fn the_font_list_comes_from_the_cache_only_once_it_is_ready() {
+        let root = std::env::temp_dir().join(format!("eo-font-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let outcome = crate::temp_layout::ensure_font_cache(
+            &root,
+            "1-1",
+            |dir: &std::path::Path| {
+                std::fs::write(dir.join("AllFonts.js"), "the list").unwrap();
+                std::fs::write(dir.join("font_selection.bin"), "selection").unwrap();
+                true
+            },
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+        );
+        let crate::temp_layout::FontCache::Generated(generation) = outcome else {
+            panic!("not built: {:?}", outcome);
+        };
+        let fonts = FontsState::pending();
+        fonts.adopt(generation);
+
+        assert_eq!(fonts.generated_list(), None);
+        fonts.finish(FontsStatus::Failed);
+        assert_eq!(fonts.generated_list(), None);
+        fonts.finish(FontsStatus::Ready);
+        let list = fonts.generated_list().expect("ready with a generation");
+        assert_eq!(std::fs::read_to_string(list).unwrap(), "the list");
+        drop(fonts);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

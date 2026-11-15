@@ -27,13 +27,21 @@ const CLAIMED_DOCUMENT: &str = "claimed-document";
 const DOCUMENTS_LOCK: &str = "documents.lock";
 const DOCUMENTS_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 const DOCUMENTS_LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(5);
-const FONTDATA_DIR: &str = "fontdata";
+// Each build of the font cache is a generation: a folder of its own under
+// font-generations/, never written again once its marker is in it.
+const FONT_GENERATIONS_DIR: &str = "font-generations";
+// Written last into a generation, so a folder that has it is complete.
 pub const FONTS_MARKER: &str = ".fonts_generated";
+// Every process reading a generation holds a shared lock on this file in it.
+const GENERATION_IN_USE: &str = "in-use.lock";
 // What the marker holds when the app version was never set, as in tests. It
 // matches no release.
 const VERSION_UNSET: &str = "unset";
 const FONTS_LOCK: &str = "fonts.lock";
-const FONTS_STAGING_PREFIX: &str = "fontdata.new-";
+// Earlier versions kept one cache in fontdata/, with FONTS_MARKER next to it
+// in the root, and built it in fontdata.new-<id>/.
+const LEGACY_FONTDATA_DIR: &str = "fontdata";
+const LEGACY_STAGING_PREFIX: &str = "fontdata.new-";
 const LOG_PREFIX: &str = "js-debug-";
 const LOG_SUFFIX: &str = ".log";
 
@@ -77,6 +85,29 @@ fn open_locked(path: &Path, create: bool) -> std::io::Result<File> {
         .open(path)?;
     // Non-blocking: a lock that is taken has to answer "taken" right away.
     let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if taken != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(file)
+}
+
+// Shared: any number of holders at once, and while one holds it, open_locked
+// on the same file fails. Never creates the file.
+#[cfg(target_os = "windows")]
+fn open_shared(path: &Path) -> std::io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(path)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn open_shared(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::io::AsRawFd;
+    let file = File::open(path)?;
+    let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
     if taken != 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -217,10 +248,6 @@ pub fn sweep_dead_instances(
 // ---------------------------------------------------------------------------
 // Shared font cache
 // ---------------------------------------------------------------------------
-
-pub fn fontdata_dir(root: &Path) -> PathBuf {
-    root.join(FONTDATA_DIR)
-}
 
 // The version from tauri.conf.json, which every release bumps. The crate
 // version in Cargo.toml never changes, so it cannot tell two releases apart.
@@ -363,29 +390,90 @@ fn modified_nanos(meta: &std::fs::Metadata) -> u128 {
         .unwrap_or(0)
 }
 
-pub fn fonts_ready(root: &Path) -> bool {
-    fonts_ready_for(root, &expected_marker())
+fn generations_dir(root: &Path) -> PathBuf {
+    root.join(FONT_GENERATIONS_DIR)
+}
+
+// Sorted by name, last first. Generations whose marker matches were built from
+// the same fonts and binaries, so the order does not change what is read: it
+// only makes every instance pick the same one.
+fn generation_folders(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(generations_dir(root)) else {
+        return Vec::new();
+    };
+    let mut folders: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    folders.sort();
+    folders.reverse();
+    folders
+}
+
+// <instance id>-<attempt>: no other process or attempt uses the same name.
+fn new_generation_dir(root: &Path, instance_id: &str) -> PathBuf {
+    static ATTEMPTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let attempt = ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    generations_dir(root).join(format!("{}-{}", instance_id, attempt))
+}
+
+// A complete generation, held for reading. Nothing writes into it once it is
+// published, and no cleanup removes it while any process holds it.
+pub struct FontGeneration {
+    dir: PathBuf,
+    _in_use: File,
+}
+
+impl FontGeneration {
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl std::fmt::Debug for FontGeneration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("FontGeneration").field(&self.dir).finish()
+    }
+}
+
+// The generation this version reads, held, or None when there is none.
+pub fn current_font_generation(root: &Path) -> Option<FontGeneration> {
+    adopt_generation(root, &expected_marker())
+}
+
+// The lock comes before the check: once it is held, no cleanup can unpublish
+// the folder, so what the check saw stays true.
+fn adopt_generation(root: &Path, expected: &str) -> Option<FontGeneration> {
+    for dir in generation_folders(root) {
+        let Ok(in_use) = open_shared(&dir.join(GENERATION_IN_USE)) else {
+            continue;
+        };
+        if generation_ready(&dir, expected) {
+            return Some(FontGeneration { dir, _in_use: in_use });
+        }
+    }
+    None
 }
 
 // x2t's scan always writes both files and the PDF export uses both, so a
-// cache missing either is a half-installed one and counts as missing. A cache
-// whose marker differs counts as missing too: the scan can change with the
-// bundled x2t and fonts, and with the fonts installed.
-fn fonts_ready_for(root: &Path, expected: &str) -> bool {
-    let Ok(marker) = std::fs::read(root.join(FONTS_MARKER)) else {
+// generation missing either is incomplete. One whose marker differs does not
+// count either: the scan can change with the bundled x2t and fonts, and with
+// the fonts installed.
+fn generation_ready(dir: &Path, expected: &str) -> bool {
+    let Ok(marker) = std::fs::read(dir.join(FONTS_MARKER)) else {
         return false;
     };
     if !marker_matches(&marker, expected) {
         return false;
     }
-    let fontdata = fontdata_dir(root);
-    if !is_nonempty(&fontdata.join("AllFonts.js")) {
+    if !is_nonempty(&dir.join("AllFonts.js")) {
         return false;
     }
-    if !is_nonempty(&fontdata.join("font_selection.bin")) {
+    if !is_nonempty(&dir.join("font_selection.bin")) {
         return false;
     }
-    !(cfg!(target_os = "windows") && has_extended_paths(&fontdata))
+    !(cfg!(target_os = "windows") && has_extended_paths(dir))
 }
 
 // Markers written before they held a version say "generated", and those
@@ -413,42 +501,104 @@ fn has_extended_paths(fontdata: &Path) -> bool {
     contains("AllFonts.js", b"\"/?/") || contains("font_selection.bin", br"\\?\")
 }
 
-// Moves each generated file over its counterpart in fontdata/. A rename
-// replaces in one step, so an instance reading the cache meanwhile gets the
-// old file or the new one, never half of one.
-fn install_font_cache(staging: &Path, fontdata: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(fontdata)?;
-    for entry in std::fs::read_dir(staging)?.flatten() {
-        let target = fontdata.join(entry.file_name());
-        if entry.path().is_dir() {
-            let _ = std::fs::remove_dir_all(&target);
-        }
-        std::fs::rename(entry.path(), &target)?;
-    }
-    let _ = std::fs::remove_dir_all(staging);
-    Ok(())
-}
-
-fn remove_marker(root: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(root.join(FONTS_MARKER)) {
+fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
         _ => Ok(()),
     }
 }
 
-#[derive(Debug, PartialEq)]
+// Fails when the folder is already there, so the generator never writes into
+// a folder it did not make.
+fn create_generation_dir(dir: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir(dir)
+}
+
+// x2t writes straight into the generation's own folder, which never moves, so
+// any path it records there stays valid. The lock is held before the marker
+// is written: the generation is never published without a holder.
+fn build_generation(
+    dir: &Path,
+    expected: &str,
+    tag: &str,
+    generate: impl FnOnce(&Path) -> bool,
+) -> Option<FontGeneration> {
+    if !generate(dir) {
+        return None;
+    }
+    let in_use_path = dir.join(GENERATION_IN_USE);
+    std::fs::write(&in_use_path, b"").ok()?;
+    let in_use = open_shared(&in_use_path).ok()?;
+    write_replacing(&dir.join(FONTS_MARKER), expected.as_bytes(), tag).ok()?;
+    if !generation_ready(dir, expected) {
+        return None;
+    }
+    Some(FontGeneration {
+        dir: dir.to_path_buf(),
+        _in_use: in_use,
+    })
+}
+
+// Removes one generation unless a process holds it. The exclusive lock fails
+// while any does; under it the marker goes, and from then on no process takes
+// the folder, so the rest goes after the lock is let go (Windows cannot
+// delete a file this process has open). A folder without the lock file was
+// never published.
+fn remove_generation(dir: &Path) -> bool {
+    let in_use = dir.join(GENERATION_IN_USE);
+    if in_use.exists() {
+        let Ok(exclusive) = open_locked(&in_use, false) else {
+            return false;
+        };
+        if remove_file_if_present(&dir.join(FONTS_MARKER)).is_err() {
+            return false;
+        }
+        drop(exclusive);
+    }
+    std::fs::remove_dir_all(dir).is_ok()
+}
+
+// Only while holding fonts.lock: nobody else is generating, so a folder
+// without its marker is what a generator that died left behind.
+fn remove_unpublished_generations(root: &Path) {
+    for dir in generation_folders(root) {
+        if !dir.join(FONTS_MARKER).exists() {
+            remove_generation(&dir);
+        }
+    }
+}
+
+// Only while holding fonts.lock. Every generation but `keep` that no process
+// holds.
+fn remove_unused_generations(root: &Path, keep: Option<&Path>) -> usize {
+    let mut removed = 0;
+    for dir in generation_folders(root) {
+        if Some(dir.as_path()) == keep {
+            continue;
+        }
+        if remove_generation(&dir) {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+#[derive(Debug)]
 pub enum FontCache {
-    Ready,
-    Generated,
-    GeneratedByOther,
+    Ready(FontGeneration),
+    Generated(FontGeneration),
+    GeneratedByOther(FontGeneration),
     Failed,
     GaveUp,
 }
 
-// Builds the shared font cache if it is missing. One instance generates at a
-// time; one that starts meanwhile waits for that run instead of writing the
-// same files, and after `timeout` goes on without it. `generate` writes into
-// the folder it is handed and reports success.
+// Builds a generation of the shared font cache if none matches this version.
+// One instance generates at a time; one that starts meanwhile waits for that
+// run instead of building the same, and after `timeout` goes on without it.
+// `generate` writes into the folder it is handed and reports success.
 pub fn ensure_font_cache(
     root: &Path,
     instance_id: &str,
@@ -456,8 +606,19 @@ pub fn ensure_font_cache(
     timeout: std::time::Duration,
     poll: std::time::Duration,
 ) -> FontCache {
-    if fonts_ready(root) {
-        return FontCache::Ready;
+    ensure_font_cache_for(root, &expected_marker(), instance_id, generate, timeout, poll)
+}
+
+fn ensure_font_cache_for(
+    root: &Path,
+    expected: &str,
+    instance_id: &str,
+    generate: impl FnOnce(&Path) -> bool,
+    timeout: std::time::Duration,
+    poll: std::time::Duration,
+) -> FontCache {
+    if let Some(generation) = adopt_generation(root, expected) {
+        return FontCache::Ready(generation);
     }
     let started = std::time::Instant::now();
     let mut waited = false;
@@ -471,62 +632,68 @@ pub fn ensure_font_cache(
             }
         }
     };
-    if fonts_ready(root) {
+    if let Some(generation) = adopt_generation(root, expected) {
         return if waited {
-            FontCache::GeneratedByOther
+            FontCache::GeneratedByOther(generation)
         } else {
-            FontCache::Ready
+            FontCache::Ready(generation)
         };
     }
-    // Holding the lock means nobody else is generating, so a staging folder
-    // still here is what a generator that died left behind.
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().starts_with(FONTS_STAGING_PREFIX) {
-                let _ = std::fs::remove_dir_all(entry.path());
-            }
-        }
+    remove_unpublished_generations(root);
+    let dir = new_generation_dir(root, instance_id);
+    if create_generation_dir(&dir).is_err() {
+        drop(lock);
+        return FontCache::Failed;
     }
-    let staging = root.join(format!("{}{}", FONTS_STAGING_PREFIX, instance_id));
-    let generated = std::fs::create_dir_all(&staging).is_ok() && generate(&staging);
-    let marker = expected_marker();
-    // The marker goes before the files do: an instance whose fingerprint
-    // matches it reads the cache without the lock, and a rename failing
-    // midway must not leave a mixed cache marked valid.
-    let installed = generated
-        && remove_marker(root).is_ok()
-        && install_font_cache(&staging, &fontdata_dir(root)).is_ok()
-        && write_replacing(&root.join(FONTS_MARKER), marker.as_bytes(), instance_id).is_ok();
-    let _ = std::fs::remove_dir_all(&staging);
+    let Some(generation) = build_generation(&dir, expected, instance_id, generate) else {
+        // Earlier generations stay as they were, and so do their readers.
+        let _ = std::fs::remove_dir_all(&dir);
+        drop(lock);
+        return FontCache::Failed;
+    };
+    remove_unused_generations(root, Some(generation.dir()));
     drop(lock);
-    if installed {
-        FontCache::Generated
-    } else {
-        FontCache::Failed
-    }
+    FontCache::Generated(generation)
 }
 
-// Removes the font cache earlier versions kept in the temp root, once the
-// cache lives elsewhere. A version still using it holds fonts.lock while it
-// builds the cache there, so a taken lock leaves it in place. So does any
-// other instance alive, which may be an earlier version reading the cache;
-// the next start removes it. fonts.lock itself stays: another start may
-// already have it open.
-pub fn remove_old_font_cache(temp_root: &Path, font_root: &Path, own_id: &str) -> bool {
-    if temp_root == font_root {
+// The generations in `root` that no process reads, except the one this
+// version reads. Skipped while fonts.lock is taken: the start holding it
+// cleans up once it has published.
+pub fn remove_old_font_generations(root: &Path) -> usize {
+    if generation_folders(root).is_empty() {
+        return 0;
+    }
+    let Ok(lock) = take_lock(&root.join(FONTS_LOCK)) else {
+        return 0;
+    };
+    let current = current_font_generation(root);
+    let removed = remove_unused_generations(root, current.as_ref().map(FontGeneration::dir));
+    drop(lock);
+    removed
+}
+
+// Removes the cache earlier versions kept in `root`: fontdata/, the marker
+// next to it and their staging folders. Those versions read it without a
+// lock, so it stays while any other instance is alive in `temp_root`, which
+// may be one of them, and while fonts.lock is taken, which they hold while
+// building it; the next start removes it. fonts.lock itself stays: another
+// start may already have it open.
+pub fn remove_legacy_font_cache(root: &Path, temp_root: &Path, own_id: &str) -> bool {
+    let has_marker = root.join(FONTS_MARKER).exists();
+    if !has_marker && !root.join(LEGACY_FONTDATA_DIR).exists() {
         return false;
     }
     if another_instance_alive(temp_root, own_id) {
         return false;
     }
-    let Ok(lock) = take_lock(&temp_root.join(FONTS_LOCK)) else {
+    let Ok(lock) = take_lock(&root.join(FONTS_LOCK)) else {
         return false;
     };
-    let _ = std::fs::remove_file(temp_root.join(FONTS_MARKER));
-    let _ = std::fs::remove_dir_all(fontdata_dir(temp_root));
-    if let Ok(entries) = std::fs::read_dir(temp_root) {
+    let _ = std::fs::remove_file(root.join(FONTS_MARKER));
+    let _ = std::fs::remove_dir_all(root.join(LEGACY_FONTDATA_DIR));
+    if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().starts_with(FONTS_STAGING_PREFIX) {
+            if entry.file_name().to_string_lossy().starts_with(LEGACY_STAGING_PREFIX) {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
         }
