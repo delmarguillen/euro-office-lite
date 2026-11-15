@@ -57,9 +57,10 @@ pub struct TextOptions {
     pub encoding: u32,
     // Only CSV has one.
     pub delimiter: Option<u32>,
-    // Whether the file started with a UTF-8 BOM. x2t always writes one with
-    // UTF-8, so saving back has to drop it when the original had none.
-    pub utf8_bom: bool,
+    // Whether the file started with the BOM of its encoding. x2t always
+    // writes one with UTF-8, so saving back has to drop it when the original
+    // had none; a UTF-16 TXT is written back with one only if it had one.
+    pub bom: bool,
     // Line ending style of the original, from its first line break.
     pub crlf: bool,
     // How many line breaks the original ended with.
@@ -145,7 +146,7 @@ pub fn detect_file(path: &Path, kind: TextKind) -> std::io::Result<TextOptions> 
     let (head, complete) = read_head(path)?;
     let mut options = detect(&head, complete, kind);
     if !complete {
-        let utf8_without_bom = options.encoding == ENCODING_UTF8 && !options.utf8_bom;
+        let utf8_without_bom = options.encoding == ENCODING_UTF8 && !options.bom;
         if utf8_without_bom && !is_utf8_file(path)? {
             options.encoding = ENCODING_WINDOWS_1252;
         }
@@ -159,7 +160,7 @@ pub fn detect_file(path: &Path, kind: TextKind) -> std::io::Result<TextOptions> 
 // multibyte character cut at the end of the block is not taken for invalid
 // UTF-8. trailing_breaks is only right when `complete` (see detect_file).
 pub fn detect(head: &[u8], complete: bool, kind: TextKind) -> TextOptions {
-    let (encoding, body) = detect_encoding(head, complete);
+    let (encoding, bom, body) = detect_encoding(head, complete);
     let units = code_units(encoding, body);
     let delimiter = match kind {
         TextKind::Csv => Some(detect_delimiter(&units)),
@@ -168,22 +169,23 @@ pub fn detect(head: &[u8], complete: bool, kind: TextKind) -> TextOptions {
     TextOptions {
         encoding,
         delimiter,
-        utf8_bom: head.starts_with(UTF8_BOM),
+        bom,
         crlf: first_break_is_crlf(&units),
         trailing_breaks: count_trailing_breaks(&units),
     }
 }
 
-// Returns the encoding and the bytes after the BOM, if any.
-fn detect_encoding(head: &[u8], complete: bool) -> (u32, &[u8]) {
+// Returns the encoding, whether the file starts with its BOM, and the bytes
+// after that BOM.
+fn detect_encoding(head: &[u8], complete: bool) -> (u32, bool, &[u8]) {
     if let Some(body) = head.strip_prefix(UTF8_BOM) {
-        return (ENCODING_UTF8, body);
+        return (ENCODING_UTF8, true, body);
     }
     if let Some(body) = head.strip_prefix(UTF16_LE_BOM) {
-        return (ENCODING_UTF16_LE, body);
+        return (ENCODING_UTF16_LE, true, body);
     }
     if let Some(body) = head.strip_prefix(UTF16_BE_BOM) {
-        return (ENCODING_UTF16_BE, body);
+        return (ENCODING_UTF16_BE, true, body);
     }
     let utf8 = match std::str::from_utf8(head) {
         Ok(_) => true,
@@ -196,7 +198,7 @@ fn detect_encoding(head: &[u8], complete: bool) -> (u32, &[u8]) {
     } else {
         ENCODING_WINDOWS_1252
     };
-    (encoding, head)
+    (encoding, false, head)
 }
 
 // In UTF-8 and windows-1252 every byte below 0x80 is that ASCII character, so
@@ -321,7 +323,8 @@ fn encode(text: &str, options: TextOptions) -> (Vec<u8>, usize) {
         }
         ENCODING_UTF16_LE | ENCODING_UTF16_BE => {
             let le = options.encoding == ENCODING_UTF16_LE;
-            let mut bytes = if le { UTF16_LE_BOM } else { UTF16_BE_BOM }.to_vec();
+            let bom = if le { UTF16_LE_BOM } else { UTF16_BE_BOM };
+            let mut bytes = if options.bom { bom.to_vec() } else { Vec::new() };
             for unit in text.encode_utf16() {
                 bytes.extend_from_slice(&if le {
                     unit.to_le_bytes()
@@ -332,7 +335,7 @@ fn encode(text: &str, options: TextOptions) -> (Vec<u8>, usize) {
             (bytes, 0)
         }
         _ => {
-            let mut bytes = if options.utf8_bom {
+            let mut bytes = if options.bom {
                 UTF8_BOM.to_vec()
             } else {
                 Vec::new()
@@ -416,7 +419,7 @@ pub fn rebuild_csv(written: &[u8], options: TextOptions) -> Vec<u8> {
         units.push(0x0A);
     }
 
-    let drop_bom = bom == UTF8_BOM && options.encoding == ENCODING_UTF8 && !options.utf8_bom;
+    let drop_bom = bom == UTF8_BOM && options.encoding == ENCODING_UTF8 && !options.bom;
     let mut out = if drop_bom { Vec::new() } else { bom.to_vec() };
     for unit in units {
         match unit_encoding {
@@ -735,18 +738,18 @@ mod tests {
         bytes
     }
 
-    fn options(encoding: u32, utf8_bom: bool, crlf: bool, trailing_breaks: u32) -> TextOptions {
+    fn options(encoding: u32, bom: bool, crlf: bool, trailing_breaks: u32) -> TextOptions {
         TextOptions {
             encoding,
             delimiter: Some(DELIMITER_SEMICOLON),
-            utf8_bom,
+            bom,
             crlf,
             trailing_breaks,
         }
     }
 
-    fn utf8(utf8_bom: bool) -> TextOptions {
-        options(ENCODING_UTF8, utf8_bom, false, 1)
+    fn utf8(bom: bool) -> TextOptions {
+        options(ENCODING_UTF8, bom, false, 1)
     }
 
     fn txt(written: &str, options: TextOptions) -> Vec<u8> {
@@ -818,7 +821,7 @@ mod tests {
             TextOptions {
                 encoding: ENCODING_UTF8,
                 delimiter: Some(DELIMITER_COMMA),
-                utf8_bom: false,
+                bom: false,
                 crlf: false,
                 trailing_breaks: 0
             }
@@ -839,7 +842,7 @@ mod tests {
             TextOptions {
                 encoding: ENCODING_UTF8,
                 delimiter: Some(DELIMITER_SEMICOLON),
-                utf8_bom: true,
+                bom: true,
                 crlf: false,
                 trailing_breaks: 1
             }
@@ -853,7 +856,7 @@ mod tests {
             TextOptions {
                 encoding: ENCODING_UTF16_LE,
                 delimiter: Some(DELIMITER_TAB),
-                utf8_bom: false,
+                bom: true,
                 crlf: true,
                 trailing_breaks: 2
             }
@@ -867,7 +870,7 @@ mod tests {
             TextOptions {
                 encoding: ENCODING_UTF16_BE,
                 delimiter: Some(DELIMITER_SEMICOLON),
-                utf8_bom: false,
+                bom: true,
                 crlf: false,
                 trailing_breaks: 1
             }
@@ -883,7 +886,7 @@ mod tests {
             TextOptions {
                 encoding: ENCODING_WINDOWS_1252,
                 delimiter: Some(DELIMITER_SEMICOLON),
-                utf8_bom: false,
+                bom: false,
                 crlf: false,
                 trailing_breaks: 1
             }
@@ -914,7 +917,7 @@ mod tests {
             TextOptions {
                 encoding: ENCODING_UTF8,
                 delimiter: None,
-                utf8_bom: false,
+                bom: false,
                 crlf: false,
                 trailing_breaks: 1
             }
@@ -1068,13 +1071,13 @@ mod tests {
     fn txt_goes_back_to_utf16() {
         let le = rebuild_txt(
             "\u{FEFF}añ\r\n".as_bytes(),
-            options(ENCODING_UTF16_LE, false, false, 1),
+            options(ENCODING_UTF16_LE, true, false, 1),
         )
         .0;
         assert_eq!(le, utf16le_with_bom("añ\n"));
         let be = rebuild_txt(
             "\u{FEFF}añ\r\n".as_bytes(),
-            options(ENCODING_UTF16_BE, false, true, 1),
+            options(ENCODING_UTF16_BE, true, true, 1),
         )
         .0;
         assert_eq!(be, utf16be_with_bom("añ\r\n"));
