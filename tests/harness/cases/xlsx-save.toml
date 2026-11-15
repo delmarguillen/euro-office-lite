@@ -1,0 +1,16 @@
+# Open an XLSX, type a label in A2, Ctrl+S: the cells of row 1 keep their
+# values. The label makes the document changed, so Ctrl+S always writes.
+description = "XLSX: open, type in A2, Ctrl+S; A1, B1 and C1 keep their values"
+generate = "mkxlsx.py"
+input = "cells.xlsx"
+action = "open-edit-save"
+keys_before = "ctrl+Home Down"
+type = "Harness75"
+keys_after = "Return"
+check = "zip-match"
+match_1 = 'xl/worksheets/sheet1.xml <c r="A1"[^>]*>[[:space:]]*<v>1234.5</v>'
+match_2 = 'xl/worksheets/sheet1.xml <c r="B1"[^>]*>[[:space:]]*<v>1234.5</v>'
+match_3 = 'xl/worksheets/sheet1.xml <c r="C1"[^>]*>[[:space:]]*<v>46086</v>'
+match_4 = 'xl/sharedStrings.xml Harness75'
+expect = "saved-as-expected"
+screenshot = "on-failure"

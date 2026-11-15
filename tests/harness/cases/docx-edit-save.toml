@@ -1,0 +1,14 @@
+# Open a DOCX, type a word at the end, Ctrl+S: the saved document holds the
+# new word and the paragraphs it had.
+description = "DOCX: open, type at the end, Ctrl+S; the saved XML has the new text and the old paragraphs"
+generate = "mkdocx.py 3"
+input = "edit.docx"
+action = "open-edit-save"
+keys_before = "ctrl+End"
+type = " Harness75edit"
+check = "zip-match"
+match_1 = 'word/document.xml Harness75edit'
+match_2 = 'word/document.xml Paragraph 0: the quick brown fox'
+match_3 = 'word/document.xml Paragraph 2: the quick brown fox'
+expect = "saved-as-expected"
+screenshot = "on-failure"
