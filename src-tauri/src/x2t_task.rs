@@ -2689,16 +2689,20 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     // PDF runs leave one work folder in the instance, x2t-workdir, which the
-    // document cleanup keeps and the end of the instance removes with the rest.
+    // document cleanup keeps and the end of the instance removes with the rest
+    // (temp_layout: ending_an_instance_removes_its_folder). A plain folder
+    // stands in for the instance: the corpus builds this file without
+    // temp_layout.
     #[cfg(target_os = "linux")]
     #[test]
-    fn the_end_of_the_instance_leaves_no_work_folder() {
+    fn pdf_runs_leave_one_work_folder_in_the_instance() {
         let (root, binaries, fontdata) = installed_app("pdf-instance-end");
         fake_x2t(&binaries, &root.join("started"), "0");
-        let instance = crate::temp_layout::begin_instance(&root.join("temp"), 1, 1).unwrap();
+        let instance_dir = root.join("temp").join("instance");
+        std::fs::create_dir_all(&instance_dir).unwrap();
 
-        pdf_in(&root, &binaries, &fontdata, &instance.dir, "first.pdf").unwrap();
-        pdf_in(&root, &binaries, &fontdata, &instance.dir, "second.pdf").unwrap();
+        pdf_in(&root, &binaries, &fontdata, &instance_dir, "first.pdf").unwrap();
+        pdf_in(&root, &binaries, &fontdata, &instance_dir, "second.pdf").unwrap();
 
         let work_folders = |dir: &std::path::Path| -> Vec<String> {
             std::fs::read_dir(dir)
@@ -2711,9 +2715,7 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
                 })
                 .unwrap_or_default()
         };
-        assert_eq!(work_folders(&instance.dir), vec!["x2t-workdir".to_string()]);
-        instance.end();
-        assert!(!instance.dir.exists());
+        assert_eq!(work_folders(&instance_dir), vec!["x2t-workdir".to_string()]);
         let _ = std::fs::remove_dir_all(&root);
     }
 
