@@ -26,6 +26,11 @@ pub fn set_document_modified(
 }
 
 #[tauri::command]
+pub fn set_save_pending(state: State<'_, AppState>, pending: bool) {
+    *state.save_pending.lock().unwrap() = pending;
+}
+
+#[tauri::command]
 pub fn force_close(app_handle: tauri::AppHandle) -> Result<(), String> {
     crate::app_quit::discard_after_restore(&app_handle);
     Ok(())

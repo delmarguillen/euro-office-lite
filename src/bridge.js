@@ -978,6 +978,25 @@ function _eoBytesToBase64(bytes) {
   return btoa(binary);
 }
 
+// The locale chosen in the spreadsheet editor, for its PDF: without one x2t
+// formats numbers and dates for en-US. Null for the other editors, and while
+// asc_getLocale has no positive integer to give.
+function _eoSheetLocale(ref) {
+  if (window.AscDesktopEditor._currentDocType !== 'cell') return null;
+  if (typeof ref.editor.asc_getLocale !== 'function') return null;
+  var lcid = ref.editor.asc_getLocale();
+  if (!Number.isInteger(lcid) || lcid <= 0) return null;
+  return lcid;
+}
+
+// The arguments of a command that writes a PDF of the open document, with the
+// spreadsheet's locale when there is one.
+function _eoWithSheetLocale(ref, args) {
+  var lcid = _eoSheetLocale(ref);
+  if (lcid !== null) args.lcid = lcid;
+  return args;
+}
+
 // The PDF editor's changes to the open PDF, in base64. They describe the file
 // as it was opened; the backend applies them to it.
 function _eoPdfChanges(ref) {
@@ -1451,6 +1470,24 @@ function _eoMarkUnsavedChanges() {
 
 function _eoMarkSavedChanges() {
   _eoUnsavedChanges = false;
+}
+
+// The backend decides from set_document_modified whether an exit asks and
+// keeps the recovery folder, and the false sdkjs sends as a save begins reaches
+// it too. While a save of unsaved changes runs, set_save_pending keeps the
+// backend counting them as unsaved; a backend save that writes the document
+// clears it there as well.
+function _eoBeginSave() {
+  if (!_eoUnsavedChanges) return false;
+  invoke('set_save_pending', { pending: true }).catch(function(){});
+  return true;
+}
+
+// Called after the save's outcome is applied: a failure has already put the
+// modified flag back (_eoRestoreModified), so the backend never sees both off.
+function _eoEndSave(begun) {
+  if (!begun) return;
+  invoke('set_save_pending', { pending: false }).catch(function(){});
 }
 
 // Puts the modified mark back, in the JS and in Rust, when something that
@@ -2964,8 +3001,17 @@ window.AscDesktopEditor = {
   },
 
   LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
-    var isSaveAs = param && param.indexOf('saveas=true') !== -1;
     if (window.AscDesktopEditor._isPrinting) return;
+    var begun = _eoBeginSave();
+    try {
+      await window.AscDesktopEditor._saveDocument(param, password, docinfo, fileType, jsonOptions);
+    } finally {
+      _eoEndSave(begun);
+    }
+  },
+
+  _saveDocument: async function(param, password, docinfo, fileType, jsonOptions) {
+    var isSaveAs = param && param.indexOf('saveas=true') !== -1;
 
     var docType = window.AscDesktopEditor._currentDocType || 'word';
     window._eoLog('[SAVE] docType=' + docType + ' saveAs=' + !!isSaveAs + ' fileType=' + fileType);
@@ -3032,7 +3078,9 @@ window.AscDesktopEditor = {
         if (target) {
           var pathExt = target.name.split('.').pop().toLowerCase();
           try {
-            await invoke('save_file_as', { token: target.token });
+            var saveArgs = { token: target.token };
+            if (pathExt === 'pdf') saveArgs = _eoWithSheetLocale(ref, saveArgs);
+            await invoke('save_file_as', saveArgs);
             keepsDocument = pathExt === 'pdf';
             if (pathExt !== 'pdf') {
               // A Save As moves the document and the session follows it, so a
@@ -3350,6 +3398,8 @@ window.AscDesktopEditor = {
     var ref = _getEditor();
     if (!ref.editor) return;
 
+    // sdkjs reports a print as a save (EndSave), so it is one for the backend.
+    var begun = _eoBeginSave();
     try {
       window.AscDesktopEditor._isPrinting = true;
       var wasModified = _eoUnsavedChanges;
@@ -3359,7 +3409,7 @@ window.AscDesktopEditor = {
         await invoke('print_document', { pdfChanges: _eoPdfChanges(ref) });
       } else {
         await _eoWriteEditorBin(ref);
-        await invoke('print_document', {});
+        await invoke('print_document', _eoWithSheetLocale(ref, {}));
       }
 
       if (printerName) {
@@ -3388,6 +3438,7 @@ window.AscDesktopEditor = {
       }
     } finally {
       window.AscDesktopEditor._isPrinting = false;
+      _eoEndSave(begun);
     }
   },
   IsSupportNativePrint: () => true,

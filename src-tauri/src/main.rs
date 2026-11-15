@@ -479,6 +479,7 @@ fn main() {
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
             modified: Mutex::new(false),
+            save_pending: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
             pending_open: pending_open::PendingOpens::with_launch_file(file_to_open),
@@ -516,6 +517,7 @@ fn main() {
             file_ops::fonts_status,
             bridge::set_window_title,
             bridge::set_document_modified,
+            bridge::set_save_pending,
             bridge::js_log,
             bridge::force_close,
             note_separator::remove_note_separator,
@@ -793,8 +795,10 @@ fn main() {
                     raw_abs_path
                 };
                 let state = ctx.app_handle().state::<AppState>();
-                let all_fonts = temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
-                let bundled_only = !fonts_state::uses_generated_list(state.fonts.status());
+                let generated_list = state.fonts.generated_list();
+                let bundled_only = generated_list.is_none();
+                // Not read when bundled_only.
+                let all_fonts = generated_list.unwrap_or_default();
                 let bundled_fonts = bundled_fonts_dir(ctx.app_handle());
                 if !protocol_limits::may_serve_font(&all_fonts, abs_path, bundled_only, &bundled_fonts) {
                     return tauri::http::Response::builder()
@@ -806,9 +810,8 @@ fn main() {
                 std::fs::read(abs_path).ok()
             } else if decoded_path.ends_with("sdkjs/common/AllFonts.js") {
                 let state = ctx.app_handle().state::<AppState>();
-                let generated = temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
-                let from_cache = fonts_state::uses_generated_list(state.fonts.status());
-                let cached = if from_cache { std::fs::read(&generated).ok() } else { None };
+                let generated_list = state.fonts.generated_list();
+                let cached = generated_list.and_then(|path| std::fs::read(path).ok());
                 cached.or_else(|| read_resource(ctx.app_handle(), &relative))
             } else {
                 read_resource(ctx.app_handle(), &relative)
@@ -981,8 +984,7 @@ fn main() {
                             return;
                         }
                         let state = h.state::<AppState>();
-                        let modified = *state.modified.lock().unwrap();
-                        if !modified {
+                        if !app_quit::has_unsaved_changes(&state) {
                             // Tauri closes the window and the app exits.
                             app_quit::mark_exit_confirmed(&state);
                             return;
@@ -1028,12 +1030,29 @@ fn sweep_leftovers(app: &tauri::AppHandle, root: &std::path::Path) {
     }
 }
 
+// The single cache earlier versions kept, and generations nobody reads, in
+// the font root and in the temp root, where the cache was before or falls
+// back to.
 fn sweep_old_font_cache(temp_root: &std::path::Path, font_root: &std::path::Path, own_id: &str) {
-    if !temp_root.join(temp_layout::FONTS_MARKER).exists() {
-        return;
+    let mut roots = vec![font_root];
+    if temp_root != font_root {
+        roots.push(temp_root);
     }
-    if temp_layout::remove_old_font_cache(temp_root, font_root, own_id) {
-        log_startup("Removed the font cache left in the temp folder by an earlier version");
+    for root in roots {
+        if temp_layout::remove_legacy_font_cache(root, temp_root, own_id) {
+            log_startup(&format!(
+                "Removed the font cache an earlier version left in {}",
+                root.display()
+            ));
+        }
+        let removed = temp_layout::remove_old_font_generations(root);
+        if removed > 0 {
+            log_startup(&format!(
+                "Removed {} unused font cache generations from {}",
+                removed,
+                root.display()
+            ));
+        }
     }
 }
 
@@ -1053,11 +1072,22 @@ fn start_font_generation(
     instance_id: &str,
     binaries_dir: &std::path::Path,
 ) {
-    let cache_ready = temp_layout::fonts_ready(font_root);
+    let warm = temp_layout::current_font_generation(font_root);
+    let cache_ready = warm.is_some();
+    if let Some(generation) = warm {
+        fonts.adopt(generation);
+    }
     let font_root = font_root.to_path_buf();
     let instance_id = instance_id.to_string();
     let binaries_dir = binaries_dir.to_path_buf();
-    let generate = move || run_font_generation(&font_root, &instance_id, &binaries_dir);
+    let built_for = fonts.clone();
+    let generate = move || {
+        let Some(generation) = run_font_generation(&font_root, &instance_id, &binaries_dir) else {
+            return false;
+        };
+        built_for.adopt(generation);
+        true
+    };
     let handle = app.clone();
     let on_settled = move |status: fonts_state::FontsStatus| {
         log_startup(&format!("Font cache status: {:?}", status));
@@ -1074,16 +1104,12 @@ fn start_font_generation(
     }
 }
 
-// Reports whether the cache is usable once it returns.
+// The generation this instance reads from now on, or None without one.
 fn run_font_generation(
     font_root: &std::path::Path,
     instance_id: &str,
     binaries_dir: &std::path::Path,
-) -> bool {
-    let marker = font_root.join(temp_layout::FONTS_MARKER);
-    if marker.exists() && !temp_layout::fonts_ready(font_root) {
-        log_startup("Marker exists but the font cache is missing or stale, regenerating");
-    }
+) -> Option<temp_layout::FontGeneration> {
     let outcome = temp_layout::ensure_font_cache(
         font_root,
         instance_id,
@@ -1092,23 +1118,23 @@ fn run_font_generation(
         FONT_CACHE_POLL,
     );
     match outcome {
-        temp_layout::FontCache::GeneratedByOther => {
-            log_startup("Font cache built by another instance")
+        temp_layout::FontCache::Ready(generation) => Some(generation),
+        temp_layout::FontCache::Generated(generation) => {
+            log_startup("Built a new font cache generation");
+            Some(generation)
         }
-        temp_layout::FontCache::GaveUp => log_startup(
-            "WARNING: another instance is still building the font cache, starting without it",
-        ),
-        _ => {}
+        temp_layout::FontCache::GeneratedByOther(generation) => {
+            log_startup("Font cache built by another instance");
+            Some(generation)
+        }
+        temp_layout::FontCache::GaveUp => {
+            log_startup(
+                "WARNING: another instance is still building the font cache, starting without it",
+            );
+            None
+        }
+        temp_layout::FontCache::Failed => None,
     }
-    // A failed run can leave files next to an old marker (converter.rs), so
-    // the outcome has to say the cache is good too.
-    let built = matches!(
-        outcome,
-        temp_layout::FontCache::Ready
-            | temp_layout::FontCache::Generated
-            | temp_layout::FontCache::GeneratedByOther
-    );
-    built && temp_layout::fonts_ready(font_root)
 }
 
 // The folder of the running executable: the last place x2t is looked for on
@@ -1212,15 +1238,15 @@ mod font_startup_tests {
             &binaries_dir,
             &x2t_task::font_scan_dirs(&binaries_dir),
         ));
-        assert!(!temp_layout::fonts_ready(&font_root), "the cache starts cold");
+        assert!(temp_layout::current_font_generation(&font_root).is_none(), "the cache starts cold");
 
         let fonts = std::sync::Arc::new(fonts_state::FontsState::pending());
         let (root, dir) = (font_root.clone(), binaries_dir.clone());
         let started = Instant::now();
         let thread = fonts_state::start(
             fonts.clone(),
-            temp_layout::fonts_ready(&font_root),
-            move || run_font_generation(&root, "real-x2t", &dir),
+            false,
+            move || run_font_generation(&root, "real-x2t", &dir).is_some(),
             |_| {},
         );
         let startup = started.elapsed();
@@ -1231,7 +1257,7 @@ mod font_startup_tests {
         let build = started.elapsed();
         eprintln!("startup returned after {:?}, cache built after {:?}", startup, build);
         assert_eq!(status, fonts_state::FontsStatus::Ready);
-        assert!(temp_layout::fonts_ready(&font_root));
+        assert!(temp_layout::current_font_generation(&font_root).is_some());
         assert!(startup < build / 10, "startup {:?} vs build {:?}", startup, build);
         let _ = std::fs::remove_dir_all(&font_root);
     }
