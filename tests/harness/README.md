@@ -76,6 +76,32 @@ Outcomes:
   types something first.
 - `open-timeout`, `launch-failed`, `no-input`, `bad-case-file`.
 
+## Cases
+
+Every case that saves first changes the document: `Z` typed at the end of the
+last line of a TXT, or added to the last cell of a CSV. The save must then be
+the input with that `Z` and nothing else changed.
+
+| case | input | ok when |
+|---|---|---|
+| `csv-bmp` | UTF-8 CSV, every character inside the BMP | saved with the `Z`, byte for byte |
+| `csv-emoji` | UTF-8 CSV with an emoji and U+20000 | saved with the `Z`, byte for byte |
+| `csv-emoji-bom` | the same CSV with a UTF-8 BOM | saved with the `Z`, BOM kept |
+| `csv-emoji-crlf` | the same CSV with CRLF | saved with the `Z`, CRLF kept |
+| `csv-emoji-utf16le-bom` | the same CSV in UTF-16 LE with a BOM | saved with the `Z`, encoding and BOM kept |
+| `csv-html-emoji` | `html-emoji.csv`: first cell `<html>`, and an emoji | opens as a sheet; saved with the `Z`, byte for byte |
+| `docx-edit-save` | DOCX with three paragraphs | the saved XML has the typed word and the paragraphs |
+| `txt-big-emoji-end` | TXT over 64 KiB, an emoji only in its last line | refused with the open error dialog |
+| `txt-bmp` | UTF-8 TXT inside the BMP | saved with the `Z`, byte for byte |
+| `txt-crlf` | ASCII TXT with CRLF | saved with the `Z`, CRLF kept |
+| `txt-emoji` | UTF-8 TXT with an emoji | refused with the open error dialog, file unchanged |
+| `txt-html` | TXT holding HTML | opens as text; saved with the `Z`, byte for byte |
+| `txt-nul` | `hello world` and one NUL | opens, and Ctrl+S without edits writes nothing |
+| `txt-utf16-bom-emoji` | UTF-16 LE TXT with a BOM and an emoji | refused with the open error dialog, file unchanged |
+| `txt-utf16be-nobom` | UTF-16 BE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
+| `txt-utf16le-nobom` | UTF-16 LE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
+| `xlsx-save` | XLSX with a number, a formatted number and a date | after typing in A2, row 1 keeps its values |
+
 ## result.json
 
 ```json

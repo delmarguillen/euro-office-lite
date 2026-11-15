@@ -1,0 +1,16 @@
+# The CSV of csv-emoji with CRLF line endings. The case appends Z to the last
+# cell (F2 edits it in place) and the save must be the input with that Z,
+# every line still ending in CRLF.
+description = "UTF-8 CSV with CRLF and characters above U+FFFF: Ctrl+S after adding Z to the last cell keeps CRLF and every byte"
+generate = "mktxt.py csv-emoji-crlf"
+input = "emoji-crlf.csv"
+input_sha256 = "a85c070fbaf1af204e8b45bd2e8b0685cdd0d0b082e7f62e1ec10fed13013ff7"
+action = "open-edit-save"
+keys_before = "ctrl+End F2 End"
+type = "Z"
+keys_after = "Return"
+check = "expected-bytes"
+expected_generate = "mktxt.py csv-emoji-crlf z"
+expected_sha256 = "84466003dffc2d51b9261d27ddfda89004554e974dffdd961fa23bcf8577fc35"
+expect = "saved-as-expected"
+screenshot = "on-failure"
