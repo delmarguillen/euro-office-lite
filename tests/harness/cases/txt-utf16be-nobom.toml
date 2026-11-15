@@ -1,0 +1,16 @@
+# UTF-16 BE without a BOM, with accents, Cyrillic and CRLF. It must be
+# detected as UTF-16 and saved back the same way. Ctrl+S on a document with no
+# changes writes nothing, so the case types Z at the end of the last line and
+# the save must be the input with that Z, still UTF-16 BE without a BOM.
+description = "UTF-16 BE TXT without a BOM: opens, and Ctrl+S after typing Z keeps encoding, no BOM and CRLF"
+generate = "mktxt.py utf16be-no-bom"
+input = "utf16be-nobom.txt"
+input_sha256 = "7e03c5e3f6513d2be61134cf260cfad95780d9af95fb4c7a020d46b44525f3c8"
+action = "open-edit-save"
+keys_before = "ctrl+End"
+type = "Z"
+check = "expected-bytes"
+expected_generate = "mktxt.py utf16be-no-bom z"
+expected_sha256 = "9277763285edccc213cbb0d7d8c8d241bb253ada58e2a689c945e1bdc6f0db4f"
+expect = "saved-as-expected"
+screenshot = "on-failure"

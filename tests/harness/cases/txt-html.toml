@@ -1,0 +1,15 @@
+# A TXT whose text is HTML must open as text, not as an HTML document. Ctrl+S
+# on a document with no changes writes nothing, so the case types Z at the
+# end of the line and the save must be the input with that Z.
+description = "TXT holding HTML: opens as text, and Ctrl+S after typing Z keeps every byte"
+generate = "mktxt.py html"
+input = "html.txt"
+input_sha256 = "d0b3952d0a96cbd175a7d9ee694b9a1a0b609e430b972e36100ca31b648d3f9d"
+action = "open-edit-save"
+keys_before = "ctrl+End"
+type = "Z"
+check = "expected-bytes"
+expected_generate = "mktxt.py html z"
+expected_sha256 = "8efed7da312c718047003b21e1d641869d3c57e869fbb8ed835ed33e1aa26bd4"
+expect = "saved-as-expected"
+screenshot = "on-failure"

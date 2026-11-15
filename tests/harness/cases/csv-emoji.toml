@@ -1,0 +1,17 @@
+# A CSV with an emoji and a CJK Extension B character: CSV is not refused and
+# keeps them. Ctrl+S on a document with no changes writes nothing, so the case
+# appends Z to the last cell (F2 edits it in place) and the save must be the
+# input with that Z.
+description = "CSV with characters above U+FFFF: opens, and Ctrl+S after adding Z to the last cell keeps every byte"
+generate = "mktxt.py csv-emoji"
+input = "emoji.csv"
+input_sha256 = "66f72138ab4f01a30589908a2f3d3178a2b51d6ab237ede1ca3405c112a136c8"
+action = "open-edit-save"
+keys_before = "ctrl+End F2 End"
+type = "Z"
+keys_after = "Return"
+check = "expected-bytes"
+expected_generate = "mktxt.py csv-emoji z"
+expected_sha256 = "3c56e7001e41a738e3009d6e93e3c34ff2e864a4d84d1e611b1e4905be6f87df"
+expect = "saved-as-expected"
+screenshot = "on-failure"

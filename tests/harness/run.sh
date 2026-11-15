@@ -118,18 +118,32 @@ DETAIL=""
 
 note() { DETAIL="${DETAIL:+$DETAIL; }$*"; }
 
-generate_input() {
-  local source=$1 gen args
-  read -r gen args <<< "$(case_value generate)"
+# generate SPEC OUT SHA256: runs the generator SPEC names into OUT and, when
+# SHA256 is set, checks that OUT has it.
+generate() {
+  local spec=$1 out=$2 want=$3 gen args
+  read -r gen args <<< "$spec"
   [ -f "$HERE/gen/$gen" ] || { note "no generator gen/$gen"; return 1; }
   # shellcheck disable=SC2086 # generator arguments are words
-  python3 -I "$HERE/gen/$gen" "$source" $args || { note "generator failed"; return 1; }
-  local want
-  want=$(case_value input_sha256)
+  python3 -I "$HERE/gen/$gen" "$out" $args || { note "generator failed: $spec"; return 1; }
   [ -z "$want" ] && return 0
-  [ "$(sha256_of "$source")" = "$want" ] && return 0
-  note "generated input does not have the input_sha256 of the case"
+  [ "$(sha256_of "$out")" = "$want" ] && return 0
+  note "$(basename "$out") does not have the sha256 the case gives"
   return 1
+}
+
+generate_input() {
+  generate "$(case_value generate)" "$1" "$(case_value input_sha256)"
+}
+
+# The file a save must write, for the expected-bytes check.
+expected_file() { echo "$(dirname "$1")/expected-$(basename "$1")"; }
+
+generate_expected() {
+  local spec
+  spec=$(case_value expected_generate)
+  [ -n "$spec" ] || return 0
+  generate "$spec" "$(expected_file "$1")" "$(case_value expected_sha256)"
 }
 
 observe_rejection() {
@@ -202,6 +216,18 @@ check_same_text() {
   fi
 }
 
+check_expected_bytes() {
+  local doc=$1 expected
+  expected=$(expected_file "$2")
+  note "saved $(wc -c < "$doc") bytes, expected $(wc -c < "$expected") bytes"
+  if cmp -s "$doc" "$expected"; then
+    OBSERVED=saved-as-expected
+    return
+  fi
+  OBSERVED=saved-changed
+  note "first difference: $(cmp "$doc" "$expected" 2>&1 | head -1)"
+}
+
 check_zip_match() {
   local doc=$1 match part pattern missing=""
   while IFS= read -r match; do
@@ -236,6 +262,7 @@ observe_open_document() {
   case $(case_value check) in
     same-text) check_same_text "$doc" "$source" ;;
     zip-match) check_zip_match "$doc" ;;
+    expected-bytes) check_expected_bytes "$doc" "$source" ;;
     *) OBSERVED=saved; note "no check for this case" ;;
   esac
 }
@@ -278,7 +305,7 @@ run_case() {
   source=$dir/source/$(case_value input)
   doc=$dir/$(case_value input)
   mkdir -p "$dir/source"
-  if ! generate_input "$source"; then
+  if ! generate_input "$source" || ! generate_expected "$source"; then
     OBSERVED=no-input
     record_case "$name" false "$expected" "" $(( SECONDS - started ))
     return

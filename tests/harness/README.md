@@ -51,7 +51,8 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `input_sha256` | optional: the generated input must have this sha256 |
 | `action` | `open`, `open-save` (Ctrl+S) or `open-edit-save` |
 | `keys_before`, `type`, `keys_after` | for `open-edit-save`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
-| `check` | how a saved file is judged: `same-text` or `zip-match` |
+| `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match` |
+| `expected_generate`, `expected_sha256` | for `expected-bytes`: the generator of the file the save must write, and optionally its sha256 |
 | `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain |
 | `expect` | the outcome that makes the case ok |
 | `control_expect` | optional: the outcome with `--control`, for a build without the fix |
@@ -66,8 +67,12 @@ Outcomes:
 - `opens-whole`, `opens-empty`, `saved-changed` (`same-text`): after Ctrl+S
   the file is the same as the input, has nothing but a BOM and line breaks,
   or is something else.
+- `saved-as-expected`, `saved-changed` (`expected-bytes`): the saved file is
+  byte for byte the expected one, or not.
 - `saved-as-expected`, `saved-missing-content` (`zip-match`).
-- `save-not-written`: Ctrl+S did not change the file within 30 s.
+- `save-not-written`: Ctrl+S did not change the file within 30 s. Current
+  builds do not write a document with no changes, so a case that needs a save
+  types something first.
 - `open-timeout`, `launch-failed`, `no-input`, `bad-case-file`.
 
 ## result.json
