@@ -19,6 +19,14 @@ const INSTANCE_LOCK: &str = "instance.lock";
 // The canonical path of the file an instance has open, for the other
 // instances to read. Absent while it has none.
 const OPEN_DOCUMENT: &str = "open-document";
+// The same for the file an instance is opening or saving to, from before x2t
+// converts it until open-document names it or the attempt ends.
+const CLAIMED_DOCUMENT: &str = "claimed-document";
+// Held by one instance at a time while it announces a file and checks the
+// others; never while x2t converts.
+const DOCUMENTS_LOCK: &str = "documents.lock";
+const DOCUMENTS_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+const DOCUMENTS_LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 const FONTDATA_DIR: &str = "fontdata";
 pub const FONTS_MARKER: &str = ".fonts_generated";
 // What the marker holds when the app version was never set, as in tests. It
@@ -551,7 +559,84 @@ fn canonical_or_given(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-// Written whole and renamed into place, so a reader never sees half a path.
+// Under Flatpak, a file outside the sandbox's filesystem permissions arrives
+// through the document portal as <portal>/<doc-id>/<name>. The same file
+// handed over twice can get two doc-ids, and each doc-id gives it its own
+// inode number. xdg-desktop-portal 1.19.0 and later serve the file's host path
+// in this extended attribute; 1.19.0 to 1.19.2 end it with a NUL.
+#[cfg(target_os = "linux")]
+const PORTAL_HOST_PATH: &std::ffi::CStr = c"user.document-portal.host-path";
+
+// Where the document portal is mounted in this sandbox. None outside Flatpak.
+#[cfg(target_os = "linux")]
+fn document_portal() -> Option<PathBuf> {
+    if !Path::new("/.flatpak-info").exists() {
+        return None;
+    }
+    // Flatpak mounts the portal at /run/flatpak/doc and links this path to
+    // it. Resolved, it is the prefix of the canonical paths of its files.
+    let uid = unsafe { libc::getuid() };
+    let link = PathBuf::from(format!("/run/user/{uid}/doc"));
+    link.canonicalize().ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn document_portal() -> Option<PathBuf> {
+    None
+}
+
+// The host path the portal serves for one of its files. None when it serves
+// none: a portal older than 1.19.0, or an error.
+#[cfg(target_os = "linux")]
+fn portal_host_path(file: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let file = std::ffi::CString::new(file.as_os_str().as_bytes()).ok()?;
+    let mut value = vec![0u8; libc::PATH_MAX as usize];
+    let read = unsafe {
+        libc::getxattr(
+            file.as_ptr(),
+            PORTAL_HOST_PATH.as_ptr(),
+            value.as_mut_ptr().cast(),
+            value.len(),
+        )
+    };
+    if read <= 0 {
+        return None;
+    }
+    value.truncate(read as usize);
+    if value.last() == Some(&0) {
+        value.pop();
+    }
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(std::ffi::OsString::from_vec(value)))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn portal_host_path(_file: &Path) -> Option<PathBuf> {
+    None
+}
+
+// What two paths are compared by to tell whether they name one file: the
+// canonical path, or for a file inside `portal` the host path the portal
+// serves for it, when it serves one. None when the path does not resolve.
+fn file_identity(path: &Path, portal: Option<&Path>) -> Option<PathBuf> {
+    let canonical = path.canonicalize().ok()?;
+    let Some(portal) = portal else {
+        return Some(canonical);
+    };
+    if !canonical.starts_with(portal) {
+        return Some(canonical);
+    }
+    Some(portal_host_path(&canonical).unwrap_or(canonical))
+}
+
+// file_identity with the document portal of this process, if it has one.
+pub fn document_identity(path: &Path) -> Option<PathBuf> {
+    file_identity(path, document_portal().as_deref())
+}
+
 pub fn publish_open_document(dir: &Path, document: Option<&Path>) -> std::io::Result<()> {
     let target = dir.join(OPEN_DOCUMENT);
     let Some(document) = document else {
@@ -560,6 +645,11 @@ pub fn publish_open_document(dir: &Path, document: Option<&Path>) -> std::io::Re
             _ => Ok(()),
         };
     };
+    write_document_path(&target, document)
+}
+
+// Written whole and renamed into place, so a reader never sees half a path.
+fn write_document_path(target: &Path, document: &Path) -> std::io::Result<()> {
     let canonical = canonical_or_given(document);
     let Some(text) = canonical.to_str() else {
         return Err(std::io::Error::new(
@@ -567,24 +657,42 @@ pub fn publish_open_document(dir: &Path, document: Option<&Path>) -> std::io::Re
             "the path is not valid Unicode",
         ));
     };
-    write_replacing(&target, text.as_bytes(), "write")
+    write_replacing(target, text.as_bytes(), "write")
 }
 
-// The file another instance has published, resolved again now. None when
-// there is nothing readable or the file no longer exists.
-fn published_document(instance: &Path) -> Option<PathBuf> {
-    let text = std::fs::read_to_string(instance.join(OPEN_DOCUMENT)).ok()?;
+// The identity of the file another instance has written to `file`, taken
+// again now. None when there is nothing readable or the file no longer exists.
+fn published_document(file: &Path, portal: Option<&Path>) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(file).ok()?;
     if text.is_empty() {
         return None;
     }
-    PathBuf::from(text).canonicalize().ok()
+    file_identity(Path::new(&text), portal)
 }
 
-// Whether a live instance other than `own_id` has `document` open. Any doubt
-// (an unreadable folder, a file that cannot be resolved) answers no: this
-// check must never stop a file from opening because of an error.
+// Whether an instance folder names `wanted` as the file it has open or the
+// one it is opening or saving to.
+fn names_document(instance: &Path, portal: Option<&Path>, wanted: &Path) -> bool {
+    [OPEN_DOCUMENT, CLAIMED_DOCUMENT]
+        .iter()
+        .any(|name| published_document(&instance.join(name), portal).as_deref() == Some(wanted))
+}
+
+// Whether a live instance other than `own_id` has `document` open, or is
+// opening or saving to it. Any doubt (an unreadable folder, a file that cannot
+// be resolved) answers no: this check must never stop a file from opening
+// because of an error.
 pub fn open_in_another_instance(root: &Path, own_id: &str, document: &Path) -> bool {
-    let Ok(wanted) = document.canonicalize() else {
+    open_in_another_instance_with_portal(root, own_id, document, document_portal().as_deref())
+}
+
+fn open_in_another_instance_with_portal(
+    root: &Path,
+    own_id: &str,
+    document: &Path,
+    portal: Option<&Path>,
+) -> bool {
+    let Some(wanted) = file_identity(document, portal) else {
         return false;
     };
     let Ok(entries) = std::fs::read_dir(root.join(INSTANCES_DIR)) else {
@@ -598,11 +706,77 @@ pub fn open_in_another_instance(root: &Path, own_id: &str, document: &Path) -> b
         if !is_locked(&instance.join(INSTANCE_LOCK)) {
             continue;
         }
-        if published_document(&instance).as_deref() == Some(wanted.as_path()) {
+        if names_document(&instance, portal, &wanted) {
             return true;
         }
     }
     false
+}
+
+// The file an instance announced in its folder as the one it is opening or
+// saving to. Dropping it removes the announcement; open-document is left as
+// it was.
+#[derive(Debug)]
+pub struct DocumentClaim {
+    // None when the announcement could not be written.
+    file: Option<PathBuf>,
+}
+
+impl Drop for DocumentClaim {
+    fn drop(&mut self) {
+        if let Some(file) = &self.file {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+}
+
+// Announces `document` in the folder of instance `own_id`, then checks the
+// other instances. None when another live instance has it open or announced:
+// the announcement is withdrawn. Otherwise the caller converts, publishes
+// open-document if that worked, and drops the claim.
+//
+// Announcing before checking means that of two instances doing this at once
+// at least one sees the other, so they never both go on. documents.lock makes
+// the two steps one for each instance: the second sees the first, the first
+// does not see the second, and exactly one goes on. Without the lock both may
+// give up, never both go on.
+pub fn claim_document(root: &Path, own_id: &str, document: &Path) -> Option<DocumentClaim> {
+    let lock = wait_for_documents_lock(root);
+    let claim = announce_document(&instance_dir(root, own_id), document);
+    if open_in_another_instance(root, own_id, document) {
+        // Withdrawn before the lock goes, so no one checking later sees it.
+        drop(claim);
+        drop(lock);
+        return None;
+    }
+    drop(lock);
+    Some(claim)
+}
+
+// A failed write is an announcement nobody sees: the open or save goes on as
+// it did before announcements existed.
+fn announce_document(dir: &Path, document: &Path) -> DocumentClaim {
+    let file = dir.join(CLAIMED_DOCUMENT);
+    if write_document_path(&file, document).is_err() {
+        return DocumentClaim { file: None };
+    }
+    DocumentClaim { file: Some(file) }
+}
+
+// None when the lock cannot be had in DOCUMENTS_LOCK_WAIT: an error, or an
+// instance that does not let go. The caller goes on without it.
+fn wait_for_documents_lock(root: &Path) -> Option<File> {
+    let path = root.join(DOCUMENTS_LOCK);
+    let started = std::time::Instant::now();
+    loop {
+        if let Ok(lock) = take_lock(&path) {
+            return Some(lock);
+        }
+        if started.elapsed() >= DOCUMENTS_LOCK_WAIT {
+            return None;
+        }
+        std::thread::sleep(DOCUMENTS_LOCK_POLL);
+    }
 }
 
 fn write_replacing(path: &Path, bytes: &[u8], tag: &str) -> std::io::Result<()> {

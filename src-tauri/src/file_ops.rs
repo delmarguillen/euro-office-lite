@@ -22,6 +22,10 @@ pub struct AppState {
     // addresses (temp_layout.rs, "Document images").
     pub doc_seq: std::sync::atomic::AtomicU64,
     pub modified: Mutex<bool>,
+    // A save of unsaved changes is under way (set_save_pending). sdkjs reports
+    // the document as saved when a save begins, so until the save ends
+    // `modified` can be false with nothing written (app_quit::has_unsaved_changes).
+    pub save_pending: Mutex<bool>,
     // The path a 0-byte file was opened from (#33). It is not in the recent
     // list yet: the file still has no content, and an entry that opens to
     // nothing is worse than no entry. The first save that actually writes it
@@ -269,7 +273,7 @@ pub async fn open_pdf(
     token: String,
 ) -> Result<String, String> {
     let input = pdf_to_open(&state.grants, &token)?;
-    crate::new_window::refuse_if_open_elsewhere(&state, &input)?;
+    let claim = crate::new_window::claim_for_open(&state, &input)?;
     let path = input.to_string_lossy().to_string();
     let file_name = input
         .file_name()
@@ -299,7 +303,8 @@ pub async fn open_pdf(
     );
 
     set_current_file(&state, Some(input));
-    *state.modified.lock().unwrap() = false;
+    drop(claim);
+    crate::app_quit::mark_document_clean(&state);
     *state.text_options.lock().unwrap() = None;
     super::recent::record(&app, &path);
 
@@ -349,8 +354,11 @@ pub async fn open_file(
     token: String,
 ) -> Result<String, String> {
     let path = state.grants.resolve(&token, GrantKind::Open)?;
-    crate::new_window::refuse_if_open_elsewhere(&state, &path)?;
-    open_file_inner(app, state, path.to_string_lossy().to_string(), true).await
+    let claim = crate::new_window::claim_for_open(&state, &path)?;
+    let opened = open_file_inner(app, state, path.to_string_lossy().to_string(), true).await;
+    // On success open_file_inner has published the file by now.
+    drop(claim);
+    opened
 }
 
 // Every frontend open path funnels through open_file, so the recent list is fed
@@ -502,7 +510,7 @@ async fn open_file_inner(
     let b64 = STANDARD.encode(&bin_data);
 
     set_current_file(&state, Some(input.clone()));
-    *state.modified.lock().unwrap() = false;
+    crate::app_quit::mark_document_clean(&state);
     // None for anything that is not CSV or TXT: the options of the previous
     // document must not leak into how this one is saved.
     *state.text_options.lock().unwrap() = text_options;
@@ -540,7 +548,7 @@ pub async fn save_file(
         super::recent::record(&app, &recorded.to_string_lossy());
     }
 
-    *state.modified.lock().unwrap() = false;
+    crate::app_quit::mark_document_saved(&state);
     Ok("ok".to_string())
 }
 
@@ -554,7 +562,7 @@ pub async fn save_file_as(
 ) -> Result<String, String> {
     let lcid = crate::x2t_task::checked_lcid(lcid)?;
     let dest = state.grants.resolve(&token, GrantKind::Save)?;
-    crate::new_window::refuse_save_if_open_elsewhere(&state, &dest)?;
+    let claim = crate::new_window::claim_for_save(&state, &dest)?;
     crate::save_target::check_writable_destination(&dest)?;
     let path = dest.to_string_lossy().to_string();
     let format_to = detect_format(&dest);
@@ -568,9 +576,10 @@ pub async fn save_file_as(
         // which when the entry is consumed is that same path (#33).
         end_pending_recent(&state.pending_recent, &dest);
         set_current_file(&state, Some(dest));
-        *state.modified.lock().unwrap() = false;
+        crate::app_quit::mark_document_saved(&state);
         super::recent::record(&app, &path);
     }
+    drop(claim);
     Ok("ok".to_string())
 }
 
@@ -639,9 +648,11 @@ async fn save_pdf_inner(
     let changes = decode_pdf_changes(data)?;
     let current = open_pdf_file(state)?;
     let dest = pdf_save_destination(&state.grants, token.as_deref(), &current)?;
-    if dest != current {
-        crate::new_window::refuse_save_if_open_elsewhere(state, &dest)?;
-    }
+    let claim = if dest != current {
+        Some(crate::new_window::claim_for_save(state, &dest)?)
+    } else {
+        None
+    };
     crate::protocol_limits::check_pdf_save_target(&dest)?;
     // Refused before x2t runs; write_beside_and_rename checks again.
     crate::save_target::check_writable_destination(&dest)?;
@@ -667,7 +678,8 @@ async fn save_pdf_inner(
         set_current_file(state, Some(dest.clone()));
         super::recent::record(app, &dest.to_string_lossy());
     }
-    *state.modified.lock().unwrap() = false;
+    drop(claim);
+    crate::app_quit::mark_document_saved(state);
     Ok("ok".to_string())
 }
 
@@ -1145,7 +1157,7 @@ pub async fn create_new(
 
     set_current_file(&state, None);
     *state.save_suggestion.lock().unwrap() = None;
-    *state.modified.lock().unwrap() = false;
+    crate::app_quit::mark_document_clean(&state);
 
     let result = open_file_inner(
         app,
@@ -1366,6 +1378,7 @@ pub(crate) fn test_state_for(root: &Path, instance: crate::temp_layout::Instance
         instance,
         doc_seq: std::sync::atomic::AtomicU64::new(1),
         modified: Mutex::new(false),
+        save_pending: Mutex::new(false),
         pending_recent: Mutex::new(None),
         recovery: Mutex::new(None),
         pending_open: crate::pending_open::PendingOpens::default(),

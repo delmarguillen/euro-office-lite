@@ -256,13 +256,21 @@ fn read_copy(
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<EditorInput, String> {
     let text_copy = crate::text_import::prepare_read_copy(source, work_dir, text_kind, text_options)
-        .map_err(|e| format!("read copy: {}", e))?;
+        .map_err(|e| read_copy_error(source, e))?;
     if let Some(copy) = text_copy {
         return Ok(EditorInput { copies: vec![copy.path], options: Some(copy.options) });
     }
     let copy = crate::text_import::document_read_copy(source, work_dir)
         .map_err(|e| format!("read copy: {}", e))?;
     Ok(EditorInput { copies: vec![copy], options: None })
+}
+
+// A TXT x2t would read without its text gets the error of a file that is not valid.
+fn read_copy_error(source: &std::path::Path, error: std::io::Error) -> String {
+    if crate::text_import::is_txt_outside_the_bmp(&error) {
+        return not_valid_error(source);
+    }
+    format!("read copy: {}", error)
 }
 
 // The copy x2t reads an ODF package from when one of its picture references has
@@ -724,6 +732,31 @@ mod tests {
 
         assert_eq!(refused.err(), Some("This file is not a valid .doc".to_string()));
         assert_eq!(files_in(&work_dir), 0);
+    }
+
+    fn text_editor_input(name: &str, content: &[u8]) -> (Result<EditorInput, String>, std::path::PathBuf) {
+        let (original, work_dir) = original_and_work_dir(name, content);
+        let kind = crate::text_import::TextKind::for_path(&original);
+        let options = kind.map(|kind| crate::text_import::detect_file(&original, kind).unwrap());
+        (prepare_editor_input(&original, &work_dir, kind, options), work_dir)
+    }
+
+    #[test]
+    fn a_txt_x2t_would_read_without_its_text_is_not_valid_and_leaves_no_copy() {
+        for text in ["hello \u{1F600}\n", "\u{20000}\r\n"] {
+            let (refused, work_dir) = text_editor_input("notes.txt", text.as_bytes());
+
+            assert_eq!(refused.err(), Some("This file is not a valid .txt".to_string()), "{:?}", text);
+            assert_eq!(files_in(&work_dir), 0, "{:?}", text);
+        }
+    }
+
+    #[test]
+    fn a_csv_with_an_emoji_still_opens_from_utf32() {
+        let (input, _) = text_editor_input("icons.csv", "name,icon\nsmile,\u{1F600}\n".as_bytes());
+
+        let options = input.unwrap().options.unwrap();
+        assert_eq!(options.encoding, crate::text_import::ENCODING_UTF32_LE);
     }
 
     #[test]
