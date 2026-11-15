@@ -212,16 +212,19 @@ fn start_markdown_document(state: &AppState, path: Option<PathBuf>) {
     *state.pending_recent.lock().unwrap() = None;
     crate::file_ops::set_current_file(state, path);
     *state.save_suggestion.lock().unwrap() = None;
-    *state.modified.lock().unwrap() = false;
+    crate::app_quit::mark_document_clean(state);
     *state.text_options.lock().unwrap() = None;
 }
 
 // The Markdown file an Open token names becomes the open document, unless
-// another window has it open: two windows saving one file overwrite each other.
+// another window has it open or is opening or saving to it: two windows
+// saving one file overwrite each other.
 fn open_markdown(state: &AppState, token: &str) -> Result<(PathBuf, Vec<u8>), String> {
     let (path, bytes) = read_markdown_file(&state.grants, token)?;
-    crate::new_window::refuse_if_open_elsewhere(state, &path)?;
+    let claim = crate::new_window::claim_for_open(state, &path)?;
     start_markdown_document(state, Some(path.clone()));
+    // open-document names the file now.
+    drop(claim);
     Ok((path, bytes))
 }
 
@@ -273,10 +276,13 @@ fn store_markdown(
     let current = state.current_file.lock().unwrap().clone();
     let dest = markdown_save_destination(&state.grants, token, current.clone())?;
     // As the editors' Save As (save_file_as): the other window would write
-    // its own copy over this one on its next save.
-    if token.is_some() {
-        crate::new_window::refuse_save_if_open_elsewhere(state, &dest)?;
-    }
+    // its own copy over this one on its next save. Held until open-document
+    // names `dest`, or dropped on the error return.
+    let claim = if token.is_some() {
+        Some(crate::new_window::claim_for_save(state, &dest)?)
+    } else {
+        None
+    };
     let written = decode_markdown_data(data)
         .and_then(|bytes| crate::save_target::write_bytes_beside_and_rename(&bytes, &dest));
     if let Err(error) = written {
@@ -287,7 +293,8 @@ fn store_markdown(
     if new_file {
         crate::file_ops::set_current_file(state, Some(dest.clone()));
     }
-    *state.modified.lock().unwrap() = false;
+    drop(claim);
+    crate::app_quit::mark_document_saved(state);
     // The text is in the file now: its recovery copy goes.
     crate::recovery::end_session(state, true);
     Ok(SavedMarkdown { path: dest, new_file })
@@ -501,29 +508,11 @@ mod tests {
         path
     }
 
-    // The state of a window whose instance folder is under `root`, built as
-    // main.rs builds it. Each `pid` is another window.
+    // The state of a window whose instance folder is under `root`, holding
+    // its instance lock. Each `pid` is another window.
     fn window_state(root: &Path, pid: u32) -> AppState {
         let instance = crate::temp_layout::begin_instance(root, 1000, pid).unwrap();
-        AppState {
-            current_file: std::sync::Mutex::new(None),
-            temp_dir: instance.dir.clone(),
-            temp_root: root.to_path_buf(),
-            font_root: root.to_path_buf(),
-            fonts: std::sync::Arc::new(crate::fonts_state::FontsState::pending()),
-            instance,
-            doc_seq: std::sync::atomic::AtomicU64::new(1),
-            modified: std::sync::Mutex::new(false),
-            pending_recent: std::sync::Mutex::new(None),
-            recovery: std::sync::Mutex::new(None),
-            pending_open: crate::pending_open::PendingOpens::default(),
-            grants: PathGrants::default(),
-            text_options: std::sync::Mutex::new(None),
-            last_print_pdf: std::sync::Mutex::new(None),
-            pasted_images: std::sync::Mutex::new(Vec::new()),
-            save_suggestion: std::sync::Mutex::new(None),
-            title_bar_args: Vec::new(),
-        }
+        crate::file_ops::test_state_for(root, instance)
     }
 
     // Whether the window `state` belongs to is seen by the others as having `file` open.
@@ -593,6 +582,50 @@ mod tests {
         let save = state.grants.grant(file.clone(), GrantKind::Save).token;
         assert!(store_markdown(&state, TEXT_B64, Some(&save)).is_ok());
         assert_eq!(std::fs::read(&file).unwrap(), b"text\n");
+    }
+
+    #[test]
+    fn a_file_another_window_is_saving_to_is_not_opened() {
+        let dir = test_dir("open-while-saving");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let other = window_state(&dir, 2);
+        let saving = crate::new_window::claim_for_save(&other, &file).unwrap();
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        let result = open_markdown(&state, &token);
+        assert_eq!(result.err().as_deref(), Some(crate::new_window::OPEN_ELSEWHERE));
+        drop(saving);
+        assert!(open_markdown(&state, &token).is_ok());
+    }
+
+    #[test]
+    fn save_as_to_a_file_another_window_is_opening_is_refused() {
+        let dir = test_dir("save-while-opening");
+        let taken = file_with(&dir, "taken.md", b"theirs\n");
+        let other = window_state(&dir, 2);
+        let opening = crate::new_window::claim_for_open(&other, &taken).unwrap();
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(taken.clone(), GrantKind::Save).token;
+        let result = store_markdown(&state, TEXT_B64, Some(&token));
+        assert_eq!(result.err().as_deref(), Some(crate::new_window::OPEN_ELSEWHERE));
+        assert_eq!(std::fs::read(&taken).unwrap(), b"theirs\n");
+        drop(opening);
+    }
+
+    #[test]
+    fn opening_and_saving_end_a_save_that_never_finished() {
+        let dir = test_dir("save-pending");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let state = window_state(&dir, 1);
+        *state.save_pending.lock().unwrap() = true;
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        open_markdown(&state, &token).unwrap();
+        assert!(!crate::app_quit::has_unsaved_changes(&state));
+
+        *state.modified.lock().unwrap() = true;
+        *state.save_pending.lock().unwrap() = true;
+        store_markdown(&state, TEXT_B64, None).unwrap();
+        assert!(!crate::app_quit::has_unsaved_changes(&state));
     }
 
     #[test]
