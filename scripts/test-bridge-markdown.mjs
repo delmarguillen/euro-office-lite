@@ -210,8 +210,18 @@ for (const [label, bytes] of Object.entries(files)) {
 {
   // UTF-16 LE without a BOM, "A\r\n": every byte is valid UTF-8, NULs included.
   let code = null;
-  try { Text.decode(new Uint8Array([0x41, 0x00, 0x0d, 0x00, 0x0a, 0x00])); } catch (error) { code = error.code; }
+  try { Text.decodeFile(new Uint8Array([0x41, 0x00, 0x0d, 0x00, 0x0a, 0x00])); } catch (error) { code = error.code; }
   check(results, 'a file with a NUL (UTF-16 without a BOM) is refused, not changed', code === 'not-utf8');
+}
+{
+  // A recovery copy is what encode wrote: a NUL pasted into the text comes back.
+  const draft = '# Draft\n\0pasted\n';
+  const bytes = Text.encode(draft, { bom: true, eol: '\r\n' });
+  let decoded = null;
+  try { decoded = Text.decode(bytes); } catch (error) {}
+  check(results, 'a recovery copy with a NUL decodes to its text', decoded !== null && decoded.text === draft);
+  const utf8 = Text.decodeFile(new Uint8Array([0x63, 0x61, 0x66, 0xc3, 0xa9, 0x0a]));
+  check(results, 'a UTF-8 file without a NUL still opens', utf8.text === 'café\n');
 }
 
 // ── Image references ──

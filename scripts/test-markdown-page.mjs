@@ -78,7 +78,8 @@ function installFakeTauri(fake) {
     markdown_recovery_reload: () => (stored('copy')
       ? { data: stored('copy'), name: fake.name, hasFile: !fake.isNew && !fake.recoverId }
       : null),
-    recovery_end: () => { sessionStorage.removeItem('copy'); },
+    // discard:false lets go of the session and keeps its copy.
+    recovery_end: (args) => { if (args.discard) sessionStorage.removeItem('copy'); },
     pick_save_target: (args) => (args.requestedExt === 'html'
       ? { token: 'tok-html', name: 'notes.html' }
       : { token: 'tok-save', name: 'copy.md' }),
@@ -661,6 +662,31 @@ const commandsNamed = async (calls, name) => (await calls()).filter((call) => ca
     && !names.includes('recovery_end') && !names.includes('recovery_discard'));
   await context.close();
 }
+{
+  // A NUL pasted into the draft is in the copy: it is the user's text, not a file to refuse.
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('# Draft\n\0pasted text'), recoverId: '1700000000000-43' });
+  await page.waitForTimeout(1000);
+  const shown = page.url().endsWith('/markdown/markdown.html') ? await page.evaluate(() => {
+    const content = document.getElementById('md-editor').shadowRoot?.querySelector('.cm-content');
+    return content ? content.textContent : document.getElementById('md-source').value;
+  }) : '';
+  check(results, 'a recovered draft with a NUL reopens with its text', shown.includes('pasted text'), page.url() + ' ' + shown);
+  const names = (await calls()).map((call) => call.command);
+  check(results, 'a recovered draft with a NUL keeps its session', !names.includes('recovery_end') && !names.includes('read_markdown'));
+  await context.close();
+}
+{
+  // Copied bytes that are not UTF-8: the adopted session is let go of, not deleted.
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: b64('caf\xE9'), recoverId: '1700000000000-44' });
+  await page.waitForURL('**/index.html');
+  const ended = await commandsNamed(calls, 'recovery_end');
+  const names = (await calls()).map((call) => call.command);
+  check(results, 'a recovery copy that cannot be decoded is let go of with discard:false', ended.length === 1
+    && ended[0].args.discard === false, JSON.stringify(ended));
+  check(results, 'a recovery copy that cannot be decoded is not replaced by the file', !names.includes('read_markdown')
+    && names.includes('dialog.message'));
+  await context.close();
+}
 
 // ── Reloading the page ──
 const editorText = (page) => page.evaluate(() => {
@@ -700,6 +726,34 @@ async function reloadPage(page) {
     && !(await page.evaluate(() => document.body.classList.contains('editing'))));
   const last = (await commandsNamed(calls, 'set_document_modified')).pop();
   check(results, 'the saved file reopens unmodified', last && last.args.modified === false);
+  await context.close();
+}
+{
+  // The copy holds a NUL the user pasted: a reload shows it, it does not reopen the file.
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('# One\n') });
+  await page.evaluate((copy) => sessionStorage.setItem('copy', copy), utf8('# One\n\0pasted text'));
+  const before = (await calls()).length;
+  await reloadPage(page);
+  const after = (await calls()).slice(before).map((call) => call.command);
+  check(results, 'a reload with a NUL in the copy keeps the unsaved text', (await editorText(page)).includes('pasted text'), await editorText(page));
+  check(results, 'a reload with a NUL in the copy neither reopens the file nor drops the copy', !after.includes('read_markdown')
+    && (await page.evaluate(() => sessionStorage.getItem('copy'))) !== null, after.join(' '));
+  await context.close();
+}
+{
+  // A copy that cannot be decoded is let go of for the start screen, never replaced by the file.
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('# One\n') });
+  await page.evaluate((copy) => sessionStorage.setItem('copy', copy), b64('caf\xE9'));
+  const before = (await calls()).length;
+  await page.reload();
+  await page.waitForTimeout(1500);
+  const after = (await calls()).slice(before);
+  const ended = after.filter((call) => call.command === 'recovery_end');
+  check(results, 'a reload copy that cannot be decoded is let go of with discard:false', ended.length === 1
+    && ended[0].args.discard === false && !after.some((call) => call.command === 'read_markdown'),
+    after.map((call) => call.command).join(' '));
+  check(results, 'a reload copy that cannot be decoded stays for the start screen',
+    (await page.evaluate(() => sessionStorage.getItem('copy'))) !== null);
   await context.close();
 }
 
@@ -774,6 +828,14 @@ async function reloadPage(page) {
   await page.waitForURL('**/index.html');
   const message = (await calls()).find((call) => call.command === 'dialog.message');
   check(results, 'a file that is not UTF-8 is not opened (Spanish message)', message && message.args.text.includes('UTF-8') && message.args.text.includes('archivo'));
+  await context.close();
+}
+{
+  // UTF-16 LE without a BOM, "A\r\n": valid UTF-8 byte for byte, refused for its NULs.
+  const { context, page, calls } = await openPage({ name: 'utf16.md', data: b64('A\0\r\0\n\0') });
+  await page.waitForURL('**/index.html');
+  const message = (await calls()).find((call) => call.command === 'dialog.message');
+  check(results, 'a file with a NUL is not opened, as one that is not UTF-8', message && message.args.text.includes('UTF-8'));
   await context.close();
 }
 {

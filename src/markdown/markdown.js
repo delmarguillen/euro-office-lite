@@ -703,8 +703,18 @@
     var file = pending || await invoke('current_document').catch(function() { return null; });
     if (!file) throw new Error('no file to open');
     var opened = await invoke('read_markdown', { token: file.token });
-    var decoded = Text.decode(base64ToBytes(opened.data));
+    var decoded = Text.decodeFile(base64ToBytes(opened.data));
     return { name: opened.name, decoded: decoded };
+  }
+
+  // A recovery copy this page took but cannot show. The backend lets go of it
+  // without deleting it, so the start screen offers it again; never through
+  // read_markdown, which would delete it.
+  async function releaseRecoveryCopy(error) {
+    log('recovery copy not shown: ' + errorText(error));
+    await invoke('recovery_end', { discard: false }).catch(function() {});
+    await tauri.dialog.message(t('recoverFailedMsg'), { title: t('openFailed'), kind: 'error' });
+    await leaveToStart();
   }
 
   async function startNew(framed) {
@@ -720,14 +730,20 @@
   // again, and nothing here discards it.
   async function startRecovered(framed, id) {
     var recovered;
-    var decoded;
     try {
       recovered = await invoke('markdown_recovery_load', { id: id });
-      decoded = Text.decode(base64ToBytes(recovered.data));
     } catch (error) {
       log('recover failed: ' + errorText(error));
       await tauri.dialog.message(t('recoverFailedMsg'), { title: t('openFailed'), kind: 'error' });
       await leaveToStart();
+      return;
+    }
+    // Loaded, the session is this process's now: a failure lets go of it.
+    var decoded;
+    try {
+      decoded = Text.decode(base64ToBytes(recovered.data));
+    } catch (error) {
+      await releaseRecoveryCopy(error);
       return;
     }
     format = { bom: decoded.bom, eol: decoded.eol };
@@ -743,19 +759,23 @@
 
   // A reload (F5, devtools) while the document had a recovery copy: the
   // copy comes back marked modified and stays offered until saved or
-  // discarded (markdown_recovery_reload). False when there is no copy.
+  // discarded (markdown_recovery_reload). False only when there is no copy:
+  // the page then opens the file, which ends the session.
   async function startReloaded(framed) {
-    var reloaded = await invoke('markdown_recovery_reload').catch(function(error) {
-      log('reload copy failed: ' + errorText(error));
-      return null;
-    });
+    var reloaded;
+    try {
+      reloaded = await invoke('markdown_recovery_reload');
+    } catch (error) {
+      await releaseRecoveryCopy(error);
+      return true;
+    }
     if (!reloaded) return false;
     var decoded;
     try {
       decoded = Text.decode(base64ToBytes(reloaded.data));
     } catch (error) {
-      log('reload copy unreadable: ' + errorText(error));
-      return false;
+      await releaseRecoveryCopy(error);
+      return true;
     }
     format = { bom: decoded.bom, eol: decoded.eol };
     hasFile = reloaded.hasFile;

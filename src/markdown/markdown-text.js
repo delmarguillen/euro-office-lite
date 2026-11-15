@@ -28,12 +28,12 @@
   }
 
   // { text, bom, eol }. Throws an Error with code 'not-utf8' for bytes that
-  // are not UTF-8 text: decoding them anyway would change them on save. A
-  // NUL is valid UTF-8 but never in text; UTF-16 without a BOM is full of them.
+  // are not UTF-8: decoding them anyway would change them on save. Used as it
+  // is for the page's own recovery copies, which hold whatever encode wrote,
+  // a pasted NUL included.
   function decode(bytes) {
     var bom = startsWithBom(bytes);
     var body = bom ? bytes.subarray(3) : bytes;
-    if (body.indexOf(0) !== -1) throw notUtf8Error();
     var raw;
     try {
       raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body);
@@ -46,6 +46,15 @@
       bom: bom,
       eol: lineEndOf(raw)
     };
+  }
+
+  // decode for a file being opened. A NUL is valid UTF-8 but never in a text
+  // file, and UTF-16 without a BOM is full of them: such a file is refused as
+  // not UTF-8.
+  function decodeFile(bytes) {
+    var body = startsWithBom(bytes) ? bytes.subarray(3) : bytes;
+    if (body.indexOf(0) !== -1) throw notUtf8Error();
+    return decode(bytes);
   }
 
   // The bytes to write for `text` in the format `decode` found.
@@ -107,6 +116,7 @@
 
   global.EoMarkdownText = {
     decode: decode,
+    decodeFile: decodeFile,
     encode: encode,
     isMarkdownPath: isMarkdownPath,
     classifyImageSource: classifyImageSource,
