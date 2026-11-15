@@ -609,7 +609,8 @@ fn decode_utf8_strict(bytes: &[u8]) -> std::io::Result<String> {
 // character outside the BMP (an emoji, CJK extension B), and reads each of its
 // UTF-16 surrogates as U+FFFD when they come as two 32-bit units. Saving what it
 // read would replace the file, so such a TXT is not opened. A CSV with the same
-// characters reads whole from UTF-32.
+// characters reads whole from UTF-32 on Linux, but not on Windows (see
+// read_copy_encoding).
 #[derive(Debug)]
 pub struct TxtOutsideTheBmp;
 
@@ -627,6 +628,57 @@ pub fn is_txt_outside_the_bmp(error: &std::io::Error) -> bool {
 
 fn has_characters_outside_the_bmp(text: &str) -> bool {
     text.chars().any(|c| c > '\u{FFFF}')
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Platform {
+    Windows,
+    LinuxOrMacos,
+}
+
+impl Platform {
+    fn current() -> Platform {
+        if cfg!(target_os = "windows") {
+            Platform::Windows
+        } else {
+            Platform::LinuxOrMacos
+        }
+    }
+}
+
+// x2t 10.0.0.169 on Windows reads an empty sheet from a UTF-32 CSV with a
+// character outside the BMP, and the whole sheet from the same CSV in UTF-16 LE
+// with a BOM and without its final line break. In UTF-16 every ASCII character
+// is followed by a 00 byte and the copy starts with FF FE, so it still starts
+// and reads like no document format.
+fn read_copy_encoding(kind: TextKind, text: &str, platform: Platform) -> u32 {
+    if platform != Platform::Windows || kind != TextKind::Csv {
+        return ENCODING_UTF32_LE;
+    }
+    if !has_characters_outside_the_bmp(text) {
+        return ENCODING_UTF32_LE;
+    }
+    ENCODING_UTF16_LE
+}
+
+fn without_final_break(text: &str) -> &str {
+    if let Some(rest) = text.strip_suffix("\r\n") {
+        return rest;
+    }
+    if let Some(rest) = text.strip_suffix('\n') {
+        return rest;
+    }
+    text.strip_suffix('\r').unwrap_or(text)
+}
+
+fn write_utf16le_text_with_bom(copy: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut out = std::io::BufWriter::new(std::fs::File::create(copy)?);
+    out.write_all(UTF16_LE_BOM)?;
+    for unit in text.encode_utf16() {
+        out.write_all(&unit.to_le_bytes())?;
+    }
+    out.flush()
 }
 
 fn write_utf32_text(copy: &Path, text: &str) -> std::io::Result<()> {
@@ -677,7 +729,8 @@ pub struct ReadCopy {
 
 // x2t picks how to read a file from its first bytes, before its extension.
 // UTF-32 without a BOM does not start like any document format, so a TXT or CSV
-// is always read as the text it is. Only reading uses it: saving keeps the
+// is always read as the text it is, except for the UTF-16 copy described at
+// read_copy_encoding. Only reading uses it: saving keeps the
 // encoding and delimiter of the original, from the options kept for the save.
 // Takes the folder instead of the app state so the corpus can open files the
 // same way. None for anything that is not a TXT or CSV.
@@ -686,6 +739,16 @@ pub fn prepare_read_copy(
     temp_dir: &Path,
     kind: Option<TextKind>,
     options: Option<TextOptions>,
+) -> std::io::Result<Option<ReadCopy>> {
+    prepare_read_copy_on(source, temp_dir, kind, options, Platform::current())
+}
+
+fn prepare_read_copy_on(
+    source: &Path,
+    temp_dir: &Path,
+    kind: Option<TextKind>,
+    options: Option<TextOptions>,
+    platform: Platform,
 ) -> std::io::Result<Option<ReadCopy>> {
     let (Some(kind), Some(options)) = (kind, options) else {
         return Ok(None);
@@ -708,6 +771,14 @@ pub fn prepare_read_copy(
     if text.is_empty() && !bytes.is_empty() {
         remove_if_failed(&copy, std::fs::write(&copy, UTF8_BOM))?;
         let options = TextOptions { encoding: ENCODING_UTF8, ..options };
+        return Ok(Some(ReadCopy { path: copy, options }));
+    }
+
+    if read_copy_encoding(kind, text, platform) == ENCODING_UTF16_LE {
+        // final_break_to_cut has already cut the break of a UTF-8 original.
+        let text = if cut == 0 { without_final_break(text) } else { text };
+        remove_if_failed(&copy, write_utf16le_text_with_bom(&copy, text))?;
+        let options = TextOptions { encoding: ENCODING_UTF16_LE, ..options };
         return Ok(Some(ReadCopy { path: copy, options }));
     }
 
@@ -1353,9 +1424,13 @@ mod tests {
     }
 
     fn try_prepared(source: &Path, temp: &Path) -> std::io::Result<Option<ReadCopy>> {
+        try_prepared_on(source, temp, Platform::current())
+    }
+
+    fn try_prepared_on(source: &Path, temp: &Path, platform: Platform) -> std::io::Result<Option<ReadCopy>> {
         let kind = TextKind::for_path(source);
         let options = kind.map(|kind| detect_file(source, kind).unwrap());
-        prepare_read_copy(source, temp, kind, options)
+        prepare_read_copy_on(source, temp, kind, options, platform)
     }
 
     fn prepared(source: &Path, temp: &Path) -> Option<ReadCopy> {
@@ -1364,14 +1439,20 @@ mod tests {
 
     // The bytes of the copy x2t reads for a file named `name` holding `bytes`.
     fn copy_bytes(name: &str, bytes: &[u8]) -> Vec<u8> {
+        copy_on(name, bytes, Platform::current()).1
+    }
+
+    // The encoding x2t is told to read the copy with, and the bytes of the copy,
+    // as prepared on `platform`.
+    fn copy_on(name: &str, bytes: &[u8], platform: Platform) -> (u32, Vec<u8>) {
         let (dir, temp) = read_copy_dirs(name);
         let source = dir.join(name);
         std::fs::write(&source, bytes).unwrap();
-        let copy = prepared(&source, &temp).expect(name);
+        let copy = try_prepared_on(&source, &temp, platform).unwrap().expect(name);
         assert_eq!(std::fs::read(&source).unwrap(), bytes, "the original is left alone");
         let content = std::fs::read(&copy.path).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        content
+        (copy.options.encoding, content)
     }
 
     #[test]
@@ -1500,7 +1581,75 @@ mod tests {
             0x00, 0x00, 0x02, 0x00, 0x2C, 0, 0, 0,
         ];
         let expected = [&expected[..], &[0x31, 0, 0, 0]].concat();
-        assert_eq!(copy_bytes("emoji.csv", "a,\u{1F600}\n\u{20000},1\n".as_bytes()), expected);
+        let bytes = "a,\u{1F600}\n\u{20000},1\n".as_bytes();
+        assert_eq!(copy_on("linux-emoji.csv", bytes, Platform::LinuxOrMacos), (ENCODING_UTF32_LE, expected));
+    }
+
+    // The bytes of the UTF-16 copy of "a,\u{1F600}\n\u{20000},1".
+    const EMOJI_CSV_UTF16_COPY: [u8; 20] = [
+        0xFF, 0xFE, 0x61, 0x00, 0x2C, 0x00, 0x3D, 0xD8, 0x00, 0xDE, 0x0A, 0x00,
+        0x40, 0xD8, 0x00, 0xDC, 0x2C, 0x00, 0x31, 0x00,
+    ];
+
+    #[test]
+    fn on_windows_a_csv_with_characters_outside_the_bmp_is_read_from_utf16_with_a_bom() {
+        let bytes = "a,\u{1F600}\n\u{20000},1\n".as_bytes();
+        let copy = copy_on("win-emoji.csv", bytes, Platform::Windows);
+        assert_eq!(copy, (ENCODING_UTF16_LE, EMOJI_CSV_UTF16_COPY.to_vec()));
+    }
+
+    #[test]
+    fn on_windows_the_utf16_copy_loses_one_final_break_whatever_the_encoding() {
+        let windows = Platform::Windows;
+        let crlf = "a,\u{1F600}\r\n\u{20000},1\r\n";
+        let expected = utf16le_with_bom("a,\u{1F600}\r\n\u{20000},1");
+        assert_eq!(copy_on("win-crlf.csv", crlf.as_bytes(), windows).1, expected);
+        assert_eq!(copy_on("win-le.csv", &utf16le_with_bom(crlf), windows).1, expected);
+        assert_eq!(copy_on("win-be.csv", &utf16be_with_bom(crlf), windows).1, expected);
+        let blank_row = "a,\u{1F600}\n\n";
+        let expected = utf16le_with_bom("a,\u{1F600}\n");
+        assert_eq!(copy_on("win-blank.csv", blank_row.as_bytes(), windows).1, expected);
+        assert_eq!(copy_on("win-blank16.csv", &utf16le_with_bom(blank_row), windows).1, expected);
+        let no_break = "\u{1F600},1";
+        assert_eq!(copy_on("win-nobreak.csv", no_break.as_bytes(), windows).1, utf16le_with_bom(no_break));
+    }
+
+    #[test]
+    fn the_utf16_copy_rebuilds_the_original_from_what_x2t_writes() {
+        let original = "name,icon\nsmile,\u{1F600}\n\u{20000},2\n";
+        let copy = copy_on("win-measured.csv", original.as_bytes(), Platform::Windows);
+        assert_eq!(copy, (ENCODING_UTF16_LE, utf16le_with_bom("name,icon\nsmile,\u{1F600}\n\u{20000},2")));
+        let options = csv(original.as_bytes());
+        let written = format!("\u{FEFF}{}", original);
+        assert_eq!(rebuild_csv(written.as_bytes(), options), original.as_bytes());
+    }
+
+    #[test]
+    fn on_windows_a_csv_within_the_bmp_is_still_read_from_utf32() {
+        let text = "caf\u{E9},\u{4E2D}\u{FFFD}\n1,2";
+        let copy = copy_on("win-bmp.csv", text.as_bytes(), Platform::Windows);
+        assert_eq!(copy, (ENCODING_UTF32_LE, utf32le(text)));
+    }
+
+    #[test]
+    fn on_windows_a_txt_with_an_emoji_is_still_not_opened() {
+        let (dir, temp) = read_copy_dirs("windows-txt");
+        let source = dir.join("win-emoji.txt");
+        std::fs::write(&source, "a \u{1F600} b\n").unwrap();
+        let error = try_prepared_on(&source, &temp, Platform::Windows).expect_err("refused");
+        assert!(is_txt_outside_the_bmp(&error));
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy for x2t");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_utf16_copy_passes_the_content_check_as_a_csv() {
+        let text = "<html><body>\u{1F600}</body></html>,b\n1,2\n";
+        let (_, copy) = copy_on("win-page.csv", text.as_bytes(), Platform::Windows);
+        let sample = crate::x2t_task::ContentSample::of(&copy);
+        assert!(crate::x2t_task::content_matches_extension(Path::new("/t/eo-read-copy.csv"), &sample));
+        let sample = crate::x2t_task::ContentSample::of(&EMOJI_CSV_UTF16_COPY);
+        assert!(crate::x2t_task::content_matches_extension(Path::new("/t/eo-read-copy.csv"), &sample));
     }
 
     #[test]
