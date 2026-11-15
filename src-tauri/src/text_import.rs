@@ -160,7 +160,7 @@ pub fn detect_file(path: &Path, kind: TextKind) -> std::io::Result<TextOptions> 
 // multibyte character cut at the end of the block is not taken for invalid
 // UTF-8. trailing_breaks is only right when `complete` (see detect_file).
 pub fn detect(head: &[u8], complete: bool, kind: TextKind) -> TextOptions {
-    let (encoding, bom, body) = detect_encoding(head, complete);
+    let (encoding, bom, body) = detect_encoding(head, complete, kind);
     let units = code_units(encoding, body);
     let delimiter = match kind {
         TextKind::Csv => Some(detect_delimiter(&units)),
@@ -177,7 +177,7 @@ pub fn detect(head: &[u8], complete: bool, kind: TextKind) -> TextOptions {
 
 // Returns the encoding, whether the file starts with its BOM, and the bytes
 // after that BOM.
-fn detect_encoding(head: &[u8], complete: bool) -> (u32, bool, &[u8]) {
+fn detect_encoding(head: &[u8], complete: bool, kind: TextKind) -> (u32, bool, &[u8]) {
     if let Some(body) = head.strip_prefix(UTF8_BOM) {
         return (ENCODING_UTF8, true, body);
     }
@@ -186,6 +186,12 @@ fn detect_encoding(head: &[u8], complete: bool) -> (u32, bool, &[u8]) {
     }
     if let Some(body) = head.strip_prefix(UTF16_BE_BOM) {
         return (ENCODING_UTF16_BE, true, body);
+    }
+    // Before UTF-8: UTF-16 text in ASCII is valid UTF-8 too.
+    if kind == TextKind::Txt {
+        if let Some(encoding) = utf16_without_bom(head, complete) {
+            return (encoding, false, head);
+        }
     }
     let utf8 = match std::str::from_utf8(head) {
         Ok(_) => true,
@@ -199,6 +205,47 @@ fn detect_encoding(head: &[u8], complete: bool) -> (u32, bool, &[u8]) {
         ENCODING_WINDOWS_1252
     };
     (encoding, false, head)
+}
+
+// UTF-16 without a BOM. Read as UTF-8 or windows-1252 it has a NUL in every
+// ASCII character. Those NULs are high bytes, so they sit at one parity: odd
+// offsets in LE, even in BE. The other parity only has the NUL low bytes of
+// characters such as U+4E00 or U+0100.
+fn utf16_without_bom(head: &[u8], complete: bool) -> Option<u32> {
+    if complete && head.len() % 2 != 0 {
+        return None;
+    }
+    let nuls_at_even = head.iter().step_by(2).filter(|&&byte| byte == 0).count();
+    let nuls_at_odd = head.iter().skip(1).step_by(2).filter(|&&byte| byte == 0).count();
+    let (encoding, high_nuls) = if nuls_at_odd > 2 * nuls_at_even {
+        (ENCODING_UTF16_LE, nuls_at_odd)
+    } else if nuls_at_even > 2 * nuls_at_odd {
+        (ENCODING_UTF16_BE, nuls_at_even)
+    } else {
+        return None;
+    };
+    let units = code_units(encoding, head);
+    // ASCII text with a stray NUL is valid UTF-16 too, so one NUL is not
+    // enough. Latin text has a NUL high byte in nearly every character, and
+    // Cyrillic or Greek still in each space, digit and punctuation mark.
+    if high_nuls * 8 < units.len() {
+        return None;
+    }
+    is_utf16_text(&units, complete).then_some(encoding)
+}
+
+// Valid UTF-16 with no control character but tab and line breaks: binary data
+// read as UTF-16 gives U+0000 and other controls. When the head is not the
+// whole file it may end in the first half of a surrogate pair.
+fn is_utf16_text(units: &[u16], complete: bool) -> bool {
+    let units = match units.split_last() {
+        Some((&last, rest)) if !complete && (0xD800..=0xDBFF).contains(&last) => rest,
+        _ => units,
+    };
+    char::decode_utf16(units.iter().copied()).all(|decoded| match decoded {
+        Ok(c) => !c.is_control() || matches!(c, '\t' | '\n' | '\r'),
+        Err(_) => false,
+    })
 }
 
 // In UTF-8 and windows-1252 every byte below 0x80 is that ASCII character, so
@@ -1771,5 +1818,164 @@ mod tests {
         bytes.extend(std::iter::repeat(b'x').take(HEAD_LEN * 2 + 3));
         let (content, _) = document_copy_of("rtf-long", "a.rtf", &bytes);
         assert_eq!(content, &bytes[UTF8_BOM.len()..]);
+    }
+
+    // ---- UTF-16 TXT without a BOM ----
+
+    fn utf16le(text: &str) -> Vec<u8> {
+        text.encode_utf16().flat_map(|unit| unit.to_le_bytes()).collect()
+    }
+
+    fn utf16be(text: &str) -> Vec<u8> {
+        text.encode_utf16().flat_map(|unit| unit.to_be_bytes()).collect()
+    }
+
+    fn utf16le_units(units: &[u16]) -> Vec<u8> {
+        units.iter().flat_map(|unit| unit.to_le_bytes()).collect()
+    }
+
+    fn txt_encoding(bytes: &[u8]) -> u32 {
+        detect(bytes, true, TextKind::Txt).encoding
+    }
+
+    const NO_BOM_TEXTS: [&str; 5] = [
+        "Hello\r\nWorld\r\n",
+        "Línea uno\nÜber alles €\n",
+        // NULs only in the spaces and punctuation, 12 of 58 characters.
+        "Съешь же ещё этих мягких французских булок, да выпей чаю.\n",
+        "a 😀 b",
+        "\n\n",
+    ];
+
+    #[test]
+    fn utf16_without_bom_is_detected_in_both_byte_orders() {
+        for text in NO_BOM_TEXTS {
+            let le = detect(&utf16le(text), true, TextKind::Txt);
+            assert_eq!((le.encoding, le.bom), (ENCODING_UTF16_LE, false), "{:?}", text);
+            let be = detect(&utf16be(text), true, TextKind::Txt);
+            assert_eq!((be.encoding, be.bom), (ENCODING_UTF16_BE, false), "{:?}", text);
+        }
+    }
+
+    #[test]
+    fn utf16_without_bom_gets_its_line_endings_and_final_breaks() {
+        assert_eq!(
+            detect(&utf16le("año\r\nb\r\n\r\n"), true, TextKind::Txt),
+            TextOptions {
+                encoding: ENCODING_UTF16_LE,
+                delimiter: None,
+                bom: false,
+                crlf: true,
+                trailing_breaks: 2
+            }
+        );
+    }
+
+    #[test]
+    fn a_surrogate_pair_cut_by_the_end_of_the_head_is_still_utf16() {
+        let mut bytes = utf16le("ab😀");
+        bytes.truncate(bytes.len() - 2);
+        assert_eq!(detect(&bytes, false, TextKind::Txt).encoding, ENCODING_UTF16_LE);
+        assert_ne!(detect(&bytes, true, TextKind::Txt).encoding, ENCODING_UTF16_LE);
+    }
+
+    #[test]
+    fn detect_file_reads_the_final_breaks_of_a_long_utf16_without_bom() {
+        let dir = std::env::temp_dir().join(format!("eo-text-tail16-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.txt");
+        let mut text = "line\r\n".repeat(HEAD_LEN / 12 + 100);
+        text.push_str("last\r\n\r\n");
+        std::fs::write(&path, utf16be(&text)).unwrap();
+
+        let options = detect_file(&path, TextKind::Txt).unwrap();
+        assert_eq!(
+            (options.encoding, options.bom, options.crlf, options.trailing_breaks),
+            (ENCODING_UTF16_BE, false, true, 2)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn text_that_is_not_utf16_is_not_taken_for_it() {
+        let stray_nul = "Primera línea\nSegunda\0 línea con un NUL perdido\nTercera\n".as_bytes();
+        assert_eq!(stray_nul.len() % 2, 0, "even, so only the NUL count rules it out");
+        let png = b"\x89PNG\r\n\x1A\n\0\0\0\rIHDR\0\0\0\x10\0\0\0\x10\x08\x06\0\0\0\x1F\xF3";
+        let mut odd_length = utf16le("Hello");
+        odd_length.push(b'!');
+        // A high surrogate followed by "a", and a low one with no high before it.
+        let lone_high = utf16le_units(&[0x78, 0x79, 0x7A, 0xD841, 0x61, 0x62, 0x63]);
+        let lone_low = utf16le_units(&[0x78, 0x79, 0x7A, 0xDC41, 0x61, 0x62, 0x63]);
+        // 16-bit numbers below 256: NULs at one parity, but no text.
+        let numbers = utf16le_units(&[1, 2, 3, 0x41, 5, 6, 7, 8]);
+        let cases: [(&str, &[u8], u32); 11] = [
+            ("UTF-8", "año café\n".as_bytes(), ENCODING_UTF8),
+            ("even-length ASCII", b"abcd", ENCODING_UTF8),
+            ("UTF-8 with a stray NUL", stray_nul, ENCODING_UTF8),
+            ("UTF-8 with a run of NULs", b"log line\n\0\0\0\0\0\0next\n", ENCODING_UTF8),
+            ("windows-1252", b"Caf\xE9 a\xF1o\r\n", ENCODING_WINDOWS_1252),
+            ("binary with scattered NULs", png, ENCODING_WINDOWS_1252),
+            ("binary numbers", &numbers, ENCODING_UTF8),
+            ("empty", b"", ENCODING_UTF8),
+            ("odd length", &odd_length, ENCODING_UTF8),
+            ("lone high surrogate", &lone_high, ENCODING_WINDOWS_1252),
+            ("lone low surrogate", &lone_low, ENCODING_WINDOWS_1252),
+        ];
+        for (case, bytes, encoding) in cases {
+            assert_eq!(txt_encoding(bytes), encoding, "{}", case);
+        }
+    }
+
+    #[test]
+    fn a_csv_without_bom_is_never_taken_for_utf16() {
+        assert_eq!(csv(&utf16le("a;b\n")).encoding, ENCODING_UTF8);
+    }
+
+    // The texts prepare_read_copy opens: a TXT outside the BMP is refused.
+    fn no_bom_texts_in_the_bmp() -> impl Iterator<Item = &'static str> {
+        NO_BOM_TEXTS.into_iter().filter(|text| !has_characters_outside_the_bmp(text))
+    }
+
+    #[test]
+    fn a_utf16_txt_without_bom_outside_the_bmp_is_refused() {
+        for text in NO_BOM_TEXTS.into_iter().filter(|text| has_characters_outside_the_bmp(text)) {
+            for (name, bytes) in [("emoji-le.txt", utf16le(text)), ("emoji-be.txt", utf16be(text))] {
+                let (error, left) = refused_txt(name, &bytes);
+                assert!(is_txt_outside_the_bmp(&error), "{} {:?}: {}", name, text, error);
+                assert_eq!(left, 0, "no copy for x2t: {} {:?}", name, text);
+            }
+        }
+    }
+
+    #[test]
+    fn a_utf16_txt_without_bom_is_read_from_a_utf32_copy() {
+        for text in no_bom_texts_in_the_bmp() {
+            assert_eq!(copy_bytes("no-bom-le.txt", &utf16le(text)), utf32le(text), "{:?}", text);
+            assert_eq!(copy_bytes("no-bom-be.txt", &utf16be(text)), utf32le(text), "{:?}", text);
+        }
+    }
+
+    #[test]
+    fn utf16_without_bom_round_trips_without_a_bom() {
+        let (dir, temp) = read_copy_dirs("utf16-no-bom");
+        for text in no_bom_texts_in_the_bmp() {
+            for original in [utf16le(text), utf16be(text)] {
+                let source = dir.join("no-bom.txt");
+                std::fs::write(&source, &original).unwrap();
+                let options = detect_file(&source, TextKind::Txt).unwrap();
+                let copy = prepared(&source, &temp).unwrap();
+                assert_eq!(copy.options, TextOptions { encoding: ENCODING_UTF32_LE, ..options });
+                assert_eq!(std::fs::read(&copy.path).unwrap(), utf32le(text), "x2t reads the text");
+                // x2t 9.4 writes CRLF without the final break, 8.2 adds one.
+                let body = text.trim_end_matches(['\r', '\n']).replace("\r\n", "\n");
+                let body = body.replace('\n', "\r\n");
+                for written in [format!("\u{FEFF}{}", body), format!("\u{FEFF}{}\r\n\r\n", body)] {
+                    let saved = rebuild_txt(written.as_bytes(), options).0;
+                    assert_eq!(saved, original, "{:?}", text);
+                }
+                assert_eq!(std::fs::read(&source).unwrap(), original, "the original is left alone");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
