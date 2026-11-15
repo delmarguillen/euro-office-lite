@@ -21,18 +21,24 @@
     return crlf > lf ? '\r\n' : '\n';
   }
 
+  function notUtf8Error() {
+    var error = new Error('the file is not UTF-8 text');
+    error.code = 'not-utf8';
+    return error;
+  }
+
   // { text, bom, eol }. Throws an Error with code 'not-utf8' for bytes that
-  // are not UTF-8: decoding them anyway would change them on save.
+  // are not UTF-8 text: decoding them anyway would change them on save. A
+  // NUL is valid UTF-8 but never in text; UTF-16 without a BOM is full of them.
   function decode(bytes) {
     var bom = startsWithBom(bytes);
     var body = bom ? bytes.subarray(3) : bytes;
+    if (body.indexOf(0) !== -1) throw notUtf8Error();
     var raw;
     try {
       raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body);
     } catch (e) {
-      var error = new Error('the file is not UTF-8 text');
-      error.code = 'not-utf8';
-      throw error;
+      throw notUtf8Error();
     }
     return {
       // What a textarea's value turns the text into anyway.

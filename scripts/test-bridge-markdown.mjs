@@ -207,6 +207,12 @@ for (const [label, bytes] of Object.entries(files)) {
   try { Text.decode(new Uint8Array([0x63, 0x61, 0x66, 0xe9, 0x0a])); } catch (error) { code = error.code; }
   check(results, 'a file that is not UTF-8 is refused, not changed', code === 'not-utf8');
 }
+{
+  // UTF-16 LE without a BOM, "A\r\n": every byte is valid UTF-8, NULs included.
+  let code = null;
+  try { Text.decode(new Uint8Array([0x41, 0x00, 0x0d, 0x00, 0x0a, 0x00])); } catch (error) { code = error.code; }
+  check(results, 'a file with a NUL (UTF-16 without a BOM) is refused, not changed', code === 'not-utf8');
+}
 
 // ── Image references ──
 {
