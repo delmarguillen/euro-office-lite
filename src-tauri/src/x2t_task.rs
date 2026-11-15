@@ -1203,7 +1203,7 @@ const ZIP64_END_LOCATOR_SIGNATURE: &[u8] = b"PK\x06\x07";
 // them, noted on their lines below. HTML is never
 // accepted, because x2t picks the format from the content. An .rtf starts
 // like one, after an optional BOM and blank space. A TXT or CSV is read from
-// its UTF-32 copy (text_import::prepare_read_copy). An extension outside
+// its UTF-32 or UTF-16 copy (text_import::prepare_read_copy). An extension outside
 // CONVERTED_EXTENSIONS, or none, is refused. A file that starts like a ZIP
 // must also open as one (converter.rs). Content that is neither a CFB nor a
 // ZIP must not hold what x2t would read as another format first.
