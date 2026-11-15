@@ -654,6 +654,20 @@ fn read_copy_path(temp_dir: &Path, kind: TextKind) -> std::path::PathBuf {
     temp_dir.join(name)
 }
 
+// x2t drops the rest of a TXT line from its first NUL character when it
+// reads the copy, and saving writes back only what is left, so a TXT with one
+// is refused instead of opened. That covers a UTF-16 TXT the detection could
+// not tell apart from others.
+fn refuse_nul(bytes: &[u8], encoding: u32) -> std::io::Result<()> {
+    let Some(unit) = code_units(encoding, bytes).iter().position(|&unit| unit == 0) else {
+        return Ok(());
+    };
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!("NUL character at code unit {}", unit),
+    ))
+}
+
 // A copy of the original for x2t to read, and the options to read it with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReadCopy {
@@ -679,6 +693,9 @@ pub fn prepare_read_copy(
     let bytes = std::fs::read(source)?;
     let cut = final_break_to_cut(kind, options, &bytes) as usize;
     let decoded = decode_text(&bytes[..bytes.len() - cut], options.encoding)?;
+    if kind == TextKind::Txt {
+        refuse_nul(&bytes, options.encoding)?;
+    }
     // A leading U+FEFF would make the copy start like a UTF-16 BOM (FF FE).
     let text = decoded.trim_start_matches('\u{FEFF}');
     if kind == TextKind::Txt && has_characters_outside_the_bmp(text) {
@@ -1976,6 +1993,38 @@ mod tests {
                 assert_eq!(std::fs::read(&source).unwrap(), original, "the original is left alone");
             }
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- NUL characters ----
+
+    #[test]
+    fn a_txt_with_a_nul_is_refused_instead_of_cut_by_x2t() {
+        let (dir, temp) = read_copy_dirs("nul");
+        let mut odd_length = utf16le("Hello");
+        odd_length.push(b'!');
+        let cases: [(&str, Vec<u8>, usize); 8] = [
+            ("utf8.txt", b"one\ntwo\0 three\n".to_vec(), 7),
+            // The NUL is refused before the character outside the BMP.
+            ("emoji.txt", "line one\0 with \u{1F600}\n".as_bytes().to_vec(), 8),
+            ("latin.txt", b"Caf\xE9 con le\xF1a\0 y m\xE1s\r\n".to_vec(), 13),
+            ("bom.txt", utf16le_with_bom("a\0b"), 2),
+            // UTF-16 the detection does not take: one NUL in 18 characters,
+            // an odd length, a lone surrogate, a U+0000.
+            ("sparse.txt", utf16le("中文文本很长的行没有空格的文字内容\n"), 35),
+            ("odd.txt", odd_length, 1),
+            ("lone.txt", utf16le_units(&[0x78, 0x79, 0x7A, 0xD841, 0x61, 0x62, 0x63]), 1),
+            ("u0000.txt", utf16le("Hello\0World\n"), 1),
+        ];
+        for (name, bytes, unit) in cases {
+            let source = dir.join(name);
+            std::fs::write(&source, &bytes).unwrap();
+            let error = try_prepared(&source, &temp).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{}", name);
+            assert_eq!(error.to_string(), format!("NUL character at code unit {}", unit), "{}", name);
+            assert_eq!(std::fs::read(&source).unwrap(), bytes, "the original is left alone");
+        }
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy left behind");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
