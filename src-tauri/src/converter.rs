@@ -17,6 +17,9 @@ pub async fn convert_file(
     // ignores it.
     fontdata_dir: &std::path::Path,
     text_options: Option<crate::text_import::TextOptions>,
+    // The locale chosen in the spreadsheet editor: only the PDF export reads
+    // it.
+    pdf_lcid: Option<u32>,
 ) -> Result<String, String> {
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let binaries_dir = resource_dir.join("binaries");
@@ -35,6 +38,7 @@ pub async fn convert_file(
                 &temp_dir,
                 &fontdata,
                 &log_pdf,
+                pdf_lcid,
             )
         })
         .await;
