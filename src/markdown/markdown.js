@@ -713,8 +713,23 @@
   async function releaseRecoveryCopy(error) {
     log('recovery copy not shown: ' + errorText(error));
     await invoke('recovery_end', { discard: false }).catch(function() {});
-    await tauri.dialog.message(t('recoverFailedMsg'), { title: t('openFailed'), kind: 'error' });
-    await leaveToStart();
+    await showThenLeave(showRecoverFailed);
+  }
+
+  function showRecoverFailed() {
+    return tauri.dialog.message(t('recoverFailedMsg'), { title: t('openFailed'), kind: 'error' });
+  }
+
+  // The page has nothing to stay on: it goes back to the start screen even
+  // when the message could not be shown.
+  async function showThenLeave(showMessage) {
+    try {
+      await showMessage();
+    } catch (error) {
+      log('message not shown: ' + errorText(error));
+    } finally {
+      await leaveToStart();
+    }
   }
 
   async function startNew(framed) {
@@ -734,8 +749,7 @@
       recovered = await invoke('markdown_recovery_load', { id: id });
     } catch (error) {
       log('recover failed: ' + errorText(error));
-      await tauri.dialog.message(t('recoverFailedMsg'), { title: t('openFailed'), kind: 'error' });
-      await leaveToStart();
+      await showThenLeave(showRecoverFailed);
       return;
     }
     // Loaded, the session is this process's now: a failure lets go of it.
@@ -808,8 +822,7 @@
       file = await readFile(pending);
     } catch (error) {
       log('open failed: ' + errorText(error));
-      await showOpenFailed(error);
-      await leaveToStart();
+      await showThenLeave(function() { return showOpenFailed(error); });
       return;
     }
     format = { bom: file.decoded.bom, eol: file.decoded.eol };

@@ -120,6 +120,7 @@ function installFakeTauri(fake) {
     dialog: {
       message: (text, options) => {
         record({ command: 'dialog.message', args: { text, options } });
+        if (fake.dialogFails) return Promise.reject(new Error('the dialog could not be shown'));
         return Promise.resolve();
       },
       confirm: (text) => {
@@ -754,6 +755,43 @@ async function reloadPage(page) {
     after.map((call) => call.command).join(' '));
   check(results, 'a reload copy that cannot be decoded stays for the start screen',
     (await page.evaluate(() => sessionStorage.getItem('copy'))) !== null);
+  await context.close();
+}
+
+// ── A message that cannot be shown ──
+// The page still goes back to the start screen and closes the document.
+const leftForStart = async (page, calls) => page.url().endsWith('/index.html')
+  && (await calls()).some((call) => call.command === 'close_document');
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('# One\n'), dialogFails: true });
+  await page.evaluate((copy) => sessionStorage.setItem('copy', copy), b64('caf\xE9'));
+  await page.reload();
+  await page.waitForTimeout(1500);
+  const ended = await commandsNamed(calls, 'recovery_end');
+  check(results, 'a reload copy that cannot be shown nor told leaves for the start screen', await leftForStart(page, calls), page.url());
+  check(results, 'a reload copy that cannot be shown nor told is let go of with discard:false',
+    ended.length === 1 && ended[0].args.discard === false && (await page.evaluate(() => sessionStorage.getItem('copy'))) !== null);
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: b64('caf\xE9'), recoverId: '1700000000000-45', dialogFails: true });
+  await page.waitForTimeout(1500);
+  const ended = await commandsNamed(calls, 'recovery_end');
+  check(results, 'a recovery copy that cannot be shown nor told leaves for the start screen', await leftForStart(page, calls), page.url());
+  check(results, 'a recovery copy that cannot be shown nor told is let go of with discard:false',
+    ended.length === 1 && ended[0].args.discard === false);
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: '', recoverId: '1-1', recoverError: 'locked', dialogFails: true });
+  await page.waitForTimeout(1500);
+  check(results, 'a recovery that cannot be loaded nor told leaves for the start screen', await leftForStart(page, calls), page.url());
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: '', readError: 'open-elsewhere', dialogFails: true });
+  await page.waitForTimeout(1500);
+  check(results, 'a refused open that cannot be told leaves for the start screen', await leftForStart(page, calls), page.url());
   await context.close();
 }
 
