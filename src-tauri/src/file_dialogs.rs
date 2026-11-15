@@ -20,7 +20,7 @@ const OPEN_EXTENSIONS: [&str; 28] = [
 
 // Offered by the same Open filter, but read as text by the Markdown page
 // (markdown.rs), never converted.
-use crate::markdown::MARKDOWN_EXTENSIONS;
+use crate::markdown::{HTML_EXTENSIONS, MARKDOWN_EXTENSIONS};
 
 // What the Open filter lists: the formats x2t converts, then Markdown.
 fn open_dialog_extensions() -> Vec<&'static str> {
@@ -376,10 +376,14 @@ pub fn with_save_extension(path: PathBuf, fallback_ext: &str) -> PathBuf {
 }
 
 // A Markdown Save As keeps .md and .markdown, and only those: the page writes
-// text, never an office format. Every other Save As keeps the formats x2t writes.
+// text, never an office format. Its Export as HTML keeps .html and .htm, which
+// export_markdown_html accepts. Every other Save As keeps the formats x2t writes.
 fn keeps_its_extension(ext: &str, fallback_ext: &str) -> bool {
     if MARKDOWN_EXTENSIONS.contains(&fallback_ext) {
         return MARKDOWN_EXTENSIONS.contains(&ext);
+    }
+    if HTML_EXTENSIONS.contains(&fallback_ext) {
+        return HTML_EXTENSIONS.contains(&ext);
     }
     SAVE_EXTENSIONS.contains(&ext)
 }
@@ -526,6 +530,26 @@ mod tests {
         assert_eq!(
             with_save_extension(PathBuf::from("/d/notes.md"), "docx"),
             PathBuf::from("/d/notes.md.docx"),
+            "the other formats are as before"
+        );
+    }
+
+    #[test]
+    fn an_html_export_keeps_html_and_htm_only() {
+        for name in ["/d/report.html", "/d/report.HTML", "/d/report.htm"] {
+            assert_eq!(with_save_extension(PathBuf::from(name), "html"), PathBuf::from(name));
+        }
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/report"), "html"),
+            PathBuf::from("/d/report.html")
+        );
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/report.md"), "html"),
+            PathBuf::from("/d/report.md.html")
+        );
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/report.html"), "docx"),
+            PathBuf::from("/d/report.html.docx"),
             "the other formats are as before"
         );
     }
