@@ -78,9 +78,9 @@ Outcomes:
 
 ## Cases
 
-Every case that saves first changes the document: `Z` typed at the end of the
-last line of a TXT, or added to the last cell of a CSV. The save must then be
-the input with that `Z` and nothing else changed.
+A TXT or CSV case that saves first changes the document: `Z` typed at the end
+of the last line of a TXT, or added to the last cell of a CSV. The save must
+then be the input with that `Z` and nothing else changed.
 
 | case | input | ok when |
 |---|---|---|
