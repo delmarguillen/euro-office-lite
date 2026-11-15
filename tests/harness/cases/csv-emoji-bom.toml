@@ -1,0 +1,16 @@
+# The CSV of csv-emoji in UTF-8 with a BOM. The case appends Z to the last
+# cell (F2 edits it in place) and the save must be the input with that Z,
+# still starting with the BOM.
+description = "UTF-8 CSV with a BOM and characters above U+FFFF: Ctrl+S after adding Z to the last cell keeps the BOM and every byte"
+generate = "mktxt.py csv-emoji-bom"
+input = "emoji-bom.csv"
+input_sha256 = "e9327ea0d56aa44651c9796dc6043265d5f9704a88af7767001f64880edfb66f"
+action = "open-edit-save"
+keys_before = "ctrl+End F2 End"
+type = "Z"
+keys_after = "Return"
+check = "expected-bytes"
+expected_generate = "mktxt.py csv-emoji-bom z"
+expected_sha256 = "fc77ac6b7f93ddf592b2f05fc1d5d5ad19dae996ae30665a47decf615a7776e9"
+expect = "saved-as-expected"
+screenshot = "on-failure"

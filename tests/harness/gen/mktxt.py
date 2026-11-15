@@ -21,6 +21,10 @@ def utf16le_bom(text):
     return b'\xff\xfe' + utf16le(text)
 
 
+def utf8_bom(text):
+    return b'\xef\xbb\xbf' + utf8(text)
+
+
 # More than 64 KiB in UTF-8, every character inside the BMP.
 def long_bmp_text():
     line = 'Línea con acentos áéíóú ñ, euro € y cirílico Привет мир, número '
@@ -34,6 +38,8 @@ def long_bmp_text():
 
 BMP = 'Acentos áéíóú ñ\nCirílico Привет\nChino 中 y U+FFFD �\n'
 NO_BOM = 'Accents áéíóú ñ\r\nCyrillic Привет мир\r\n'
+# An emoji and a CJK Extension B character, both above U+FFFF.
+CSV_EMOJI = 'name,icon\nsmile,\U0001F600\n\U00020000,2\n'
 
 SAMPLES = {
     # A character above U+FFFF in the middle line.
@@ -47,7 +53,15 @@ SAMPLES = {
     'utf16be-no-bom': (utf16be, NO_BOM),
     'bmp-utf8': (utf8, BMP),
     'html': (utf8, '<html><body><b>x</b></body></html>\n'),
-    'csv-emoji': (utf8, 'name,icon\nsmile,\U0001F600\n\U00020000,2\n'),
+    'csv-emoji': (utf8, CSV_EMOJI),
+    'csv-emoji-bom': (utf8_bom, CSV_EMOJI),
+    'csv-emoji-crlf': (utf8, CSV_EMOJI.replace('\n', '\r\n')),
+    'csv-emoji-utf16le-bom': (utf16le_bom, CSV_EMOJI),
+    # The first cell reads like the start of an HTML document.
+    'csv-html-emoji': (utf8, '<html>,x\nsmile,\U0001F600\n'),
+    # The shape of csv-emoji with characters inside the BMP in their place.
+    'csv-bmp': (utf8, 'name,icon\nsmile,\u263A\n\u4E2D,2\n'),
+    'crlf-utf8': (utf8, 'first line\r\nsecond line\r\n'),
 }
 
 

@@ -1,0 +1,15 @@
+# ASCII TXT with CRLF line endings. Ctrl+S on a document with no changes
+# writes nothing, so the case types Z at the end of the last line and the
+# save must be the input with that Z, every line still ending in CRLF.
+description = "TXT with CRLF: opens, and Ctrl+S after typing Z keeps CRLF and every byte"
+generate = "mktxt.py crlf-utf8"
+input = "crlf.txt"
+input_sha256 = "a6ad0f6d0647ff79b6c9fbce44e1f9955b395b563f661705a691949bf6e0a75e"
+action = "open-edit-save"
+keys_before = "ctrl+End"
+type = "Z"
+check = "expected-bytes"
+expected_generate = "mktxt.py crlf-utf8 z"
+expected_sha256 = "06bed313139ea05cb1bc38eb17a2da0b439e8cc81dc4aa454d42cd78b2d40de2"
+expect = "saved-as-expected"
+screenshot = "on-failure"

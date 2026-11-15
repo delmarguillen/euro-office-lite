@@ -1,0 +1,17 @@
+# The control of the csv-emoji cases: the same rows with U+263A and U+4E2D,
+# inside the BMP, where csv-emoji has characters above U+FFFF. The case
+# appends Z to the last cell (F2 edits it in place) and the save must be the
+# input with that Z.
+description = "UTF-8 CSV inside the BMP: opens, and Ctrl+S after adding Z to the last cell keeps every byte"
+generate = "mktxt.py csv-bmp"
+input = "bmp.csv"
+input_sha256 = "ab319d96fa433b8e314f6e6a753ca09f84a98a0811cf34e787962b194fd33265"
+action = "open-edit-save"
+keys_before = "ctrl+End F2 End"
+type = "Z"
+keys_after = "Return"
+check = "expected-bytes"
+expected_generate = "mktxt.py csv-bmp z"
+expected_sha256 = "cdff5a054a7b6abe149c96f9ab77a53ee2d4e87a3d5e6c6be3d100468ce16709"
+expect = "saved-as-expected"
+screenshot = "on-failure"

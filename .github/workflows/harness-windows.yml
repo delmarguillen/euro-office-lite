@@ -1,0 +1,139 @@
+name: Harness (Windows)
+
+# Installs the NSIS installer of a "Windows Dev Build" run on a clean runner
+# and runs every case of tests/harness with tests/harness/win/run.ps1. The job
+# is red when a case is not ok (run.ps1 exits 1) or the harness could not run
+# (exit 2).
+#
+# Known red: csv-html-emoji fails to open on Windows because of a defect of
+# the app, not of the harness. The case is run as it is; the job stays red
+# until the app is fixed.
+#
+# result.json is uploaded on every run; the output of run.ps1, the app logs
+# and the screenshots only when the job fails.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Windows Dev Build run id to take installer-x86_64-pc-windows-msvc from"
+        required: true
+        type: string
+
+  # After every Windows Dev Build; the job skips builds that did not succeed.
+  # workflow_run only fires for the workflow file on the default branch, and
+  # the checkout is then the default branch: its cases judge the build,
+  # whatever branch the build came from.
+  workflow_run:
+    workflows: ["Windows Dev Build"]
+    types: [completed]
+
+permissions:
+  contents: read
+  # Downloading an artifact of another run goes through the Actions API.
+  actions: read
+
+concurrency:
+  # On workflow_run github.ref is the default branch; the branch that was
+  # built is head_branch.
+  group: harness-windows-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness-windows:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # The job runs an installer built from another branch: leave no
+          # token in .git/config.
+          persist-credentials: false
+
+      - name: Download the installer from the build run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: installer-x86_64-pc-windows-msvc
+          path: installer/
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate the inputs
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          python tests/harness/gen/mkinputs.py "$env:RUNNER_TEMP\harness-inputs"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Run the harness
+        # Below the job timeout, so the upload steps still run.
+        timeout-minutes: 35
+        shell: pwsh
+        run: |
+          $exe = @(Get-ChildItem -LiteralPath installer -Recurse -Filter '*.exe')
+          if ($exe.Count -ne 1) {
+            Write-Output "ERROR: the downloaded artifact must hold one .exe, it holds $($exe.Count)"
+            Get-ChildItem -LiteralPath installer -Recurse | Format-Table -AutoSize FullName, Length
+            exit 1
+          }
+          $installer = $exe[0].FullName
+          $inputs = Join-Path $env:RUNNER_TEMP 'harness-inputs'
+          $out = Join-Path $env:RUNNER_TEMP 'harness'
+          $script = Join-Path $env:GITHUB_WORKSPACE 'tests\harness\win\run.ps1'
+          $stdout = Join-Path $env:RUNNER_TEMP 'run.out.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'run.err.log'
+          Write-Output "::group::Installer under test"
+          Write-Output $installer
+          Write-Output ('version ' + $exe[0].VersionInfo.ProductVersion)
+          Write-Output ('sha256 ' + (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLower())
+          Write-Output "::endgroup::"
+
+          # run.ps1 drives the app on the desktop and writes its progress with
+          # [Console]::Error: it runs as a child process with both streams in
+          # files, and its exit status is the step's.
+          $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" all -Installer "{1}" -Inputs "{2}" -Out "{3}"' -f $script, $installer, $inputs, $out
+          $child = Start-Process powershell -ArgumentList $arguments -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          # Reading the handle now keeps the exit code readable after the end.
+          $null = $child.Handle
+          # 30 minutes; the 17 cases take under 4.
+          $finished = $child.WaitForExit(1800000)
+          if (-not $finished) {
+            Write-Output "ERROR: run.ps1 did not finish in 30 minutes; killing its process tree"
+            taskkill /T /F /PID $child.Id
+          }
+          Write-Output "::group::run.ps1 standard error"
+          Get-Content -LiteralPath $stderr
+          Write-Output "::endgroup::"
+          Write-Output "::group::run.ps1 standard output"
+          Get-Content -LiteralPath $stdout
+          Write-Output "::endgroup::"
+          if (-not $finished) { exit 2 }
+          Write-Output ('run.ps1 exit status ' + $child.ExitCode)
+          exit $child.ExitCode
+
+      - name: Upload result.json
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: harness-windows-result-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/harness/result.json
+          # There is none when the harness could not run (exit 2).
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload logs and screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: harness-windows-diagnostics-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/run.out.log
+            ${{ runner.temp }}/run.err.log
+            ${{ runner.temp }}/harness/*/app.log
+            ${{ runner.temp }}/harness/*/screen.png
+          if-no-files-found: warn
+          retention-days: 7

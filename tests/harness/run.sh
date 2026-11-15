@@ -110,6 +110,11 @@ ensure_installed() {
   [ "$want" = "$(installed_sha256)" ] || die "the installed binary is not the one in $deb"
 }
 
+# Without the app every case would wait a minute for it and end launch-failed.
+check_app_installed() {
+  [ -x "$APP_BIN" ] || die "$APP_BIN is not installed: give a package with --deb"
+}
+
 # --- one case --------------------------------------------------------------------
 
 # Set by each step of a case.
@@ -375,6 +380,7 @@ main() {
   mkdir -p "$OUT" || die "cannot create $OUT"
   check_machine_free
   [ -n "$DEB" ] && ensure_installed "$DEB"
+  check_app_installed
   $KEEP_DISPLAY || trap stop_display EXIT
   start_display
   local name
