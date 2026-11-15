@@ -156,10 +156,14 @@ launch_app() {
   echo "$pid"
 }
 
-# open_state LOG: "failed" or "ready" once the app log says so.
+# open_state LOG: "failed" or "ready" once the app log says so. A .md opens
+# in the Markdown page, which says neither: the backend's [OPEN] markdown
+# lines stand for them.
 open_state() {
   grep -q '\[OPEN\] failed' "$1" && { echo failed; return 0; }
+  grep -q '\[OPEN\] markdown failed:' "$1" && { echo failed; return 0; }
   grep -q 'Document ready' "$1" && { echo ready; return 0; }
+  grep -q '\[OPEN\] markdown success' "$1" && { echo ready; return 0; }
   return 1
 }
 

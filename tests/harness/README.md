@@ -153,9 +153,15 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `control_expect` | optional: the outcome with `--control`, for a build without the fix |
 | `screenshot` | `on-failure` or `always` |
 
+A case waits up to 120 s for the app log to say how the open went. Ready:
+`Document ready` from an editor, or `[OPEN] markdown success` for a `.md`,
+which opens on the Markdown page and has no editor to say it. Failed:
+`[OPEN] failed` or `[OPEN] markdown failed:`; on Windows also `errorCode=`
+in the log or a native dialog.
+
 Outcomes:
 
-- `rejected-with-dialog`: the log has `[OPEN] failed`, a dialog opens and the
+- `rejected-with-dialog`: the open failed (see above), a dialog opens and the
   file is unchanged. `rejected-without-dialog` and `rejected-but-file-changed`
   otherwise.
 - `opens`: the document is ready (action `open`).
