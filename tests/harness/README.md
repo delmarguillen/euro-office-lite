@@ -27,7 +27,8 @@ and `sudo -n apt-get` when it has to install a package.
 
 `run.sh CASE|all [--deb FILE] [--control] [--screenshots] [--keep-display] [--out DIR]`. It
 refuses to start while the app is running or while the recovery folder has
-entries, so a recovery prompt never gets in the way. Results go to `--out`,
+entries, so a recovery prompt never gets in the way. Without `--deb` the app
+must be installed already; when it is not, run.sh exits 2. Results go to `--out`,
 by default `$HARNESS_WORK/run-<date>` (`HARNESS_WORK` defaults to
 `~/eol-harness-work`); each case has its folder there with the generated input
 (`source/`), the copy the app opened and the app log. The display is
