@@ -39,13 +39,25 @@ function Resolve-FullPath([string]$path) {
 }
 
 # Lower-case sha256 of a file; empty when it is missing or locked by a writer.
+# The read shares write and delete: on Windows the app refuses to save over a
+# file another handle holds without them (Get-FileHash shares only read), and a
+# hash taken while it saves would make the save fail.
 function Get-Sha256([string]$path) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return '' }
+    $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
     try {
-        return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
     } catch {
         return ''
     }
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = $hasher.ComputeHash($stream)
+    } finally {
+        $hasher.Dispose()
+        $stream.Dispose()
+    }
+    return ([System.BitConverter]::ToString($digest).Replace('-', '').ToLowerInvariant())
 }
 
 # --- where the app keeps things ------------------------------------------------
