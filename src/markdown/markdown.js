@@ -1,8 +1,8 @@
 // The Markdown page: a rendered preview of a .md, and an editor beside it for
 // the text: CodeMirror (vendor/codemirror.min.js), loaded the first time Edit
 // is pressed, or the textarea if it does not load. Reached from the start screen, Open and Recents through
-// bridge.js (_eoOpenMarkdown), which leaves the file's token under
-// PENDING_KEY. The file is read and written as bytes by markdown.rs; never
+// bridge.js (_eoOpenMarkdown), which puts the file's token in the page's
+// address (takePending). The file is read and written as bytes by markdown.rs; never
 // through x2t or the ONLYOFFICE editors.
 //
 // The preview is the document's HTML after DOMPurify, inside an iframe
@@ -16,8 +16,6 @@
   var invoke = tauri.core.invoke;
   var Text = window.EoMarkdownText;
 
-  // Written by _eoOpenMarkdown in bridge.js.
-  var PENDING_KEY = 'eo-markdown-open';
   var START_PAGE = '../index.html';
   var RENDER_DELAY_MS = 250;
   // While modified, the text is copied for crash recovery at most this often.
@@ -659,15 +657,16 @@
   }
 
   // ── Opening ──
-  // { token, name } for a file, { new: true } for New Markdown, { recover: id }
-  // for a document offered on the start screen, or null.
+  // { token } for a file, { new: true } for New Markdown, { recover: id } for
+  // a document offered on the start screen, or null. It comes in the address
+  // (bridge.js, _eoGoToMarkdownPage) and is taken out of it, and out of the
+  // history, at once: a reload finds none and goes to startReloaded.
   function takePending() {
-    var pending = null;
-    try {
-      pending = JSON.parse(localStorage.getItem(PENDING_KEY) || 'null');
-      localStorage.removeItem(PENDING_KEY);
-    } catch (e) {}
-    if (pending && (pending.token || pending.new || pending.recover)) return pending;
+    var params = new URLSearchParams(window.location.search);
+    if (window.location.search) history.replaceState(null, '', window.location.pathname);
+    if (params.get('new')) return { new: true };
+    if (params.get('recover')) return { recover: params.get('recover') };
+    if (params.get('token')) return { token: params.get('token') };
     return null;
   }
 

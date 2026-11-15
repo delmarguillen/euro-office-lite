@@ -41,6 +41,14 @@ async function routingBridge() {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
+// Where the bridge sent the page: the page itself and what its address hands
+// over (bridge.js, _eoGoToMarkdownPage).
+function markdownTarget(bridge) {
+  const url = new URL(String(bridge.sandbox.location.href), 'http://app/');
+  return { page: url.pathname.slice(1), params: Object.fromEntries(url.searchParams) };
+}
+const LEGACY_KEY = 'eo-markdown-open';
+
 // A bridge without the function under test (the base, for instance) fails
 // the check instead of stopping the script.
 function tryRun(bridge, code) {
@@ -55,22 +63,33 @@ function tryRun(bridge, code) {
 {
   const { bridge } = await routingBridge();
   tryRun(bridge, '_eoNewMarkdown()');
-  const pending = bridge.sandbox.localStorage.getItem('eo-markdown-open');
-  check(results, 'New Markdown goes to the Markdown page', bridge.sandbox.location.href === 'markdown/markdown.html');
-  check(results, 'New Markdown leaves a new document for the page', pending === JSON.stringify({ new: true }), String(pending));
+  const target = markdownTarget(bridge);
+  check(results, 'New Markdown goes to the Markdown page', target.page === 'markdown/markdown.html');
+  check(results, 'New Markdown asks for a new document in the address', JSON.stringify(target.params) === JSON.stringify({ new: '1' }),
+    String(bridge.sandbox.location.href));
+  check(results, 'New Markdown writes nothing to localStorage', bridge.sandbox.localStorage.getItem(LEGACY_KEY) === null);
   const html = await readFile(path.join(projectRoot, 'src', 'index.html'), 'utf8');
   const patches = await readFile(path.join(projectRoot, 'src', 'editor-patches.js'), 'utf8');
   check(results, 'the start screen has a New Markdown button next to the others', /data-type="slide"[\s\S]*?data-new-markdown/.test(html));
   check(results, 'the button calls _eoNewMarkdown', /data-new-markdown[\s\S]{0,120}_eoNewMarkdown\(\)/.test(patches));
 }
 
+// Nothing reads or writes the old localStorage hand-over any more.
+{
+  const sources = await Promise.all(['bridge.js', 'editor-patches.js', 'markdown/markdown.js']
+    .map((name) => readFile(path.join(projectRoot, 'src', ...name.split('/')), 'utf8')));
+  check(results, 'no page uses the eo-markdown-open entry', sources.every((source) => !source.includes(LEGACY_KEY)));
+}
+
 // ── Recovering a Markdown document ──
 {
   const { bridge } = await routingBridge();
   tryRun(bridge, "_eoRecoverMarkdown('1700000000000-42')");
-  const pending = bridge.sandbox.localStorage.getItem('eo-markdown-open');
-  check(results, 'Recover sends a Markdown document to its page', bridge.sandbox.location.href === 'markdown/markdown.html');
-  check(results, 'Recover leaves the folder id for the page', pending === JSON.stringify({ recover: '1700000000000-42' }), String(pending));
+  const target = markdownTarget(bridge);
+  check(results, 'Recover sends a Markdown document to its page', target.page === 'markdown/markdown.html');
+  check(results, 'Recover puts the folder id in the address', JSON.stringify(target.params) === JSON.stringify({ recover: '1700000000000-42' }),
+    String(bridge.sandbox.location.href));
+  check(results, 'Recover writes nothing to localStorage', bridge.sandbox.localStorage.getItem(LEGACY_KEY) === null);
   const patches = await readFile(path.join(projectRoot, 'src', 'editor-patches.js'), 'utf8');
   check(results, 'the start screen routes a Markdown candidate to _eoRecoverMarkdown',
     /candidate\.docType === 'markdown'[\s\S]{0,80}_eoRecoverMarkdown\(candidate\.id\)/.test(patches));
@@ -90,11 +109,12 @@ function tryRun(bridge, code) {
 
 for (const name of ['notes.md', 'NOTES.MD', 'notes.markdown']) {
   const { bridge, commands } = await routingBridge();
-  await bridge.run(`_eoOpenGranted({ token: 'tok', name: ${JSON.stringify(name)} })`);
-  const pending = JSON.parse(bridge.sandbox.localStorage.getItem('eo-markdown-open') || 'null');
-  check(results, `opening ${name} loads the Markdown page`,
-    bridge.sandbox.location.href === 'markdown/markdown.html');
-  check(results, `opening ${name} hands over its token`, pending && pending.token === 'tok' && pending.name === name);
+  await bridge.run(`_eoOpenGranted({ token: 'tok+/=&x', name: ${JSON.stringify(name)} })`);
+  const target = markdownTarget(bridge);
+  check(results, `opening ${name} loads the Markdown page`, target.page === 'markdown/markdown.html');
+  check(results, `opening ${name} hands over its token, and only it, in the address`,
+    JSON.stringify(target.params) === JSON.stringify({ token: 'tok+/=&x' }), String(bridge.sandbox.location.href));
+  check(results, `opening ${name} writes nothing to localStorage`, bridge.sandbox.localStorage.getItem(LEGACY_KEY) === null);
   check(results, `opening ${name} converts nothing`, !commands.some((command) => /^open_/.test(command.name)));
   bridge.stopTimers();
 }
@@ -107,7 +127,7 @@ for (const name of ['notes.md', 'NOTES.MD', 'notes.markdown']) {
     commands.some((command) => command.name === 'open_file') &&
     commands.some((command) => command.name === 'openEditor' && command.args === 'word'));
   check(results, '.docx does not load the Markdown page',
-    bridge.sandbox.location.href === 'index.html' && bridge.sandbox.localStorage.getItem('eo-markdown-open') === null);
+    bridge.sandbox.location.href === 'index.html' && bridge.sandbox.localStorage.getItem(LEGACY_KEY) === null);
   bridge.stopTimers();
 }
 
@@ -117,7 +137,6 @@ for (const name of ['notes.md', 'NOTES.MD', 'notes.markdown']) {
   const launch = { token: 'tok-launch', name: 'notes.md' };
   const bridge = await loadBridge({ invoke: { take_pending_open_file: pendingQueue(launch), fonts_status: () => 'ready' } });
   bridge.sandbox.location = { href: 'index.html', reload() { this.reloaded = true; } };
-  bridge.sandbox.localStorage.removeItem('eo-markdown-open');
   // With no editor open, LocalFileOpen hands the file to _openPath in
   // editor-patches.js, which this harness does not load. Its Markdown routing
   // is checked below ('the start screen routes Markdown before converting').
@@ -126,9 +145,9 @@ for (const name of ['notes.md', 'NOTES.MD', 'notes.markdown']) {
   }`);
   bridge.run('_eoTakePendingOpenFile()');
   await settle();
-  const pending = JSON.parse(bridge.sandbox.localStorage.getItem('eo-markdown-open') || 'null');
+  const target = markdownTarget(bridge);
   check(results, 'a .md given at launch loads the Markdown page',
-    bridge.sandbox.location.href === 'markdown/markdown.html' && pending && pending.token === 'tok-launch');
+    target.page === 'markdown/markdown.html' && target.params.token === 'tok-launch');
   bridge.stopTimers();
 }
 
@@ -148,7 +167,7 @@ for (const name of ['notes.md', 'report.docx']) {
     !commands.some((command) => command.name === 'recovery_end'));
   check(results, `from an open editor, ${name} is queued for nothing`,
     bridge.sandbox.localStorage.getItem('eo-pending-open') === null &&
-    bridge.sandbox.localStorage.getItem('eo-markdown-open') === null);
+    bridge.sandbox.localStorage.getItem(LEGACY_KEY) === null);
   bridge.stopTimers();
 }
 

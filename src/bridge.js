@@ -1346,30 +1346,30 @@ function _eoIsMarkdownPath(name) {
 }
 window._eoIsMarkdownPath = _eoIsMarkdownPath;
 
-// Read by the Markdown page (markdown.js, takePendingFile).
-function _eoSetPendingMarkdown(file) {
-  localStorage.setItem('eo-markdown-open', JSON.stringify({ token: file.token, name: file.name }));
+// What the Markdown page is to open goes in its address, one key and value,
+// which the page reads and takes out at once (markdown.js, takePending). Not
+// in localStorage: on WebKitGTK, with another process of the app open, the
+// page did not see what the start screen had just written there.
+function _eoGoToMarkdownPage(key, value) {
+  window.location.href = EO_MARKDOWN_PAGE + '?' + key + '=' + encodeURIComponent(value);
 }
 
 // From the start screen, where no document is open.
 function _eoOpenMarkdown(file) {
-  _eoSetPendingMarkdown(file);
-  window.location.href = EO_MARKDOWN_PAGE;
+  _eoGoToMarkdownPage('token', file.token);
 }
 window._eoOpenMarkdown = _eoOpenMarkdown;
 
 // The start screen's New Markdown: the page starts an empty document.
 function _eoNewMarkdown() {
-  localStorage.setItem('eo-markdown-open', JSON.stringify({ new: true }));
-  window.location.href = EO_MARKDOWN_PAGE;
+  _eoGoToMarkdownPage('new', '1');
 }
 window._eoNewMarkdown = _eoNewMarkdown;
 
 // The start screen's Recover for a Markdown document (recovery.rs, "Markdown
 // sessions"): the page loads it by its folder's id.
 function _eoRecoverMarkdown(id) {
-  localStorage.setItem('eo-markdown-open', JSON.stringify({ recover: id }));
-  window.location.href = EO_MARKDOWN_PAGE;
+  _eoGoToMarkdownPage('recover', id);
 }
 window._eoRecoverMarkdown = _eoRecoverMarkdown;
 

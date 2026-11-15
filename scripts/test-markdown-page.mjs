@@ -51,13 +51,6 @@ function installFakeTauri(fake) {
   };
   window.__listeners = {};
   localStorage.setItem('eo-ui-lang', fake.lang || 'en');
-  if (!sessionStorage.getItem('opened')) {
-    sessionStorage.setItem('opened', '1');
-    let pending = { token: 'tok-open', name: fake.name };
-    if (fake.isNew) pending = { new: true };
-    if (fake.recoverId) pending = { recover: fake.recoverId };
-    localStorage.setItem('eo-markdown-open', JSON.stringify(pending));
-  }
   // The file on disk and the recovery copy outlive a reload, as in the backend.
   const stored = (key) => sessionStorage.getItem(key);
   const handlers = {
@@ -131,6 +124,13 @@ function installFakeTauri(fake) {
   };
 }
 
+// What bridge.js puts in the page's address (_eoGoToMarkdownPage).
+function handOver(fake) {
+  if (fake.isNew) return 'new=1';
+  if (fake.recoverId) return 'recover=' + encodeURIComponent(fake.recoverId);
+  return 'token=tok-open';
+}
+
 const results = [];
 const server = await serveSource();
 const base = `http://127.0.0.1:${server.address().port}/markdown/markdown.html`;
@@ -162,7 +162,7 @@ async function openPage(fake, options = {}) {
     if (/Content Security Policy/i.test(message.text())) csp.push(message.text());
   });
   await page.addInitScript(installFakeTauri, fake);
-  await page.goto(base);
+  await page.goto(base + '?' + handOver(fake));
   let first = 'read_markdown';
   if (fake.isNew) first = 'new_markdown';
   if (fake.recoverId) first = 'markdown_recovery_load';
@@ -755,6 +755,42 @@ async function reloadPage(page) {
     after.map((call) => call.command).join(' '));
   check(results, 'a reload copy that cannot be decoded stays for the start screen',
     (await page.evaluate(() => sessionStorage.getItem('copy'))) !== null);
+  await context.close();
+}
+
+// ── What the start screen hands over, in the address ──
+// Read once and taken out of the address: a reload goes to startReloaded.
+const plainAddress = (page) => page.url() === base;
+{
+  const { context, page, calls } = await openPage({ isNew: true });
+  check(results, 'a new document starts from the address alone, with nothing in localStorage',
+    (await commandsNamed(calls, 'new_markdown')).length === 1
+    && (await page.evaluate(() => localStorage.getItem('eo-markdown-open'))) === null);
+  check(results, 'the hand-over is taken out of the address', plainAddress(page), page.url());
+  await page.keyboard.type('draft');
+  await page.waitForTimeout(RECOVERY_WAIT_MS);
+  await reloadPage(page);
+  check(results, 'a reload of a new document does not start another one', (await commandsNamed(calls, 'new_markdown')).length === 1);
+  check(results, 'a reload of a new document keeps its text', (await editorText(page)).includes('draft'), await editorText(page));
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('lost text'), recoverId: '1700000000000-46' });
+  check(results, 'a recovery is taken out of the address', plainAddress(page), page.url());
+  await reloadPage(page);
+  check(results, 'a reload of a recovered document does not load it again', (await commandsNamed(calls, 'markdown_recovery_load')).length === 1);
+  await context.close();
+}
+{
+  const { context, page, calls } = await openPage({ name: 'notes.md', data: utf8('# One\n') });
+  check(results, 'the file token is taken out of the address', plainAddress(page) && !page.url().includes('tok-open'), page.url());
+  const logged = (await commandsNamed(calls, 'js_log')).filter((call) => String(call.args.msg).includes('tok-open'));
+  check(results, 'the file token is in no log line', logged.length === 0, JSON.stringify(logged));
+  const before = (await calls()).length;
+  await reloadPage(page);
+  const after = (await calls()).slice(before).map((call) => call.command);
+  check(results, 'a reload without a copy reopens the file through current_document', after.includes('markdown_recovery_reload')
+    && after.indexOf('current_document') !== -1 && after.indexOf('current_document') < after.indexOf('read_markdown'), after.join(' '));
   await context.close();
 }
 
