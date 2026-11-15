@@ -5,7 +5,7 @@
 # Current behaviour, known issue: a NUL after plain text is not refused.
 description = "TXT 'hello world' plus a NUL: opens as UTF-16 text, and Ctrl+S without edits writes nothing"
 generate = "mktxt.py nul-after-text"
-input = "nul.txt"
+input = "text-with-nul.txt"
 input_sha256 = "430646847e70344c09f58739e99d5bc96eac8d5fe7295cf196b986279876bf9b"
 action = "open-save"
 check = "same-text"
