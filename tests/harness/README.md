@@ -59,6 +59,80 @@ The workflow needs nothing from a test machine: it installs the package with
 `$RUNNER_TEMP` with `--out`, and skips backup.sh and restore.sh because the
 runner starts with no user state and is discarded after the job.
 
+### Windows
+
+`harness-windows.yml` ("Harness (Windows)") runs `win\run.ps1 all` on a
+clean `windows-latest` runner against the NSIS installer of a "Windows Dev
+Build" run (its artifact `installer-x86_64-pc-windows-msvc`). It starts the
+same two ways as the Linux workflow: by hand with the build run id in
+`run_id`, or after every Windows Dev Build that succeeds.
+
+The job makes the inputs with `gen/mkinputs.py` under `$RUNNER_TEMP`, then
+starts `run.ps1 all -Installer <exe> -Inputs <dir> -Out <dir>` as a child
+process, as described in [Windows](#windows), and fails when it exits 1 or 2.
+Every run has `result.json` in the artifact
+`harness-windows-result-<attempt>`, unless the harness could not run. A
+failed job also has `harness-windows-diagnostics-<attempt>`: the output of
+run.ps1 and, per case, `app.log` and `screen.png`.
+
+The job is red today: `csv-html-emoji` fails to open on Windows because of
+a known defect of the app, not of the harness. The case stays as it is.
+
+## Windows
+
+`win/` is the same harness for the Windows app installed from the NSIS
+installer: `run.ps1`, `status.ps1`, `backup.ps1` and `restore.ps1` do what
+their `.sh` namesakes do, and write `result.json` with the same schema.
+`selftest.ps1` checks the parts that need no window, on any system with
+PowerShell.
+
+```
+python gen\mkinputs.py C:\h\inputs           # inputs of every case, checked by sha256
+win\backup.ps1 C:\h\backup                   # recovery data, recent files, window state
+win\status.ps1 some-setup.exe                 # installed version, installer sha256
+win\run.ps1 all -Installer some-setup.exe -Inputs C:\h\inputs -Out C:\h\run
+win\restore.ps1 C:\h\backup                  # put the user state back, checked by sha256
+```
+
+`run.ps1 CASE|all [-Installer FILE] [-Inputs DIR] [-Control] [-Screenshots] [-Out DIR]`.
+`-Installer` runs the installer silently (`/S`) first. Exit status: 0 every
+case ok, 1 some case failed, 2 the harness could not run.
+
+- The app must run on the desktop of an interactive session: keys and
+  `SetForegroundWindow` need it. From a remote shell, start run.ps1 as a
+  child process with its output in files, wait with a limit, and kill the
+  whole tree when the limit is reached:
+
+  ```
+  $p = Start-Process powershell -PassThru `
+      -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File C:\h\harness\win\run.ps1 all -Inputs C:\h\inputs -Out C:\h\run' `
+      -RedirectStandardOutput C:\h\run.out -RedirectStandardError C:\h\run.err
+  $null = $p.Handle
+  if (-not $p.WaitForExit(1800000)) { taskkill /T /F /PID $p.Id }
+  $p.ExitCode
+  ```
+
+  run.ps1 writes its progress to standard error; the exit status of the child
+  is that of run.ps1.
+- Inputs: `gen/mkinputs.py DIR` writes the input of every case to
+  `DIR\CASE\` and stops when a file does not have the sha256 its case gives.
+  On a machine without Python, run it elsewhere and copy `DIR` over;
+  `-Inputs DIR` then takes the files from there.
+- Copy files to the machine; do not move them. A moved file keeps its ACL.
+- If the interactive session belongs to another user than the remote shell,
+  grant that user the folders the shell created:
+  `icacls DIR /grant USER:(OI)(CI)M /T`.
+- `backup.ps1` and `restore.ps1` read `%APPDATA%` and `%LOCALAPPDATA%`: run
+  them as the user of the session the app runs in. Like run.sh, run.ps1
+  refuses to start while the app is running or its recovery folder has
+  entries.
+- run.ps1 closes the app with `WM_CLOSE`; it kills it only when a modified
+  document could not be saved.
+- The 17 cases take under 4 minutes: about 13 s per save, 2-3 s per refused
+  file, 38 s for `txt-nul`.
+- `csv-html-emoji` fails today on Windows: the app does not open the file,
+  a known defect of the app, so `run.ps1 all` exits 1.
+
 ## Case files
 
 `cases/NAME.toml`, one `key = "value"` (or `key = 'value'`, taken
