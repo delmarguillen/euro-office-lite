@@ -1070,7 +1070,7 @@ mod tests {
             let options = TextOptions {
                 encoding: ENCODING_WINDOWS_1252,
                 delimiter: None,
-                utf8_bom: false,
+                bom: false,
                 crlf: true,
                 trailing_breaks: 1,
             };

@@ -22,6 +22,10 @@ pub struct AppState {
     // addresses (temp_layout.rs, "Document images").
     pub doc_seq: std::sync::atomic::AtomicU64,
     pub modified: Mutex<bool>,
+    // A save of unsaved changes is under way (set_save_pending). sdkjs reports
+    // the document as saved when a save begins, so until the save ends
+    // `modified` can be false with nothing written (app_quit::has_unsaved_changes).
+    pub save_pending: Mutex<bool>,
     // The path a 0-byte file was opened from (#33). It is not in the recent
     // list yet: the file still has no content, and an entry that opens to
     // nothing is worse than no entry. The first save that actually writes it
@@ -269,7 +273,7 @@ pub async fn open_pdf(
     token: String,
 ) -> Result<String, String> {
     let input = pdf_to_open(&state.grants, &token)?;
-    crate::new_window::refuse_if_open_elsewhere(&state, &input)?;
+    let claim = crate::new_window::claim_for_open(&state, &input)?;
     let path = input.to_string_lossy().to_string();
     let file_name = input
         .file_name()
@@ -299,7 +303,8 @@ pub async fn open_pdf(
     );
 
     set_current_file(&state, Some(input));
-    *state.modified.lock().unwrap() = false;
+    drop(claim);
+    crate::app_quit::mark_document_clean(&state);
     *state.text_options.lock().unwrap() = None;
     super::recent::record(&app, &path);
 
@@ -349,8 +354,11 @@ pub async fn open_file(
     token: String,
 ) -> Result<String, String> {
     let path = state.grants.resolve(&token, GrantKind::Open)?;
-    crate::new_window::refuse_if_open_elsewhere(&state, &path)?;
-    open_file_inner(app, state, path.to_string_lossy().to_string(), true).await
+    let claim = crate::new_window::claim_for_open(&state, &path)?;
+    let opened = open_file_inner(app, state, path.to_string_lossy().to_string(), true).await;
+    // On success open_file_inner has published the file by now.
+    drop(claim);
+    opened
 }
 
 // Every frontend open path funnels through open_file, so the recent list is fed
@@ -437,45 +445,35 @@ async fn open_file_inner(
         ),
     );
 
-    // x2t's UTF-8 CSV reader adds an empty row after a final line break, and it
-    // loses the text of a UTF-16 TXT, so those are read from a copy that avoids
-    // both. current_file and the recent list keep the original path, and saving
-    // keeps the original's options; only the conversion sees the copy.
-    let read_copy = match crate::text_import::prepare_read_copy(
+    // x2t reads a checked copy in the temp dir. current_file and the recent list
+    // keep the original path, and saving keeps the original's options; only the
+    // conversion sees the copy.
+    let input_copy = super::converter::prepare_editor_input(
         Path::new(&source),
         &state.temp_dir,
         text_kind,
         text_options,
-    ) {
-        Ok(copy) => copy,
-        Err(e) => {
-            log_event(
-                &state,
-                &format!("[OPEN] failed file={} error=read copy: {}", file_name, e),
-            );
-            return Err(e.to_string());
-        }
-    };
-    let convert_from = read_copy
-        .as_ref()
-        .map(|copy| copy.path.to_string_lossy().to_string())
-        .unwrap_or_else(|| source.clone());
-    let convert_options = read_copy.as_ref().map(|copy| copy.options).or(text_options);
+    )
+    .map_err(|error| {
+        log_event(
+            &state,
+            &format!("[OPEN] failed file={} error={}", file_name, error),
+        );
+        error
+    })?;
 
     let converted = super::converter::convert_file(
         &app,
-        &convert_from,
+        &input_copy.path().to_string_lossy(),
         &output.to_string_lossy(),
         format_from,
         format_to,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.font_root),
-        convert_options,
+        input_copy.options.or(text_options),
+        None,
     )
     .await;
-    if let Some(copy) = &read_copy {
-        let _ = std::fs::remove_file(&copy.path);
-    }
+    drop(input_copy);
     converted.map_err(|error| {
         log_event(
             &state,
@@ -511,7 +509,7 @@ async fn open_file_inner(
     let b64 = STANDARD.encode(&bin_data);
 
     set_current_file(&state, Some(input.clone()));
-    *state.modified.lock().unwrap() = false;
+    crate::app_quit::mark_document_clean(&state);
     // None for anything that is not CSV or TXT: the options of the previous
     // document must not leak into how this one is saved.
     *state.text_options.lock().unwrap() = text_options;
@@ -541,7 +539,7 @@ pub async fn save_file(
     crate::save_target::check_writable_destination(&dest)?;
 
     let format_to = detect_format(&dest);
-    save_editor_bin(&app, &state, &dest, format_to).await?;
+    save_editor_bin(&app, &state, &dest, format_to, None).await?;
 
     // The 0-byte file this document was opened from now holds a real document,
     // so it earns its place in the recent list (#33).
@@ -549,7 +547,7 @@ pub async fn save_file(
         super::recent::record(&app, &recorded.to_string_lossy());
     }
 
-    *state.modified.lock().unwrap() = false;
+    crate::app_quit::mark_document_saved(&state);
     Ok("ok".to_string())
 }
 
@@ -558,13 +556,16 @@ pub async fn save_file_as(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     token: String,
+    // The locale chosen in the spreadsheet editor, for a PDF export.
+    lcid: Option<i64>,
 ) -> Result<String, String> {
+    let lcid = crate::x2t_task::checked_lcid(lcid)?;
     let dest = state.grants.resolve(&token, GrantKind::Save)?;
-    crate::new_window::refuse_save_if_open_elsewhere(&state, &dest)?;
+    let claim = crate::new_window::claim_for_save(&state, &dest)?;
     crate::save_target::check_writable_destination(&dest)?;
     let path = dest.to_string_lossy().to_string();
     let format_to = detect_format(&dest);
-    save_editor_bin(&app, &state, &dest, format_to).await?;
+    save_editor_bin(&app, &state, &dest, format_to, lcid).await?;
 
     // A PDF export leaves the document itself untouched (current_file keeps
     // pointing at the editable file), so it does not belong in the list either.
@@ -574,9 +575,10 @@ pub async fn save_file_as(
         // which when the entry is consumed is that same path (#33).
         end_pending_recent(&state.pending_recent, &dest);
         set_current_file(&state, Some(dest));
-        *state.modified.lock().unwrap() = false;
+        crate::app_quit::mark_document_saved(&state);
         super::recent::record(&app, &path);
     }
+    drop(claim);
     Ok("ok".to_string())
 }
 
@@ -589,10 +591,10 @@ async fn save_editor_bin(
     state: &AppState,
     dest: &Path,
     format_to: i32,
+    pdf_lcid: Option<u32>,
 ) -> Result<(), String> {
     let input = state.temp_dir.join("Editor.bin");
     let temp_dir = state.temp_dir.to_string_lossy().to_string();
-    let fontdata = crate::temp_layout::fontdata_dir(&state.font_root);
     let text_options = text_options_for_save(state, dest);
     let convert = |output: PathBuf| async move {
         super::converter::convert_file(
@@ -602,8 +604,8 @@ async fn save_editor_bin(
             8192,
             format_to,
             &temp_dir,
-            &fontdata,
             text_options,
+            pdf_lcid,
         )
         .await
     };
@@ -643,9 +645,11 @@ async fn save_pdf_inner(
     let changes = decode_pdf_changes(data)?;
     let current = open_pdf_file(state)?;
     let dest = pdf_save_destination(&state.grants, token.as_deref(), &current)?;
-    if dest != current {
-        crate::new_window::refuse_save_if_open_elsewhere(state, &dest)?;
-    }
+    let claim = if dest != current {
+        Some(crate::new_window::claim_for_save(state, &dest)?)
+    } else {
+        None
+    };
     crate::protocol_limits::check_pdf_save_target(&dest)?;
     // Refused before x2t runs; write_beside_and_rename checks again.
     crate::save_target::check_writable_destination(&dest)?;
@@ -658,7 +662,6 @@ async fn save_pdf_inner(
         &work.source(),
         &work.output(),
         &state.temp_dir,
-        &crate::temp_layout::fontdata_dir(&state.font_root),
     )
     .await;
     finish_pdf_save(&work, applied, &dest)?;
@@ -671,7 +674,8 @@ async fn save_pdf_inner(
         set_current_file(state, Some(dest.clone()));
         super::recent::record(app, &dest.to_string_lossy());
     }
-    *state.modified.lock().unwrap() = false;
+    drop(claim);
+    crate::app_quit::mark_document_saved(state);
     Ok("ok".to_string())
 }
 
@@ -851,13 +855,16 @@ pub async fn write_editor_bin(
 }
 
 // `pdf_changes` is set when a PDF is open: what prints is that PDF with the
-// editor's changes applied. Otherwise the Editor.bin written before.
+// editor's changes applied. Otherwise the Editor.bin written before, with
+// `lcid`, the locale chosen in the spreadsheet editor, when there is one.
 #[tauri::command]
 pub async fn print_document(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     pdf_changes: Option<String>,
+    lcid: Option<i64>,
 ) -> Result<String, String> {
+    let lcid = crate::x2t_task::checked_lcid(lcid)?;
     // A failed print leaves nothing for the viewer to open.
     *state.last_print_pdf.lock().unwrap() = None;
 
@@ -893,8 +900,8 @@ pub async fn print_document(
         8192,
         513,
         &state.temp_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.font_root),
         None,
+        lcid,
     )
     .await
     .map_err(|error| {
@@ -934,7 +941,6 @@ async fn print_pdf(
         &work.source(),
         &work.output(),
         &state.temp_dir,
-        &crate::temp_layout::fontdata_dir(&state.font_root),
     )
     .await;
     finish_pdf_save(&work, applied, &pdf_path)?;
@@ -1145,7 +1151,7 @@ pub async fn create_new(
 
     set_current_file(&state, None);
     *state.save_suggestion.lock().unwrap() = None;
-    *state.modified.lock().unwrap() = false;
+    crate::app_quit::mark_document_clean(&state);
 
     let result = open_file_inner(
         app,
@@ -1165,32 +1171,46 @@ pub async fn convert_for_insert(
     token: String,
 ) -> Result<serde_json::Value, String> {
     let input = state.grants.resolve(&token, GrantKind::Insert)?;
-    let path = input.to_string_lossy().to_string();
-    let insert_dir = state.temp_dir.join("insert_tmp");
-    let _ = std::fs::create_dir_all(&insert_dir);
+    let insert = InsertDir::create(&state.temp_dir).map_err(|e| e.to_string())?;
+    let insert_dir = insert.0.clone();
 
     let output = insert_dir.join("Editor.bin");
 
     let format_from = detect_format(&input);
     let format_to = 8192;
 
-    super::converter::convert_file(
+    // The same copies opening uses, so the inserted file is read as what it is.
+    // x2t still gets no options here: it refuses a TXT or CSV without them, as
+    // it has always done when inserting one.
+    let text_kind = crate::text_import::TextKind::for_path(&input);
+    let text_options = match text_kind {
+        Some(kind) => {
+            Some(crate::text_import::detect_file(&input, kind).map_err(|e| e.to_string())?)
+        }
+        None => None,
+    };
+    let input_copy =
+        super::converter::prepare_editor_input(&input, &insert_dir, text_kind, text_options)?;
+
+    let converted = super::converter::convert_file(
         &app,
-        &path,
+        &input_copy.path().to_string_lossy(),
         &output.to_string_lossy(),
         format_from,
         format_to,
         &insert_dir.to_string_lossy(),
-        &crate::temp_layout::fontdata_dir(&state.font_root),
+        None,
         None,
     )
-    .await?;
+    .await;
+    drop(input_copy);
+    converted?;
 
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
     let b64 = STANDARD.encode(&bin_data);
 
-    // x2t drops the inserted document's images in insert_tmp/media/, but the
-    // exporter only ever looks in temp_dir/media/, so anything left here came out
+    // x2t drops the inserted document's images in media/ of the insert's folder,
+    // but the exporter only ever looks in temp_dir/media/, so anything left there came out
     // of the PDF as a black rectangle: the same #31 mechanism through another
     // door. Staging them into media/ is what makes them exportable, and it has to
     // go through the collision-safe primitive rather than copy under the original
@@ -1210,6 +1230,7 @@ pub async fn convert_for_insert(
         );
         images.insert(name, serde_json::Value::String(img_url));
     }
+    keep_insert_media(&insert_dir.join("media"), &state.temp_dir.join("insert_tmp").join("media"));
 
     Ok(serde_json::json!({
         "data": b64,
@@ -1217,19 +1238,57 @@ pub async fn convert_for_insert(
     }))
 }
 
+// Each insert converts in a folder of its own under insert_tmp/, so two inserts
+// at the same time never share the copy, Editor.bin or x2t's scratch files.
+// The folder is removed when this is dropped.
+struct InsertDir(PathBuf);
+
+impl InsertDir {
+    fn create(temp_dir: &Path) -> std::io::Result<InsertDir> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let parent = temp_dir.join("insert_tmp");
+        std::fs::create_dir_all(&parent)?;
+        loop {
+            let dir = parent.join(format!("convert-{}", NEXT.fetch_add(1, Ordering::Relaxed)));
+            match std::fs::create_dir(&dir) {
+                Ok(()) => return Ok(InsertDir(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+impl Drop for InsertDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+// copy-to-media resolves a bare image name against insert_tmp/media/ (main.rs,
+// copy_source), so the images of the last insert stay there once its own
+// folder is gone, as they did when every insert used insert_tmp/ itself.
+fn keep_insert_media(insert_media_dir: &Path, kept_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(insert_media_dir) else {
+        return;
+    };
+    let _ = std::fs::create_dir_all(kept_dir);
+    for entry in entries.flatten() {
+        let kept = kept_dir.join(entry.file_name());
+        let _ = std::fs::remove_file(&kept);
+        let _ = std::fs::rename(entry.path(), &kept);
+    }
+}
+
 // A sync command runs on the main thread, so it never waits for the build:
 // the editor only asks once the status has settled (bridge.js), and an early
 // call gets this error and the bundled list (font-patches.js).
 #[tauri::command]
 pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
-    let path = crate::temp_layout::fontdata_dir(&state.font_root).join("AllFonts.js");
-    generated_font_list(state.fonts.status(), &path)
-}
-
-fn generated_font_list(status: crate::fonts_state::FontsStatus, path: &Path) -> Result<String, String> {
-    if !crate::fonts_state::uses_generated_list(status) {
-        return Err(format!("The font cache is not usable: {:?}", status));
-    }
+    let Some(path) = state.fonts.generated_list() else {
+        return Err(format!("The font cache is not usable: {:?}", state.fonts.status()));
+    };
     std::fs::read_to_string(path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
 }
 
@@ -1307,6 +1366,7 @@ pub(crate) fn test_state_for(root: &Path, instance: crate::temp_layout::Instance
         instance,
         doc_seq: std::sync::atomic::AtomicU64::new(1),
         modified: Mutex::new(false),
+        save_pending: Mutex::new(false),
         pending_recent: Mutex::new(None),
         recovery: Mutex::new(None),
         pending_open: crate::pending_open::PendingOpens::default(),
@@ -1706,6 +1766,40 @@ mod tests {
     }
 
     #[test]
+    fn two_inserts_at_the_same_time_convert_in_different_folders() {
+        let dir = staging_dir();
+
+        let first = InsertDir::create(&dir).unwrap();
+        let second = InsertDir::create(&dir).unwrap();
+
+        assert_ne!(first.0, second.0);
+        assert!(first.0.is_dir() && second.0.is_dir());
+        assert_eq!(first.0.parent(), Some(dir.join("insert_tmp").as_path()));
+        let (first_dir, second_dir) = (first.0.clone(), second.0.clone());
+        drop(first);
+        drop(second);
+        assert!(!first_dir.exists() && !second_dir.exists(), "each folder goes with its insert");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_images_of_an_insert_stay_where_a_bare_name_is_resolved() {
+        let dir = staging_dir();
+        let insert = InsertDir::create(&dir).unwrap();
+        std::fs::create_dir_all(insert.0.join("media")).unwrap();
+        std::fs::write(insert.0.join("media/image1.png"), b"inserted").unwrap();
+        let kept = dir.join("insert_tmp/media");
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::write(kept.join("image1.png"), b"earlier insert").unwrap();
+
+        keep_insert_media(&insert.0.join("media"), &kept);
+        drop(insert);
+
+        assert_eq!(std::fs::read(kept.join("image1.png")).unwrap(), b"inserted");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn insert_media_is_a_noop_without_images() {
         let dir = staging_dir();
         assert!(stage_insert_media(&dir.join("insert_tmp/media"), &dir.join("media")).is_empty());
@@ -2059,20 +2153,6 @@ mod tests {
         assert!(pdf_to_open(&grants, &save.token).is_err());
         let insert = grants.grant(PathBuf::from("/home/u/c.pdf"), GrantKind::Insert);
         assert!(pdf_to_open(&grants, &insert.token).is_err());
-    }
-
-    #[test]
-    fn the_font_list_comes_from_the_cache_only_once_it_is_ready() {
-        use crate::fonts_state::FontsStatus;
-        let dir = std::env::temp_dir().join(format!("eo-font-list-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("AllFonts.js");
-        std::fs::write(&path, "old list").unwrap();
-
-        assert!(generated_font_list(FontsStatus::Pending, &path).is_err());
-        assert!(generated_font_list(FontsStatus::Failed, &path).is_err());
-        assert_eq!(generated_font_list(FontsStatus::Ready, &path), Ok("old list".to_string()));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

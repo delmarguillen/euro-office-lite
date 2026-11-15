@@ -822,6 +822,11 @@ pub fn recovery_load(
         return Err(format!("Not a recovery session id: {}", id));
     }
     let root = recover_root(&app)?;
+    load_session(&state, &root, id)
+}
+
+// recovery_load with the recover folder given, so tests need no app.
+fn load_session(state: &AppState, root: &Path, id: String) -> Result<LoadedSession, String> {
     let dir = root.join(&id);
     if !dir.is_dir() {
         return Err(format!("No recovery session named {}", id));
@@ -1524,5 +1529,35 @@ mod tests {
         std::fs::write(dir.join(BIN_FILE), b"DOCYxxxx").unwrap();
         assert!(!is_markdown_folder(&dir));
         assert!(markdown_recovery_dir(&root, "1-2").is_err());
+    }
+
+    // --- loading ----------------------------------------------------------
+
+    #[test]
+    fn recovering_a_file_open_in_another_window_leaves_it_to_that_window() {
+        use crate::temp_layout::{begin_instance, open_in_another_instance, publish_open_document};
+        let temp_root = scratch();
+        let file = temp_root.join("a.docx");
+        std::fs::write(&file, b"x").unwrap();
+        let other = begin_instance(&temp_root, 1000, 2).unwrap();
+        publish_open_document(&other.dir, Some(&file)).unwrap();
+        let own = crate::file_ops::test_state_for(&temp_root, begin_instance(&temp_root, 1000, 1).unwrap());
+        let recover_root = temp_root.join("recover");
+        let folder = Folder::new(&recover_root, "2000-3").bin(b"DOCY;v10").changes(1);
+        let mut info = read_doc_info(&folder.info(0, now()).dir).unwrap();
+        info.path = Some(file.to_string_lossy().to_string());
+        write_doc_info(&recover_root.join("2000-3"), &info).unwrap();
+
+        let loaded = load_session(&own, &recover_root, "2000-3".to_string()).unwrap();
+
+        assert_eq!(loaded.path, info.path);
+        assert_eq!(*own.current_file.lock().unwrap(), None);
+        assert_eq!(*own.save_suggestion.lock().unwrap(), Some(file.clone()));
+        assert!(!open_in_another_instance(&temp_root, &other.id, &file));
+        assert_eq!(
+            crate::new_window::claim_for_save(&own, &file).err(),
+            Some(crate::new_window::OPEN_ELSEWHERE.to_string())
+        );
+        end_session(&own, true);
     }
 }

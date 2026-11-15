@@ -12,6 +12,7 @@ use tauri::State;
 use crate::file_ops::{log_event, AppState};
 use crate::launch_args::NEW_WINDOW;
 use crate::path_grants::{GrantKind, PathGrants};
+use crate::temp_layout::DocumentClaim;
 
 // What the bridge gets back when nothing went wrong.
 pub const OPENED: &str = "opened";
@@ -47,13 +48,18 @@ pub fn new_window_launch(
 }
 
 // Both paths are resolved by the file system when they can be, so a symlink,
-// a ".." or (on Windows) another letter case still names the same file.
+// a ".." or (on Windows) another letter case still names the same file, and
+// so do two document portal paths of one host file (temp_layout.rs).
 pub fn is_open_document(chosen: &Path, current: Option<&Path>) -> bool {
     let Some(current) = current else {
         return false;
     };
-    match (chosen.canonicalize(), current.canonicalize()) {
-        (Ok(chosen), Ok(current)) => chosen == current,
+    let identities = (
+        crate::temp_layout::document_identity(chosen),
+        crate::temp_layout::document_identity(current),
+    );
+    match identities {
+        (Some(chosen), Some(current)) => chosen == current,
         _ => chosen == current,
     }
 }
@@ -62,32 +68,35 @@ pub fn is_open_elsewhere(state: &AppState, document: &Path) -> bool {
     crate::temp_layout::open_in_another_instance(&state.temp_root, &state.instance.id, document)
 }
 
-// For the commands that open a file in this window.
-pub fn refuse_if_open_elsewhere(state: &AppState, document: &Path) -> Result<(), String> {
-    if !is_open_elsewhere(state, document) {
-        return Ok(());
-    }
-    log_event(state, "[OPEN] the file is open in another window: not opened");
-    Err(OPEN_ELSEWHERE.to_string())
+// Err(OPEN_ELSEWHERE) when a live instance other than `own_id` has `document`
+// open, or is opening or saving to it. Otherwise the other windows see it as
+// open until the claim is dropped, which the caller does once open-document
+// names the file or the open or save failed. A file that does not exist yet
+// is open nowhere.
+pub fn claim_document(root: &Path, own_id: &str, document: &Path) -> Result<DocumentClaim, String> {
+    let Some(claim) = crate::temp_layout::claim_document(root, own_id, document) else {
+        return Err(OPEN_ELSEWHERE.to_string());
+    };
+    Ok(claim)
 }
 
-// Err(OPEN_ELSEWHERE) when a live instance other than `own_id` has `dest`
-// open. A file that does not exist yet is open nowhere.
-pub fn check_save_destination(root: &Path, own_id: &str, dest: &Path) -> Result<(), String> {
-    if crate::temp_layout::open_in_another_instance(root, own_id, dest) {
-        return Err(OPEN_ELSEWHERE.to_string());
+// For the commands that open a file in this window.
+pub fn claim_for_open(state: &AppState, document: &Path) -> Result<DocumentClaim, String> {
+    let claimed = claim_document(&state.temp_root, &state.instance.id, document);
+    if claimed.is_err() {
+        log_event(state, "[OPEN] the file is open in another window: not opened");
     }
-    Ok(())
+    claimed
 }
 
 // For the commands that write a file chosen in a dialog. The other window keeps
 // its own copy and would overwrite this write on its next save.
-pub fn refuse_save_if_open_elsewhere(state: &AppState, dest: &Path) -> Result<(), String> {
-    let checked = check_save_destination(&state.temp_root, &state.instance.id, dest);
-    if checked.is_err() {
+pub fn claim_for_save(state: &AppState, dest: &Path) -> Result<DocumentClaim, String> {
+    let claimed = claim_document(&state.temp_root, &state.instance.id, dest);
+    if claimed.is_err() {
         log_event(state, "[SAVE] the destination is open in another window: not saved");
     }
-    checked
+    claimed
 }
 
 // Starts this executable without a shell and does not wait for it. A thread
@@ -224,9 +233,9 @@ mod tests {
         let other = crate::temp_layout::begin_instance(&root, 1000, 2).unwrap();
         crate::temp_layout::publish_open_document(&other.dir, Some(&file)).unwrap();
 
-        let checked = check_save_destination(&root, &own.id, &file);
+        let claimed = claim_document(&root, &own.id, &file);
 
-        assert_eq!(checked, Err(OPEN_ELSEWHERE.to_string()));
+        assert_eq!(claimed.err(), Some(OPEN_ELSEWHERE.to_string()));
         drop((own, other));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -238,7 +247,7 @@ mod tests {
         let own = crate::temp_layout::begin_instance(&root, 1000, 1).unwrap();
         crate::temp_layout::publish_open_document(&own.dir, Some(&file)).unwrap();
 
-        assert_eq!(check_save_destination(&root, &own.id, &file), Ok(()));
+        assert!(claim_document(&root, &own.id, &file).is_ok());
         drop(own);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -253,9 +262,73 @@ mod tests {
         let other = crate::temp_layout::begin_instance(&root, 1000, 2).unwrap();
         crate::temp_layout::publish_open_document(&other.dir, Some(&open)).unwrap();
 
-        assert_eq!(check_save_destination(&root, &own.id, &free), Ok(()));
-        assert_eq!(check_save_destination(&root, &own.id, &new), Ok(()));
+        assert!(claim_document(&root, &own.id, &free).is_ok());
+        assert!(claim_document(&root, &own.id, &new).is_ok());
         drop((own, other));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn window(root: &Path, pid: u32) -> AppState {
+        let instance = crate::temp_layout::begin_instance(root, 1000, pid).unwrap();
+        crate::file_ops::test_state_for(root, instance)
+    }
+
+    // What save_file_as does once x2t has written the file.
+    fn finish_save(state: &AppState, dest: &Path, claim: DocumentClaim) {
+        crate::file_ops::set_current_file(state, Some(dest.to_path_buf()));
+        drop(claim);
+    }
+
+    #[test]
+    fn a_file_another_window_is_saving_to_does_not_open() {
+        let root = scratch_root("saving");
+        let dest = document_in(&root, "a.docx");
+        let saving = window(&root, 1);
+        let opening = window(&root, 2);
+
+        let save = claim_for_save(&saving, &dest).unwrap();
+        assert_eq!(claim_for_open(&opening, &dest).err(), Some(OPEN_ELSEWHERE.to_string()));
+        finish_save(&saving, &dest, save);
+        assert_eq!(claim_for_open(&opening, &dest).err(), Some(OPEN_ELSEWHERE.to_string()));
+
+        drop((saving, opening));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_file_another_window_is_opening_is_not_saved_over() {
+        let root = scratch_root("opening");
+        let dest = document_in(&root, "a.docx");
+        let opening = window(&root, 1);
+        let saving = window(&root, 2);
+
+        let open = claim_for_open(&opening, &dest).unwrap();
+        assert_eq!(claim_for_save(&saving, &dest).err(), Some(OPEN_ELSEWHERE.to_string()));
+        drop(open);
+
+        drop((saving, opening));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_save_over_the_own_file_and_to_a_new_one_leaves_it_open_here() {
+        let root = scratch_root("own-and-new");
+        let own_file = document_in(&root, "a.docx");
+        let new_file = root.join("b.docx");
+        let saving = window(&root, 1);
+        let other = window(&root, 2);
+        crate::file_ops::set_current_file(&saving, Some(own_file.clone()));
+
+        let over_own = claim_for_save(&saving, &own_file).unwrap();
+        finish_save(&saving, &own_file, over_own);
+        let to_new = claim_for_save(&saving, &new_file).unwrap();
+        // x2t's output renamed into place.
+        std::fs::write(&new_file, b"x").unwrap();
+        finish_save(&saving, &new_file, to_new);
+
+        assert_eq!(claim_for_open(&other, &new_file).err(), Some(OPEN_ELSEWHERE.to_string()));
+        assert!(claim_for_open(&other, &own_file).is_ok());
+        drop((saving, other));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

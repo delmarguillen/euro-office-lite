@@ -1,0 +1,10 @@
+# UTF-16 LE with a BOM and an emoji: a character above U+FFFF, which x2t
+# cannot read, so the app refuses the file and leaves it as it was.
+description = "UTF-16 LE TXT with a BOM and an emoji: refused with the open error dialog, file unchanged"
+generate = "mktxt.py emoji-utf16le-bom"
+input = "emoji-le.txt"
+input_sha256 = "883848657fc6cbb7e3165d72459d9062eca1f528f493545cf0d5e35e60083e58"
+action = "open-save"
+check = "same-text"
+expect = "rejected-with-dialog"
+screenshot = "on-failure"

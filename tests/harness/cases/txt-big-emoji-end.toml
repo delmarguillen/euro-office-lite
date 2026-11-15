@@ -1,0 +1,10 @@
+# More than 64 KiB of text inside the BMP and one emoji only in the last
+# line: the check for characters above U+FFFF must read the whole file.
+description = "TXT over 64 KiB with an emoji only in its last line: refused with the open error dialog"
+generate = "mktxt.py long-emoji-end"
+input = "big-emoji-end.txt"
+input_sha256 = "7b10e858faa4c9e0f9c34bd4a5387084e2b769e5eb28501f25c6d3e66313b936"
+action = "open-save"
+check = "same-text"
+expect = "rejected-with-dialog"
+screenshot = "on-failure"

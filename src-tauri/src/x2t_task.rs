@@ -89,6 +89,104 @@ fn x2t_search_dirs(
     dirs
 }
 
+// The longest an x2t run may take before it is killed. The app also runs on a
+// Raspberry Pi 3 with 1 GB of RAM, so both are far above what a run needs.
+// A document conversion (open, save, export, print, PDF save) works on files
+// of up to 512 MB as Editor.bin and 256 MB as PDF (protocol_limits.rs), which
+// can take minutes there.
+pub const DOCUMENT_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+// The font scan takes about 30 s on a Raspberry Pi (main.rs), more with many
+// fonts installed.
+pub const FONT_SCAN_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+// How often a running x2t is checked for its end: std has no wait with a time
+// limit, so the wait polls.
+const X2T_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+#[derive(Debug)]
+pub enum X2tRunError {
+    Spawn(std::io::Error),
+    Wait(std::io::Error),
+    TimedOut(std::time::Duration),
+}
+
+impl std::fmt::Display for X2tRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            X2tRunError::Spawn(error) => write!(f, "Failed to spawn x2t: {}", error),
+            X2tRunError::Wait(error) => write!(f, "Failed to wait for x2t: {}", error),
+            X2tRunError::TimedOut(limit) => write!(f, "x2t timed out after {} s", limit.as_secs()),
+        }
+    }
+}
+
+// Runs `cmd` as Command::output does (empty stdin, stdout and stderr
+// collected, exit status), but kills it once it has run for `limit`. Each pipe
+// is read on its own thread, so x2t never blocks on a full pipe. A killed x2t
+// is reaped before this returns, so whatever the caller holds for the run (the
+// PDF work folder, fonts.lock) is released only once x2t is gone. Processes x2t
+// itself started are not killed.
+pub fn run_with_time_limit(
+    cmd: &mut std::process::Command,
+    limit: std::time::Duration,
+) -> Result<std::process::Output, X2tRunError> {
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(X2tRunError::Spawn)?;
+    let stdout = read_in_thread(child.stdout.take());
+    let stderr = read_in_thread(child.stderr.take());
+    // On an error the reader threads are left to end when the pipes close.
+    let status = wait_with_limit(&mut child, limit)?;
+    Ok(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
+fn read_in_thread<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    })
+}
+
+fn wait_with_limit(
+    child: &mut std::process::Child,
+    limit: std::time::Duration,
+) -> Result<std::process::ExitStatus, X2tRunError> {
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(error) => {
+                kill_and_reap(child);
+                return Err(X2tRunError::Wait(error));
+            }
+        }
+        if started.elapsed() >= limit {
+            kill_and_reap(child);
+            return Err(X2tRunError::TimedOut(limit));
+        }
+        std::thread::sleep(X2T_POLL);
+    }
+}
+
+// SIGKILL on Linux and macOS, TerminateProcess on Windows; wait() returns once
+// the process is gone.
+fn kill_and_reap(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Where to write the params file x2t is invoked with. Every path inside the
 /// XML is absolute, so the file does not need to sit next to the output; the
 /// print path has always written it into temp_dir and works on all three
@@ -217,6 +315,61 @@ fn reset_work_dir(work_dir: &std::path::Path) -> Result<(), String> {
     create_dir(work_dir)
 }
 
+// Every PDF run on Linux and macOS rebuilds <temp>/x2t-workdir, removing it
+// first, and its x2t then runs from that folder. Two runs in one instance (an
+// export and a print at once) would remove the folder from under the first
+// x2t, so the rebuild and the x2t run go one at a time per temp dir.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+static WORK_DIRS_IN_USE: std::sync::Mutex<std::collections::BTreeSet<std::path::PathBuf>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+static WORK_DIR_RELEASED: std::sync::Condvar = std::sync::Condvar::new();
+
+// A hung x2t holds the folder until DOCUMENT_TIME_LIMIT kills it. A run that
+// waits longer than this fails instead of waiting with it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const WORK_DIR_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct WorkDirHold {
+    temp_dir: std::path::PathBuf,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for WorkDirHold {
+    fn drop(&mut self) {
+        let mut in_use = WORK_DIRS_IN_USE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        in_use.remove(&self.temp_dir);
+        WORK_DIR_RELEASED.notify_all();
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn hold_work_dir(
+    temp_dir: &std::path::Path,
+    wait: std::time::Duration,
+) -> Result<WorkDirHold, String> {
+    let in_use = WORK_DIRS_IN_USE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut in_use, waited) = WORK_DIR_RELEASED
+        .wait_timeout_while(in_use, wait, |in_use| in_use.contains(temp_dir))
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if waited.timed_out() {
+        return Err(format!(
+            "PDF work directory in {} still in use by another conversion after {}s",
+            temp_dir.display(),
+            wait.as_secs()
+        ));
+    }
+    in_use.insert(temp_dir.to_path_buf());
+    Ok(WorkDirHold {
+        temp_dir: temp_dir.to_path_buf(),
+    })
+}
+
 const DOCTRENDERER_CONFIG_PARENT: &str = r#"<Settings>
 <file>../editors/sdkjs/common/Native/native.js</file>
 <file>../editors/sdkjs/common/Native/jquery_native.js</file>
@@ -292,6 +445,15 @@ pub fn x2t_options_xml() -> &'static str {
 </options>\n"
 }
 
+// Windows takes "/" as a separator too. On Linux and macOS "\" is an ordinary
+// character of a file name, so the path stays as it is.
+fn x2t_path(path: &str) -> String {
+    if cfg!(target_os = "windows") {
+        return path.replace('\\', "/");
+    }
+    path.to_string()
+}
+
 // Paths are passed raw and escaped here, once. `extra` is already XML: the
 // numeric CSV/TXT elements from TextOptions::xml_elements.
 pub fn convert_params_xml(
@@ -310,10 +472,10 @@ pub fn convert_params_xml(
 <m_nFormatTo>{}</m_nFormatTo>
 <m_sTempDir>{}</m_sTempDir>
 {}{}</TaskQueueDataConvert>"#,
-        xml_escape(&input.replace('\\', "/")),
-        xml_escape(&output.replace('\\', "/")),
+        xml_escape(&x2t_path(input)),
+        xml_escape(&x2t_path(output)),
         format_to,
-        xml_escape(&temp_dir.replace('\\', "/")),
+        xml_escape(&x2t_path(temp_dir)),
         extra,
         x2t_options_xml(),
     )
@@ -390,6 +552,33 @@ fn pdf_params_xml_with(
     )
 }
 
+// The LCIDs accepted for a spreadsheet's PDF: a language ID in the low 16 bits
+// and a sort ID in the next 4, the most a Windows LCID holds (MAKELCID).
+const LCID_RANGE: std::ops::RangeInclusive<i64> = 1..=0xF_FFFF;
+
+// The locale chosen in the spreadsheet editor, as the bridge sends it. A value
+// outside LCID_RANGE is refused.
+pub fn checked_lcid(lcid: Option<i64>) -> Result<Option<u32>, String> {
+    let Some(lcid) = lcid else {
+        return Ok(None);
+    };
+    if !LCID_RANGE.contains(&lcid) {
+        return Err(format!("Invalid locale id: {}", lcid));
+    }
+    Ok(Some(lcid as u32))
+}
+
+// Without m_nLcid x2t formats a spreadsheet's numbers and dates for en-US.
+fn locale_params(lcid: Option<u32>) -> String {
+    match lcid {
+        Some(lcid) => format!("<m_nLcid>{}</m_nLcid>\n", lcid),
+        None => String::new(),
+    }
+}
+
+// `lcid` is the locale chosen in the spreadsheet editor; None for the other
+// editors.
+#[allow(clippy::too_many_arguments)]
 pub fn convert_to_pdf(
     binaries_dir: &std::path::Path,
     exe_dir: Option<&std::path::Path>,
@@ -398,8 +587,20 @@ pub fn convert_to_pdf(
     temp_dir: &std::path::Path,
     fontdata_dir: &std::path::Path,
     log: &dyn Fn(&str),
+    lcid: Option<u32>,
 ) -> Result<String, String> {
-    run_x2t_to_pdf(binaries_dir, exe_dir, input, output, temp_dir, fontdata_dir, log, "")
+    let extra = locale_params(lcid);
+    run_x2t_to_pdf(
+        binaries_dir,
+        exe_dir,
+        input,
+        output,
+        temp_dir,
+        fontdata_dir,
+        log,
+        &extra,
+        DOCUMENT_TIME_LIMIT,
+    )
 }
 
 // Writes `source_pdf` with the editor's changes applied to `output`. The
@@ -424,6 +625,7 @@ pub fn apply_pdf_changes(
         fontdata_dir,
         log,
         &pdf_changes_params(&scratch.to_string_lossy()),
+        DOCUMENT_TIME_LIMIT,
     );
     let _ = std::fs::remove_dir_all(&scratch);
     result
@@ -446,6 +648,7 @@ fn run_x2t_to_pdf(
     fontdata_dir: &std::path::Path,
     log: &dyn Fn(&str),
     extra_params: &str,
+    limit: std::time::Duration,
 ) -> Result<String, String> {
     let binaries_dir = &strip_extended_prefix(binaries_dir);
     let output_name = std::path::Path::new(output)
@@ -481,6 +684,12 @@ fn run_x2t_to_pdf(
     };
 
     validate_editor_resources(&editors_dir).map_err(|error| {
+        log(&format!("setup failed: {}", error));
+        error
+    })?;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let work_dir_hold = hold_work_dir(temp_dir, WORK_DIR_WAIT).map_err(|error| {
         log(&format!("setup failed: {}", error));
         error
     })?;
@@ -538,12 +747,15 @@ fn run_x2t_to_pdf(
     write_file(&params_xml, &xml)?;
 
     let mut cmd = pdf_command(&run_x2t, &run_dir, &params_xml, binaries_dir);
-    let result = cmd.output().map_err(|error| {
-        let message = format!("Failed to spawn x2t: {}", error);
+    let run = run_with_time_limit(&mut cmd, limit);
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    drop(work_dir_hold);
+    let _ = std::fs::remove_file(&params_xml);
+    let result = run.map_err(|error| {
+        let message = error.to_string();
         log(&message);
         message
     })?;
-    let _ = std::fs::remove_file(&params_xml);
     let code = result.status.code().unwrap_or(-999);
     let pdf_exists = std::path::Path::new(output).exists();
     let pdf_size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
@@ -864,6 +1076,7 @@ pub fn detect_format(path: &std::path::Path) -> i32 {
         Some("csv") => 260,
         Some("xlsm") => 261,
         Some("xltx") => 262,
+        Some("xltm") => 263,
         Some("xlsb") => 264,
         Some("fods") => 265,
         Some("ots") => 266,
@@ -872,7 +1085,9 @@ pub fn detect_format(path: &std::path::Path) -> i32 {
         Some("odp") => 131,
         Some("ppsx") => 132,
         Some("pptm") => 133,
+        Some("ppsm") => 134,
         Some("potx") => 135,
+        Some("potm") => 136,
         Some("fodp") => 137,
         Some("otp") => 138,
         Some("pdf") => 513,
@@ -907,34 +1122,116 @@ pub fn is_empty_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+// The extensions the app converts to Editor.bin: those the open dialog offers,
+// but PDF (open_pdf reads it as it is), those the insert, compare and merge
+// dialogs offer (file_dialogs.rs), and xltm, potm and ppsm, which x2t converts
+// like the others of their family. A file under any other is refused.
+pub const CONVERTED_EXTENSIONS: [&str; 30] = [
+    "docx", "doc", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "txt",
+    "xlsx", "xls", "xlsm", "xltx", "xltm", "xlsb", "ods", "ots", "fods", "csv",
+    "pptx", "ppt", "pptm", "ppsx", "ppsm", "potx", "potm", "odp", "otp", "fodp",
+];
+
+pub fn is_converted_extension(path: &std::path::Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    CONVERTED_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+}
+
+// x2t picks the format of a file that is not a CFB from its first
+// MIN_SIZE_BUFFER (4096) bytes, and looks for the end of an HTML document in
+// its last 4096 (core/Common/OfficeFileFormatChecker2.cpp at v10.0.0.169,
+// isOfficeFile).
+pub const X2T_HEAD_LEN: usize = 4096;
+// minizip looks for the end of a ZIP's central directory in the last 0xFFFF
+// bytes of a file (core/OfficeUtils/src/zlib-1.2.11/contrib/minizip/unzip.c,
+// unz64local_SearchCentralDir), plus the 22 bytes of the record itself.
+pub const ZIP_END_SEARCH_LEN: usize = 0xFFFF + 22;
+
+// The bytes of a file the content check reads: those x2t reads to pick its
+// format.
+pub struct ContentSample {
+    // The first X2T_HEAD_LEN bytes.
+    pub head: Vec<u8>,
+    // The last ZIP_END_SEARCH_LEN bytes, the whole file when it is shorter.
+    pub tail: Vec<u8>,
+}
+
+impl ContentSample {
+    pub fn read(path: &std::path::Path) -> std::io::Result<ContentSample> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(path)?;
+        let mut head = Vec::new();
+        (&mut file).take(X2T_HEAD_LEN as u64).read_to_end(&mut head)?;
+        let size = file.metadata()?.len();
+        file.seek(SeekFrom::Start(size.saturating_sub(ZIP_END_SEARCH_LEN as u64)))?;
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail)?;
+        Ok(ContentSample { head, tail })
+    }
+
+    // minizip opens a file that starts like a ZIP or has the end of a central
+    // directory in its tail: only such a file can hold a package.
+    pub fn may_hold_a_package(&self) -> bool {
+        is_zip(&self.head) || has_zip_end(&self.tail)
+    }
+
+    pub fn starts_like_a_cfb(&self) -> bool {
+        is_cfb(&self.head)
+    }
+
+    #[cfg(test)]
+    pub fn of(bytes: &[u8]) -> ContentSample {
+        ContentSample {
+            head: bytes[..bytes.len().min(X2T_HEAD_LEN)].to_vec(),
+            tail: bytes[bytes.len().saturating_sub(ZIP_END_SEARCH_LEN)..].to_vec(),
+        }
+    }
+}
+
 const ZIP_SIGNATURE: &[u8] = b"PK\x03\x04";
 const CFB_SIGNATURE: &[u8] = &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+const ZIP_END_SIGNATURE: &[u8] = b"PK\x05\x06";
+const ZIP64_END_LOCATOR_SIGNATURE: &[u8] = b"PK\x06\x07";
 
 // A container format must start like one; x2t would otherwise pick the format
 // from the content. OOXML is a ZIP, or a CFB when it has a password; xlsb is
-// always a ZIP. ODF is always a ZIP, flat ODF an XML document. Word 97-2003,
-// Excel 97-2003 and PowerPoint 97-2003 are CFB; the legacy extensions also
-// take the other content x2t converts under them: see is_legacy_doc,
-// is_legacy_xls and is_legacy_ppt. HTML is never accepted, because x2t picks
-// the format from the content. Other extensions (rtf, txt, csv...) are left to
-// x2t.
-pub fn content_matches_extension(path: &std::path::Path, head: &[u8]) -> bool {
+// always a ZIP. ODF is always a ZIP, flat ODF an XML document whose root is
+// office:document. Word 97-2003, Excel 97-2003 and PowerPoint 97-2003 are
+// CFB; the legacy extensions also take the other content x2t converts under
+// them, noted on their lines below. HTML is never
+// accepted, because x2t picks the format from the content. An .rtf starts
+// like one, after an optional BOM and blank space. A TXT or CSV is read from
+// its UTF-32 or UTF-16 copy (text_import::prepare_read_copy). An extension outside
+// CONVERTED_EXTENSIONS, or none, is refused. A file that starts like a ZIP
+// must also open as one (converter.rs). Content that is neither a CFB nor a
+// ZIP must not hold what x2t would read as another format first.
+pub fn content_matches_extension(path: &std::path::Path, content: &ContentSample) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return true;
+        return false;
     };
+    let head = content.head.as_slice();
     let zip = is_zip(head);
     let cfb = is_cfb(head);
-    match ext.to_lowercase().as_str() {
+    let ext = ext.to_lowercase();
+    let text = !zip && !cfb && !x2t_finds_another_format(&ext, content);
+    match ext.as_str() {
         "docx" | "docm" | "dotx" | "dotm" => zip || cfb,
         "xlsx" | "xlsm" | "xltx" | "xltm" => zip || cfb,
         "pptx" | "pptm" | "potx" | "potm" | "ppsx" | "ppsm" => zip || cfb,
         "xlsb" => zip,
         "odt" | "ods" | "odp" | "ott" | "ots" | "otp" => zip,
-        "doc" => is_legacy_doc(head),
-        "xls" => is_legacy_xls(head),
-        "ppt" => is_legacy_ppt(head),
-        "fodt" | "fods" | "fodp" => starts_with_xml_declaration(head),
-        _ => true,
+        // Word 97-2003 (CFB), a DOCX renamed to .doc (ZIP) or an RTF saved as .doc.
+        "doc" => cfb || zip || (text && starts_with_rtf(head)),
+        // Excel 97-2003 (CFB), an XLSX renamed to .xls (ZIP) or Excel 2003 XML.
+        "xls" => cfb || zip || (text && is_spreadsheet_ml(head)),
+        // PowerPoint 97-2003 (CFB) or a PPTX renamed to .ppt (ZIP).
+        "ppt" => cfb || zip,
+        "rtf" => text && starts_with_rtf(head),
+        "fodt" | "fods" | "fodp" => text && is_flat_odf(head),
+        "txt" | "csv" => text,
+        _ => false,
     }
 }
 
@@ -946,23 +1243,130 @@ fn is_cfb(head: &[u8]) -> bool {
     head.starts_with(CFB_SIGNATURE)
 }
 
-// .doc: Word 97-2003 (CFB), a DOCX renamed to .doc (ZIP) or an RTF saved as .doc.
-fn is_legacy_doc(head: &[u8]) -> bool {
-    is_cfb(head) || is_zip(head) || starts_with_rtf(head)
+// What x2t looks for before it gets to the format the extension names, in a
+// file that is neither a CFB nor a ZIP: a ZIP after other data, an Office
+// document in a single XML, which only an .xls of Excel 2003 XML may be, and
+// HTML or MHT, refused even where x2t would find RTF first.
+fn x2t_finds_another_format(ext: &str, content: &ContentSample) -> bool {
+    has_zip_end(&content.tail)
+        || flat_ooxml_under_another_extension(ext, &content.head)
+        || x2t_reads_as_html(content)
+        || x2t_reads_as_mht(&content.head)
 }
 
-// .xls: Excel 97-2003 (CFB), an XLSX renamed to .xls (ZIP) or Excel 2003 XML.
-fn is_legacy_xls(head: &[u8]) -> bool {
-    is_cfb(head) || is_zip(head) || is_spreadsheet_ml(head)
+fn flat_ooxml_under_another_extension(ext: &str, head: &[u8]) -> bool {
+    match x2t_flat_ooxml(head) {
+        None => false,
+        Some(FlatOoxml::Excel2003) => ext != "xls",
+        Some(_) => true,
+    }
 }
 
-// .ppt: PowerPoint 97-2003 (CFB) or a PPTX renamed to .ppt (ZIP).
-fn is_legacy_ppt(head: &[u8]) -> bool {
-    is_cfb(head) || is_zip(head)
+// x2t takes a file for HTML when isHtmlFormatFile (OfficeFileFormatChecker2.cpp:156)
+// finds an html tag in its first bytes, then a closing html or body tag in
+// its last X2T_HEAD_LEN bytes, the whole file when shorter (:887-899). It
+// checks this before flat ODF.
+fn x2t_reads_as_html(content: &ContentSample) -> bool {
+    let end = &content.tail[content.tail.len().saturating_sub(X2T_HEAD_LEN)..];
+    html_start(&content.head) && html_end(end)
+}
+
+// "html", in any case, inside a tag opened in the first 100 bytes.
+fn html_start(head: &[u8]) -> bool {
+    if head.len() < 4 {
+        return false;
+    }
+    let mut tag_open = false;
+    for i in 0..(head.len() - 4).min(100) {
+        match head[i] {
+            b'<' => tag_open = true,
+            b'>' => tag_open = false,
+            _ if tag_open && head[i..i + 4].eq_ignore_ascii_case(b"html") => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+// "</html" in any case, or "</body>" in lower case.
+fn html_end(bytes: &[u8]) -> bool {
+    if bytes.len() <= 6 {
+        return false;
+    }
+    (0..bytes.len() - 6).any(|i| {
+        let window = &bytes[i..];
+        window[..6].eq_ignore_ascii_case(b"</html") || window.starts_with(b"</body>")
+    })
+}
+
+// isMultiPartsHtmlFormatFile (OfficeFileFormatChecker2.cpp:113): both headers
+// anywhere in the first X2T_HEAD_LEN bytes.
+fn x2t_reads_as_mht(head: &[u8]) -> bool {
+    contains(head, b"Content-Type: multipart/related") && contains(head, b"Content-Type: text/html")
+}
+
+// The Office documents in a single XML isOOXFlatFormatFile finds
+// (OfficeFileFormatChecker2.cpp:1656), in the order it looks for them.
+#[derive(Debug, PartialEq, Eq)]
+enum FlatOoxml {
+    Word2003,
+    Excel2003,
+    // An OOXML package (Flat OPC) of Word, Excel or PowerPoint.
+    Package,
+}
+
+const WORD_2003_LINE: &[u8] = b"xmlns:w=\"http://schemas.microsoft.com/office/word/2003/wordml\"";
+const EXCEL_2003_LINE: &[u8] = b"xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\"";
+const PACKAGE_LINE: &[u8] = b"xmlns:pkg=\"http://schemas.microsoft.com/office/2006/xmlPackage\"";
+const PACKAGE_PROGIDS: [&[u8]; 3] = [
+    b"progid=\"Word.Document\"",
+    b"progid=\"Excel.Sheet\"",
+    b"progid=\"PowerPoint.Show\"",
+];
+
+// isOOXFlatFormatFile on the first X2T_HEAD_LEN bytes: the strings it looks
+// for anywhere in them, read as UTF-16 after a UTF-16 BOM.
+fn x2t_flat_ooxml(head: &[u8]) -> Option<FlatOoxml> {
+    if head.len() < 8 {
+        return None;
+    }
+    let text = text_x2t_searches(head);
+    if contains(&text, WORD_2003_LINE) {
+        return Some(FlatOoxml::Word2003);
+    }
+    let workbook = contains(&text, b"<Workbook") || !contains(&text, b"<html");
+    if contains(&text, EXCEL_2003_LINE) && workbook {
+        return Some(FlatOoxml::Excel2003);
+    }
+    let packaged = PACKAGE_PROGIDS.iter().any(|progid| contains(&text, progid));
+    if contains(&text, PACKAGE_LINE) && packaged {
+        return Some(FlatOoxml::Package);
+    }
+    None
+}
+
+// x2t turns the bytes into UTF-8 when they start with a UTF-16 BOM, and takes
+// them as they are otherwise.
+fn text_x2t_searches(head: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let units = head.chunks_exact(2);
+    let decoded: Vec<u16> = match head {
+        [0xFF, 0xFE, ..] => units.map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect(),
+        [0xFE, 0xFF, ..] => units.map(|pair| u16::from_be_bytes([pair[0], pair[1]])).collect(),
+        _ => return std::borrow::Cow::Borrowed(head),
+    };
+    std::borrow::Cow::Owned(String::from_utf16_lossy(&decoded).into_bytes())
+}
+
+// minizip opens a file as a ZIP when it finds the end of a central directory,
+// or the Zip64 locator of one, in its last bytes, whatever comes before it.
+fn has_zip_end(tail: &[u8]) -> bool {
+    contains(tail, ZIP_END_SIGNATURE) || contains(tail, ZIP64_END_LOCATOR_SIGNATURE)
 }
 
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 const XML_DECLARATION: &[u8] = b"<?xml";
+const XML_DECLARATION_END: &[u8] = b"?>";
+const FLAT_ODF_ROOT: &[u8] = b"<office:document";
 const RTF_START: &[u8] = b"{\\rtf";
 const SPREADSHEET_ML_NAMESPACE: &[u8] = b"urn:schemas-microsoft-com:office:spreadsheet";
 const SPREADSHEET_ML_PROGID: &[u8] = b"progid=\"Excel.Sheet\"";
@@ -983,20 +1387,78 @@ fn starts_with_xml_declaration(head: &[u8]) -> bool {
     skip_bom_and_space(head).starts_with(XML_DECLARATION)
 }
 
+fn skip_space(bytes: &[u8]) -> &[u8] {
+    let first_non_space = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    &bytes[first_non_space..]
+}
+
+// A flat ODF's first bytes: an optional UTF-8 BOM and whitespace, the XML
+// declaration, whitespace, then the root element, as LibreOffice writes it.
+// Anything else between the declaration and the root is not a flat ODF.
+fn is_flat_odf(head: &[u8]) -> bool {
+    let document = skip_bom_and_space(head);
+    if !document.starts_with(XML_DECLARATION) {
+        return false;
+    }
+    let Some(end) = document
+        .windows(XML_DECLARATION_END.len())
+        .position(|window| window == XML_DECLARATION_END)
+    else {
+        return false;
+    };
+    let after_declaration = skip_space(&document[end + XML_DECLARATION_END.len()..]);
+    let Some(after_root) = after_declaration.strip_prefix(FLAT_ODF_ROOT) else {
+        return false;
+    };
+    matches!(after_root.first(), Some(b' ' | b'\t' | b'\r' | b'\n' | b'>' | b'/'))
+}
+
 // An RTF document's first bytes: an optional UTF-8 BOM, optional whitespace,
 // then "{\rtf".
 fn starts_with_rtf(head: &[u8]) -> bool {
     skip_bom_and_space(head).starts_with(RTF_START)
 }
 
-// Excel 2003 XML (SpreadsheetML): an XML document whose first bytes carry the
-// <?mso-application progid="Excel.Sheet"?> instruction or the SpreadsheetML
-// namespace on the root <Workbook>. Any other XML, XHTML included, is not.
+// Excel 2003 XML (SpreadsheetML): an XML document whose root element is
+// <Workbook>, with the <?mso-application progid="Excel.Sheet"?> instruction or
+// the SpreadsheetML namespace in its first bytes. Any other XML, XHTML
+// included, is not.
 fn is_spreadsheet_ml(head: &[u8]) -> bool {
     if !starts_with_xml_declaration(head) {
         return false;
     }
-    contains(head, SPREADSHEET_ML_PROGID) || contains(head, SPREADSHEET_ML_NAMESPACE)
+    let marked = contains(head, SPREADSHEET_ML_PROGID) || contains(head, SPREADSHEET_ML_NAMESPACE);
+    marked && root_element_is(head, b"Workbook")
+}
+
+// Whether the first element of an XML document is `name`, past the BOM, the
+// declaration, processing instructions, comments and blank space before it.
+fn root_element_is(head: &[u8], name: &[u8]) -> bool {
+    let mut rest = skip_bom_and_space(head);
+    loop {
+        let skipped = match rest {
+            [b'<', b'?', ..] => skip_past(&rest[2..], b"?>"),
+            [b'<', b'!', b'-', b'-', ..] => skip_past(&rest[4..], b"-->"),
+            _ => break,
+        };
+        let Some(after) = skipped else {
+            return false;
+        };
+        rest = skip_space(after);
+    }
+    let Some(after_name) = rest.strip_prefix(b"<").and_then(|tag| tag.strip_prefix(name)) else {
+        return false;
+    };
+    matches!(after_name.first(), Some(b' ' | b'\t' | b'\r' | b'\n' | b'>' | b'/'))
+}
+
+// The bytes after the first `end`.
+fn skip_past<'a>(bytes: &'a [u8], end: &[u8]) -> Option<&'a [u8]> {
+    let position = bytes.windows(end.len()).position(|window| window == end)?;
+    Some(&bytes[position + end.len()..])
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -1260,7 +1722,7 @@ pub fn generate_fonts(
             symlink_dirs.len()
         ));
     }
-    match cmd.output() {
+    match run_with_time_limit(&mut cmd, FONT_SCAN_TIME_LIMIT) {
         Ok(result) => {
             let code = result.status.code().unwrap_or(-1);
             if result.status.success() {
@@ -1321,6 +1783,111 @@ mod tests {
         } else {
             "x2t"
         }
+    }
+
+    // A shell script that stands in for a slow, failing or hung x2t. sh reads
+    // it rather than the script being executed: executing a file just written
+    // fails now and then with "Text file busy" while other tests spawn.
+    #[cfg(unix)]
+    fn script(dir: &std::path::Path, body: &str) -> std::process::Command {
+        let path = dir.join("x2t.sh");
+        std::fs::write(&path, body).unwrap();
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.arg(path);
+        cmd
+    }
+
+    // run_with_time_limit on another thread: a run that does not return in
+    // time fails the test instead of hanging it.
+    #[cfg(unix)]
+    fn run_or_fail(
+        mut cmd: std::process::Command,
+        limit: std::time::Duration,
+    ) -> Result<std::process::Output, X2tRunError> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(run_with_time_limit(&mut cmd, limit));
+        });
+        receiver
+            .recv_timeout(limit + std::time::Duration::from_secs(10))
+            .expect("the x2t run did not return after its time limit")
+    }
+
+    #[cfg(unix)]
+    fn is_running(pid: &str) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+
+    #[cfg(unix)]
+    const TEST_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_that_ends_in_time_keeps_its_output_and_exit_code() {
+        let dir = scratch_dir("run-ok");
+        let body = "echo out; echo err >&2; exit 0";
+
+        let output = run_or_fail(script(&dir, body), TEST_LIMIT).unwrap();
+
+        assert_eq!(output, script(&dir, body).output().unwrap());
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"out\n");
+        assert_eq!(output.stderr, b"err\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_that_fails_in_time_reports_as_before() {
+        let dir = scratch_dir("run-fails");
+        let body = "echo out; echo err >&2; exit 89";
+
+        let output = run_or_fail(script(&dir, body), TEST_LIMIT).unwrap();
+
+        assert_eq!(output, script(&dir, body).output().unwrap());
+        assert_eq!(output.status.code(), Some(89));
+        assert_eq!(output.stdout, b"out\n");
+        assert_eq!(output.stderr, b"err\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_run_is_killed_at_its_limit() {
+        let dir = scratch_dir("run-hangs");
+        let pid_file = dir.join("pid");
+        let body = format!("echo $$ > '{}'; exec sleep 600", pid_file.display());
+        let limit = std::time::Duration::from_secs(1);
+        let started = std::time::Instant::now();
+
+        let error = run_or_fail(script(&dir, &body), limit).unwrap_err();
+
+        assert!(started.elapsed() >= limit);
+        assert_eq!(error.to_string(), "x2t timed out after 1 s");
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        assert!(!is_running(pid.trim()), "x2t is still running");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 1 MB on each pipe: far more than a pipe buffer (64 KB on Linux), so an
+    // unread pipe would stop x2t before it exits.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_with_more_output_than_a_pipe_holds_does_not_block() {
+        let dir = scratch_dir("run-chatty");
+        let body = "head -c 1048576 /dev/zero; head -c 1048576 /dev/zero >&2; exit 0";
+
+        let output = run_or_fail(script(&dir, body), TEST_LIMIT).unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), 1048576);
+        assert_eq!(output.stderr.len(), 1048576);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // The #35 regression: convert_to_pdf used to drop the params file next to
@@ -1642,6 +2209,34 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
+    fn a_spreadsheet_pdf_uses_the_locale_chosen_in_the_editor() {
+        let xml = pdf_params_xml_with("/d/in.bin", "/d/out.pdf", "/f", "/f/AllFonts.js", &locale_params(Some(1053)));
+        assert!(xml.contains("<m_nLcid>1053</m_nLcid>\n"), "{}", xml);
+    }
+
+    #[test]
+    fn a_pdf_without_a_locale_from_the_editor_has_no_lcid() {
+        let without = pdf_params_xml_with("/d/in.bin", "/d/out.pdf", "/f", "/f/AllFonts.js", &locale_params(None));
+        assert!(!without.contains("m_nLcid"), "{}", without);
+        assert_eq!(without, pdf_params_xml("/d/in.bin", "/d/out.pdf", "/f", "/f/AllFonts.js"));
+    }
+
+    #[test]
+    fn a_locale_from_the_editor_outside_the_lcid_range_is_refused() {
+        for lcid in [0, -1, -1053, 0x10_0000, i64::from(u32::MAX) + 1] {
+            assert!(checked_lcid(Some(lcid)).is_err(), "{lcid}");
+        }
+    }
+
+    #[test]
+    fn a_locale_from_the_editor_inside_the_lcid_range_is_kept() {
+        assert_eq!(checked_lcid(None), Ok(None));
+        for lcid in [1, 1031, 1053, 0x1_0407, 0xF_FFFF] {
+            assert_eq!(checked_lcid(Some(lcid)), Ok(Some(lcid as u32)), "{lcid}");
+        }
+    }
+
+    #[test]
     fn pdf_change_params_ask_for_the_changes_and_no_extra_files() {
         let extra = pdf_changes_params("/t/R&D/tmp");
         let xml = pdf_params_xml_with("/t/src.pdf", "/t/out.pdf", "/f", "/f/AllFonts.js", &extra);
@@ -1692,7 +2287,7 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         let mut result = None;
         let lines = logged(|log| {
             result = Some(convert_to_pdf(
-                &binaries, None, "/d/in.docx", "/d/out.pdf", &temp, &fontdata, log,
+                &binaries, None, "/d/in.docx", "/d/out.pdf", &temp, &fontdata, log, None,
             ));
         });
 
@@ -1718,7 +2313,7 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         let mut result = None;
         let lines = logged(|log| {
             result = Some(convert_to_pdf(
-                &binaries, None, "/d/in.docx", "/d/out.pdf", &temp, &fontdata, log,
+                &binaries, None, "/d/in.docx", "/d/out.pdf", &temp, &fontdata, log, None,
             ));
         });
 
@@ -1985,6 +2580,226 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    // Stands in for x2t: says it started, holds its run for `seconds`, then
+    // reads its work folder the way DoctRenderer does, relative to the folder
+    // it was started in, and writes the PDF only if the folder is still there.
+    #[cfg(target_os = "linux")]
+    fn fake_x2t(binaries: &std::path::Path, started: &std::path::Path, seconds: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!(
+            "#!/bin/sh\n\
+             touch '{}'\n\
+             sleep {}\n\
+             test -f DoctRenderer.config && test -f AllFonts.js || exit 1\n\
+             out=$(sed -n 's:.*<m_sFileTo>\\(.*\\)</m_sFileTo>.*:\\1:p' \"$1\")\n\
+             echo pdf > \"$out\"\n",
+            started.display(),
+            seconds
+        );
+        let x2t = binaries.join("x2t");
+        std::fs::write(&x2t, script).unwrap();
+        std::fs::set_permissions(&x2t, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wait_for(path: &std::path::Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !path.exists() {
+            assert!(std::time::Instant::now() < deadline, "{} never appeared", path.display());
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn pdf_in(
+        root: &std::path::Path,
+        binaries: &std::path::Path,
+        fontdata: &std::path::Path,
+        temp: &std::path::Path,
+        name: &str,
+    ) -> Result<String, String> {
+        let output = root.join(name);
+        convert_to_pdf(
+            binaries,
+            None,
+            "/d/in.docx",
+            &output.to_string_lossy(),
+            temp,
+            fontdata,
+            &|_: &str| {},
+            None,
+        )
+    }
+
+    // An export and a print at once in the same instance: the second run used
+    // to remove x2t-workdir while the first x2t was still reading from it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_second_pdf_run_leaves_the_work_dir_of_the_first_alone() {
+        let (root, binaries, fontdata) = installed_app("pdf-overlap");
+        let started = root.join("first-x2t-started");
+        fake_x2t(&binaries, &started, "1");
+        let temp = root.join("temp/1-1");
+
+        let first = {
+            let (root, binaries, fontdata, temp) =
+                (root.clone(), binaries.clone(), fontdata.clone(), temp.clone());
+            std::thread::spawn(move || pdf_in(&root, &binaries, &fontdata, &temp, "first.pdf"))
+        };
+        wait_for(&started);
+        let second = pdf_in(&root, &binaries, &fontdata, &temp, "second.pdf");
+        let first = first.join().unwrap();
+
+        assert_eq!(first, Ok("ok".to_string()), "the first x2t lost its work folder");
+        assert_eq!(second, Ok("ok".to_string()));
+        assert!(root.join("first.pdf").exists());
+        assert!(root.join("second.pdf").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn two_pdf_runs_in_a_row_both_write_their_pdf() {
+        let (root, binaries, fontdata) = installed_app("pdf-in-a-row");
+        fake_x2t(&binaries, &root.join("started"), "0");
+        let temp = root.join("temp/1-1");
+
+        let first = pdf_in(&root, &binaries, &fontdata, &temp, "first.pdf");
+        let second = pdf_in(&root, &binaries, &fontdata, &temp, "second.pdf");
+
+        assert_eq!(first, Ok("ok".to_string()));
+        assert_eq!(second, Ok("ok".to_string()));
+        assert!(root.join("first.pdf").exists());
+        assert!(root.join("second.pdf").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Stands in for an x2t that hangs: writes its pid, says it started and
+    // sleeps as that same process.
+    #[cfg(target_os = "linux")]
+    fn hung_x2t(binaries: &std::path::Path, started: &std::path::Path, pid: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!(
+            "#!/bin/sh\necho $$ > '{}'\ntouch '{}'\nexec sleep 600\n",
+            pid.display(),
+            started.display()
+        );
+        let x2t = binaries.join("x2t");
+        std::fs::write(&x2t, script).unwrap();
+        std::fs::set_permissions(&x2t, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // A hung PDF run used to keep x2t-workdir for good, so every later PDF of
+    // the instance gave up after WORK_DIR_WAIT. Now the hung x2t is killed at
+    // its limit and the next PDF, already waiting, goes ahead.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn after_a_hung_pdf_run_the_next_one_does_not_wait_for_the_work_dir() {
+        let (root, binaries, fontdata) = installed_app("pdf-hung");
+        let started = root.join("hung-x2t-started");
+        let pid_file = root.join("hung-x2t-pid");
+        hung_x2t(&binaries, &started, &pid_file);
+        let temp = root.join("temp/1-1");
+        let limit = std::time::Duration::from_secs(2);
+
+        let hung = {
+            let (root, binaries, fontdata, temp) =
+                (root.clone(), binaries.clone(), fontdata.clone(), temp.clone());
+            std::thread::spawn(move || {
+                run_x2t_to_pdf(
+                    &binaries,
+                    None,
+                    "/d/in.docx",
+                    &root.join("hung.pdf").to_string_lossy(),
+                    &temp,
+                    &fontdata,
+                    &|_: &str| {},
+                    "",
+                    limit,
+                )
+            })
+        };
+        wait_for(&started);
+        // The hung x2t already runs; the next run starts this one.
+        let quick = root.join("quick");
+        std::fs::create_dir_all(&quick).unwrap();
+        fake_x2t(&quick, &root.join("next-x2t-started"), "0");
+        std::fs::rename(quick.join("x2t"), binaries.join("x2t")).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        {
+            let (root, binaries, fontdata, temp) =
+                (root.clone(), binaries.clone(), fontdata.clone(), temp.clone());
+            std::thread::spawn(move || {
+                let _ = sender.send(pdf_in(&root, &binaries, &fontdata, &temp, "next.pdf"));
+            });
+        }
+        let next = receiver
+            .recv_timeout(limit + std::time::Duration::from_secs(20))
+            .expect("the next PDF still waits for the work folder");
+        let hung = hung.join().unwrap();
+
+        assert_eq!(hung, Err("x2t timed out after 2 s".to_string()));
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        assert!(!is_running(pid.trim()), "the hung x2t is still running");
+        assert_eq!(next, Ok("ok".to_string()));
+        assert!(root.join("next.pdf").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // PDF runs leave one work folder in the instance, x2t-workdir, which the
+    // document cleanup keeps and the end of the instance removes with the rest
+    // (temp_layout: ending_an_instance_removes_its_folder). A plain folder
+    // stands in for the instance: the corpus builds this file without
+    // temp_layout.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pdf_runs_leave_one_work_folder_in_the_instance() {
+        let (root, binaries, fontdata) = installed_app("pdf-instance-end");
+        fake_x2t(&binaries, &root.join("started"), "0");
+        let instance_dir = root.join("temp").join("instance");
+        std::fs::create_dir_all(&instance_dir).unwrap();
+
+        pdf_in(&root, &binaries, &fontdata, &instance_dir, "first.pdf").unwrap();
+        pdf_in(&root, &binaries, &fontdata, &instance_dir, "second.pdf").unwrap();
+
+        let work_folders = |dir: &std::path::Path| -> Vec<String> {
+            std::fs::read_dir(dir)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                        .filter(|name| name.starts_with("x2t-workdir"))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(work_folders(&instance_dir), vec!["x2t-workdir".to_string()]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // A hung x2t keeps the folder: the next run in that instance gives up after
+    // the wait, and a run in another instance does not wait at all.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_held_work_dir_makes_the_next_run_give_up_after_the_wait() {
+        let root = scratch_dir("work-dir-hold");
+        let instance = root.join("1-1");
+        let other = root.join("2-2");
+        let wait = std::time::Duration::from_millis(200);
+
+        let held = hold_work_dir(&instance, wait).unwrap();
+        let started = std::time::Instant::now();
+        let error = hold_work_dir(&instance, wait).err().expect("the folder is held");
+
+        assert!(started.elapsed() >= wait);
+        assert!(error.contains("still in use"), "{}", error);
+        assert!(hold_work_dir(&other, wait).is_ok(), "another instance does not wait");
+        drop(held);
+        assert!(hold_work_dir(&instance, wait).is_ok(), "the end of the run frees it");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(target_os = "windows")]
     #[test]
     fn plain_paths_give_the_same_convert_params_as_before() {
         let xml = convert_params_xml(
@@ -2010,6 +2825,21 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 </options>\n\
 </TaskQueueDataConvert>"
         );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn convert_params_keep_a_backslash_that_is_part_of_a_name() {
+        let xml = convert_params_xml(
+            "/home/u/a\\b.docx",
+            "/tmp/eo\\1/Editor.bin",
+            8192,
+            "/tmp/eo\\1",
+            "",
+        );
+        assert!(xml.contains("<m_sFileFrom>/home/u/a\\b.docx</m_sFileFrom>"), "{}", xml);
+        assert!(xml.contains("<m_sFileTo>/tmp/eo\\1/Editor.bin</m_sFileTo>"), "{}", xml);
+        assert!(xml.contains("<m_sTempDir>/tmp/eo\\1</m_sTempDir>"), "{}", xml);
     }
 
     #[test]
@@ -2138,13 +2968,53 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 
     const HTML_HEAD: &[u8] = b"<html><body>";
     const OOXML_EXTENSIONS: &[&str] = &[
-        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx",
-        "potm", "ppsx", "ppsm",
+        "docx", "docm", "dotx", "dotm", "xlsx", "xlsm", "xltx", "xltm", "pptx", "pptm", "potx", "potm",
+        "ppsx", "ppsm",
     ];
     const ODF_EXTENSIONS: &[&str] = &["odt", "ods", "odp", "ott", "ots", "otp"];
 
-    fn matches(name: &str, head: &[u8]) -> bool {
-        content_matches_extension(std::path::Path::new(name), head)
+    fn matches(name: &str, bytes: &[u8]) -> bool {
+        content_matches_extension(std::path::Path::new(name), &ContentSample::of(bytes))
+    }
+
+    // The smallest end of a central directory: an empty ZIP.
+    const EMPTY_ZIP: &[u8] = b"PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+
+    fn followed_by(first: &[u8], then: &[u8]) -> Vec<u8> {
+        let mut bytes = first.to_vec();
+        bytes.extend_from_slice(then);
+        bytes
+    }
+
+    #[test]
+    fn an_rtf_or_a_flat_odf_with_a_zip_after_it_is_refused() {
+        let rtf = b"{\\rtf1\\ansi Some text\\par}".as_slice();
+        let fodt = b"<?xml version=\"1.0\"?><office:document office:version=\"1.3\"/>".as_slice();
+        let zip64_locator = b"PK\x06\x07\0\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0".as_slice();
+        for (name, start) in [("/d/a.rtf", rtf), ("/d/a.doc", rtf), ("/d/a.fodt", fodt)] {
+            assert!(matches(name, start), "{name}");
+            assert!(!matches(name, &followed_by(start, EMPTY_ZIP)), "{name}");
+            assert!(!matches(name, &followed_by(start, zip64_locator)), "{name}");
+        }
+        assert!(!matches("/d/a.txt", &followed_by(b"text", EMPTY_ZIP)));
+    }
+
+    #[test]
+    fn a_zip_end_further_back_than_minizip_looks_is_not_a_zip() {
+        let rtf = followed_by(b"{\\rtf1\\ansi ", EMPTY_ZIP);
+        let mut far = rtf.clone();
+        far.extend(std::iter::repeat(b' ').take(ZIP_END_SEARCH_LEN));
+        assert!(matches("/d/a.rtf", &far));
+        let mut near = rtf;
+        near.extend(std::iter::repeat(b' ').take(0xFFFF - EMPTY_ZIP.len()));
+        assert!(!matches("/d/a.rtf", &near));
+    }
+
+    #[test]
+    fn a_cfb_with_a_zip_inside_is_still_accepted() {
+        let doc = followed_by(WORD97_DOC, EMPTY_ZIP);
+        assert!(matches("/d/a.doc", &doc));
+        assert!(matches("/d/a.docx", &followed_by(CFB_SIGNATURE, EMPTY_ZIP)));
     }
 
     #[test]
@@ -2179,9 +3049,71 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
-    fn text_formats_are_left_to_x2t() {
-        for name in ["/d/a.rtf", "/d/a.txt", "/d/a.csv", "/d/a"] {
-            assert!(matches(name, HTML_HEAD), "{name}");
+    fn txt_and_csv_take_any_text() {
+        for name in ["/d/a.txt", "/d/a.CSV"] {
+            assert!(matches(name, b"a,b\n1,2\n"), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_extension_outside_the_list_is_refused() {
+        let contents: [&[u8]; 4] = [b"PK\x03\x04rest", CFB_SIGNATURE, b"just some text\n", b"<?xml version=\"1.0\"?><a/>"];
+        for name in ["/d/a.xml", "/d/a.html", "/d/a.mht", "/d/a.xlam", "/d/a.ppam", "/d/a.pdf", "/d/a"] {
+            assert!(!is_converted_extension(std::path::Path::new(name)), "{name}");
+            for content in contents {
+                assert!(!matches(name, content), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn xltm_potm_and_ppsm_are_converted_like_the_others_of_their_family() {
+        for ext in ["xltm", "potm", "ppsm", "XLTM"] {
+            let name = format!("/d/a.{ext}");
+            assert!(is_converted_extension(std::path::Path::new(&name)), "{ext}");
+            assert!(matches(&name, b"PK\x03\x04rest"), "{ext}");
+            assert!(matches(&name, CFB_SIGNATURE), "{ext}");
+            assert!(!matches(&name, b"just some text\n"), "{ext}");
+        }
+    }
+
+    // One content each listed extension takes, so none falls to the refusal.
+    #[test]
+    fn every_listed_extension_has_a_content_it_takes() {
+        let contents: [&[u8]; 6] = [
+            b"PK\x03\x04rest",
+            CFB_SIGNATURE,
+            b"{\\rtf1\\ansi",
+            b"<?xml version=\"1.0\"?><office:document>",
+            EXCEL_2003_XML_HEAD,
+            b"just some text\n",
+        ];
+        for ext in CONVERTED_EXTENSIONS {
+            let name = format!("/d/a.{ext}");
+            assert!(is_converted_extension(std::path::Path::new(&name)), "{ext}");
+            assert!(contents.iter().any(|content| matches(&name, content)), "{ext}");
+        }
+    }
+
+    #[test]
+    fn an_rtf_must_start_like_one() {
+        let heads: [&[u8]; 4] = [HTML_HEAD, b"just some text\n", b"", b"<!DOCTYPE html><html>"];
+        for head in heads {
+            assert!(!matches("/d/a.rtf", head), "{}", String::from_utf8_lossy(head));
+            assert!(!matches("/d/A.RTF", head), "{}", String::from_utf8_lossy(head));
+        }
+    }
+
+    #[test]
+    fn an_rtf_is_accepted_with_or_without_a_bom_and_blank_space() {
+        let heads: [&[u8]; 4] = [
+            b"{\\rtf1\\ansi\\deff0",
+            b"\xEF\xBB\xBF{\\rtf1\\ansi",
+            b"\xEF\xBB\xBF\r\n {\\rtf1\\ansi",
+            b"\r\n{\\rtf1\\ansi",
+        ];
+        for head in heads {
+            assert!(matches("/d/a.rtf", head), "{}", String::from_utf8_lossy(head));
         }
     }
 
@@ -2266,6 +3198,105 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert!(!matches("/d/a.xls", other_xml));
     }
 
+    const FLAT_OPC: &str = "<?xml version=\"1.0\" standalone=\"yes\"?>\r\n\
+<?mso-application progid=\"Excel.Sheet\"?>\r\n\
+<pkg:package xmlns:pkg=\"http://schemas.microsoft.com/office/2006/xmlPackage\">\
+<pkg:part pkg:name=\"/xl/workbook.xml\"/></pkg:package>";
+
+    #[test]
+    fn a_flat_opc_package_is_refused_under_any_extension() {
+        for name in ["/d/a.xls", "/d/a.xml", "/d/a.fods", "/d/a.txt", "/d/a.rtf"] {
+            assert!(!matches(name, FLAT_OPC.as_bytes()), "{name}");
+        }
+        let word = FLAT_OPC.replace("Excel.Sheet", "Word.Document");
+        assert!(!matches("/d/a.doc", word.as_bytes()));
+        assert_eq!(x2t_flat_ooxml(FLAT_OPC.as_bytes()), Some(FlatOoxml::Package));
+    }
+
+    #[test]
+    fn the_flat_opc_strings_are_found_past_the_first_256_bytes() {
+        let padding = " ".repeat(3000);
+        let rtf = format!("{{\\rtf1\\ansi{padding} {}", FLAT_OPC.replace("Excel.Sheet", "PowerPoint.Show"));
+        assert!(!matches("/d/a.rtf", rtf.as_bytes()));
+        let fodt = format!("<?xml version=\"1.0\"?><office:document>{padding}<!-- {EXCEL_2003_LINE_TEXT} -->");
+        assert!(!matches("/d/a.fodt", fodt.as_bytes()));
+    }
+
+    const EXCEL_2003_LINE_TEXT: &str = "xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\"";
+
+    #[test]
+    fn a_flat_opc_package_is_found_in_utf16_too() {
+        let utf16: Vec<u8> = "\u{FEFF}".chars().chain(FLAT_OPC.chars())
+            .flat_map(|c| (c as u16).to_le_bytes())
+            .collect();
+        assert_eq!(x2t_flat_ooxml(&utf16), Some(FlatOoxml::Package));
+    }
+
+    #[test]
+    fn a_spreadsheet_ml_marker_in_a_comment_of_another_root_is_refused() {
+        let commented = b"<?xml version=\"1.0\"?>\n\
+<!-- <Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\"> progid=\"Excel.Sheet\" -->\n\
+<root><item/></root>";
+        assert!(!matches("/d/a.xls", commented));
+        let instruction_then_other_root = b"<?xml version=\"1.0\"?><?mso-application progid=\"Excel.Sheet\"?><Book/>";
+        assert!(!matches("/d/a.xls", instruction_then_other_root));
+        let commented_then_workbook = b"<?xml version=\"1.0\"?><!-- note --><?mso-application progid=\"Excel.Sheet\"?>\n<Workbook>";
+        assert!(matches("/d/a.xls", commented_then_workbook));
+    }
+
+    #[test]
+    fn a_flat_odf_or_an_rtf_x2t_takes_for_html_is_refused() {
+        let fodt = b"<?xml version=\"1.0\"?><office:document xmlns:h=\"html\"><x/></office:document><!-- </html> -->";
+        let rtf = b"{\\rtf1\\ansi <html><body>Some text</body></html>}";
+        assert!(!matches("/d/a.fodt", fodt));
+        assert!(!matches("/d/a.rtf", rtf));
+        assert!(!matches("/d/a.doc", rtf));
+        assert!(!matches("/d/a.txt", rtf));
+    }
+
+    #[test]
+    fn html_is_only_what_x2t_takes_for_it() {
+        let late_tag = format!("{{\\rtf1\\ansi{}<html></html>}}", " ".repeat(100));
+        assert!(matches("/d/a.rtf", late_tag.as_bytes()), "the tag is past the first 100 bytes");
+        let unclosed = format!("{{\\rtf1 <HTML>{}}}", " ".repeat(5000));
+        assert!(matches("/d/a.rtf", unclosed.as_bytes()), "no closing tag in the last bytes");
+        let closed = format!("{}</Html>", unclosed);
+        assert!(!matches("/d/a.rtf", closed.as_bytes()));
+        let closed_far_back = format!("{{\\rtf1 <HTML></HTML>{}}}", " ".repeat(5000));
+        assert!(matches("/d/a.rtf", closed_far_back.as_bytes()), "the closing tag is before the last 4096 bytes");
+    }
+
+    #[test]
+    fn mht_headers_are_refused() {
+        let headers = "Content-Type: multipart/related; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/html\r\n";
+        let rtf = format!("{{\\rtf1\\ansi {headers}}}");
+        let fodt = format!("<?xml version=\"1.0\"?><office:document><!-- {headers} -->");
+        assert!(!matches("/d/a.rtf", rtf.as_bytes()));
+        assert!(!matches("/d/a.fodt", fodt.as_bytes()));
+        let one_header = format!("{{\\rtf1\\ansi Content-Type: text/html}}");
+        assert!(matches("/d/a.rtf", one_header.as_bytes()));
+    }
+
+    // The root LibreOffice writes: xmlns:xhtml is one of many namespaces, well
+    // past the first 100 bytes x2t looks for an html tag in.
+    const FLAT_ODF_WITH_XHTML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n\
+<office:document xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
+xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" \
+xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" \
+xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+xmlns:xhtml=\"http://www.w3.org/1999/xhtml\" xmlns:grddl=\"http://www.w3.org/2003/g/data-view#\" \
+office:version=\"1.3\" office:mimetype=\"application/vnd.oasis.opendocument.text\">\n\
+<office:body><office:text><text:p xhtml:about=\"#p1\">Text</text:p></office:text></office:body>\n\
+</office:document>\n";
+
+    #[test]
+    fn a_flat_odf_whose_root_declares_xhtml_is_accepted() {
+        assert!(!html_start(FLAT_ODF_WITH_XHTML.as_bytes()));
+        for name in ["/d/a.fodt", "/d/a.fods", "/d/a.fodp"] {
+            assert!(matches(name, FLAT_ODF_WITH_XHTML.as_bytes()), "{name}");
+        }
+    }
+
     #[test]
     fn spreadsheet_ml_markers_without_an_xml_declaration_are_rejected() {
         let html = b"<html><body>urn:schemas-microsoft-com:office:spreadsheet</body></html>";
@@ -2284,21 +3315,63 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert!(!matches("/d/a.xlsb", b"just some text\n"));
     }
 
+    const FLAT_ODF_EXTENSIONS: [&str; 4] = ["fodt", "fods", "fodp", "FODT"];
+    const ROOT_ELEMENT: &str = "<office:document xmlns:office=\"urn:x\" office:version=\"1.3\">";
+
     #[test]
-    fn flat_odf_extensions_need_an_xml_declaration() {
-        let with_bom = b"\xEF\xBB\xBF<?xml version=\"1.0\"?>";
-        let with_space = b" \r\n\t<?xml version=\"1.0\"?>";
-        let with_bom_and_space = b"\xEF\xBB\xBF\n<?xml version=\"1.0\"?>";
-        for ext in ["fodt", "fods", "fodp", "FODT"] {
+    fn flat_odf_extensions_accept_an_office_document_root() {
+        let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+        let accepted = [
+            format!("{declaration}{ROOT_ELEMENT}"),
+            format!("{declaration}\n{ROOT_ELEMENT}"),
+            format!("{declaration}\n\n{ROOT_ELEMENT}"),
+            format!("\u{FEFF}{declaration}\n{ROOT_ELEMENT}"),
+            format!(" \r\n\t{declaration}\r\n{ROOT_ELEMENT}"),
+            format!("{declaration}<office:document/>"),
+            format!("{declaration}<office:document>"),
+        ];
+        for ext in FLAT_ODF_EXTENSIONS {
             let name = format!("/d/a.{ext}");
-            assert!(matches(&name, b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>"), "{ext}");
-            assert!(matches(&name, with_bom), "{ext}");
-            assert!(matches(&name, with_space), "{ext}");
-            assert!(matches(&name, with_bom_and_space), "{ext}");
-            assert!(!matches(&name, b"just some text\n"), "{ext}");
-            assert!(!matches(&name, b"PK\x03\x04rest"), "{ext}");
-            assert!(!matches(&name, b"\xEF\xBB\xBF"), "{ext}");
-            assert!(!matches(&name, b""), "{ext}");
+            for head in &accepted {
+                assert!(matches(&name, head.as_bytes()), "{ext}: {head}");
+            }
+        }
+    }
+
+    #[test]
+    fn flat_odf_extensions_refuse_anything_else() {
+        let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+        let refused = [
+            declaration.to_string(),
+            format!("{declaration}\n"),
+            format!("{declaration}<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>"),
+            format!("{declaration}<!-- padding --><office:document>"),
+            format!("{declaration}<!DOCTYPE html><office:document>"),
+            format!("{declaration}<office:document-content>"),
+            format!("{declaration}<other:document>"),
+            "<?xml version=\"1.0\" <office:document>".to_string(),
+            "just some text\n".to_string(),
+            "PK\u{3}\u{4}rest".to_string(),
+            "\u{FEFF}".to_string(),
+            String::new(),
+        ];
+        for ext in FLAT_ODF_EXTENSIONS {
+            let name = format!("/d/a.{ext}");
+            for head in &refused {
+                assert!(!matches(&name, head.as_bytes()), "{ext}: {head}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_flat_odf_documents_of_the_corpus_are_accepted() {
+        let documents: [(&str, &[u8]); 3] = [
+            ("/d/a.fodt", include_bytes!("../../tests/corpus/src/basic.fodt")),
+            ("/d/a.fods", include_bytes!("../../tests/corpus/src/basic.fods")),
+            ("/d/a.fodp", include_bytes!("../../tests/corpus/src/basic.fodp")),
+        ];
+        for (name, bytes) in documents {
+            assert!(matches(name, bytes), "{name}");
         }
     }
 
@@ -2347,6 +3420,18 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         for (ext, code) in cases {
             let path = std::path::PathBuf::from(format!("/tmp/a.{}", ext));
             assert_eq!(detect_format(&path), code, "{}", ext);
+        }
+    }
+
+    // AVS_OFFICESTUDIO_FILE_SPREADSHEET_XLTM, _PRESENTATION_POTM and
+    // _PRESENTATION_PPSM (core/Common/OfficeFileFormats.h at v10.0.0.169).
+    #[test]
+    fn detect_format_knows_the_macro_templates_and_shows_opened_another_way() {
+        let cases = [("xltm", 263), ("potm", 136), ("ppsm", 134)];
+        for (ext, code) in cases {
+            for name in [format!("/tmp/a.{}", ext), format!("/tmp/A.{}", ext.to_uppercase())] {
+                assert_eq!(detect_format(std::path::Path::new(&name)), code, "{}", name);
+            }
         }
     }
 

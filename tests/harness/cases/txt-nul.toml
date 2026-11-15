@@ -1,0 +1,13 @@
+# A TXT of plain text followed by one NUL byte, a known edge case of the text
+# import: it is read as UTF-16 and shows meaningless text. Ctrl+S without an
+# edit writes nothing, since the document has no changes, so the file keeps
+# its 12 bytes: save-not-written.
+# Current behaviour, known issue: a NUL after plain text is not refused.
+description = "TXT 'hello world' plus a NUL: opens as UTF-16 text, and Ctrl+S without edits writes nothing"
+generate = "mktxt.py nul-after-text"
+input = "text-with-nul.txt"
+input_sha256 = "430646847e70344c09f58739e99d5bc96eac8d5fe7295cf196b986279876bf9b"
+action = "open-save"
+check = "same-text"
+expect = "save-not-written"
+screenshot = "on-failure"

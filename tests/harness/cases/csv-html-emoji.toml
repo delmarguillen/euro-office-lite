@@ -1,0 +1,17 @@
+# A CSV whose first cell is <html> and that has an emoji. It must open as a
+# sheet, not as an HTML document: the case appends Z to the last cell (F2
+# edits it in place) and the save must be the input with that Z, which only a
+# sheet with the two rows and two columns of the file writes.
+description = "CSV starting with <html> and holding an emoji: opens as a sheet, and Ctrl+S after adding Z to the last cell keeps every byte"
+generate = "mktxt.py csv-html-emoji"
+input = "html-emoji.csv"
+input_sha256 = "33f37bcd4b14ab9a07ca961786cc776944e80e75bcc049e5158e12109670648a"
+action = "open-edit-save"
+keys_before = "ctrl+End F2 End"
+type = "Z"
+keys_after = "Return"
+check = "expected-bytes"
+expected_generate = "mktxt.py csv-html-emoji z"
+expected_sha256 = "fc3bba9db28daee2ab080b2a935d413366243f8d7071b6b0bc0f5049b70dd460"
+expect = "saved-as-expected"
+screenshot = "on-failure"
