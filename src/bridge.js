@@ -1453,6 +1453,24 @@ function _eoMarkSavedChanges() {
   _eoUnsavedChanges = false;
 }
 
+// The backend decides from set_document_modified whether an exit asks and
+// keeps the recovery folder, and the false sdkjs sends as a save begins reaches
+// it too. While a save of unsaved changes runs, set_save_pending keeps the
+// backend counting them as unsaved; a backend save that writes the document
+// clears it there as well.
+function _eoBeginSave() {
+  if (!_eoUnsavedChanges) return false;
+  invoke('set_save_pending', { pending: true }).catch(function(){});
+  return true;
+}
+
+// Called after the save's outcome is applied: a failure has already put the
+// modified flag back (_eoRestoreModified), so the backend never sees both off.
+function _eoEndSave(begun) {
+  if (!begun) return;
+  invoke('set_save_pending', { pending: false }).catch(function(){});
+}
+
 // Puts the modified mark back, in the JS and in Rust, when something that
 // wrote no copy of the document over it reported it as saved.
 function _eoRestoreModified(wasModified) {
@@ -2964,8 +2982,17 @@ window.AscDesktopEditor = {
   },
 
   LocalFileSave: async function(param, password, docinfo, fileType, jsonOptions) {
-    var isSaveAs = param && param.indexOf('saveas=true') !== -1;
     if (window.AscDesktopEditor._isPrinting) return;
+    var begun = _eoBeginSave();
+    try {
+      await window.AscDesktopEditor._saveDocument(param, password, docinfo, fileType, jsonOptions);
+    } finally {
+      _eoEndSave(begun);
+    }
+  },
+
+  _saveDocument: async function(param, password, docinfo, fileType, jsonOptions) {
+    var isSaveAs = param && param.indexOf('saveas=true') !== -1;
 
     var docType = window.AscDesktopEditor._currentDocType || 'word';
     window._eoLog('[SAVE] docType=' + docType + ' saveAs=' + !!isSaveAs + ' fileType=' + fileType);
@@ -3350,6 +3377,8 @@ window.AscDesktopEditor = {
     var ref = _getEditor();
     if (!ref.editor) return;
 
+    // sdkjs reports a print as a save (EndSave), so it is one for the backend.
+    var begun = _eoBeginSave();
     try {
       window.AscDesktopEditor._isPrinting = true;
       var wasModified = _eoUnsavedChanges;
@@ -3388,6 +3417,7 @@ window.AscDesktopEditor = {
       }
     } finally {
       window.AscDesktopEditor._isPrinting = false;
+      _eoEndSave(begun);
     }
   },
   IsSupportNativePrint: () => true,
