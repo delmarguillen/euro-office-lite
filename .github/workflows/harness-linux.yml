@@ -1,0 +1,101 @@
+name: Harness (Linux)
+
+# Installs the .deb of a "Linux Dev Build" run on a clean runner and runs every
+# case of tests/harness against it under Xvfb and openbox. The job is red when
+# a case is not ok (run.sh exits 1) or the harness could not run (exit 2).
+#
+# result.json is uploaded on every run; the package install log, the app logs
+# and the screenshots only when the job fails.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Linux Dev Build run id to take deb-x86_64-unknown-linux-gnu from"
+        required: true
+        type: string
+
+  # After every Linux Dev Build; the job skips builds that did not succeed.
+  # workflow_run only fires for the workflow file on the default branch, and
+  # the checkout is then the default branch: its cases judge the build,
+  # whatever branch the build came from.
+  workflow_run:
+    workflows: ["Linux Dev Build"]
+    types: [completed]
+
+permissions:
+  contents: read
+  # Downloading an artifact of another run goes through the Actions API.
+  actions: read
+
+concurrency:
+  # On workflow_run github.ref is the default branch; the branch that was
+  # built is head_branch.
+  group: harness-linux-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness-linux:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # The runner image the x86_64 .deb is built on.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # The job runs a package built from another branch: leave no token
+          # in .git/config.
+          persist-credentials: false
+
+      - name: Download the .deb from the build run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: deb-x86_64-unknown-linux-gnu
+          path: deb/
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install harness dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb openbox xdotool wmctrl x11-utils imagemagick unzip python3 dbus
+
+      - name: Run the harness
+        # Below the job timeout, so the upload steps still run.
+        timeout-minutes: 35
+        run: |
+          DEB=$(find deb -maxdepth 2 -name '*.deb' -print -quit)
+          if [ -z "$DEB" ]; then
+            echo "ERROR: the downloaded artifact has no .deb"
+            ls -laR deb
+            exit 1
+          fi
+          echo "::group::Package under test"
+          dpkg-deb -f "$DEB" Package Version Architecture
+          echo "::endgroup::"
+          bash tests/harness/run.sh all --deb "$DEB" --out "$RUNNER_TEMP/harness"
+
+      - name: Upload result.json
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: harness-linux-result-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/harness/result.json
+          # There is none when the harness could not run (exit 2).
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload logs and screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: harness-linux-diagnostics-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/harness/apt.log
+            ${{ runner.temp }}/harness/*/app.log
+            ${{ runner.temp }}/harness/*/screen.png
+          if-no-files-found: warn
+          retention-days: 7

@@ -39,6 +39,26 @@ The binary has no commit id in it, so `status.sh` tells builds apart by the
 sha256 of `/usr/bin/euro-office-lite`, compared with the one inside each
 `.deb` it is given. A Dev Build and a release can share a version string.
 
+## Running in CI
+
+`.github/workflows/harness-linux.yml` ("Harness (Linux)") runs `run.sh all` on
+a clean `ubuntu-22.04` runner against the `.deb` of a "Linux Dev Build" run
+(its artifact `deb-x86_64-unknown-linux-gnu`). It starts:
+
+- by hand, with the id of that build run in the `run_id` input;
+- on its own after every Linux Dev Build that succeeds. The cases are then
+  those of the default branch, whatever branch was built.
+
+The job fails when run.sh exits 1 or 2. Every run has `result.json` in the
+artifact `harness-linux-result-<attempt>`, unless the harness could not run.
+A failed job also has `harness-linux-diagnostics-<attempt>`: `apt.log` and,
+per case, `app.log` and `screen.png`.
+
+The workflow needs nothing from a test machine: it installs the package with
+`--deb` (the runner has `sudo` without a password), writes to a folder under
+`$RUNNER_TEMP` with `--out`, and skips backup.sh and restore.sh because the
+runner starts with no user state and is discarded after the job.
+
 ## Case files
 
 `cases/NAME.toml`, one `key = "value"` (or `key = 'value'`, taken
