@@ -555,6 +555,30 @@ fn decode_utf8_strict(bytes: &[u8]) -> std::io::Result<String> {
     })
 }
 
+// x2t 10.0.0.169 on Linux reads no text at all from a UTF-32 TXT that holds a
+// character outside the BMP (an emoji, CJK extension B), and reads each of its
+// UTF-16 surrogates as U+FFFD when they come as two 32-bit units. Saving what it
+// read would replace the file, so such a TXT is not opened. A CSV with the same
+// characters reads whole from UTF-32.
+#[derive(Debug)]
+pub struct TxtOutsideTheBmp;
+
+impl std::fmt::Display for TxtOutsideTheBmp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a TXT with a character outside the BMP")
+    }
+}
+
+impl std::error::Error for TxtOutsideTheBmp {}
+
+pub fn is_txt_outside_the_bmp(error: &std::io::Error) -> bool {
+    error.get_ref().is_some_and(|inner| inner.is::<TxtOutsideTheBmp>())
+}
+
+fn has_characters_outside_the_bmp(text: &str) -> bool {
+    text.chars().any(|c| c > '\u{FFFF}')
+}
+
 fn write_utf32_text(copy: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut out = std::io::BufWriter::new(std::fs::File::create(copy)?);
@@ -607,6 +631,9 @@ pub fn prepare_read_copy(
     let decoded = decode_text(&bytes[..bytes.len() - cut], options.encoding)?;
     // A leading U+FEFF would make the copy start like a UTF-16 BOM (FF FE).
     let text = decoded.trim_start_matches('\u{FEFF}');
+    if kind == TextKind::Txt && has_characters_outside_the_bmp(text) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, TxtOutsideTheBmp));
+    }
     let copy = read_copy_path(temp_dir, kind);
 
     // x2t refuses an empty TXT (exit 88) but opens a lone UTF-8 BOM as an empty
@@ -1333,10 +1360,80 @@ mod tests {
     }
 
     #[test]
-    fn a_txt_keeps_its_line_endings_and_characters_outside_the_bmp() {
-        let text = "a\r\n\u{436} \u{4E2D} \u{1F600}\rb\n\n";
+    fn a_txt_keeps_its_line_endings_and_characters() {
+        let text = "a\r\n\u{436} \u{4E2D} \u{FFFD}\rb\n\n";
         assert_eq!(copy_bytes("wide.txt", &utf16be_with_bom(text)), utf32le(text));
         assert_eq!(copy_bytes("utf8.txt", text.as_bytes()), utf32le(text));
+    }
+
+    #[test]
+    fn a_txt_within_the_bmp_is_read_whole_from_utf32() {
+        let text = "caf\u{E9} \u{4E2D}\u{FFFD}\n";
+        let expected: [u8; 28] = [
+            0x63, 0, 0, 0, 0x61, 0, 0, 0, 0x66, 0, 0, 0, 0xE9, 0, 0, 0, 0x20, 0, 0, 0,
+            0x2D, 0x4E, 0, 0, 0xFD, 0xFF, 0, 0,
+        ];
+        let expected = [&expected[..], &[0x0A, 0, 0, 0]].concat();
+        assert_eq!(copy_bytes("bmp.txt", text.as_bytes()), expected);
+        assert_eq!(copy_bytes("bmp16.txt", &utf16le_with_bom(text)), expected);
+    }
+
+    // The error prepare_read_copy gives for a TXT, and how many files it left
+    // in the temp dir.
+    fn refused_txt(name: &str, bytes: &[u8]) -> (std::io::Error, usize) {
+        let (dir, temp) = read_copy_dirs(name);
+        let source = dir.join(name);
+        std::fs::write(&source, bytes).unwrap();
+        let error = try_prepared(&source, &temp).expect_err(name);
+        let left = std::fs::read_dir(&temp).unwrap().count();
+        let _ = std::fs::remove_dir_all(&dir);
+        (error, left)
+    }
+
+    fn assert_refused_in_every_encoding(text: &str) {
+        let encodings = [
+            ("utf8.txt", text.as_bytes().to_vec()),
+            ("le.txt", utf16le_with_bom(text)),
+            ("be.txt", utf16be_with_bom(text)),
+        ];
+        for (name, bytes) in encodings {
+            let (error, left) = refused_txt(name, &bytes);
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData, "{} {:?}", name, text);
+            assert_eq!(left, 0, "no copy for x2t: {} {:?}", name, text);
+        }
+    }
+
+    #[test]
+    fn a_txt_with_an_emoji_is_not_opened_because_x2t_would_read_no_text() {
+        let texts = ["x\na \u{1F600} b\ny\n", "\u{1F600} first\nline\n", "x\r\na \u{1F600} b\r\n"];
+        for text in texts {
+            assert_refused_in_every_encoding(text);
+        }
+    }
+
+    #[test]
+    fn a_txt_with_cjk_extension_b_is_not_opened_because_x2t_would_read_no_text() {
+        assert_refused_in_every_encoding("\u{20000}\n");
+        assert_refused_in_every_encoding("\u{20000} \u{1D11E} \u{1F600} \u{1F389} \u{10348}\r\nnext\r\n");
+    }
+
+    #[test]
+    fn a_txt_with_an_emoji_past_the_detected_head_is_not_opened() {
+        let line = "The quick brown fox jumps over the lazy dog.\n";
+        let text = format!("{}end \u{1F600}\n", line.repeat(HEAD_LEN / line.len() + 1));
+        let (error, left) = refused_txt("long.txt", text.as_bytes());
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn a_csv_with_characters_outside_the_bmp_is_read_whole_from_utf32() {
+        let expected: [u8; 24] = [
+            0x61, 0, 0, 0, 0x2C, 0, 0, 0, 0x00, 0xF6, 0x01, 0x00, 0x0A, 0, 0, 0,
+            0x00, 0x00, 0x02, 0x00, 0x2C, 0, 0, 0,
+        ];
+        let expected = [&expected[..], &[0x31, 0, 0, 0]].concat();
+        assert_eq!(copy_bytes("emoji.csv", "a,\u{1F600}\n\u{20000},1\n".as_bytes()), expected);
     }
 
     #[test]
