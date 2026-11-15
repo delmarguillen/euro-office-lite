@@ -399,6 +399,33 @@ fn pdf_params_xml_with(
     )
 }
 
+// The LCIDs accepted for a spreadsheet's PDF: a language ID in the low 16 bits
+// and a sort ID in the next 4, the most a Windows LCID holds (MAKELCID).
+const LCID_RANGE: std::ops::RangeInclusive<i64> = 1..=0xF_FFFF;
+
+// The locale chosen in the spreadsheet editor, as the bridge sends it. A value
+// outside LCID_RANGE is refused.
+pub fn checked_lcid(lcid: Option<i64>) -> Result<Option<u32>, String> {
+    let Some(lcid) = lcid else {
+        return Ok(None);
+    };
+    if !LCID_RANGE.contains(&lcid) {
+        return Err(format!("Invalid locale id: {}", lcid));
+    }
+    Ok(Some(lcid as u32))
+}
+
+// Without m_nLcid x2t formats a spreadsheet's numbers and dates for en-US.
+fn locale_params(lcid: Option<u32>) -> String {
+    match lcid {
+        Some(lcid) => format!("<m_nLcid>{}</m_nLcid>\n", lcid),
+        None => String::new(),
+    }
+}
+
+// `lcid` is the locale chosen in the spreadsheet editor; None for the other
+// editors.
+#[allow(clippy::too_many_arguments)]
 pub fn convert_to_pdf(
     binaries_dir: &std::path::Path,
     exe_dir: Option<&std::path::Path>,
@@ -407,8 +434,10 @@ pub fn convert_to_pdf(
     temp_dir: &std::path::Path,
     fontdata_dir: &std::path::Path,
     log: &dyn Fn(&str),
+    lcid: Option<u32>,
 ) -> Result<String, String> {
-    run_x2t_to_pdf(binaries_dir, exe_dir, input, output, temp_dir, fontdata_dir, log, "")
+    let extra = locale_params(lcid);
+    run_x2t_to_pdf(binaries_dir, exe_dir, input, output, temp_dir, fontdata_dir, log, &extra)
 }
 
 // Writes `source_pdf` with the editor's changes applied to `output`. The
@@ -1901,6 +1930,34 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
     }
 
     #[test]
+    fn a_spreadsheet_pdf_uses_the_locale_chosen_in_the_editor() {
+        let xml = pdf_params_xml_with("/d/in.bin", "/d/out.pdf", "/f", "/f/AllFonts.js", &locale_params(Some(1053)));
+        assert!(xml.contains("<m_nLcid>1053</m_nLcid>\n"), "{}", xml);
+    }
+
+    #[test]
+    fn a_pdf_without_a_locale_from_the_editor_has_no_lcid() {
+        let without = pdf_params_xml_with("/d/in.bin", "/d/out.pdf", "/f", "/f/AllFonts.js", &locale_params(None));
+        assert!(!without.contains("m_nLcid"), "{}", without);
+        assert_eq!(without, pdf_params_xml("/d/in.bin", "/d/out.pdf", "/f", "/f/AllFonts.js"));
+    }
+
+    #[test]
+    fn a_locale_from_the_editor_outside_the_lcid_range_is_refused() {
+        for lcid in [0, -1, -1053, 0x10_0000, i64::from(u32::MAX) + 1] {
+            assert!(checked_lcid(Some(lcid)).is_err(), "{lcid}");
+        }
+    }
+
+    #[test]
+    fn a_locale_from_the_editor_inside_the_lcid_range_is_kept() {
+        assert_eq!(checked_lcid(None), Ok(None));
+        for lcid in [1, 1031, 1053, 0x1_0407, 0xF_FFFF] {
+            assert_eq!(checked_lcid(Some(lcid)), Ok(Some(lcid as u32)), "{lcid}");
+        }
+    }
+
+    #[test]
     fn pdf_change_params_ask_for_the_changes_and_no_extra_files() {
         let extra = pdf_changes_params("/t/R&D/tmp");
         let xml = pdf_params_xml_with("/t/src.pdf", "/t/out.pdf", "/f", "/f/AllFonts.js", &extra);
@@ -1951,7 +2008,7 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         let mut result = None;
         let lines = logged(|log| {
             result = Some(convert_to_pdf(
-                &binaries, None, "/d/in.docx", "/d/out.pdf", &temp, &fontdata, log,
+                &binaries, None, "/d/in.docx", "/d/out.pdf", &temp, &fontdata, log, None,
             ));
         });
 
@@ -1977,7 +2034,7 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         let mut result = None;
         let lines = logged(|log| {
             result = Some(convert_to_pdf(
-                &binaries, None, "/d/in.docx", "/d/out.pdf", &temp, &fontdata, log,
+                &binaries, None, "/d/in.docx", "/d/out.pdf", &temp, &fontdata, log, None,
             ));
         });
 

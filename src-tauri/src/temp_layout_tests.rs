@@ -1715,9 +1715,308 @@ fn publishing_replaces_the_previous_file() {
     assert!(open_in_another_instance(&root, &own.id, &second));
 }
 
+// A stand-in for the document portal: <portal>/<doc-id>/<name>, with the host
+// path in the extended attribute the portal serves it in.
+#[cfg(target_os = "linux")]
+fn portal_document(portal: &Path, doc_id: &str, host_path: Option<&[u8]>) -> PathBuf {
+    let dir = portal.join(doc_id);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = document_in(&dir, "a.docx");
+    if let Some(value) = host_path {
+        set_portal_host_path(&file, value);
+    }
+    file
+}
+
+#[cfg(target_os = "linux")]
+fn set_portal_host_path(file: &Path, value: &[u8]) {
+    use std::os::unix::ffi::OsStrExt;
+    let file = std::ffi::CString::new(file.as_os_str().as_bytes()).unwrap();
+    let set = unsafe {
+        libc::setxattr(
+            file.as_ptr(),
+            PORTAL_HOST_PATH.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+        )
+    };
+    assert_eq!(set, 0, "setxattr: {}", std::io::Error::last_os_error());
+}
+
+#[cfg(target_os = "linux")]
+fn scratch_portal(root: &Path) -> PathBuf {
+    let portal = root.join("doc");
+    std::fs::create_dir_all(&portal).unwrap();
+    portal.canonicalize().unwrap()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn two_doc_ids_of_one_host_file_have_one_identity() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let first = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx"));
+    let second = portal_document(&portal, "5e6f7a8b", Some(b"/srv/data/a.docx"));
+
+    let host = Some(PathBuf::from("/srv/data/a.docx"));
+    assert_eq!(file_identity(&first, Some(&portal)), host);
+    assert_eq!(file_identity(&second, Some(&portal)), host);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_host_path_ending_in_nul_is_the_same_path() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let file = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx\0"));
+
+    assert_eq!(file_identity(&file, Some(&portal)), Some(PathBuf::from("/srv/data/a.docx")));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn two_host_files_have_two_identities() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let first = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx"));
+    let second = portal_document(&portal, "5e6f7a8b", Some(b"/srv/data/b.docx"));
+
+    assert_ne!(file_identity(&first, Some(&portal)), file_identity(&second, Some(&portal)));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_portal_file_without_a_host_path_is_its_canonical_path() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let file = portal_document(&portal, "1a2b3c4d", None);
+
+    assert_eq!(file_identity(&file, Some(&portal)), Some(file.canonicalize().unwrap()));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_host_path_attribute_counts_only_inside_the_portal() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let outside = document_in(&root, "b.docx");
+    set_portal_host_path(&outside, b"/srv/data/b.docx");
+    let inside = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx"));
+
+    assert_eq!(file_identity(&outside, Some(&portal)), Some(outside.canonicalize().unwrap()));
+    // Outside Flatpak there is no portal.
+    assert_eq!(file_identity(&inside, None), Some(inside.canonicalize().unwrap()));
+}
+
+#[test]
+fn a_file_that_does_not_exist_has_no_identity() {
+    let root = scratch_root();
+    assert_eq!(file_identity(&root.join("gone.docx"), Some(&root)), None);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn another_doc_id_of_the_same_host_file_is_open() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let theirs = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx"));
+    let mine = portal_document(&portal, "5e6f7a8b", Some(b"/srv/data/a.docx"));
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&theirs)).unwrap();
+
+    assert!(open_in_another_instance_with_portal(&root, &own.id, &mine, Some(&portal)));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn another_doc_id_of_another_host_file_is_not_open() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let theirs = portal_document(&portal, "1a2b3c4d", Some(b"/srv/data/a.docx"));
+    let mine = portal_document(&portal, "5e6f7a8b", Some(b"/srv/data/b.docx"));
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&theirs)).unwrap();
+
+    assert!(!open_in_another_instance_with_portal(&root, &own.id, &mine, Some(&portal)));
+}
+
+// A portal older than 1.19.0 serves no host path: two doc-ids stay two files,
+// one doc-id stays one, as before.
+#[cfg(target_os = "linux")]
+#[test]
+fn without_host_paths_only_the_same_doc_id_is_open() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let theirs = portal_document(&portal, "1a2b3c4d", None);
+    let mine = portal_document(&portal, "5e6f7a8b", None);
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&theirs)).unwrap();
+
+    assert!(!open_in_another_instance_with_portal(&root, &own.id, &mine, Some(&portal)));
+    assert!(open_in_another_instance_with_portal(&root, &own.id, &theirs, Some(&portal)));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn files_outside_the_portal_compare_as_before() {
+    let root = scratch_root();
+    let portal = scratch_portal(&root);
+    let file = document_in(&root, "a.docx");
+    let different = document_in(&root, "b.docx");
+    let link = root.join("link.docx");
+    std::os::unix::fs::symlink(&file, &link).unwrap();
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&other.dir, Some(&file)).unwrap();
+
+    assert!(open_in_another_instance_with_portal(&root, &own.id, &file, Some(&portal)));
+    assert!(open_in_another_instance_with_portal(&root, &own.id, &link, Some(&portal)));
+    assert!(!open_in_another_instance_with_portal(&root, &own.id, &different, Some(&portal)));
+}
+
 #[test]
 fn publishing_into_a_missing_folder_is_an_error_not_a_panic() {
     let root = scratch_root();
     let file = document_in(&root, "a.docx");
     assert!(publish_open_document(&root.join("missing"), Some(&file)).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// The file each instance is opening or saving to
+// ---------------------------------------------------------------------------
+
+fn claimed_text(instance: &Instance) -> Option<String> {
+    std::fs::read_to_string(instance.dir.join(CLAIMED_DOCUMENT)).ok()
+}
+
+fn open_document_text(instance: &Instance) -> Option<String> {
+    std::fs::read_to_string(instance.dir.join(OPEN_DOCUMENT)).ok()
+}
+
+fn canonical_text(path: &Path) -> String {
+    path.canonicalize().unwrap().to_str().unwrap().to_string()
+}
+
+#[test]
+fn an_announcement_is_the_canonical_path_and_goes_with_its_claim() {
+    let root = scratch_root();
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+
+    let claim = claim_document(&root, &own.id, &root.join("sub").join("..").join("a.docx")).unwrap();
+    assert_eq!(claimed_text(&own), Some(canonical_text(&file)));
+    let leftovers: Vec<_> = std::fs::read_dir(&own.dir)
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().contains("tmp"))
+        .collect();
+    assert!(leftovers.is_empty());
+
+    drop(claim);
+    assert_eq!(claimed_text(&own), None);
+    assert_eq!(open_document_text(&own), None);
+}
+
+#[test]
+fn a_file_another_instance_announced_cannot_be_claimed() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    let theirs = claim_document(&root, &other.id, &file).unwrap();
+
+    assert!(open_in_another_instance(&root, &own.id, &file));
+    assert!(claim_document(&root, &own.id, &file).is_none());
+    assert_eq!(claimed_text(&own), None);
+    drop(theirs);
+}
+
+#[test]
+fn a_withdrawn_claim_leaves_open_document_as_it_was() {
+    let root = scratch_root();
+    let opened = document_in(&root, "a.docx");
+    let failed = document_in(&root, "b.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    publish_open_document(&own.dir, Some(&opened)).unwrap();
+
+    let claim = claim_document(&root, &own.id, &failed).unwrap();
+    // The open or the save failed.
+    drop(claim);
+
+    assert_eq!(claimed_text(&own), None);
+    assert_eq!(open_document_text(&own), Some(canonical_text(&opened)));
+    assert!(claim_document(&root, &other.id, &failed).is_some());
+    assert!(claim_document(&root, &other.id, &opened).is_none());
+}
+
+#[test]
+fn a_dead_instances_announcement_does_not_count() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let dead = begin_instance(&root, 1000, 2).unwrap();
+    let claim = claim_document(&root, &dead.id, &file).unwrap();
+    // A crash during the conversion: the lock goes with the process, the
+    // folder and the announcement stay.
+    dead.lock.lock().unwrap().take();
+    std::mem::forget(claim);
+
+    assert!(claimed_text(&dead).is_some());
+    assert!(claim_document(&root, &own.id, &file).is_some());
+}
+
+#[test]
+fn of_two_instances_claiming_one_file_at_once_exactly_one_goes_on() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let first = begin_instance(&root, 1000, 1).unwrap();
+    let second = begin_instance(&root, 1000, 2).unwrap();
+    for _ in 0..200 {
+        let start = std::sync::Barrier::new(2);
+        let claims = std::thread::scope(|scope| {
+            let a = scope.spawn(|| {
+                start.wait();
+                claim_document(&root, &first.id, &file)
+            });
+            let b = scope.spawn(|| {
+                start.wait();
+                claim_document(&root, &second.id, &file)
+            });
+            [a.join().unwrap(), b.join().unwrap()]
+        });
+        assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
+    }
+}
+
+#[test]
+fn a_claim_that_cannot_be_announced_still_goes_on() {
+    let root = scratch_root();
+    let file = document_in(&root, "a.docx");
+    let without_folder = "1000-9";
+
+    let claim = claim_document(&root, without_folder, &file).unwrap();
+
+    assert!(claim.file.is_none());
+}
+
+#[test]
+fn a_documents_lock_nobody_releases_is_not_waited_on_forever() {
+    let root = scratch_root();
+    let free = document_in(&root, "a.docx");
+    let announced = document_in(&root, "b.docx");
+    let own = begin_instance(&root, 1000, 1).unwrap();
+    let other = begin_instance(&root, 1000, 2).unwrap();
+    let theirs = claim_document(&root, &other.id, &announced).unwrap();
+    let held = take_lock(&root.join(DOCUMENTS_LOCK)).unwrap();
+
+    assert!(claim_document(&root, &own.id, &free).is_some());
+    // Without the lock the announcement is still seen.
+    assert!(claim_document(&root, &own.id, &announced).is_none());
+    drop((held, theirs));
 }
