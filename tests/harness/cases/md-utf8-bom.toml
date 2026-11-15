@@ -1,0 +1,15 @@
+# The same Markdown with a UTF-8 BOM. The save must be the input with Z at
+# the end, BOM kept.
+# Keys: the page opens in preview; 4 Shift+Tab reach Edit, Space presses it, the lone Shifts wait for the editor.
+description = "UTF-8 Markdown with a BOM: Ctrl+S after typing Z keeps the BOM and every byte"
+generate = "mkmd.py utf8-bom"
+input = "notes-bom.md"
+input_sha256 = "d9b963172e09850db5bdd99a4b4cc7b6f2e528e44f8ec2384f2566c1cea40774"
+action = "open-edit-save"
+keys_before = "shift+Tab shift+Tab shift+Tab shift+Tab space shift shift shift shift shift shift shift shift shift shift ctrl+End"
+type = "Z"
+check = "expected-bytes"
+expected_generate = "mkmd.py utf8-bom z"
+expected_sha256 = "9d2f90424c7190ebc87651b9d0db4034a82ca4e9f807bff669e77835e87654fe"
+expect = "saved-as-expected"
+screenshot = "on-failure"

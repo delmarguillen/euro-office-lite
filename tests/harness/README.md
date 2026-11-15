@@ -128,8 +128,8 @@ case ok, 1 some case failed, 2 the harness could not run.
   entries.
 - run.ps1 closes the app with `WM_CLOSE`; it kills it only when a modified
   document could not be saved.
-- The 17 cases take under 4 minutes: about 13 s per save, 2-3 s per refused
-  file, 38 s for `txt-nul`.
+- The 17 TXT, CSV and Office cases take under 4 minutes: about 13 s per
+  save, 2-3 s per refused file, 38 s for `txt-nul`.
 - `csv-html-emoji` fails today on Windows: the app does not open the file,
   a known defect of the app, so `run.ps1 all` exits 1.
 
@@ -182,6 +182,12 @@ A TXT or CSV case that saves first changes the document: `Z` typed at the end
 of the last line of a TXT, or added to the last cell of a CSV. The save must
 then be the input with that `Z` and nothing else changed.
 
+A Markdown case does the same on the Markdown page, which opens in preview:
+its keys go from the preview to Edit with Shift+Tab, press it with Space,
+wait for the editor with lone Shift presses and go to the end with
+Ctrl+End. The `Z` lands after the final line break, so the save must be the
+input with `Z` appended (`gen/mkmd.py`).
+
 | case | input | ok when |
 |---|---|---|
 | `csv-bmp` | UTF-8 CSV, every character inside the BMP | saved with the `Z`, byte for byte |
@@ -191,6 +197,10 @@ then be the input with that `Z` and nothing else changed.
 | `csv-emoji-utf16le-bom` | the same CSV in UTF-16 LE with a BOM | saved with the `Z`, encoding and BOM kept |
 | `csv-html-emoji` | `html-emoji.csv`: first cell `<html>`, and an emoji | opens as a sheet; saved with the `Z`, byte for byte |
 | `docx-edit-save` | DOCX with three paragraphs | the saved XML has the typed word and the paragraphs |
+| `md-crlf` | Markdown with CRLF | saved with the `Z`, CRLF kept |
+| `md-emoji` | UTF-8 Markdown with an emoji and U+20000 | saved with the `Z`, byte for byte |
+| `md-utf8` | UTF-8 Markdown, no BOM | saved with the `Z`, byte for byte |
+| `md-utf8-bom` | the same Markdown with a UTF-8 BOM | saved with the `Z`, BOM kept |
 | `txt-big-emoji-end` | TXT over 64 KiB, an emoji only in its last line | refused with the open error dialog |
 | `txt-bmp` | UTF-8 TXT inside the BMP | saved with the `Z`, byte for byte |
 | `txt-crlf` | ASCII TXT with CRLF | saved with the `Z`, CRLF kept |
