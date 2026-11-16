@@ -249,6 +249,88 @@ check_zip_match() {
   note "not found: $missing"
 }
 
+# --- exporting to PDF ------------------------------------------------------------
+
+# The PDF an open-export-pdf case writes, next to the document it opened.
+export_file() { echo "$(dirname "$1")/exported.pdf"; }
+
+has_content() { [ -s "$1" ]; }
+
+# Let the writer finish: the hash must hold for two seconds.
+wait_file_settled() {
+  local last=""
+  while [ "$last" != "$(sha256_of "$1")" ]; do
+    last=$(sha256_of "$1")
+    sleep 2
+  done
+}
+
+export_ended() { has_content "$1" || grep -q 'SaveAs failed' "$2"; }
+
+# save_as_pdf PID PDF LOG: Ctrl+Shift+S opens the native Save As dialog, and
+# the app takes the format from the extension of the name typed there.
+save_as_pdf() {
+  local pid=$1 pdf=$2 log_file=$3 dialog
+  rm -f "$pdf"
+  x xdotool windowactivate --sync "$(main_window "$pid")" key ctrl+shift+s
+  if ! wait_for 20 has_dialog "$pid"; then
+    OBSERVED=export-no-dialog
+    return 1
+  fi
+  dialog=$(dialogs_of "$pid" | head -1)
+  note "dialog: '${dialog#* }'"
+  x xdotool windowactivate --sync "${dialog%% *}"
+  sleep 1
+  # The dialog offers the name of the document, selected or not: replace it.
+  x xdotool key --delay 200 ctrl+a
+  x xdotool type --delay 40 "$pdf"
+  x xdotool key --delay 200 Return
+  # The first export of a fresh install builds the font cache before it writes.
+  wait_for 120 export_ended "$pdf" "$log_file"
+  if ! has_content "$pdf"; then
+    OBSERVED=export-not-written
+    note "log: $(grep -m1 'SaveAs failed' "$log_file")"
+    return 1
+  fi
+  wait_file_settled "$pdf"
+}
+
+# Every match_N of the case is an extended regex some line of the PDF's text
+# must contain. The text stays next to the PDF, for a case that fails.
+check_pdf_text() {
+  local pdf=$1 text=${1%.pdf}.txt pattern missing=""
+  note "exported $(wc -c < "$pdf") bytes"
+  if [ "$(head -c 5 "$pdf")" != "%PDF-" ]; then
+    OBSERVED=exported-not-pdf
+    return
+  fi
+  if ! command -v pdftotext >/dev/null; then
+    OBSERVED=no-pdftotext
+    return
+  fi
+  pdftotext -q -enc UTF-8 "$pdf" "$text"
+  while IFS= read -r pattern; do
+    grep -Eq -- "$pattern" "$text" && continue
+    missing="${missing:+$missing, }$pattern"
+  done < <(case_matches)
+  if [ -z "$missing" ]; then
+    OBSERVED=exported-as-expected
+    return
+  fi
+  OBSERVED=exported-missing-content
+  note "not found: $missing"
+}
+
+export_pdf() {
+  local pid=$1 pdf log_file=$3
+  pdf=$(export_file "$2")
+  save_as_pdf "$pid" "$pdf" "$log_file" || return 0
+  case $(case_value check) in
+    pdf-text) check_pdf_text "$pdf" ;;
+    *) OBSERVED=exported; note "no check for this case" ;;
+  esac
+}
+
 observe_open_document() {
   local pid=$1 doc=$2 source=$3 sha_before=$4 log_file=$5 action
   action=$(case_value action)
@@ -257,6 +339,10 @@ observe_open_document() {
   sleep 3
   if [ "$action" = open ]; then
     OBSERVED=opens
+    return
+  fi
+  if [ "$action" = open-export-pdf ]; then
+    export_pdf "$pid" "$doc" "$log_file"
     return
   fi
   [ "$action" = open-edit-save ] && edit_document "$pid"
