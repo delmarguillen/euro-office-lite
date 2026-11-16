@@ -500,6 +500,17 @@ function Start-App([string]$exe, [string]$file) {
     return $process.Id
 }
 
+# Starts the app with no document, on its start screen, and returns its process id.
+function Start-AppEmpty([string]$exe, [string]$folder) {
+    $process = Start-Process -FilePath $exe -WorkingDirectory $folder -PassThru
+    return $process.Id
+}
+
+# Ends the app at once, as a crash would: no window is closed, nothing is saved.
+function Stop-AppAbruptly([int]$processId) {
+    Stop-Process -Id $processId -Force
+}
+
 # The log of an instance is js-debug-<start ms>-<pid>.log; the newest for the pid.
 function Find-InstanceLog([int]$processId) {
     $root = Get-TempRoot
@@ -528,6 +539,13 @@ function Get-LogLine([string]$path, [string]$pattern) {
         if ([regex]::IsMatch($line, $pattern)) { return $line }
     }
     return ''
+}
+
+# The first group of a regex in the text of a log, or nothing.
+function Get-LogValue([string]$path, [string]$pattern) {
+    $found = [regex]::Match((Read-SharedText $path), $pattern)
+    if (-not $found.Success) { return '' }
+    return $found.Groups[1].Value
 }
 
 # Return on each dialog accepts its default button.

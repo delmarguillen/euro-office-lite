@@ -588,6 +588,64 @@ function Export-Pdf($run) {
     Add-Note $run 'no check for this case'
 }
 
+# --- recovery after a kill ---------------------------------------------------------
+
+$RecoveryWaitSeconds = 30
+
+# The id of the recovery session of a document: its folder under recover\.
+$SessionPattern = '\[RECOVER\] begin session=(\d+-\d+)'
+# The number of sessions the start screen got to offer.
+$CandidatesPattern = '\[RECOVER\] candidates=(\d+)'
+
+# The file the app appends every change of a recovery session to.
+function Get-RecoveryChanges([string]$session) {
+    $folder = Join-Path (Join-Path (Get-ConfigDir) 'recover') $session
+    return (Join-Path (Join-Path $folder 'changes') 'changes0.json')
+}
+
+# Starts the app with no document and returns the number of sessions its start
+# screen got to offer, or nothing when the log never says. The log of this
+# second instance is kept as app-restart.log.
+function Get-OfferedAfterRestart($options, $run) {
+    $run.ProcessId = Start-AppEmpty $options.Exe $run.Dir
+    $hasWindow = Wait-Until 60 { Test-MainWindow $run.ProcessId }
+    if (-not $hasWindow) { return '' }
+    [void](Wait-Until 60 { (Get-LogValue (Find-InstanceLog $run.ProcessId) $CandidatesPattern) -ne '' })
+    $restartLog = Find-InstanceLog $run.ProcessId
+    if ($restartLog) { Copy-Item -LiteralPath $restartLog -Destination (Join-Path $run.Dir 'app-restart.log') -Force }
+    return (Get-LogValue $restartLog $CandidatesPattern)
+}
+
+# Edits the document, waits for the app to record the changes, kills it and
+# starts it again with no document. The case does not press Recover.
+function Recover-AfterKill($options, $run) {
+    $began = Wait-Until 10 { (Get-LogValue $run.Log $SessionPattern) -ne '' }
+    if (-not $began) {
+        $run.Observed = 'recovery-not-started'
+        return
+    }
+    $session = Get-LogValue $run.Log $SessionPattern
+    $changes = Get-RecoveryChanges $session
+    if (-not (Edit-Document $run)) {
+        $run.Observed = 'not-in-foreground'
+        return
+    }
+    $recorded = Wait-Until $RecoveryWaitSeconds { Test-HasContent $changes }
+    if (-not $recorded) {
+        $run.Observed = 'recovery-not-written'
+        return
+    }
+    Wait-StableFile $changes
+    Add-Note $run ('session {0}: {1} bytes of changes' -f $session, (Get-FileLength $changes))
+    Stop-AppAbruptly $run.ProcessId
+    [void](Wait-Until 10 { -not (Test-ProcessAlive $run.ProcessId) })
+    $offered = Get-OfferedAfterRestart $options $run
+    $run.Observed = 'recovery-not-offered'
+    if (-not $offered) { return }
+    Add-Note $run ('log: [RECOVER] candidates=' + $offered)
+    if ([int]$offered -ge 1) { $run.Observed = 'recovery-offered' }
+}
+
 function Observe-OpenDocument($options, $run) {
     $action = Get-CaseValue $run.Case 'action'
     Add-Note $run ('log: ' + (Get-LogLine $run.Log '\[OPEN\] (markdown )?success'))
@@ -599,6 +657,10 @@ function Observe-OpenDocument($options, $run) {
     }
     if ($action -eq 'open-export-pdf') {
         Export-Pdf $run
+        return
+    }
+    if ($action -eq 'edit-kill-recover') {
+        Recover-AfterKill $options $run
         return
     }
     if ($action -eq 'open-edit-save' -and -not (Edit-Document $run)) {
