@@ -86,7 +86,7 @@ function Test-Scripts {
 
 function Test-CaseFiles {
     $names = @(Get-SelectedCases 'all')
-    Assert-Equal 'number of cases' $names.Count 24
+    Assert-Equal 'number of cases' $names.Count 27
     foreach ($name in $names) {
         $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
         $complete = ($null -ne $case) -and (Get-CaseValue $case 'input') -and (Get-CaseValue $case 'generate') -and (Get-CaseValue $case 'expect')
@@ -294,6 +294,16 @@ function Save-Screenshot([string]$path) {
     return $true
 }
 
+# The inputs every build refuses: a .docx that is not a document the app opens.
+$FakeNeverOpens = @('encrypted.docx', 'plain-text.docx', 'truncated.docx')
+
+# The error a fixed build refuses the file with, or nothing when it opens it.
+function Get-FakeOpenError([string]$name) {
+    if ($FakeNeverOpens -contains $name) { return 'This file is not a valid .docx' }
+    if ($Fake.Refuses -and $name -like '*emoji*.txt') { return 'character above U+FFFF' }
+    return ''
+}
+
 # Writes the log an instance would: a TXT with an emoji is refused with a
 # dialog unless the stand-in plays a build without that fix, and a .md opens
 # in the Markdown page, which logs only the backend's line.
@@ -309,8 +319,9 @@ function Start-App([string]$exe, [string]$file) {
     $name = Split-Path -Leaf $file
     $lines = @('[OPEN] success editor_bin=10 bytes media_files=0', ('[RECOVER] begin session=' + $Fake.Session + ' bytes=10'), '[EO] Document ready: docType=word')
     if ($name -like '*.md') { $lines = @('[OPEN] markdown success bytes=10') }
-    if ($Fake.Refuses -and $name -like '*emoji*.txt') {
-        $lines = @('[OPEN] failed file=' + $name + ' error=character above U+FFFF')
+    $openError = Get-FakeOpenError $name
+    if ($openError) {
+        $lines = @('[OPEN] failed file=' + $name + ' error=' + $openError)
         $Fake.Dialogs = @(New-Object PSObject -Property @{ Handle = [IntPtr]2; Title = 'Cannot open' })
     }
     New-Item -ItemType Directory -Force -Path (Get-TempRoot) | Out-Null
@@ -384,7 +395,7 @@ function Test-FullRun([string]$inputs) {
     $result = Read-Result $options
     $notOk = @($result.cases | Where-Object { -not $_.ok } | ForEach-Object { $_.case + '=' + $_.observed })
     Assert-Equal 'all: exit status' $status 0
-    Assert-Equal 'all: cases in result.json' @($result.cases).Count 24
+    Assert-Equal 'all: cases in result.json' @($result.cases).Count 27
     $export = Join-Path (Join-Path $options.Out 'docx-export-pdf') 'exported.pdf'
     Assert-Equal 'all: the export of a case is a PDF' (Test-PdfHeader $export) $true
     Assert-Equal 'all: cases not ok' ($notOk -join ' ') ''
@@ -396,8 +407,14 @@ function Test-FullRun([string]$inputs) {
     Assert-Equal 'all: fields of a case' (@($first.PSObject.Properties | ForEach-Object { $_.Name }) -join ' ') 'case ok expected observed detail screenshot seconds'
     Assert-Equal 'all: no screenshot for a case that is ok' ($null -eq $first.screenshot) $true
     Assert-Equal 'all: the log of a case is kept' (Test-Path -LiteralPath (Join-Path (Join-Path $options.Out 'csv-bmp') 'app.log')) $true
-    Assert-Equal 'all: keys of the last case' ($Fake.Chords -join ', ') '11 24, 28, 0D, 11 53'
     Assert-Equal 'all: the app of the last case was closed' $Fake.Alive $false
+}
+
+function Test-KeysOfACase([string]$inputs) {
+    $options = New-FakeOptions 'xlsx-save' $inputs $false 'run-keys'
+    $status = Invoke-Harness $options
+    Assert-Equal 'keys: exit status' $status 0
+    Assert-Equal 'keys: chords sent for xlsx-save' ($Fake.Chords -join ', ') '11 24, 28, 0D, 11 53'
 }
 
 function Test-FailingRun([string]$inputs) {
@@ -531,6 +548,7 @@ Test-RecoverySignals
 Test-Json
 Test-OpenSignals
 Test-FullRun $TestInputs
+Test-KeysOfACase $TestInputs
 Test-FailingRun $TestInputs
 Test-ExportNotWritten $TestInputs
 Test-RecoveryRun $TestInputs

@@ -133,8 +133,9 @@ case ok, 1 some case failed, 2 the harness could not run.
   `PATH`, else the one Git for Windows has in `mingw64\bin`. Without either
   it only checks that the file starts with `%PDF-`, and the detail of the
   case says so.
-- The 17 TXT, CSV and Office cases take under 4 minutes: about 13 s per
-  save, 2-3 s per refused file, 38 s for `txt-nul`.
+- The 17 TXT, CSV, `docx-edit-save` and `xlsx-save` cases take under
+  4 minutes: about 13 s per save, 2-3 s per refused file, 38 s for `txt-nul`.
+  The other cases have not been timed.
 - `csv-html-emoji` fails today on Windows: the app does not open the file,
   a known defect of the app, so `run.ps1 all` exits 1.
 
@@ -233,8 +234,11 @@ input with `Z` appended (`gen/mkmd.py`).
 | `csv-emoji-utf16le-bom` | the same CSV in UTF-16 LE with a BOM | saved with the `Z`, encoding and BOM kept |
 | `csv-html-emoji` | `html-emoji.csv`: first cell `<html>`, and an emoji | opens as a sheet; saved with the `Z`, byte for byte |
 | `docx-edit-save` | DOCX with three paragraphs | the saved XML has the typed word and the paragraphs |
+| `docx-encrypted` | `.docx` that is a CFB with the `EncryptionInfo` and `EncryptedPackage` streams of a document with a password; the streams hold filler | refused with the open error dialog, file unchanged |
 | `docx-export-pdf` | DOCX with one paragraph | the text of the exported PDF has the paragraph |
+| `docx-plain-text` | `.docx` that holds plain text | refused with the open error dialog, file unchanged |
 | `docx-recover` | DOCX with two paragraphs | after typing and a kill, the next start gets the document to offer for recovery |
+| `docx-truncated-zip` | the first half of a DOCX: a ZIP without its central directory | refused with the open error dialog, file unchanged |
 | `md-crlf` | Markdown with CRLF | saved with the `Z`, CRLF kept |
 | `md-emoji` | UTF-8 Markdown with an emoji and U+20000 | saved with the `Z`, byte for byte |
 | `md-utf8` | UTF-8 Markdown, no BOM | saved with the `Z`, byte for byte |
