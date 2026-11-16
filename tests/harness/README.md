@@ -13,7 +13,8 @@ credentials.
 
 Needs: `xvfb`, `openbox`, `xdotool`, `wmctrl`, `x11-utils`, `imagemagick`
 (screenshots), `unzip`, `python3` (input generators), `dbus-run-session`,
-and `sudo -n apt-get` when it has to install a package.
+`pdftotext` from `poppler-utils` (the `pdf-text` check), and
+`sudo -n apt-get` when it has to install a package.
 
 ## Use
 
@@ -127,7 +128,11 @@ case ok, 1 some case failed, 2 the harness could not run.
   refuses to start while the app is running or its recovery folder has
   entries.
 - run.ps1 closes the app with `WM_CLOSE`; it kills it only when a modified
-  document could not be saved.
+  document could not be saved, or when the case is an `edit-kill-recover`.
+- The `pdf-text` check reads the PDF with `pdftotext`: the one on the
+  `PATH`, else the one Git for Windows has in `mingw64\bin`. Without either
+  it only checks that the file starts with `%PDF-`, and the detail of the
+  case says so.
 - The 17 TXT, CSV and Office cases take under 4 minutes: about 13 s per
   save, 2-3 s per refused file, 38 s for `txt-nul`.
 - `csv-html-emoji` fails today on Windows: the app does not open the file,
@@ -144,11 +149,11 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `generate` | `SCRIPT ARGS`: runs `python3 gen/SCRIPT OUT ARGS` to make the input |
 | `input` | file name of the input |
 | `input_sha256` | optional: the generated input must have this sha256 |
-| `action` | `open`, `open-save` (Ctrl+S) or `open-edit-save` |
-| `keys_before`, `type`, `keys_after` | for `open-edit-save`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
-| `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match` |
+| `action` | `open`, `open-save` (Ctrl+S), `open-edit-save`, `open-export-pdf` or `edit-kill-recover` |
+| `keys_before`, `type`, `keys_after` | for `open-edit-save` and `edit-kill-recover`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
+| `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match`; for `open-export-pdf`, `pdf-text` |
 | `expected_generate`, `expected_sha256` | for `expected-bytes`: the generator of the file the save must write, and optionally its sha256 |
-| `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain |
+| `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain; for `pdf-text`: `REGEX`, an extended regex a line of the PDF's text must contain |
 | `expect` | the outcome that makes the case ok |
 | `control_expect` | optional: the outcome with `--control`, for a build without the fix |
 | `screenshot` | `on-failure` or `always` |
@@ -174,7 +179,38 @@ Outcomes:
 - `save-not-written`: Ctrl+S did not change the file within 30 s. Current
   builds do not write a document with no changes, so a case that needs a save
   types something first.
+- `exported-as-expected`, `exported-missing-content` (`pdf-text`): every
+  `match_N` is in the text of the PDF, or not. `exported-not-pdf`: the file
+  does not start with `%PDF-`. `no-pdftotext`: run.sh found no `pdftotext`.
+- `export-no-dialog`: no Save As dialog within 20 s of Ctrl+Shift+S.
+  `export-not-written`: no PDF within 120 s of the name being typed.
+- `recovery-offered`, `recovery-not-offered` (`edit-kill-recover`): the log
+  of the app started after the kill has `[RECOVER] candidates=N` with N at
+  least 1, or not. `recovery-not-started`: the log of the first start has no
+  `[RECOVER] begin session=`. `recovery-not-written`: the changes file of
+  that session was still empty 30 s after the edit.
 - `open-timeout`, `launch-failed`, `no-input`, `bad-case-file`.
+
+### Export to PDF
+
+`open-export-pdf` opens the input, presses Ctrl+Shift+S (Save As) and types
+the path of `exported.pdf`, in the folder of the case, into the native
+dialog, then Return. The app takes the format from the extension of the name.
+The case waits until the file has content and its sha256 holds for two
+seconds. The text `pdftotext` reads from it is kept as `exported.txt`.
+
+### Recovery after a kill
+
+`edit-kill-recover` opens the input and reads the id of its recovery session
+from `[RECOVER] begin session=ID` in the log. It edits the document like
+`open-edit-save`, then waits until `recover/ID/changes/changes0.json` in the
+config folder of the app has content and its sha256 holds for two seconds.
+It kills the app (`kill -9`, `Stop-Process -Force`) and starts it again with
+no document; the log of that second start is `app-restart.log`. The case is
+judged by the `[RECOVER] candidates=N` line the start screen leaves there.
+It does not press Recover, so it does not show that the typed text comes
+back. The second app is closed and the recovery folder is emptied, as after
+every case.
 
 ## Cases
 
@@ -197,6 +233,8 @@ input with `Z` appended (`gen/mkmd.py`).
 | `csv-emoji-utf16le-bom` | the same CSV in UTF-16 LE with a BOM | saved with the `Z`, encoding and BOM kept |
 | `csv-html-emoji` | `html-emoji.csv`: first cell `<html>`, and an emoji | opens as a sheet; saved with the `Z`, byte for byte |
 | `docx-edit-save` | DOCX with three paragraphs | the saved XML has the typed word and the paragraphs |
+| `docx-export-pdf` | DOCX with one paragraph | the text of the exported PDF has the paragraph |
+| `docx-recover` | DOCX with two paragraphs | after typing and a kill, the next start gets the document to offer for recovery |
 | `md-crlf` | Markdown with CRLF | saved with the `Z`, CRLF kept |
 | `md-emoji` | UTF-8 Markdown with an emoji and U+20000 | saved with the `Z`, byte for byte |
 | `md-utf8` | UTF-8 Markdown, no BOM | saved with the `Z`, byte for byte |
@@ -210,6 +248,7 @@ input with `Z` appended (`gen/mkmd.py`).
 | `txt-utf16-bom-emoji` | UTF-16 LE TXT with a BOM and an emoji | refused with the open error dialog, file unchanged |
 | `txt-utf16be-nobom` | UTF-16 BE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
 | `txt-utf16le-nobom` | UTF-16 LE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
+| `xlsx-export-pdf` | the XLSX of `xlsx-save` | the text of the exported PDF has 1234.5 as `#,##0.00` shows it, with the separators of any locale |
 | `xlsx-save` | XLSX with a number, a formatted number and a date | after typing in A2, row 1 keeps its values |
 
 ## result.json
