@@ -1,0 +1,9 @@
+# A PowerPoint template: a package whose main part has the template content
+# type. The app has no in-place save for .potx, so the case only opens it.
+description = "POTX template: opens"
+generate = "mkooxml.py potx"
+input = "template.potx"
+input_sha256 = "4b5454cc9e579f865a4d7532801d79dd69f38b65e9fbbd314ac90036144003a2"
+action = "open"
+expect = "opens"
+screenshot = "on-failure"

@@ -86,7 +86,7 @@ function Test-Scripts {
 
 function Test-CaseFiles {
     $names = @(Get-SelectedCases 'all')
-    Assert-Equal 'number of cases' $names.Count 27
+    Assert-Equal 'number of cases' $names.Count 34
     foreach ($name in $names) {
         $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
         $complete = ($null -ne $case) -and (Get-CaseValue $case 'input') -and (Get-CaseValue $case 'generate') -and (Get-CaseValue $case 'expect')
@@ -349,6 +349,17 @@ function Save-FakeDocument {
         New-Zip $Fake.File @{ 'word/document.xml' = '<w:t>Paragraph 0: the quick brown fox</w:t><w:t>Paragraph 2: the quick brown fox' + $Fake.Typed + '</w:t>' }
         return
     }
+    if ($name -like '*.pptx') {
+        New-Zip $Fake.File @{ 'ppt/slides/slide1.xml' = '<a:t>Harness slide text' + $Fake.Typed + '</a:t>' }
+        return
+    }
+    if ($name -like '*.od?') {
+        # The text of the input says its format: "Harness ODT text".
+        $format = [System.IO.Path]::GetExtension($name).TrimStart('.').ToUpperInvariant()
+        $cell = '<table:table-cell office:value="1234.5"/>'
+        New-Zip $Fake.File @{ 'content.xml' = $cell + '<text:span>Harness ' + $format + ' text' + $Fake.Typed + '</text:span>' }
+        return
+    }
     $row = '<row r="1"><c r="A1"><v>1234.5</v></c><c r="B1" s="1">  <v>1234.5</v></c><c r="C1" s="2"><v>46086</v></c></row>'
     New-Zip $Fake.File @{ 'xl/worksheets/sheet1.xml' = $row; 'xl/sharedStrings.xml' = '<t>' + $Fake.Typed + '</t>' }
 }
@@ -395,7 +406,7 @@ function Test-FullRun([string]$inputs) {
     $result = Read-Result $options
     $notOk = @($result.cases | Where-Object { -not $_.ok } | ForEach-Object { $_.case + '=' + $_.observed })
     Assert-Equal 'all: exit status' $status 0
-    Assert-Equal 'all: cases in result.json' @($result.cases).Count 27
+    Assert-Equal 'all: cases in result.json' @($result.cases).Count 34
     $export = Join-Path (Join-Path $options.Out 'docx-export-pdf') 'exported.pdf'
     Assert-Equal 'all: the export of a case is a PDF' (Test-PdfHeader $export) $true
     Assert-Equal 'all: cases not ok' ($notOk -join ' ') ''

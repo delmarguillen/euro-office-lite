@@ -1,0 +1,9 @@
+# An Excel template: a package whose main part has the template content type.
+# The app has no in-place save for .xltx, so the case only opens it.
+description = "XLTX template: opens"
+generate = "mkooxml.py xltx"
+input = "template.xltx"
+input_sha256 = "5d7ef3063b7933c1d90fb93cb95d55bda1091d2a250644b7fbb15fbfd01966f5"
+action = "open"
+expect = "opens"
+screenshot = "on-failure"

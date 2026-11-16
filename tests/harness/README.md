@@ -225,6 +225,12 @@ wait for the editor with lone Shift presses and go to the end with
 Ctrl+End. The `Z` lands after the final line break, so the save must be the
 input with `Z` appended (`gen/mkmd.py`).
 
+The inputs `gen/mkooxml.py`, `gen/mkodf.py` and `gen/mkcfb.py` write are
+stored ZIPs (no compression) or plain bytes, so each has the same sha256 on
+every system. A template (`.dotx`, `.xltx`, `.potx`) is only opened: Ctrl+S
+writes in place the formats of `SAVE_IN_PLACE_EXTENSIONS`
+(`src-tauri/src/file_dialogs.rs`), and the others go through Save As.
+
 | case | input | ok when |
 |---|---|---|
 | `csv-bmp` | UTF-8 CSV, every character inside the BMP | saved with the `Z`, byte for byte |
@@ -239,10 +245,16 @@ input with `Z` appended (`gen/mkmd.py`).
 | `docx-plain-text` | `.docx` that holds plain text | refused with the open error dialog, file unchanged |
 | `docx-recover` | DOCX with two paragraphs | after typing and a kill, the next start gets the document to offer for recovery |
 | `docx-truncated-zip` | the first half of a DOCX: a ZIP without its central directory | refused with the open error dialog, file unchanged |
+| `dotx-open` | DOTX template with one paragraph | opens |
 | `md-crlf` | Markdown with CRLF | saved with the `Z`, CRLF kept |
 | `md-emoji` | UTF-8 Markdown with an emoji and U+20000 | saved with the `Z`, byte for byte |
 | `md-utf8` | UTF-8 Markdown, no BOM | saved with the `Z`, byte for byte |
 | `md-utf8-bom` | the same Markdown with a UTF-8 BOM | saved with the `Z`, BOM kept |
+| `odp-open` | ODP with one page covered by a text box | the saved `content.xml` has the typed word and the text |
+| `ods-open` | ODS with a number in A1 and a text in B1 | after typing in A2, row 1 keeps its values |
+| `odt-open` | ODT with one paragraph | the saved `content.xml` has the typed word and the paragraph |
+| `potx-open` | POTX template with one slide | opens |
+| `pptx-edit-save` | PPTX with one slide covered by a text box | the saved slide has the typed word and the text |
 | `txt-big-emoji-end` | TXT over 64 KiB, an emoji only in its last line | refused with the open error dialog |
 | `txt-bmp` | UTF-8 TXT inside the BMP | saved with the `Z`, byte for byte |
 | `txt-crlf` | ASCII TXT with CRLF | saved with the `Z`, CRLF kept |
@@ -254,6 +266,7 @@ input with `Z` appended (`gen/mkmd.py`).
 | `txt-utf16le-nobom` | UTF-16 LE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
 | `xlsx-export-pdf` | the XLSX of `xlsx-save` | the text of the exported PDF has 1234.5 as `#,##0.00` shows it, with the separators of any locale |
 | `xlsx-save` | XLSX with a number, a formatted number and a date | after typing in A2, row 1 keeps its values |
+| `xltx-open` | XLTX template with a number and a text | opens |
 
 ## result.json
 
