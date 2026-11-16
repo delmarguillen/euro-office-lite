@@ -1,0 +1,16 @@
+# Open an ODS, type a label in A2, Ctrl+S: the app saves an .ods in place, and
+# the cells of row 1 keep their values.
+description = "ODS: open, type in A2, Ctrl+S; A1 and B1 keep their values"
+generate = "mkodf.py ods"
+input = "cells.ods"
+input_sha256 = "94b9fcaa23c0601d9bceabffda2c65fc2b78842cf7253c0c3006bb044a890b0a"
+action = "open-edit-save"
+keys_before = "ctrl+Home Down"
+type = "Harness75"
+keys_after = "Return"
+check = "zip-match"
+match_1 = 'content.xml office:value="1234.5"'
+match_2 = 'content.xml Harness ODS text'
+match_3 = 'content.xml Harness75'
+expect = "saved-as-expected"
+screenshot = "on-failure"

@@ -1,0 +1,12 @@
+# Open an XLSX and export it to PDF. B1 holds 1234.5 with the format
+# "#,##0.00". The PDF is written for the locale of the spreadsheet editor,
+# which follows the language of the system, so the pattern takes any
+# separators: 1,234.50, 1.234,50 or 1 234,50. The 1234.5 of A1 does not match.
+description = "XLSX: open, Save As with a .pdf name; the text of the PDF has the formatted number"
+generate = "mkxlsx.py"
+input = "number.xlsx"
+action = "open-export-pdf"
+check = "pdf-text"
+match_1 = '1[^0-9]{0,3}234[.,]50'
+expect = "exported-as-expected"
+screenshot = "on-failure"

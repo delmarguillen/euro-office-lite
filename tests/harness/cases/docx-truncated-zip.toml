@@ -1,0 +1,10 @@
+# The first half of a DOCX: it starts like a ZIP and has no central directory.
+# The app refuses a file that starts like a ZIP and does not open as one,
+# before the converter runs, and leaves the file as it was.
+description = "DOCX cut in half: refused with the open error dialog, file unchanged"
+generate = "mkooxml.py docx-truncated"
+input = "truncated.docx"
+input_sha256 = "b04ea5349d6eb1867d6d0f121b8f19e86736cdb1a71cd21d246d9650b59cd284"
+action = "open"
+expect = "rejected-with-dialog"
+screenshot = "on-failure"

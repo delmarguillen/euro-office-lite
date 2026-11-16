@@ -1,0 +1,15 @@
+# Open an ODP whose only page is covered by a text box, click in it, type a
+# word at the end of its text, Ctrl+S: the app saves an .odp in place, and the
+# saved content holds the new word and the text it had.
+description = "ODP: open, type at the end of the text box, Ctrl+S; the saved content.xml has the new text and the old one"
+generate = "mkodf.py odp"
+input = "page.odp"
+input_sha256 = "c2187cf6af8cbfc2ebdefaf371d02da4cd88d484070be90970f5fa4fb0c47f7d"
+action = "open-edit-save"
+keys_before = "ctrl+End"
+type = " Harness75odp"
+check = "zip-match"
+match_1 = 'content.xml Harness75odp'
+match_2 = 'content.xml Harness ODP text'
+expect = "saved-as-expected"
+screenshot = "on-failure"

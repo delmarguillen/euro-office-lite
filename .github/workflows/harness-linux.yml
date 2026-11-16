@@ -1,8 +1,16 @@
 name: Harness (Linux)
 
 # Installs the .deb of a "Linux Dev Build" run on a clean runner and runs every
-# case of tests/harness against it under Xvfb and openbox. The job is red when
-# a case is not ok (run.sh exits 1) or the harness could not run (exit 2).
+# case of tests/harness against it under Xvfb and openbox, once per
+# architecture: x86_64 and aarch64, each on a runner of its own architecture.
+# A job is red when a case is not ok (run.sh exits 1) or the harness could not
+# run (exit 2).
+#
+# Known red: docx-xlsx-content, an XLSX named .docx, opens instead of being
+# refused because of a defect of the app, not of the harness. The case is run
+# as it is; the jobs stay red until the app is fixed.
+#
+# The log of the harness step says which pdftotext the pdf-text cases used.
 #
 # result.json is uploaded on every run; the package install log, the app logs
 # and the screenshots only when the job fails.
@@ -11,11 +19,13 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Linux Dev Build run id to take deb-x86_64-unknown-linux-gnu from"
+        description: "Linux Dev Build run id to take deb-<target> from"
         required: true
         type: string
 
   # After every Linux Dev Build; the job skips builds that did not succeed.
+  # The build succeeds only when every target does: a failed target skips
+  # both architectures here.
   # workflow_run only fires for the workflow file on the default branch, and
   # the checkout is then the default branch: its cases judge the build,
   # whatever branch the build came from.
@@ -37,9 +47,20 @@ concurrency:
 jobs:
   harness-linux:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
-    # The runner image the x86_64 .deb is built on.
-    runs-on: ubuntu-22.04
+    # The runner image each .deb is built on (see build-linux-dev.yml).
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      # A red architecture does not cancel the other.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
 
     steps:
       - name: Checkout
@@ -52,7 +73,7 @@ jobs:
       - name: Download the .deb from the build run
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: deb-x86_64-unknown-linux-gnu
+          name: deb-${{ matrix.target }}
           path: deb/
           run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -61,7 +82,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            xvfb openbox xdotool wmctrl x11-utils imagemagick unzip python3 dbus
+            xvfb openbox xdotool wmctrl x11-utils imagemagick unzip python3 dbus poppler-utils
 
       - name: Run the harness
         # Below the job timeout, so the upload steps still run.
@@ -82,7 +103,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: harness-linux-result-${{ github.run_attempt }}
+          name: harness-linux-${{ matrix.arch }}-result-${{ github.run_attempt }}
           path: ${{ runner.temp }}/harness/result.json
           # There is none when the harness could not run (exit 2).
           if-no-files-found: warn
@@ -92,10 +113,12 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: harness-linux-diagnostics-${{ github.run_attempt }}
+          name: harness-linux-${{ matrix.arch }}-diagnostics-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/harness/apt.log
             ${{ runner.temp }}/harness/*/app.log
+            ${{ runner.temp }}/harness/*/app-restart.log
+            ${{ runner.temp }}/harness/*/exported.txt
             ${{ runner.temp }}/harness/*/screen.png
           if-no-files-found: warn
           retention-days: 7

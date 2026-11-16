@@ -47,6 +47,28 @@ function New-Zip([string]$path, $parts) {
     $zip.Dispose()
 }
 
+# A one-page PDF with a line of Helvetica text per entry of LINES.
+function New-Pdf([string]$path, [string[]]$lines) {
+    $newline = [string][char]10
+    $shown = @($lines | ForEach-Object { '(' + $_ + ') Tj T*' }) -join ' '
+    $content = 'BT /F1 12 Tf 72 720 Td 14 TL ' + $shown + ' ET'
+    $objects = @(
+        '<< /Type /Catalog /Pages 2 0 R >>',
+        '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+        ('<< /Length ' + $content.Length + ' >>' + $newline + 'stream' + $newline + $content + $newline + 'endstream'),
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+    )
+    $body = '%PDF-1.4' + $newline
+    $table = 'xref' + $newline + '0 6' + $newline + '0000000000 65535 f ' + $newline
+    for ($index = 0; $index -lt $objects.Count; $index++) {
+        $table += $body.Length.ToString('0000000000') + ' 00000 n ' + $newline
+        $body += ($index + 1).ToString() + ' 0 obj' + $newline + $objects[$index] + $newline + 'endobj' + $newline
+    }
+    $trailer = 'trailer' + $newline + '<< /Size 6 /Root 1 0 R >>' + $newline + 'startxref' + $newline + $body.Length + $newline + '%%EOF' + $newline
+    [System.IO.File]::WriteAllText($path, $body + $table + $trailer, [System.Text.Encoding]::ASCII)
+}
+
 # --- checks without the app ----------------------------------------------------
 
 function Test-Scripts {
@@ -64,7 +86,7 @@ function Test-Scripts {
 
 function Test-CaseFiles {
     $names = @(Get-SelectedCases 'all')
-    Assert-Equal 'number of cases' $names.Count 21
+    Assert-Equal 'number of cases' $names.Count 35
     foreach ($name in $names) {
         $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
         $complete = ($null -ne $case) -and (Get-CaseValue $case 'input') -and (Get-CaseValue $case 'generate') -and (Get-CaseValue $case 'expect')
@@ -134,6 +156,46 @@ function Test-ZipChecks([string]$inputs) {
     Assert-Equal 'a pattern matches within one line, like grep' (Test-ZipPartMatch $xlsx 'xl/worksheets/sheet1.xml' '<sheetData>[[:space:]]*<row') $false
 }
 
+function Test-PdfChecks {
+    $pdf = Join-Path $Work 'text.pdf'
+    New-Pdf $pdf @('Paragraph 0: the quick brown fox', '1,234.50')
+    $zip = Write-Bytes 'zip.pdf' ([byte[]](0x50, 0x4B, 3, 4, 0, 0))
+    Assert-Equal 'a PDF starts with %PDF-' (Test-PdfHeader $pdf) $true
+    Assert-Equal 'a zip is not a PDF' (Test-PdfHeader $zip) $false
+    Assert-Equal 'a file of two bytes is not a PDF' (Test-PdfHeader (Write-Bytes 'short.pdf' ([byte[]](0x25, 0x50)))) $false
+    Assert-Equal 'the export goes next to the document' (Get-ExportFile (Join-Path $Work 'a.docx')) (Join-Path $Work 'exported.pdf')
+    Assert-Equal 'a line matches' (Test-LineMatch @('1234.5', '1.234,50') '1[^0-9]{0,3}234[.,]50') $true
+    Assert-Equal 'no line matches' (Test-LineMatch @('1234.5') '1[^0-9]{0,3}234[.,]50') $false
+    $run = New-Run 'pdf'
+    Check-PdfText $run $zip
+    Assert-Equal 'pdf-text: not a PDF' $run.Observed 'exported-not-pdf'
+    Test-PdfWithoutTool $pdf
+    $tool = Find-PdfToText
+    if (-not $tool) {
+        Write-Output 'skip pdf-text with pdftotext: this machine has none'
+        return
+    }
+    Assert-Equal 'pdftotext -v says a version' ((Get-PdfToTextVersion $tool) -match 'version') $true
+    $run = New-Run 'pdf'
+    $run.Case = @{ match_1 = 'Paragraph 0: the quick'; match_2 = '1[^0-9]{0,3}234[.,]50' }
+    Check-PdfText $run $pdf
+    Assert-Equal 'pdf-text: every match is there' $run.Observed 'exported-as-expected'
+    $run = New-Run 'pdf'
+    $run.Case = @{ match_1 = 'Paragraph 9' }
+    Check-PdfText $run $pdf
+    Assert-Equal 'pdf-text: a match is missing' $run.Observed 'exported-missing-content'
+}
+
+# A machine without pdftotext: the case fails instead of passing on the header.
+# The stand-in lives in this function's scope and goes when it returns.
+function Test-PdfWithoutTool([string]$pdf) {
+    function Find-PdfToText { return '' }
+    $run = New-Run 'pdf'
+    $run.Case = @{ match_1 = 'Paragraph 0: the quick' }
+    Check-PdfText $run $pdf
+    Assert-Equal 'pdf-text without pdftotext' $run.Observed 'no-pdftotext'
+}
+
 # The ways an open that failed shows, and those of an open that worked.
 function Test-OpenSignals {
     $Fake.Alive = $true
@@ -160,6 +222,17 @@ function Test-OpenSignals {
     $Fake.Alive = $false
 }
 
+function Test-RecoverySignals {
+    $log = Join-Path $Work 'recovery.log'
+    [System.IO.File]::WriteAllLines($log, [string[]]@('[OPEN] success', '[RECOVER] begin session=1700000000000-42 bytes=10', '[RECOVER] candidates=2'))
+    Assert-Equal 'the session a log names' (Get-LogValue $log $SessionPattern) '1700000000000-42'
+    Assert-Equal 'the candidates a log names' (Get-LogValue $log $CandidatesPattern) '2'
+    Assert-Equal 'a log without the line' (Get-LogValue $log '\[RECOVER\] load session=(\S+)') ''
+    Assert-Equal 'a log that is not there' (Get-LogValue (Join-Path $Work 'none.log') $SessionPattern) ''
+    $changes = Join-Path (Join-Path (Join-Path (Join-Path (Get-ConfigDir) 'recover') '1-2') 'changes') 'changes0.json'
+    Assert-Equal 'the changes file of a session' (Get-RecoveryChanges '1-2') $changes
+}
+
 function Test-Json {
     $text = 'a"b\c' + [char]10 + [char]9 + [char]1 + 'd'
     Assert-Equal 'JSON string escapes' (ConvertTo-JsonString $text) '"a\"b\\c\n\td"'
@@ -167,7 +240,7 @@ function Test-Json {
 
 # --- a stand-in for the app -----------------------------------------------------
 
-$Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false }
+$Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false; SaveDialog = $false; Session = ''; KeepsRecovery = $true }
 
 function Start-Sleep { }
 function Test-Windows { return $true }
@@ -179,10 +252,49 @@ function Test-ProcessAlive([int]$processId) { return $Fake.Alive }
 function Set-Foreground([IntPtr]$window) { return $true }
 function Click-WindowCenter([IntPtr]$window) { }
 function Click-YesButton([IntPtr]$dialog) { return $false }
-function Close-Window([IntPtr]$window) { $Fake.Alive = $false }
 function Stop-ProcessTree([int]$processId) { $Fake.Alive = $false }
 function Get-Dialogs([int]$processId) { return $Fake.Dialogs }
-function Send-Text([string]$text) { $Fake.Typed += $text }
+
+function Remove-FakeSession {
+    if (-not $Fake.Session) { return }
+    $folder = Join-Path (Join-Path (Get-ConfigDir) 'recover') $Fake.Session
+    if (Test-Path -LiteralPath $folder) { Remove-Item -LiteralPath $folder -Recurse -Force }
+    $Fake.Session = ''
+}
+
+# A clean close ends the recovery session of the document: its folder goes.
+function Close-Window([IntPtr]$window) {
+    $Fake.Alive = $false
+    Remove-FakeSession
+}
+
+# A kill leaves the recovery session behind, unless the stand-in plays a
+# build that loses it.
+function Stop-AppAbruptly([int]$processId) {
+    $Fake.Alive = $false
+    if (-not $Fake.KeepsRecovery) { Remove-FakeSession }
+}
+
+# What is typed in the document is recorded in its recovery session; what is
+# typed in the Save As dialog is not.
+function Send-Text([string]$text) {
+    $Fake.Typed += $text
+    if ($Fake.SaveDialog) { return }
+    $changes = Get-RecoveryChanges $Fake.Session
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $changes) | Out-Null
+    [System.IO.File]::AppendAllText($changes, '"' + $text + '"')
+}
+
+# The start screen: the log says how many sessions it got to offer.
+function Start-AppEmpty([string]$exe, [string]$folder) {
+    $Fake.ProcessId++
+    $Fake.Alive = $true
+    $Fake.File = ''
+    $Fake.Session = ''
+    $log = Join-Path (Get-TempRoot) ('js-debug-1700000000001-{0}.log' -f $Fake.ProcessId)
+    [System.IO.File]::WriteAllLines($log, [string[]]@('[RECOVER] candidates=' + @(Get-RecoverEntries).Count))
+    return $Fake.ProcessId
+}
 
 function Get-MainWindow([int]$processId) {
     if ($Fake.Alive) { return [IntPtr]1 }
@@ -192,6 +304,16 @@ function Get-MainWindow([int]$processId) {
 function Save-Screenshot([string]$path) {
     [System.IO.File]::WriteAllText($path, 'not a picture')
     return $true
+}
+
+# The .docx inputs a fixed build refuses. Current builds open sheet-inside.docx.
+$FakeNeverOpens = @('encrypted.docx', 'plain-text.docx', 'sheet-inside.docx', 'truncated.docx')
+
+# The error a fixed build refuses the file with, or nothing when it opens it.
+function Get-FakeOpenError([string]$name) {
+    if ($FakeNeverOpens -contains $name) { return 'This file is not a valid .docx' }
+    if ($Fake.Refuses -and $name -like '*emoji*.txt') { return 'character above U+FFFF' }
+    return ''
 }
 
 # Writes the log an instance would: a TXT with an emoji is refused with a
@@ -204,11 +326,14 @@ function Start-App([string]$exe, [string]$file) {
     $Fake.Typed = ''
     $Fake.Dialogs = @()
     $Fake.Chords = @()
+    $Fake.SaveDialog = $false
+    $Fake.Session = '1700000000000-{0}' -f $Fake.ProcessId
     $name = Split-Path -Leaf $file
-    $lines = @('[OPEN] success editor_bin=10 bytes media_files=0', '[EO] Document ready: docType=word')
+    $lines = @('[OPEN] success editor_bin=10 bytes media_files=0', ('[RECOVER] begin session=' + $Fake.Session + ' bytes=10'), '[EO] Document ready: docType=word')
     if ($name -like '*.md') { $lines = @('[OPEN] markdown success bytes=10') }
-    if ($Fake.Refuses -and $name -like '*emoji*.txt') {
-        $lines = @('[OPEN] failed file=' + $name + ' error=character above U+FFFF')
+    $openError = Get-FakeOpenError $name
+    if ($openError) {
+        $lines = @('[OPEN] failed file=' + $name + ' error=' + $openError)
         $Fake.Dialogs = @(New-Object PSObject -Property @{ Handle = [IntPtr]2; Title = 'Cannot open' })
     }
     New-Item -ItemType Directory -Force -Path (Get-TempRoot) | Out-Null
@@ -236,15 +361,45 @@ function Save-FakeDocument {
         New-Zip $Fake.File @{ 'word/document.xml' = '<w:t>Paragraph 0: the quick brown fox</w:t><w:t>Paragraph 2: the quick brown fox' + $Fake.Typed + '</w:t>' }
         return
     }
+    if ($name -like '*.pptx') {
+        New-Zip $Fake.File @{ 'ppt/slides/slide1.xml' = '<a:t>Harness slide text' + $Fake.Typed + '</a:t>' }
+        return
+    }
+    if ($name -like '*.od?') {
+        # The text of the input says its format: "Harness ODT text".
+        $format = [System.IO.Path]::GetExtension($name).TrimStart('.').ToUpperInvariant()
+        $cell = '<table:table-cell office:value="1234.5"/>'
+        New-Zip $Fake.File @{ 'content.xml' = $cell + '<text:span>Harness ' + $format + ' text' + $Fake.Typed + '</text:span>' }
+        return
+    }
     $row = '<row r="1"><c r="A1"><v>1234.5</v></c><c r="B1" s="1">  <v>1234.5</v></c><c r="C1" s="2"><v>46086</v></c></row>'
     New-Zip $Fake.File @{ 'xl/worksheets/sheet1.xml' = $row; 'xl/sharedStrings.xml' = '<t>' + $Fake.Typed + '</t>' }
+}
+
+# Ctrl+Shift+S: the Save As dialog. What is typed next is the name it returns.
+function Open-FakeSaveDialog {
+    $Fake.SaveDialog = $true
+    $Fake.Typed = ''
+    $Fake.Dialogs = @(New-Object PSObject -Property @{ Handle = [IntPtr]3; Title = 'Save As' })
+}
+
+# Return in the Save As dialog: a PDF with the text of the document, at the
+# path that was typed.
+function Save-FakeExport {
+    $Fake.SaveDialog = $false
+    if ($Fake.WritesNothing) { return }
+    $lines = @('1234.5', '1,234.50', '3/5/2026')
+    if ($Fake.File -like '*.docx') { $lines = @('Paragraph 0: the quick brown fox jumps over the lazy dog.') }
+    New-Pdf $Fake.Typed $lines
 }
 
 function Send-KeyChord([int[]]$codes) {
     $chord = Format-Codes $codes
     $Fake.Chords += $chord
+    if ($chord -eq '0D' -and $Fake.SaveDialog) { Save-FakeExport }
     if ($chord -eq '0D') { $Fake.Dialogs = @() }
     if ($chord -eq '11 53') { Save-FakeDocument }
+    if ($chord -eq '11 10 53') { Open-FakeSaveDialog }
 }
 
 function New-FakeOptions([string]$selection, [string]$inputs, [bool]$control, [string]$outName) {
@@ -262,9 +417,18 @@ function Test-FullRun([string]$inputs) {
     $status = Invoke-Harness $options
     $result = Read-Result $options
     $notOk = @($result.cases | Where-Object { -not $_.ok } | ForEach-Object { $_.case + '=' + $_.observed })
-    Assert-Equal 'all: exit status' $status 0
-    Assert-Equal 'all: cases in result.json' @($result.cases).Count 21
-    Assert-Equal 'all: cases not ok' ($notOk -join ' ') ''
+    # Without pdftotext the two export cases fail, as they would on a runner.
+    $wantedStatus = 0
+    $wantedNotOk = ''
+    if (-not (Find-PdfToText)) {
+        $wantedStatus = 1
+        $wantedNotOk = 'docx-export-pdf=no-pdftotext xlsx-export-pdf=no-pdftotext'
+    }
+    Assert-Equal 'all: exit status' $status $wantedStatus
+    Assert-Equal 'all: cases in result.json' @($result.cases).Count 35
+    $export = Join-Path (Join-Path $options.Out 'docx-export-pdf') 'exported.pdf'
+    Assert-Equal 'all: the export of a case is a PDF' (Test-PdfHeader $export) $true
+    Assert-Equal 'all: cases not ok' ($notOk -join ' ') $wantedNotOk
     Assert-Equal 'all: mode' $result.mode 'normal'
     Assert-Equal 'all: package' $result.package '0.0.0-selftest'
     Assert-Equal 'all: binary_sha256 is the exe' $result.binary_sha256 (Get-Sha256 (Get-AppExe))
@@ -273,8 +437,14 @@ function Test-FullRun([string]$inputs) {
     Assert-Equal 'all: fields of a case' (@($first.PSObject.Properties | ForEach-Object { $_.Name }) -join ' ') 'case ok expected observed detail screenshot seconds'
     Assert-Equal 'all: no screenshot for a case that is ok' ($null -eq $first.screenshot) $true
     Assert-Equal 'all: the log of a case is kept' (Test-Path -LiteralPath (Join-Path (Join-Path $options.Out 'csv-bmp') 'app.log')) $true
-    Assert-Equal 'all: keys of the last case' ($Fake.Chords -join ', ') '11 24, 28, 0D, 11 53'
     Assert-Equal 'all: the app of the last case was closed' $Fake.Alive $false
+}
+
+function Test-KeysOfACase([string]$inputs) {
+    $options = New-FakeOptions 'xlsx-save' $inputs $false 'run-keys'
+    $status = Invoke-Harness $options
+    Assert-Equal 'keys: exit status' $status 0
+    Assert-Equal 'keys: chords sent for xlsx-save' ($Fake.Chords -join ', ') '11 24, 28, 0D, 11 53'
 }
 
 function Test-FailingRun([string]$inputs) {
@@ -287,6 +457,34 @@ function Test-FailingRun([string]$inputs) {
     Assert-Equal 'fail: observed' $only.observed 'save-not-written'
     Assert-Equal 'fail: ok' $only.ok $false
     Assert-Equal 'fail: screenshot path' $only.screenshot 'txt-crlf/screen.png'
+}
+
+function Test-ExportNotWritten([string]$inputs) {
+    $Fake.WritesNothing = $true
+    $options = New-FakeOptions 'docx-export-pdf' $inputs $false 'run-no-export'
+    $status = Invoke-Harness $options
+    $Fake.WritesNothing = $false
+    $only = (Read-Result $options).cases[0]
+    Assert-Equal 'no export: exit status' $status 1
+    Assert-Equal 'no export: observed' $only.observed 'export-not-written'
+    Assert-Equal 'no export: keys' ($Fake.Chords -join ', ') '11 10 53, 11 41, 0D'
+}
+
+function Test-RecoveryRun([string]$inputs) {
+    $options = New-FakeOptions 'docx-recover' $inputs $false 'run-recover'
+    $status = Invoke-Harness $options
+    $only = (Read-Result $options).cases[0]
+    Assert-Equal 'recover: exit status' $status 0
+    Assert-Equal 'recover: observed' $only.observed 'recovery-offered'
+    Assert-Equal 'recover: the detail has the log line' $only.detail.Contains('[RECOVER] candidates=1') $true
+    Assert-Equal 'recover: the log of the second instance is kept' (Test-Path -LiteralPath (Join-Path (Join-Path $options.Out 'docx-recover') 'app-restart.log')) $true
+    Assert-Equal 'recover: the second instance was closed' $Fake.Alive $false
+    Assert-Equal 'recover: the recovery folder is left empty' @(Get-RecoverEntries).Count 0
+    $Fake.KeepsRecovery = $false
+    $options = New-FakeOptions 'docx-recover' $inputs $false 'run-recover-lost'
+    $status = Invoke-Harness $options
+    $Fake.KeepsRecovery = $true
+    Assert-Equal 'lost recovery: observed and exit status' ((Read-Result $options).cases[0].observed + ' ' + $status) 'recovery-not-offered 1'
 }
 
 function Test-ControlRun([string]$inputs) {
@@ -375,10 +573,15 @@ Test-CaseFiles
 Test-Keys
 Test-ByteChecks
 Test-ZipChecks $TestInputs
+Test-PdfChecks
+Test-RecoverySignals
 Test-Json
 Test-OpenSignals
 Test-FullRun $TestInputs
+Test-KeysOfACase $TestInputs
 Test-FailingRun $TestInputs
+Test-ExportNotWritten $TestInputs
+Test-RecoveryRun $TestInputs
 Test-ControlRun $TestInputs
 Test-BadInputs $TestInputs
 Test-RefusesBusyMachine $TestInputs
