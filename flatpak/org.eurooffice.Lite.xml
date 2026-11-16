@@ -4,6 +4,10 @@
     <comment>Word Document</comment>
     <glob pattern="*.docx"/>
   </mime-type>
+  <mime-type type="application/vnd.openxmlformats-officedocument.wordprocessingml.template">
+    <comment>Word Template</comment>
+    <glob pattern="*.dotx"/>
+  </mime-type>
   <mime-type type="application/msword">
     <comment>Word Document (Legacy)</comment>
     <glob pattern="*.doc"/>
@@ -21,6 +25,10 @@
     <comment>Excel Spreadsheet</comment>
     <glob pattern="*.xlsx"/>
   </mime-type>
+  <mime-type type="application/vnd.openxmlformats-officedocument.spreadsheetml.template">
+    <comment>Excel Template</comment>
+    <glob pattern="*.xltx"/>
+  </mime-type>
   <mime-type type="application/vnd.ms-excel">
     <comment>Excel Spreadsheet (Legacy)</comment>
     <glob pattern="*.xls"/>
@@ -33,6 +41,10 @@
   <mime-type type="application/vnd.openxmlformats-officedocument.presentationml.presentation">
     <comment>PowerPoint Presentation</comment>
     <glob pattern="*.pptx"/>
+  </mime-type>
+  <mime-type type="application/vnd.openxmlformats-officedocument.presentationml.template">
+    <comment>PowerPoint Template</comment>
+    <glob pattern="*.potx"/>
   </mime-type>
   <mime-type type="application/vnd.ms-powerpoint">
     <comment>PowerPoint Presentation (Legacy)</comment>
