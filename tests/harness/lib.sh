@@ -137,6 +137,7 @@ find_new_pid() {
 has_main_window() { [ -n "$(main_window "$1")" ]; }
 
 # launch_app FILE LOG: starts the app on FILE and prints its pid once it has a window.
+# With an empty FILE the app starts on its start screen, with no document.
 # Its own session bus: the desktop portal of a systemd user session without
 # DISPLAY delays every GTK start by about 30 s.
 launch_app() {
@@ -145,7 +146,7 @@ launch_app() {
   (
     cd "$(dirname "$file")" || exit 1
     env -u WAYLAND_DISPLAY DISPLAY="$HARNESS_DISPLAY" GDK_BACKEND=x11 XDG_SESSION_TYPE=x11 \
-      setsid nohup dbus-run-session -- "$APP_BIN" "$file" >"$out" 2>&1 </dev/null &
+      setsid nohup dbus-run-session -- "$APP_BIN" ${file:+"$file"} >"$out" 2>&1 </dev/null &
   )
   for (( i = 0; i < 120; i++ )); do
     pid=$(find_new_pid "$before") && break
@@ -156,10 +157,14 @@ launch_app() {
   echo "$pid"
 }
 
-# open_state LOG: "failed" or "ready" once the app log says so.
+# open_state LOG: "failed" or "ready" once the app log says so. A .md opens
+# in the Markdown page, which says neither: the backend's [OPEN] markdown
+# lines stand for them.
 open_state() {
   grep -q '\[OPEN\] failed' "$1" && { echo failed; return 0; }
+  grep -q '\[OPEN\] markdown failed:' "$1" && { echo failed; return 0; }
   grep -q 'Document ready' "$1" && { echo ready; return 0; }
+  grep -q '\[OPEN\] markdown success' "$1" && { echo ready; return 0; }
   return 1
 }
 

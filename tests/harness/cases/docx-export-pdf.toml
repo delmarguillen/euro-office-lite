@@ -1,0 +1,10 @@
+# Open a DOCX and export it to PDF: Ctrl+Shift+S, then a name ending in .pdf
+# typed into the Save As dialog. The text of the PDF has the paragraph.
+description = "DOCX: open, Save As with a .pdf name; the text of the PDF has the paragraph"
+generate = "mkdocx.py 1"
+input = "paragraph.docx"
+action = "open-export-pdf"
+check = "pdf-text"
+match_1 = 'Paragraph 0: the quick brown fox'
+expect = "exported-as-expected"
+screenshot = "on-failure"

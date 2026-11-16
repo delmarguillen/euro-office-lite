@@ -1,0 +1,17 @@
+# The CSV of csv-emoji in UTF-16 LE with a BOM: its two characters above
+# U+FFFF are surrogate pairs. The case appends Z to the last cell (F2 edits it
+# in place) and the save must be the input with that Z, still UTF-16 LE with
+# its BOM.
+description = "UTF-16 LE CSV with a BOM and characters above U+FFFF: Ctrl+S after adding Z to the last cell keeps encoding, BOM and every byte"
+generate = "mktxt.py csv-emoji-utf16le-bom"
+input = "emoji-utf16le.csv"
+input_sha256 = "1189a02868868c20fe4234cc43c9121f1bb79dae27060cd92b8d2d08039ec067"
+action = "open-edit-save"
+keys_before = "ctrl+End F2 End"
+type = "Z"
+keys_after = "Return"
+check = "expected-bytes"
+expected_generate = "mktxt.py csv-emoji-utf16le-bom z"
+expected_sha256 = "03975127906de11e72727ffb05ac226f81b876954372676111a8f87e7650dab1"
+expect = "saved-as-expected"
+screenshot = "on-failure"

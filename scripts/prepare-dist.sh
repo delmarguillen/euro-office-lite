@@ -102,6 +102,9 @@ copy_single_file "$SRC/button-hint-patch.js" "$DIST/button-hint-patch.js" "butto
 copy_single_file "$SRC/font-patches.js"      "$DIST/font-patches.js"      "font-patches.js"
 copy_single_file "$SRC/editor-patches.js"    "$DIST/editor-patches.js"    "editor-patches.js"
 
+# --- Markdown page and its libraries ---
+copy_tree "$SRC/markdown" "$DIST/markdown" "src/markdown"
+
 # --- Fonts ---
 copy_tree "$SRC/fonts" "$DIST/fonts" "src/fonts"
 

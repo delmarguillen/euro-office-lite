@@ -245,6 +245,80 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
     env.callbacks.recent === 0 && env.bridge.logs.some((line) => line.includes('Recent files toggle failed: disk full')));
 }
 
+// The start screen's own light or dark look.
+function buildThemeScreen(bridge) {
+  const makeButton = (choice) => {
+    const attributes = new Map();
+    return {
+      dataset: { themeChoice: choice },
+      setAttribute: (name, value) => attributes.set(name, String(value)),
+      getAttribute: (name) => (attributes.has(name) ? attributes.get(name) : null),
+    };
+  };
+  const dark = makeButton('dark');
+  const light = makeButton('light');
+  const documentElement = { dataset: {} };
+  bridge.sandbox.document = {
+    documentElement,
+    querySelectorAll: (selector) => (selector === '[data-theme-choice]' ? [dark, light] : []),
+  };
+  return { dark, light, documentElement };
+}
+
+function failingStorage(bridge, method) {
+  const storage = bridge.sandbox.localStorage;
+  storage[method] = () => { throw new Error('storage blocked'); };
+}
+
+{
+  const bridge = await loadBridge();
+  check(results, 'with nothing stored the start theme is dark', bridge.run('_eoStoredTheme()') === 'dark');
+
+  bridge.sandbox.localStorage.setItem('eo-start-theme', 'light');
+  check(results, 'a stored light theme is read back', bridge.run('_eoStoredTheme()') === 'light');
+
+  bridge.sandbox.localStorage.setItem('eo-start-theme', 'blue');
+  check(results, 'an unknown stored theme falls back to dark', bridge.run('_eoStoredTheme()') === 'dark');
+}
+
+{
+  const bridge = await loadBridge();
+  failingStorage(bridge, 'getItem');
+  let theme = null;
+  let threw = false;
+  try {
+    theme = bridge.run('_eoStoredTheme()');
+  } catch (error) {
+    threw = true;
+  }
+  check(results, 'a storage that throws on read gives dark without throwing', !threw && theme === 'dark');
+}
+
+{
+  const bridge = await loadBridge();
+  const screen = buildThemeScreen(bridge);
+  bridge.run("_eoChooseTheme('light')");
+  check(results, 'choosing light stores it', bridge.sandbox.localStorage.getItem('eo-start-theme') === 'light');
+  check(results, '... sets data-theme on the document element', screen.documentElement.dataset.theme === 'light');
+  check(results, '... and presses only the light button',
+    screen.light.getAttribute('aria-pressed') === 'true' && screen.dark.getAttribute('aria-pressed') === 'false');
+}
+
+{
+  const bridge = await loadBridge();
+  const screen = buildThemeScreen(bridge);
+  failingStorage(bridge, 'setItem');
+  let threw = false;
+  try {
+    bridge.run("_eoChooseTheme('light')");
+  } catch (error) {
+    threw = true;
+  }
+  check(results, 'a storage that throws on write does not stop choosing the theme', !threw);
+  check(results, '... and the theme is still applied',
+    screen.documentElement.dataset.theme === 'light' && screen.light.getAttribute('aria-pressed') === 'true');
+}
+
 {
   const bridge = await loadBridge();
   const missing = bridge.run(`

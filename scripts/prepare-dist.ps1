@@ -105,6 +105,9 @@ Copy-SingleFile "$src\button-hint-patch.js" "$dist\button-hint-patch.js" "button
 Copy-SingleFile "$src\font-patches.js"      "$dist\font-patches.js"      "font-patches.js"
 Copy-SingleFile "$src\editor-patches.js"    "$dist\editor-patches.js"    "editor-patches.js"
 
+# --- Markdown page and its libraries ---
+Copy-Tree "$src\markdown" "$dist\markdown" @() "src/markdown"
+
 # --- Fonts ---
 Copy-Tree "$src\fonts" "$dist\fonts" @() "src/fonts"
 

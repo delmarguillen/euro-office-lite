@@ -1,0 +1,14 @@
+# Open an ODT, type a word at the end, Ctrl+S: the app saves an .odt in place,
+# and the saved content holds the new word and the paragraph it had.
+description = "ODT: open, type at the end, Ctrl+S; the saved content.xml has the new text and the old paragraph"
+generate = "mkodf.py odt"
+input = "text.odt"
+input_sha256 = "3805e7abfc352e77dc19f1a04dc66a08baa99b0facd745cd348583aa4ca07774"
+action = "open-edit-save"
+keys_before = "ctrl+End"
+type = " Harness75odt"
+check = "zip-match"
+match_1 = 'content.xml Harness75odt'
+match_2 = 'content.xml Harness ODT text'
+expect = "saved-as-expected"
+screenshot = "on-failure"

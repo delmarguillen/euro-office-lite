@@ -30,14 +30,17 @@
   <provides>
     <binary>euro-office-lite</binary>
     <mediatype>application/vnd.openxmlformats-officedocument.wordprocessingml.document</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.wordprocessingml.template</mediatype>
     <mediatype>application/msword</mediatype>
     <mediatype>application/vnd.oasis.opendocument.text</mediatype>
     <mediatype>application/rtf</mediatype>
     <mediatype>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.spreadsheetml.template</mediatype>
     <mediatype>application/vnd.ms-excel</mediatype>
     <mediatype>application/vnd.oasis.opendocument.spreadsheet</mediatype>
     <mediatype>text/csv</mediatype>
     <mediatype>application/vnd.openxmlformats-officedocument.presentationml.presentation</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.presentationml.template</mediatype>
     <mediatype>application/vnd.ms-powerpoint</mediatype>
     <mediatype>application/vnd.oasis.opendocument.presentation</mediatype>
   </provides>

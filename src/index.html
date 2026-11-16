@@ -1,40 +1,126 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=IE8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
   <title>Euro-Office Lite</title>
+  <script>
+    // Set before the first paint so a light theme never flashes dark.
+    try {
+      if (localStorage.getItem('eo-start-theme') === 'light') document.documentElement.dataset.theme = 'light';
+    } catch (e) {}
+  </script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; }
 
+    :root {
+      --bg: #0A0C10;
+      --glow-a: rgba(124, 108, 255, 0.16);
+      --glow-b: rgba(45, 212, 191, 0.07);
+      --fg: #ECEEF3;
+      --muted: #8D95A7;
+      --line: rgba(255, 255, 255, 0.07);
+      --line-hi: rgba(255, 255, 255, 0.18);
+      --tile: rgba(255, 255, 255, 0.025);
+      --tile-hi: rgba(255, 255, 255, 0.055);
+      --pop: rgba(20, 23, 30, 0.96);
+      --shadow: rgba(0, 0, 0, 0.5);
+      --overlay: rgba(10, 12, 16, 0.92);
+      --focus: #8AB4FF;
+      --warn: #F5D48A;
+      --lite-a: #B4BBE6;
+      --lite-b: #6FD6C2;
+      --k-word: #8AB4FF;
+      --k-cell: #6EE7B7;
+      --k-slide: #FDBA74;
+      --k-pdf: #FDA4AF;
+      --k-markdown: #C4B5FD;
+      color-scheme: dark;
+    }
+    :root[data-theme="light"] {
+      --bg: #F5F6F8;
+      --glow-a: rgba(124, 108, 255, 0.10);
+      --glow-b: rgba(45, 212, 191, 0.08);
+      --fg: #0E1116;
+      --muted: #596274;
+      --line: rgba(15, 17, 22, 0.08);
+      --line-hi: rgba(15, 17, 22, 0.20);
+      --tile: rgba(255, 255, 255, 0.6);
+      --tile-hi: #FFFFFF;
+      --pop: rgba(255, 255, 255, 0.98);
+      --shadow: rgba(15, 17, 22, 0.12);
+      --overlay: rgba(245, 246, 248, 0.92);
+      --focus: #2563EB;
+      --warn: #B7791F;
+      --lite-a: #5F64A8;
+      --lite-b: #16806F;
+      --k-word: #2563EB;
+      --k-cell: #059669;
+      --k-slide: #C2410C;
+      --k-pdf: #E11D48;
+      --k-markdown: #7C3AED;
+      color-scheme: light;
+    }
+
     body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: #1e1e2e;
-      color: #cdd6f4;
+      font-family: 'Segoe UI Variable Display', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Ubuntu, Cantarell, 'Noto Sans', system-ui, sans-serif;
+      background:
+        radial-gradient(900px 520px at 50% 18%, var(--glow-a), transparent 70%),
+        radial-gradient(700px 480px at 70% 75%, var(--glow-b), transparent 70%),
+        var(--bg);
+      color: var(--fg);
+      font-size: 14px;
     }
+    button, select { font-family: inherit; }
 
-    .start {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      text-align: center;
-      overflow-y: auto;
-    }
+    /* margin:auto on the inner block centers it and still scrolls from the top
+       when the window is shorter than the content. */
+    .start { display: flex; height: 100%; overflow-y: auto; padding: 3.5rem 2rem 4rem; }
     .start.hidden { display: none; }
-
-    h1 { font-size: 2rem; font-weight: 300; margin-bottom: 0.5rem; }
-    .version { font-size: 0.85rem; color: #6c7086; margin-bottom: 2rem; }
-    .actions { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
-    .btn {
-      background: #313244; border: 1px solid #45475a; color: #cdd6f4;
-      padding: 1rem 1.5rem; border-radius: 8px; cursor: pointer;
-      font-size: 0.95rem; transition: background 0.15s; min-width: 140px;
+    .start-inner {
+      margin: auto; width: 100%; max-width: 780px;
+      display: flex; flex-direction: column; align-items: center; gap: 3rem;
     }
-    .btn:hover { background: #45475a; }
-    .btn .icon { font-size: 1.5rem; display: block; margin-bottom: 0.4rem; }
+
+    .brand { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
+    h1 { font-size: 52px; font-weight: 300; letter-spacing: -0.04em; line-height: 1; }
+    .wordmark-lite {
+      background: linear-gradient(90deg, var(--lite-a), var(--lite-b));
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .version { font-size: 12px; color: var(--muted); letter-spacing: 0.06em; }
+    .brand-rule { width: 240px; height: 1px; background: linear-gradient(90deg, transparent, var(--line-hi), transparent); }
+
+    .create { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 1.25rem; }
+    .actions { width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 12px; }
+    .btn {
+      height: 132px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+      border-radius: 18px; border: 1px solid var(--line); background: var(--tile); color: var(--fg);
+      font-size: 13px; cursor: pointer;
+      transition: transform 0.25s cubic-bezier(.2, .8, .2, 1), background 0.25s ease, border-color 0.25s ease;
+    }
+    .btn:hover { transform: translateY(-3px); background: var(--tile-hi); border-color: var(--line-hi); }
+    .btn .icon { width: 32px; height: 32px; transition: transform 0.25s cubic-bezier(.2, .8, .2, 1); }
+    .btn:hover .icon { transform: scale(1.06); }
+    .btn[data-type="word"] .icon { color: var(--k-word); }
+    .btn[data-type="cell"] .icon { color: var(--k-cell); }
+    .btn[data-type="slide"] .icon { color: var(--k-slide); }
+    .btn[data-new-markdown] .icon { color: var(--k-markdown); }
+    .btn[data-edit-pdf] .icon { color: var(--k-pdf); }
+
+    .btn.btn-open {
+      height: 40px; flex-direction: row; gap: 10px; padding: 0 14px;
+      border: 0; border-radius: 10px; background: transparent;
+    }
+    .btn.btn-open:hover { transform: none; background: var(--tile); }
+    .btn.btn-open .icon { width: 16px; height: 16px; color: currentColor; }
+    .btn.btn-open:hover .icon { transform: none; }
+    kbd {
+      font-family: inherit; font-size: 11px; color: var(--muted);
+      border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px;
+    }
 
     #placeholder {
       position: absolute; left: 0; top: 0; right: 0; bottom: 0;
@@ -46,122 +132,159 @@
     #opening {
       position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 1000;
       display: none; flex-direction: column; align-items: center; justify-content: center;
-      gap: 1rem; background: rgba(30, 30, 46, 0.92); cursor: progress;
+      gap: 1rem; background: var(--overlay); cursor: progress;
     }
     #opening.active { display: flex; }
     .opening-spinner {
       width: 36px; height: 36px; border-radius: 50%;
-      border: 3px solid #45475a; border-top-color: #89b4fa;
+      border: 2px solid var(--line-hi); border-top-color: var(--lite-b);
       animation: opening-spin 0.8s linear infinite;
     }
     .opening-text {
-      font-size: 0.95rem; color: #a6adc8; max-width: 88vw;
+      font-size: 0.95rem; color: var(--muted); max-width: 88vw;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     @keyframes opening-spin { to { transform: rotate(360deg); } }
 
-    .settings { position: absolute; top: 1rem; right: 1rem; z-index: 10; text-align: left; }
+    .settings { position: absolute; top: 0.75rem; right: 0.75rem; z-index: 10; text-align: left; }
     .settings-toggle {
       display: flex; align-items: center; justify-content: center;
-      width: 2.1rem; height: 2.1rem; padding: 0; border-radius: 6px;
-      background: #313244; border: 1px solid #45475a; color: #cdd6f4; cursor: pointer;
+      width: 40px; height: 40px; padding: 0; border-radius: 10px;
+      background: transparent; border: 1px solid transparent; color: var(--muted); cursor: pointer;
     }
-    .settings-toggle:hover { border-color: #6c7086; }
-    .settings-toggle[aria-expanded="true"] { border-color: #89b4fa; }
-    .settings-toggle svg { width: 1.15rem; height: 1.15rem; }
+    .settings-toggle:hover { background: var(--tile); color: var(--fg); }
+    .settings-toggle[aria-expanded="true"] { background: var(--tile); color: var(--fg); border-color: var(--line); }
+    .settings-toggle svg { width: 18px; height: 18px; }
     .settings-panel {
       position: absolute; top: calc(100% + 0.4rem); right: 0;
-      width: min(260px, 88vw); padding: 0.4rem 0.8rem;
-      background: #1e1e2e; border: 1px solid #45475a; border-radius: 8px;
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+      width: min(272px, 88vw); padding: 0.4rem 0.9rem;
+      background: var(--pop); border: 1px solid var(--line); border-radius: 16px;
+      box-shadow: 0 24px 60px var(--shadow);
     }
-    .settings-section { padding: 0.55rem 0; }
-    .settings-section + .settings-section { border-top: 1px solid #313244; }
-    .settings-label { display: block; font-size: 0.75rem; color: #a6adc8; margin-bottom: 0.4rem; }
+    .settings-section { padding: 0.7rem 0; }
+    .settings-section + .settings-section { border-top: 1px solid var(--line); }
+    .settings-label {
+      display: block; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 0.5rem;
+    }
+    .theme-switch {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px;
+      padding: 3px; border-radius: 10px; border: 1px solid var(--line);
+    }
+    .theme-option {
+      height: 32px; border: 0; border-radius: 7px; background: transparent;
+      color: var(--muted); font-size: 12px; cursor: pointer;
+    }
+    .theme-option:hover { color: var(--fg); }
+    .theme-option[aria-pressed="true"] { background: var(--tile-hi); color: var(--fg); }
     .settings-panel select {
       width: 100%;
-      background: #313244;
-      border: 1px solid #45475a;
-      color: #cdd6f4;
-      padding: 0.4rem 0.6rem;
-      border-radius: 6px;
-      font-size: 0.85rem;
+      background-color: transparent;
+      border: 1px solid var(--line);
+      color: var(--fg);
+      padding: 0.45rem 0.6rem;
+      border-radius: 10px;
+      font-size: 13px;
       cursor: pointer;
       -webkit-appearance: none;
       appearance: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23cdd6f4' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%238D95A7' stroke-width='1.4' d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E");
       background-repeat: no-repeat;
-      background-position: right 0.5rem center;
-      padding-right: 1.5rem;
+      background-position: right 0.6rem center;
+      padding-right: 1.6rem;
     }
-    .settings-panel select option { background: #313244; color: #cdd6f4; }
-    .settings-panel select:hover { border-color: #6c7086; }
-    .settings-panel select:focus { outline: none; border-color: #89b4fa; }
+    .settings-panel select option { background: var(--bg); color: var(--fg); }
+    .settings-panel select:hover { border-color: var(--line-hi); }
+    .settings-panel select:focus { outline: none; border-color: var(--focus); }
     .settings-panel .recent-clear { padding-left: 0; }
     .settings-panel .recent-toggle { margin-top: 0; }
+    .btn:focus-visible,
+    .recent-item:focus-visible,
+    .recent-clear:focus-visible,
+    .recover-action:focus-visible,
     .settings-toggle:focus-visible,
     .settings-panel button:focus-visible,
-    .settings-panel input:focus-visible { outline: 2px solid #89b4fa; outline-offset: 2px; }
+    .settings-panel input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
     /* Same look as the recent list below, minus the clickable row: these rows
        carry two buttons of their own, so the row itself is not a button. */
-    .recover { width: min(560px, 88vw); margin: 2rem auto 0; text-align: left; }
+    .recover, .recent { width: 100%; text-align: left; }
+    .recover { margin-bottom: -1.5rem; }
     .recover-item {
-      display: flex; align-items: center; gap: 0.6rem; width: 100%;
-      background: #313244; border: 1px solid #f9e2af; color: #cdd6f4;
-      border-radius: 6px; padding: 0.5rem 0.7rem; margin-bottom: 0.4rem;
-      font-size: 0.85rem;
+      display: flex; align-items: center; gap: 0.75rem; width: 100%;
+      border: 1px solid var(--warn); border-radius: 12px; color: var(--fg);
+      padding: 0.5rem 0.75rem; margin-bottom: 0.4rem; font-size: 13px;
     }
     .recover-icon {
-      flex: 0 0 auto; width: 1.4rem; height: 1.4rem; border-radius: 4px;
+      flex: 0 0 auto; min-width: 1.6rem; height: 1.4rem; padding: 0 0.25rem; border-radius: 6px;
       display: flex; align-items: center; justify-content: center;
-      background: #45475a; font-size: 0.7rem; font-weight: 600;
+      border: 1px solid var(--line-hi); color: var(--muted); font-size: 0.65rem; font-weight: 600;
     }
     .recover-name {
       flex: 1 1 auto; min-width: 0;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .recover-date { flex: 0 0 auto; color: #6c7086; font-size: 0.75rem; }
+    .recover-date { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
     .recover-action {
-      flex: 0 0 auto; background: none; border: 1px solid #45475a;
-      color: #89b4fa; cursor: pointer; font-family: inherit;
-      font-size: 0.78rem; padding: 0.2rem 0.5rem; border-radius: 4px;
+      flex: 0 0 auto; background: none; border: 1px solid var(--line-hi);
+      color: var(--fg); cursor: pointer; font-family: inherit;
+      font-size: 12px; padding: 0.25rem 0.6rem; border-radius: 8px;
     }
-    .recover-action:hover { background: #45475a; }
+    .recover-action:hover { background: var(--tile-hi); }
 
-    .recent { width: min(560px, 88vw); margin: 2rem auto 0; text-align: left; }
     .recent-head {
       display: flex; align-items: center; justify-content: space-between;
-      font-size: 0.85rem; color: #a6adc8; margin-bottom: 0.5rem;
+      padding: 0 0.75rem; margin-bottom: 0.25rem;
+      font-size: 11px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
     }
     .recent-clear {
-      background: none; border: none; color: #89b4fa; cursor: pointer;
-      font-size: 0.8rem; padding: 0.2rem 0.4rem; border-radius: 4px;
+      background: none; border: none; color: var(--muted); cursor: pointer;
+      font-size: 12px; letter-spacing: normal; text-transform: none;
+      padding: 0.35rem 0.5rem; border-radius: 8px;
     }
-    .recent-clear:hover { background: #313244; }
-    .recent-list { list-style: none; max-height: 232px; overflow-y: auto; }
+    .recent-clear:hover { background: var(--tile); color: var(--fg); }
+    .recent-list { list-style: none; max-height: 236px; overflow-y: auto; }
     .recent-item {
-      display: flex; align-items: baseline; gap: 0.75rem; width: 100%;
-      background: #313244; border: 1px solid #45475a; color: #cdd6f4;
-      border-radius: 6px; padding: 0.5rem 0.7rem; margin-bottom: 0.4rem;
-      cursor: pointer; text-align: left; font-family: inherit; font-size: 0.85rem;
+      display: grid; grid-template-columns: 16px minmax(0, 1.4fr) minmax(0, 1.6fr) auto;
+      align-items: center; gap: 1rem; width: 100%; height: 46px;
+      background: transparent; border: 0; border-radius: 12px; color: var(--fg);
+      padding: 0 0.75rem; cursor: pointer; text-align: left; font-family: inherit; font-size: 13px;
     }
-    .recent-item:hover { background: #45475a; }
-    .recent-name {
-      flex: 0 1 auto; max-width: 45%;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    .recent-item:hover { background: var(--tile); }
+    .recent-icon {
+      width: 16px; height: 16px; background-color: var(--muted);
+      -webkit-mask: var(--glyph) center / contain no-repeat; mask: var(--glyph) center / contain no-repeat;
+      --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 3h8l4 4M18 11v10H6V7'/%3E%3C/svg%3E");
     }
+    .recent-icon[data-kind="word"] {
+      background-color: var(--k-word);
+      --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M6 5h12M6 10h12M6 15h12M6 20h7'/%3E%3C/svg%3E");
+    }
+    .recent-icon[data-kind="cell"] {
+      background-color: var(--k-cell);
+      --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M4 6h4M10 6h4M16 6h4M4 12h4M10 12h4M16 12h4M4 18h4M10 18h4M16 18h4'/%3E%3C/svg%3E");
+    }
+    .recent-icon[data-kind="slide"] {
+      background-color: var(--k-slide);
+      --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8V5H7M17 5h3.5v3M20.5 13v3H17M7 16H3.5v-3'/%3E%3C/svg%3E");
+    }
+    .recent-icon[data-kind="pdf"] { background-color: var(--k-pdf); }
+    .recent-icon[data-kind="markdown"] {
+      background-color: var(--k-markdown);
+      --glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 17V7l4 5 4-5v10M17.5 7v10M15 14.5l2.5 2.5 2.5-2.5'/%3E%3C/svg%3E");
+    }
+    .recent-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .recent-path {
-      flex: 1 1 auto; min-width: 0; color: #6c7086; font-size: 0.78rem;
+      color: var(--muted); font-size: 12px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .recent-date { flex: 0 0 auto; color: #6c7086; font-size: 0.75rem; }
-    .recent-empty { color: #6c7086; font-size: 0.82rem; padding: 0.3rem 0; }
+    .recent-date { color: var(--muted); font-size: 12px; text-align: right; }
+    .recent-empty { color: var(--muted); font-size: 13px; padding: 0.5rem 0.75rem; }
     .recent-toggle {
-      display: flex; align-items: center; gap: 0.45rem; margin-top: 0.7rem;
-      font-size: 0.8rem; color: #a6adc8; cursor: pointer;
+      display: flex; align-items: center; gap: 0.5rem; margin-top: 0.7rem;
+      font-size: 13px; color: var(--fg); cursor: pointer;
     }
-    .recent-toggle input { accent-color: #89b4fa; cursor: pointer; }
+    .recent-toggle input { accent-color: var(--focus); cursor: pointer; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -171,14 +294,24 @@
       <button type="button" class="settings-toggle" id="settings-toggle"
               aria-expanded="false" aria-controls="settings-panel"
               data-i18n-label="settings" aria-label="Settings">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"
+             stroke-linecap="round" aria-hidden="true" focusable="false">
+          <path d="M4 7h9M17 7h3M4 17h3M11 17h9"/>
+          <circle cx="15" cy="7" r="2"/>
+          <circle cx="9" cy="17" r="2"/>
         </svg>
       </button>
       <div class="settings-panel" id="settings-panel" role="dialog"
            data-i18n-label="settings" aria-label="Settings" hidden>
+        <div class="settings-section">
+          <span class="settings-label" data-i18n="appearance">Appearance</span>
+          <div class="theme-switch" role="group" data-i18n-label="appearance" aria-label="Appearance">
+            <button type="button" class="theme-option" data-theme-choice="dark"
+                    aria-pressed="true" data-i18n="themeDark">Dark</button>
+            <button type="button" class="theme-option" data-theme-choice="light"
+                    aria-pressed="false" data-i18n="themeLight">Light</button>
+          </div>
+        </div>
         <div class="settings-section">
           <label class="settings-label" for="lang-select" data-i18n="interfaceLanguage">Interface language</label>
           <select id="lang-select"></select>
@@ -197,24 +330,40 @@
         </div>
       </div>
     </div>
-    <div>
-      <h1>Euro-Office Lite</h1>
-      <p class="version">v0.18.0-alpha — Desktop</p>
-      <div class="actions">
-        <button class="btn" data-type="word">
-          <span class="icon">W</span> <span data-i18n="document">Document</span>
-        </button>
-        <button class="btn" data-type="cell">
-          <span class="icon">X</span> <span data-i18n="spreadsheet">Spreadsheet</span>
-        </button>
-        <button class="btn" data-type="slide">
-          <span class="icon">P</span> <span data-i18n="presentation">Presentation</span>
-        </button>
-        <button class="btn" data-edit-pdf="true">
-          <span class="icon">PDF</span> <span data-i18n="editPdf">Edit PDF</span>
-        </button>
-        <button class="btn" data-open="true">
-          <span class="icon">...</span> <span data-i18n="openFile">Open file</span>
+    <div class="start-inner">
+      <div class="brand">
+        <h1 aria-label="EOLite">EO<span class="wordmark-lite">Lite</span></h1>
+        <p class="version">v0.18.0-alpha</p>
+        <div class="brand-rule" aria-hidden="true"></div>
+      </div>
+
+      <div class="create">
+        <div class="actions">
+          <button class="btn" data-type="word">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M6 5h12M6 9.5h12M6 14h12M6 18.5h7"/></svg>
+            <span data-i18n="document">Document</span>
+          </button>
+          <button class="btn" data-type="cell">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 6h4M10 6h4M16 6h4M4 12h4M10 12h4M16 12h4M4 18h4M10 18h4M16 18h4"/></svg>
+            <span data-i18n="spreadsheet">Spreadsheet</span>
+          </button>
+          <button class="btn" data-type="slide">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3.5 8V5H7M17 5h3.5v3M20.5 13v3H17M7 16H3.5v-3M12 19v1.5"/><path d="M10.5 9 14 10.5 10.5 12z"/></svg>
+            <span data-i18n="presentation">Presentation</span>
+          </button>
+          <button class="btn" data-new-markdown="true">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3.5 17V7l4 5 4-5v10"/><path d="M17.5 7v10M15 14.5l2.5 2.5 2.5-2.5"/></svg>
+            <span data-i18n="markdown">Markdown</span>
+          </button>
+          <button class="btn" data-edit-pdf="true">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 3h8l4 4"/><path d="M18 11v10H6V7"/><path d="M9 14h6M9 17.5h3.5"/></svg>
+            <span data-i18n="editPdf">Edit PDF</span>
+          </button>
+        </div>
+        <button class="btn btn-open" data-open="true">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 4h6v6M20 4l-8 8"/><path d="M18 14v6H4V6h6"/></svg>
+          <span data-i18n="openFile">Open file</span>
+          <kbd id="open-shortcut">Ctrl O</kbd>
         </button>
       </div>
 
