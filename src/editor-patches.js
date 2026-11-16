@@ -498,7 +498,6 @@
           // extension (_eoSaveAsFilters in bridge.js): anything else silently
           // saves in the document's current format instead of the chosen one.
           if (!win._eoSaveAsPanelStyled) {
-            win._eoSaveAsPanelStyled = true;
             var supportedFormats = [
               65, 67, 68, 69,      // word: docx, odt, rtf, txt
               257, 259, 260,       // cell: xlsx, ods, csv
@@ -513,6 +512,9 @@
             }
             var saveAsStyleInterval = setInterval(function() {
               try {
+                // about:blank has a head too, and a style put there is lost
+                // when the frame navigates to the editor: wait for the SDK.
+                if (!win.Asc || !win.Asc.editor) return;
                 var head = win.document && win.document.head;
                 if (!head) return;
                 var style = win.document.createElement('style');
@@ -525,6 +527,7 @@
                   '#panel-saveas .btn-doc-format' + formatFilter + ' { display: none !important; }';
                 head.appendChild(style);
                 clearInterval(saveAsStyleInterval);
+                win._eoSaveAsPanelStyled = true;
                 win._eoLog('[EO] Download As panel style installed');
               } catch(e) {
                 clearInterval(saveAsStyleInterval);
