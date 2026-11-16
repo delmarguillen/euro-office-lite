@@ -231,6 +231,10 @@ every system. A template (`.dotx`, `.xltx`, `.potx`) is only opened: Ctrl+S
 writes in place the formats of `SAVE_IN_PLACE_EXTENSIONS`
 (`src-tauri/src/file_dialogs.rs`), and the others go through Save As.
 
+`docx-xlsx-content` fails today on both systems: the app takes any ZIP under
+`.docx` and the converter reads this one as a spreadsheet, so the open is not
+refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
+
 | case | input | ok when |
 |---|---|---|
 | `csv-bmp` | UTF-8 CSV, every character inside the BMP | saved with the `Z`, byte for byte |
@@ -245,6 +249,7 @@ writes in place the formats of `SAVE_IN_PLACE_EXTENSIONS`
 | `docx-plain-text` | `.docx` that holds plain text | refused with the open error dialog, file unchanged |
 | `docx-recover` | DOCX with two paragraphs | after typing and a kill, the next start gets the document to offer for recovery |
 | `docx-truncated-zip` | the first half of a DOCX: a ZIP without its central directory | refused with the open error dialog, file unchanged |
+| `docx-xlsx-content` | `.docx` that is an XLSX | refused with the open error dialog, file unchanged |
 | `dotx-open` | DOTX template with one paragraph | opens |
 | `md-crlf` | Markdown with CRLF | saved with the `Z`, CRLF kept |
 | `md-emoji` | UTF-8 Markdown with an emoji and U+20000 | saved with the `Z`, byte for byte |

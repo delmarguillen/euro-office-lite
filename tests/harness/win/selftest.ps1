@@ -86,7 +86,7 @@ function Test-Scripts {
 
 function Test-CaseFiles {
     $names = @(Get-SelectedCases 'all')
-    Assert-Equal 'number of cases' $names.Count 34
+    Assert-Equal 'number of cases' $names.Count 35
     foreach ($name in $names) {
         $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
         $complete = ($null -ne $case) -and (Get-CaseValue $case 'input') -and (Get-CaseValue $case 'generate') -and (Get-CaseValue $case 'expect')
@@ -294,8 +294,8 @@ function Save-Screenshot([string]$path) {
     return $true
 }
 
-# The inputs every build refuses: a .docx that is not a document the app opens.
-$FakeNeverOpens = @('encrypted.docx', 'plain-text.docx', 'truncated.docx')
+# The .docx inputs a fixed build refuses. Current builds open sheet-inside.docx.
+$FakeNeverOpens = @('encrypted.docx', 'plain-text.docx', 'sheet-inside.docx', 'truncated.docx')
 
 # The error a fixed build refuses the file with, or nothing when it opens it.
 function Get-FakeOpenError([string]$name) {
@@ -406,7 +406,7 @@ function Test-FullRun([string]$inputs) {
     $result = Read-Result $options
     $notOk = @($result.cases | Where-Object { -not $_.ok } | ForEach-Object { $_.case + '=' + $_.observed })
     Assert-Equal 'all: exit status' $status 0
-    Assert-Equal 'all: cases in result.json' @($result.cases).Count 34
+    Assert-Equal 'all: cases in result.json' @($result.cases).Count 35
     $export = Join-Path (Join-Path $options.Out 'docx-export-pdf') 'exported.pdf'
     Assert-Equal 'all: the export of a case is a PDF' (Test-PdfHeader $export) $true
     Assert-Equal 'all: cases not ok' ($notOk -join ' ') ''
