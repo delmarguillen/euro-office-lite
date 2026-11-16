@@ -421,10 +421,12 @@
       }
     }
 
-    // Runs fn once the frame has a <head>, for up to 30 s.
-    function _whenHeadReady(win, fn) {
+    // Runs fn once the frame holds the live editor document, for up to 30 s.
+    // about:blank has a head too, so the SDK being up is what tells them apart.
+    function _whenEditorReady(win, fn) {
       var interval = setInterval(function() {
         try {
+          if (!win.Asc || !win.Asc.editor) return;
           var head = win.document && win.document.head;
           if (!head) return;
           clearInterval(interval);
@@ -540,14 +542,17 @@
           // editor are built on them: the date field, the image button field and
           // the placeholder text of a field. Their controls are hidden rather
           // than left to create fields that do not work.
-          if (!win._eoPdfScriptFeaturesHidden && _isPdfEditorFrame(win)) {
-            win._eoPdfScriptFeaturesHidden = true;
-            _whenHeadReady(win, function(head) {
+          // The editor is only known once the frame has left about:blank.
+          if (!win._eoPdfScriptFeaturesHidden) {
+            _whenEditorReady(win, function(head) {
+              if (!_isPdfEditorFrame(win)) return;
               var style = win.document.createElement('style');
               style.textContent =
                 '#slot-btn-form-datetime, #slot-btn-form-image { display: none !important; }\n' +
                 'tr.form-text-combo:has(#form-txt-pholder) { display: none !important; }';
               head.appendChild(style);
+              win._eoPdfScriptFeaturesHidden = true;
+              win._eoLog('[EO] PDF form controls hidden');
             });
           }
 
