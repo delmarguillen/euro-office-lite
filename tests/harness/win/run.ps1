@@ -485,6 +485,109 @@ function Check-ZipMatch($run) {
     Add-Note $run ('not found: ' + ($missing -join ', '))
 }
 
+# --- exporting to PDF ------------------------------------------------------------
+
+# The first export of a fresh install builds the font cache before it writes.
+$ExportWaitSeconds = 120
+
+# The PDF an open-export-pdf case writes, next to the document it opened.
+function Get-ExportFile([string]$doc) {
+    return (Join-Path (Split-Path -Parent $doc) 'exported.pdf')
+}
+
+function Test-HasContent([string]$path) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+    return ((Get-FileLength $path) -gt 0)
+}
+
+function Test-ExportEnded($run, [string]$pdf) {
+    if (Test-HasContent $pdf) { return $true }
+    return ((Get-LogLine $run.Log 'SaveAs failed') -ne '')
+}
+
+# Ctrl+Shift+S opens the native Save As dialog, and the app takes the format
+# from the extension of the name typed there. Returns exported, or the outcome
+# of a case whose PDF was not written.
+function Save-AsPdf($run, [string]$pdf) {
+    if (Test-Path -LiteralPath $pdf) { Remove-Item -LiteralPath $pdf -Force }
+    if (-not (Set-Foreground (Get-MainWindow $run.ProcessId))) { return 'not-in-foreground' }
+    Send-Keys 'ctrl+shift+s'
+    $dialogShown = Wait-Until 20 { Test-Dialog $run.ProcessId }
+    if (-not $dialogShown) { return 'export-no-dialog' }
+    $dialog = @(Get-Dialogs $run.ProcessId)[0]
+    Add-Note $run ("dialog: '" + $dialog.Title + "'")
+    if (-not (Set-Foreground $dialog.Handle)) { return 'not-in-foreground' }
+    Start-Sleep -Seconds 1
+    # The dialog offers the name of the document, selected or not: replace it.
+    Send-Keys 'ctrl+a'
+    Send-Text $pdf
+    Send-Keys 'Return'
+    [void](Wait-Until $ExportWaitSeconds { Test-ExportEnded $run $pdf })
+    if (-not (Test-HasContent $pdf)) {
+        Add-Note $run ('log: ' + (Get-LogLine $run.Log 'SaveAs failed'))
+        return 'export-not-written'
+    }
+    Wait-StableFile $pdf
+    return 'exported'
+}
+
+# The lines of the text of a PDF. The text stays next to the PDF, for a case
+# that fails.
+function Read-PdfText([string]$tool, [string]$pdf) {
+    $textFile = [System.IO.Path]::ChangeExtension($pdf, '.txt')
+    & $tool -q -enc UTF-8 $pdf $textFile | Out-Null
+    if (-not (Test-Path -LiteralPath $textFile -PathType Leaf)) { return @() }
+    return @([System.IO.File]::ReadAllLines($textFile, [System.Text.Encoding]::UTF8))
+}
+
+# Like grep -E PATTERN: some line matches.
+function Test-LineMatch($lines, [string]$pattern) {
+    $regex = New-Object System.Text.RegularExpressions.Regex (ConvertTo-DotNetRegex $pattern)
+    foreach ($line in $lines) {
+        if ($regex.IsMatch($line)) { return $true }
+    }
+    return $false
+}
+
+# Every match_N of the case is a regex some line of the PDF's text must
+# contain. A machine without pdftotext can only tell that the file is a PDF.
+function Check-PdfText($run, [string]$pdf) {
+    Add-Note $run ('exported {0} bytes' -f (Get-FileLength $pdf))
+    if (-not (Test-PdfHeader $pdf)) {
+        $run.Observed = 'exported-not-pdf'
+        return
+    }
+    $tool = Find-PdfToText
+    if (-not $tool) {
+        $run.Observed = 'exported-as-expected'
+        Add-Note $run 'no pdftotext: only the %PDF- header was checked'
+        return
+    }
+    $lines = Read-PdfText $tool $pdf
+    $missing = @(Get-CaseMatches $run.Case | Where-Object { -not (Test-LineMatch $lines $_) })
+    if ($missing.Count -eq 0) {
+        $run.Observed = 'exported-as-expected'
+        return
+    }
+    $run.Observed = 'exported-missing-content'
+    Add-Note $run ('not found: ' + ($missing -join ', '))
+}
+
+function Export-Pdf($run) {
+    $pdf = Get-ExportFile $run.Doc
+    $exported = Save-AsPdf $run $pdf
+    if ($exported -ne 'exported') {
+        $run.Observed = $exported
+        return
+    }
+    if ((Get-CaseValue $run.Case 'check') -eq 'pdf-text') {
+        Check-PdfText $run $pdf
+        return
+    }
+    $run.Observed = 'exported'
+    Add-Note $run 'no check for this case'
+}
+
 function Observe-OpenDocument($options, $run) {
     $action = Get-CaseValue $run.Case 'action'
     Add-Note $run ('log: ' + (Get-LogLine $run.Log '\[OPEN\] (markdown )?success'))
@@ -492,6 +595,10 @@ function Observe-OpenDocument($options, $run) {
     Start-Sleep -Seconds 3
     if ($action -eq 'open') {
         $run.Observed = 'opens'
+        return
+    }
+    if ($action -eq 'open-export-pdf') {
+        Export-Pdf $run
         return
     }
     if ($action -eq 'open-edit-save' -and -not (Edit-Document $run)) {

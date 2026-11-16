@@ -167,6 +167,34 @@ function Read-Lines([string]$path) {
     return @([System.IO.File]::ReadAllLines($path) | Where-Object { $_ })
 }
 
+# --- PDF -----------------------------------------------------------------------
+
+# Whether a file starts with the five bytes every PDF starts with.
+function Test-PdfHeader([string]$path) {
+    $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $head = New-Object byte[] 5
+        $count = $stream.Read($head, 0, 5)
+    } finally {
+        $stream.Dispose()
+    }
+    if ($count -lt 5) { return $false }
+    return ([System.Text.Encoding]::ASCII.GetString($head) -ceq '%PDF-')
+}
+
+# The pdftotext of poppler or xpdf: the one on the PATH, else the one Git for
+# Windows has in mingw64\bin. Nothing when the machine has neither.
+function Find-PdfToText {
+    $command = Get-Command pdftotext -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) { return $command.Source }
+    $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $git) { return '' }
+    $gitRoot = Split-Path -Parent (Split-Path -Parent $git.Source)
+    $bundled = Join-Path (Join-Path (Join-Path $gitRoot 'mingw64') 'bin') 'pdftotext.exe'
+    if (Test-Path -LiteralPath $bundled -PathType Leaf) { return $bundled }
+    return ''
+}
+
 # --- JSON ----------------------------------------------------------------------
 
 function ConvertTo-JsonString([string]$text) {
