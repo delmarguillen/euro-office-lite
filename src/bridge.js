@@ -1922,8 +1922,6 @@ function _eoOnSettingsOutsideClick(event) {
   _eoCloseSettings(lost);
 }
 
-// options.onLanguageChange: runs after the UI language is stored.
-// options.onRecentChange: runs after the recent files switch is stored.
 // The start screen's own light or dark look. Only the start screen uses it:
 // the editors keep their own theme.
 var EO_THEME_KEY = 'eo-start-theme';
@@ -1962,6 +1960,8 @@ function _eoInitThemeChoice() {
   if (shortcut && /Mac/.test(navigator.platform)) shortcut.textContent = '⌘ O';
 }
 
+// options.onLanguageChange: runs after the UI language is stored.
+// options.onRecentChange: runs after the recent files switch is stored.
 function _eoInitStartSettings(options) {
   var parts = _eoSettingsParts();
   if (!parts) return;
