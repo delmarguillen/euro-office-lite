@@ -120,6 +120,8 @@ check_app_installed() {
 # Set by each step of a case.
 OBSERVED=""
 DETAIL=""
+# The pid of the app a case started again after killing it.
+RESTARTED_PID=""
 
 note() { DETAIL="${DETAIL:+$DETAIL; }$*"; }
 
@@ -331,6 +333,58 @@ export_pdf() {
   esac
 }
 
+# --- recovery after a kill ---------------------------------------------------------
+
+# The id in "[RECOVER] begin session=ID": the folder of the document under recover/.
+recovery_session() {
+  sed -n 's/.*\[RECOVER\] begin session=\([0-9]*-[0-9]*\).*/\1/p' "$1" | head -1
+}
+
+has_recovery_session() { [ -n "$(recovery_session "$1")" ]; }
+
+# The file the app appends every change of a recovery session to.
+recovery_changes() { echo "$CONFIG_DIR/recover/$1/changes/changes0.json"; }
+
+# The number in "[RECOVER] candidates=N": the sessions the start screen got to offer.
+recovery_candidates() {
+  sed -n 's/.*\[RECOVER\] candidates=\([0-9]*\).*/\1/p' "$1" | head -1
+}
+
+has_recovery_candidates() { [ -n "$(recovery_candidates "$1")" ]; }
+
+# Edits the document, waits for the app to record the changes, kills it and
+# starts it again with no document. The case does not press Recover.
+kill_and_recover() {
+  local pid=$1 dir=$2 log_file=$3 session changes offered
+  local restart_log=$dir/app-restart.log
+  if ! wait_for 10 has_recovery_session "$log_file"; then
+    OBSERVED=recovery-not-started
+    return
+  fi
+  session=$(recovery_session "$log_file")
+  changes=$(recovery_changes "$session")
+  edit_document "$pid"
+  if ! wait_for 30 has_content "$changes"; then
+    OBSERVED=recovery-not-written
+    return
+  fi
+  wait_file_settled "$changes"
+  note "session $session: $(wc -c < "$changes") bytes of changes"
+  kill -9 "$pid"
+  wait_for 10 process_gone "$pid"
+  if ! RESTARTED_PID=$(launch_app "" "$restart_log"); then
+    OBSERVED=launch-failed
+    RESTARTED_PID=$(app_pids | head -1)
+    return
+  fi
+  OBSERVED=recovery-not-offered
+  wait_for 60 has_recovery_candidates "$restart_log" || return 0
+  offered=$(recovery_candidates "$restart_log")
+  note "log: [RECOVER] candidates=$offered"
+  [ "$offered" -ge 1 ] && OBSERVED=recovery-offered
+  return 0
+}
+
 observe_open_document() {
   local pid=$1 doc=$2 source=$3 sha_before=$4 log_file=$5 action
   action=$(case_value action)
@@ -343,6 +397,10 @@ observe_open_document() {
   fi
   if [ "$action" = open-export-pdf ]; then
     export_pdf "$pid" "$doc" "$log_file"
+    return
+  fi
+  if [ "$action" = edit-kill-recover ]; then
+    kill_and_recover "$pid" "$(dirname "$doc")" "$log_file"
     return
   fi
   [ "$action" = open-edit-save ] && edit_document "$pid"
@@ -386,6 +444,7 @@ run_case() {
   local name=$1 started=$SECONDS expected dir source doc sha_before pid state ok shot=""
   OBSERVED=""
   DETAIL=""
+  RESTARTED_PID=""
   if ! read_case "$HERE/cases/$name.toml"; then
     OBSERVED=bad-case-file
     record_case "$name" false "" "" 0
@@ -414,6 +473,8 @@ run_case() {
       *) OBSERVED=open-timeout ;;
     esac
   fi
+  # A case that started the app again leaves that one to close.
+  [ -n "$RESTARTED_PID" ] && pid=$RESTARTED_PID
   ok=false
   [ "$OBSERVED" = "$expected" ] && ok=true
   if wants_screenshot "$ok"; then
