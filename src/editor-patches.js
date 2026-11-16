@@ -574,9 +574,11 @@
           // the language pickers use, so they are inert in the editors that have
           // no language dialog.
           if (!win._eoLangPickerStyled) {
-            win._eoLangPickerStyled = true;
             var langStyleInterval = setInterval(function() {
               try {
+                // about:blank has a head too, and a style put there is lost
+                // when the frame navigates to the editor: wait for the SDK.
+                if (!win.Asc || !win.Asc.editor) return;
                 var head = win.document && win.document.head;
                 if (!head) return;
                 var langStyle = win.document.createElement('style');
@@ -589,6 +591,7 @@
                   '.combo-langs .input-icon:not(.spellcheck-lang) { display: none !important; }';
                 head.appendChild(langStyle);
                 clearInterval(langStyleInterval);
+                win._eoLangPickerStyled = true;
                 win._eoLog('[EO] Language picker style installed');
               } catch(e) {
                 clearInterval(langStyleInterval);
