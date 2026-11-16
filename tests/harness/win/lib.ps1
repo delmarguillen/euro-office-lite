@@ -195,6 +195,34 @@ function Find-PdfToText {
     return ''
 }
 
+# The first line pdftotext -v prints: poppler writes it to standard error and
+# xpdf to standard output. A Process object, because 5.1 turns the standard
+# error of a native command into errors that stop the script.
+function Get-PdfToTextVersion([string]$tool) {
+    $start = New-Object System.Diagnostics.ProcessStartInfo $tool, '-v'
+    $start.UseShellExecute = $false
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.CreateNoWindow = $true
+    $process = [System.Diagnostics.Process]::Start($start)
+    $errorText = $process.StandardError.ReadToEnd()
+    $outputText = $process.StandardOutput.ReadToEnd()
+    $process.WaitForExit()
+    $lines = @(($errorText + $outputText) -split '\r?\n' | Where-Object { $_ })
+    if ($lines.Count -eq 0) { return '' }
+    return $lines[0]
+}
+
+# Says in the log which pdftotext the pdf-text check uses, or that there is none.
+function Write-PdfToTextInUse {
+    $tool = Find-PdfToText
+    if (-not $tool) {
+        Write-Log 'pdftotext: none found; pdf-text cases end in no-pdftotext'
+        return
+    }
+    Write-Log ('pdftotext: {0} ({1})' -f $tool, (Get-PdfToTextVersion $tool))
+}
+
 # --- JSON ----------------------------------------------------------------------
 
 function ConvertTo-JsonString([string]$text) {

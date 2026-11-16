@@ -323,6 +323,18 @@ check_pdf_text() {
   note "not found: $missing"
 }
 
+# Says in the log which pdftotext the pdf-text check uses, or that there is none.
+log_pdftotext() {
+  local tool version
+  if ! tool=$(command -v pdftotext); then
+    log "pdftotext: none found; pdf-text cases end in no-pdftotext"
+    return
+  fi
+  # poppler prints its version to standard error.
+  version=$(pdftotext -v 2>&1 | head -1)
+  log "pdftotext: $tool ($version)"
+}
+
 export_pdf() {
   local pid=$1 pdf log_file=$3
   pdf=$(export_file "$2")
@@ -528,6 +540,7 @@ main() {
   check_machine_free
   [ -n "$DEB" ] && ensure_installed "$DEB"
   check_app_installed
+  log_pdftotext
   $KEEP_DISPLAY || trap stop_display EXIT
   start_display
   local name

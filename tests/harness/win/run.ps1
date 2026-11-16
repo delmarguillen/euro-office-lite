@@ -550,7 +550,8 @@ function Test-LineMatch($lines, [string]$pattern) {
 }
 
 # Every match_N of the case is a regex some line of the PDF's text must
-# contain. A machine without pdftotext can only tell that the file is a PDF.
+# contain. Without pdftotext the case fails: the header alone says nothing
+# about the text.
 function Check-PdfText($run, [string]$pdf) {
     Add-Note $run ('exported {0} bytes' -f (Get-FileLength $pdf))
     if (-not (Test-PdfHeader $pdf)) {
@@ -559,8 +560,7 @@ function Check-PdfText($run, [string]$pdf) {
     }
     $tool = Find-PdfToText
     if (-not $tool) {
-        $run.Observed = 'exported-as-expected'
-        Add-Note $run 'no pdftotext: only the %PDF- header was checked'
+        $run.Observed = 'no-pdftotext'
         return
     }
     $lines = Read-PdfText $tool $pdf
@@ -829,6 +829,7 @@ function Invoke-Harness($options) {
     $options.Exe = Get-AppExe
     Test-AppInstalled $options.Exe
     Set-InputSource $options
+    Write-PdfToTextInUse
     Initialize-Native
     foreach ($name in (Get-SelectedCases $options.Selection)) {
         # Nothing a case prints may end up in the exit status this function returns.

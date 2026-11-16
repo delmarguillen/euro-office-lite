@@ -167,21 +167,33 @@ function Test-PdfChecks {
     Assert-Equal 'a line matches' (Test-LineMatch @('1234.5', '1.234,50') '1[^0-9]{0,3}234[.,]50') $true
     Assert-Equal 'no line matches' (Test-LineMatch @('1234.5') '1[^0-9]{0,3}234[.,]50') $false
     $run = New-Run 'pdf'
+    Check-PdfText $run $zip
+    Assert-Equal 'pdf-text: not a PDF' $run.Observed 'exported-not-pdf'
+    Test-PdfWithoutTool $pdf
+    $tool = Find-PdfToText
+    if (-not $tool) {
+        Write-Output 'skip pdf-text with pdftotext: this machine has none'
+        return
+    }
+    Assert-Equal 'pdftotext -v says a version' ((Get-PdfToTextVersion $tool) -match 'version') $true
+    $run = New-Run 'pdf'
     $run.Case = @{ match_1 = 'Paragraph 0: the quick'; match_2 = '1[^0-9]{0,3}234[.,]50' }
     Check-PdfText $run $pdf
     Assert-Equal 'pdf-text: every match is there' $run.Observed 'exported-as-expected'
-    # Without pdftotext only the header is judged, and the detail says so.
-    $hasTool = [bool](Find-PdfToText)
-    $wanted = 'exported-as-expected'
-    if ($hasTool) { $wanted = 'exported-missing-content' }
     $run = New-Run 'pdf'
     $run.Case = @{ match_1 = 'Paragraph 9' }
     Check-PdfText $run $pdf
-    Assert-Equal 'pdf-text: a match is missing' $run.Observed $wanted
-    Assert-Equal 'pdf-text: the detail tells a check without pdftotext' $run.Detail.Contains('no pdftotext') (-not $hasTool)
+    Assert-Equal 'pdf-text: a match is missing' $run.Observed 'exported-missing-content'
+}
+
+# A machine without pdftotext: the case fails instead of passing on the header.
+# The stand-in lives in this function's scope and goes when it returns.
+function Test-PdfWithoutTool([string]$pdf) {
+    function Find-PdfToText { return '' }
     $run = New-Run 'pdf'
-    Check-PdfText $run $zip
-    Assert-Equal 'pdf-text: not a PDF' $run.Observed 'exported-not-pdf'
+    $run.Case = @{ match_1 = 'Paragraph 0: the quick' }
+    Check-PdfText $run $pdf
+    Assert-Equal 'pdf-text without pdftotext' $run.Observed 'no-pdftotext'
 }
 
 # The ways an open that failed shows, and those of an open that worked.
@@ -405,11 +417,18 @@ function Test-FullRun([string]$inputs) {
     $status = Invoke-Harness $options
     $result = Read-Result $options
     $notOk = @($result.cases | Where-Object { -not $_.ok } | ForEach-Object { $_.case + '=' + $_.observed })
-    Assert-Equal 'all: exit status' $status 0
+    # Without pdftotext the two export cases fail, as they would on a runner.
+    $wantedStatus = 0
+    $wantedNotOk = ''
+    if (-not (Find-PdfToText)) {
+        $wantedStatus = 1
+        $wantedNotOk = 'docx-export-pdf=no-pdftotext xlsx-export-pdf=no-pdftotext'
+    }
+    Assert-Equal 'all: exit status' $status $wantedStatus
     Assert-Equal 'all: cases in result.json' @($result.cases).Count 35
     $export = Join-Path (Join-Path $options.Out 'docx-export-pdf') 'exported.pdf'
     Assert-Equal 'all: the export of a case is a PDF' (Test-PdfHeader $export) $true
-    Assert-Equal 'all: cases not ok' ($notOk -join ' ') ''
+    Assert-Equal 'all: cases not ok' ($notOk -join ' ') $wantedNotOk
     Assert-Equal 'all: mode' $result.mode 'normal'
     Assert-Equal 'all: package' $result.package '0.0.0-selftest'
     Assert-Equal 'all: binary_sha256 is the exe' $result.binary_sha256 (Get-Sha256 (Get-AppExe))
