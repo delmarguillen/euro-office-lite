@@ -86,7 +86,7 @@ function Test-Scripts {
 
 function Test-CaseFiles {
     $names = @(Get-SelectedCases 'all')
-    Assert-Equal 'number of cases' $names.Count 23
+    Assert-Equal 'number of cases' $names.Count 24
     foreach ($name in $names) {
         $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
         $complete = ($null -ne $case) -and (Get-CaseValue $case 'input') -and (Get-CaseValue $case 'generate') -and (Get-CaseValue $case 'expect')
@@ -210,6 +210,17 @@ function Test-OpenSignals {
     $Fake.Alive = $false
 }
 
+function Test-RecoverySignals {
+    $log = Join-Path $Work 'recovery.log'
+    [System.IO.File]::WriteAllLines($log, [string[]]@('[OPEN] success', '[RECOVER] begin session=1700000000000-42 bytes=10', '[RECOVER] candidates=2'))
+    Assert-Equal 'the session a log names' (Get-LogValue $log $SessionPattern) '1700000000000-42'
+    Assert-Equal 'the candidates a log names' (Get-LogValue $log $CandidatesPattern) '2'
+    Assert-Equal 'a log without the line' (Get-LogValue $log '\[RECOVER\] load session=(\S+)') ''
+    Assert-Equal 'a log that is not there' (Get-LogValue (Join-Path $Work 'none.log') $SessionPattern) ''
+    $changes = Join-Path (Join-Path (Join-Path (Join-Path (Get-ConfigDir) 'recover') '1-2') 'changes') 'changes0.json'
+    Assert-Equal 'the changes file of a session' (Get-RecoveryChanges '1-2') $changes
+}
+
 function Test-Json {
     $text = 'a"b\c' + [char]10 + [char]9 + [char]1 + 'd'
     Assert-Equal 'JSON string escapes' (ConvertTo-JsonString $text) '"a\"b\\c\n\td"'
@@ -217,7 +228,7 @@ function Test-Json {
 
 # --- a stand-in for the app -----------------------------------------------------
 
-$Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false; SaveDialog = $false }
+$Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false; SaveDialog = $false; Session = ''; KeepsRecovery = $true }
 
 function Start-Sleep { }
 function Test-Windows { return $true }
@@ -229,10 +240,49 @@ function Test-ProcessAlive([int]$processId) { return $Fake.Alive }
 function Set-Foreground([IntPtr]$window) { return $true }
 function Click-WindowCenter([IntPtr]$window) { }
 function Click-YesButton([IntPtr]$dialog) { return $false }
-function Close-Window([IntPtr]$window) { $Fake.Alive = $false }
 function Stop-ProcessTree([int]$processId) { $Fake.Alive = $false }
 function Get-Dialogs([int]$processId) { return $Fake.Dialogs }
-function Send-Text([string]$text) { $Fake.Typed += $text }
+
+function Remove-FakeSession {
+    if (-not $Fake.Session) { return }
+    $folder = Join-Path (Join-Path (Get-ConfigDir) 'recover') $Fake.Session
+    if (Test-Path -LiteralPath $folder) { Remove-Item -LiteralPath $folder -Recurse -Force }
+    $Fake.Session = ''
+}
+
+# A clean close ends the recovery session of the document: its folder goes.
+function Close-Window([IntPtr]$window) {
+    $Fake.Alive = $false
+    Remove-FakeSession
+}
+
+# A kill leaves the recovery session behind, unless the stand-in plays a
+# build that loses it.
+function Stop-AppAbruptly([int]$processId) {
+    $Fake.Alive = $false
+    if (-not $Fake.KeepsRecovery) { Remove-FakeSession }
+}
+
+# What is typed in the document is recorded in its recovery session; what is
+# typed in the Save As dialog is not.
+function Send-Text([string]$text) {
+    $Fake.Typed += $text
+    if ($Fake.SaveDialog) { return }
+    $changes = Get-RecoveryChanges $Fake.Session
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $changes) | Out-Null
+    [System.IO.File]::AppendAllText($changes, '"' + $text + '"')
+}
+
+# The start screen: the log says how many sessions it got to offer.
+function Start-AppEmpty([string]$exe, [string]$folder) {
+    $Fake.ProcessId++
+    $Fake.Alive = $true
+    $Fake.File = ''
+    $Fake.Session = ''
+    $log = Join-Path (Get-TempRoot) ('js-debug-1700000000001-{0}.log' -f $Fake.ProcessId)
+    [System.IO.File]::WriteAllLines($log, [string[]]@('[RECOVER] candidates=' + @(Get-RecoverEntries).Count))
+    return $Fake.ProcessId
+}
 
 function Get-MainWindow([int]$processId) {
     if ($Fake.Alive) { return [IntPtr]1 }
@@ -255,8 +305,9 @@ function Start-App([string]$exe, [string]$file) {
     $Fake.Dialogs = @()
     $Fake.Chords = @()
     $Fake.SaveDialog = $false
+    $Fake.Session = '1700000000000-{0}' -f $Fake.ProcessId
     $name = Split-Path -Leaf $file
-    $lines = @('[OPEN] success editor_bin=10 bytes media_files=0', '[EO] Document ready: docType=word')
+    $lines = @('[OPEN] success editor_bin=10 bytes media_files=0', ('[RECOVER] begin session=' + $Fake.Session + ' bytes=10'), '[EO] Document ready: docType=word')
     if ($name -like '*.md') { $lines = @('[OPEN] markdown success bytes=10') }
     if ($Fake.Refuses -and $name -like '*emoji*.txt') {
         $lines = @('[OPEN] failed file=' + $name + ' error=character above U+FFFF')
@@ -333,7 +384,7 @@ function Test-FullRun([string]$inputs) {
     $result = Read-Result $options
     $notOk = @($result.cases | Where-Object { -not $_.ok } | ForEach-Object { $_.case + '=' + $_.observed })
     Assert-Equal 'all: exit status' $status 0
-    Assert-Equal 'all: cases in result.json' @($result.cases).Count 23
+    Assert-Equal 'all: cases in result.json' @($result.cases).Count 24
     $export = Join-Path (Join-Path $options.Out 'docx-export-pdf') 'exported.pdf'
     Assert-Equal 'all: the export of a case is a PDF' (Test-PdfHeader $export) $true
     Assert-Equal 'all: cases not ok' ($notOk -join ' ') ''
@@ -370,6 +421,23 @@ function Test-ExportNotWritten([string]$inputs) {
     Assert-Equal 'no export: exit status' $status 1
     Assert-Equal 'no export: observed' $only.observed 'export-not-written'
     Assert-Equal 'no export: keys' ($Fake.Chords -join ', ') '11 10 53, 11 41, 0D'
+}
+
+function Test-RecoveryRun([string]$inputs) {
+    $options = New-FakeOptions 'docx-recover' $inputs $false 'run-recover'
+    $status = Invoke-Harness $options
+    $only = (Read-Result $options).cases[0]
+    Assert-Equal 'recover: exit status' $status 0
+    Assert-Equal 'recover: observed' $only.observed 'recovery-offered'
+    Assert-Equal 'recover: the detail has the log line' $only.detail.Contains('[RECOVER] candidates=1') $true
+    Assert-Equal 'recover: the log of the second instance is kept' (Test-Path -LiteralPath (Join-Path (Join-Path $options.Out 'docx-recover') 'app-restart.log')) $true
+    Assert-Equal 'recover: the second instance was closed' $Fake.Alive $false
+    Assert-Equal 'recover: the recovery folder is left empty' @(Get-RecoverEntries).Count 0
+    $Fake.KeepsRecovery = $false
+    $options = New-FakeOptions 'docx-recover' $inputs $false 'run-recover-lost'
+    $status = Invoke-Harness $options
+    $Fake.KeepsRecovery = $true
+    Assert-Equal 'lost recovery: observed and exit status' ((Read-Result $options).cases[0].observed + ' ' + $status) 'recovery-not-offered 1'
 }
 
 function Test-ControlRun([string]$inputs) {
@@ -459,11 +527,13 @@ Test-Keys
 Test-ByteChecks
 Test-ZipChecks $TestInputs
 Test-PdfChecks
+Test-RecoverySignals
 Test-Json
 Test-OpenSignals
 Test-FullRun $TestInputs
 Test-FailingRun $TestInputs
 Test-ExportNotWritten $TestInputs
+Test-RecoveryRun $TestInputs
 Test-ControlRun $TestInputs
 Test-BadInputs $TestInputs
 Test-RefusesBusyMachine $TestInputs
