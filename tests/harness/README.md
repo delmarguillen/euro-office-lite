@@ -42,18 +42,26 @@ sha256 of `/usr/bin/euro-office-lite`, compared with the one inside each
 
 ## Running in CI
 
-`.github/workflows/harness-linux.yml` ("Harness (Linux)") runs `run.sh all` on
-a clean `ubuntu-22.04` runner against the `.deb` of a "Linux Dev Build" run
-(its artifact `deb-x86_64-unknown-linux-gnu`). It starts:
+`.github/workflows/harness-linux.yml` ("Harness (Linux)") runs `run.sh all`
+against the `.deb` of a "Linux Dev Build" run, once per architecture, each on
+a clean runner of its own: `ubuntu-22.04` with the artifact
+`deb-x86_64-unknown-linux-gnu`, and `ubuntu-22.04-arm` with
+`deb-aarch64-unknown-linux-gnu`. It starts:
 
 - by hand, with the id of that build run in the `run_id` input;
 - on its own after every Linux Dev Build that succeeds. The cases are then
   those of the default branch, whatever branch was built.
 
-The job fails when run.sh exits 1 or 2. Every run has `result.json` in the
-artifact `harness-linux-result-<attempt>`, unless the harness could not run.
-A failed job also has `harness-linux-diagnostics-<attempt>`: `apt.log` and,
-per case, `app.log` and `screen.png`.
+A job fails when run.sh exits 1 or 2. Every job has `result.json` in the
+artifact `harness-linux-<arch>-result-<attempt>` (`<arch>` is `x86_64` or
+`aarch64`), unless the harness could not run. A failed job also has
+`harness-linux-<arch>-diagnostics-<attempt>`: `apt.log` and, per case, the
+`app.log`, `app-restart.log`, `exported.txt` and `screen.png` it has. The job
+installs `poppler-utils` for `pdftotext`, and the log of the harness step
+says which `pdftotext` the `pdf-text` cases used.
+
+The jobs are red today: `docx-xlsx-content` opens instead of being refused
+because of a known defect of the app (see [Cases](#cases)).
 
 The workflow needs nothing from a test machine: it installs the package with
 `--deb` (the runner has `sudo` without a password), writes to a folder under
@@ -62,22 +70,27 @@ runner starts with no user state and is discarded after the job.
 
 ### Windows
 
-`harness-windows.yml` ("Harness (Windows)") runs `win\run.ps1 all` on a
-clean `windows-latest` runner against the NSIS installer of a "Windows Dev
-Build" run (its artifact `installer-x86_64-pc-windows-msvc`). It starts the
-same two ways as the Linux workflow: by hand with the build run id in
-`run_id`, or after every Windows Dev Build that succeeds.
+`harness-windows.yml` ("Harness (Windows)") runs `win\run.ps1 all` against
+the NSIS installer of a "Windows Dev Build" run, once per architecture, each
+on a clean runner of its own: `windows-latest` with the artifact
+`installer-x86_64-pc-windows-msvc`, and `windows-11-arm` with
+`installer-aarch64-pc-windows-msvc`. It starts the same two ways as the Linux
+workflow: by hand with the build run id in `run_id`, or after every Windows
+Dev Build that succeeds.
 
 The job makes the inputs with `gen/mkinputs.py` under `$RUNNER_TEMP`, then
 starts `run.ps1 all -Installer <exe> -Inputs <dir> -Out <dir>` as a child
 process, as described in [Windows](#windows), and fails when it exits 1 or 2.
-Every run has `result.json` in the artifact
-`harness-windows-result-<attempt>`, unless the harness could not run. A
-failed job also has `harness-windows-diagnostics-<attempt>`: the output of
-run.ps1 and, per case, `app.log` and `screen.png`.
+Every job has `result.json` in the artifact
+`harness-windows-<arch>-result-<attempt>`, unless the harness could not run.
+A failed job also has `harness-windows-<arch>-diagnostics-<attempt>`: the
+output of run.ps1 and, per case, the `app.log`, `app-restart.log`,
+`exported.txt` and `screen.png` it has. The output of run.ps1 says which
+`pdftotext` the `pdf-text` cases used.
 
-The job is red today: `csv-html-emoji` fails to open on Windows because of
-a known defect of the app, not of the harness. The case stays as it is.
+The jobs are red today because of known defects of the app, not of the
+harness: `csv-html-emoji` fails to open on Windows, and `docx-xlsx-content`
+opens instead of being refused. The cases stay as they are.
 
 ## Windows
 
@@ -130,14 +143,15 @@ case ok, 1 some case failed, 2 the harness could not run.
 - run.ps1 closes the app with `WM_CLOSE`; it kills it only when a modified
   document could not be saved, or when the case is an `edit-kill-recover`.
 - The `pdf-text` check reads the PDF with `pdftotext`: the one on the
-  `PATH`, else the one Git for Windows has in `mingw64\bin`. Without either
-  it only checks that the file starts with `%PDF-`, and the detail of the
-  case says so.
+  `PATH`, else the one Git for Windows has in `mingw64\bin`. run.ps1 writes
+  which one, and its version, when it starts. Without either, the case ends
+  in `no-pdftotext` and is not ok.
 - The 17 TXT, CSV, `docx-edit-save` and `xlsx-save` cases take under
   4 minutes: about 13 s per save, 2-3 s per refused file, 38 s for `txt-nul`.
   The other cases have not been timed.
 - `csv-html-emoji` fails today on Windows: the app does not open the file,
-  a known defect of the app, so `run.ps1 all` exits 1.
+  a known defect of the app. With `docx-xlsx-content` (see [Cases](#cases)),
+  `run.ps1 all` exits 1.
 
 ## Case files
 
@@ -149,7 +163,7 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `description` | one line for humans |
 | `generate` | `SCRIPT ARGS`: runs `python3 gen/SCRIPT OUT ARGS` to make the input |
 | `input` | file name of the input |
-| `input_sha256` | optional: the generated input must have this sha256 |
+| `input_sha256` | optional: the generated input must have this sha256. Left out for the deflated ZIPs of `mkdocx.py` and `mkxlsx.py`, whose bytes depend on the zlib of the Python that writes them |
 | `action` | `open`, `open-save` (Ctrl+S), `open-edit-save`, `open-export-pdf` or `edit-kill-recover` |
 | `keys_before`, `type`, `keys_after` | for `open-edit-save` and `edit-kill-recover`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
 | `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match`; for `open-export-pdf`, `pdf-text` |
@@ -182,7 +196,8 @@ Outcomes:
   types something first.
 - `exported-as-expected`, `exported-missing-content` (`pdf-text`): every
   `match_N` is in the text of the PDF, or not. `exported-not-pdf`: the file
-  does not start with `%PDF-`. `no-pdftotext`: run.sh found no `pdftotext`.
+  does not start with `%PDF-`. `no-pdftotext`: the harness found no
+  `pdftotext`; run.sh and run.ps1 write which one they use when they start.
 - `export-no-dialog`: no Save As dialog within 20 s of Ctrl+Shift+S.
   `export-not-written`: no PDF within 120 s of the name being typed.
 - `recovery-offered`, `recovery-not-offered` (`edit-kill-recover`): the log
