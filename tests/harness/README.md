@@ -13,7 +13,8 @@ credentials.
 
 Needs: `xvfb`, `openbox`, `xdotool`, `wmctrl`, `x11-utils`, `imagemagick`
 (screenshots), `unzip`, `python3` (input generators), `dbus-run-session`,
-and `sudo -n apt-get` when it has to install a package.
+`pdftotext` from `poppler-utils` (the `pdf-text` check), and
+`sudo -n apt-get` when it has to install a package.
 
 ## Use
 
@@ -41,18 +42,26 @@ sha256 of `/usr/bin/euro-office-lite`, compared with the one inside each
 
 ## Running in CI
 
-`.github/workflows/harness-linux.yml` ("Harness (Linux)") runs `run.sh all` on
-a clean `ubuntu-22.04` runner against the `.deb` of a "Linux Dev Build" run
-(its artifact `deb-x86_64-unknown-linux-gnu`). It starts:
+`.github/workflows/harness-linux.yml` ("Harness (Linux)") runs `run.sh all`
+against the `.deb` of a "Linux Dev Build" run, once per architecture, each on
+a clean runner of its own: `ubuntu-22.04` with the artifact
+`deb-x86_64-unknown-linux-gnu`, and `ubuntu-22.04-arm` with
+`deb-aarch64-unknown-linux-gnu`. It starts:
 
 - by hand, with the id of that build run in the `run_id` input;
 - on its own after every Linux Dev Build that succeeds. The cases are then
   those of the default branch, whatever branch was built.
 
-The job fails when run.sh exits 1 or 2. Every run has `result.json` in the
-artifact `harness-linux-result-<attempt>`, unless the harness could not run.
-A failed job also has `harness-linux-diagnostics-<attempt>`: `apt.log` and,
-per case, `app.log` and `screen.png`.
+A job fails when run.sh exits 1 or 2. Every job has `result.json` in the
+artifact `harness-linux-<arch>-result-<attempt>` (`<arch>` is `x86_64` or
+`aarch64`), unless the harness could not run. A failed job also has
+`harness-linux-<arch>-diagnostics-<attempt>`: `apt.log` and, per case, the
+`app.log`, `app-restart.log`, `exported.txt` and `screen.png` it has. The job
+installs `poppler-utils` for `pdftotext`, and the log of the harness step
+says which `pdftotext` the `pdf-text` cases used.
+
+The jobs are red today: `docx-xlsx-content` opens instead of being refused
+because of a known defect of the app (see [Cases](#cases)).
 
 The workflow needs nothing from a test machine: it installs the package with
 `--deb` (the runner has `sudo` without a password), writes to a folder under
@@ -61,22 +70,27 @@ runner starts with no user state and is discarded after the job.
 
 ### Windows
 
-`harness-windows.yml` ("Harness (Windows)") runs `win\run.ps1 all` on a
-clean `windows-latest` runner against the NSIS installer of a "Windows Dev
-Build" run (its artifact `installer-x86_64-pc-windows-msvc`). It starts the
-same two ways as the Linux workflow: by hand with the build run id in
-`run_id`, or after every Windows Dev Build that succeeds.
+`harness-windows.yml` ("Harness (Windows)") runs `win\run.ps1 all` against
+the NSIS installer of a "Windows Dev Build" run, once per architecture, each
+on a clean runner of its own: `windows-latest` with the artifact
+`installer-x86_64-pc-windows-msvc`, and `windows-11-arm` with
+`installer-aarch64-pc-windows-msvc`. It starts the same two ways as the Linux
+workflow: by hand with the build run id in `run_id`, or after every Windows
+Dev Build that succeeds.
 
 The job makes the inputs with `gen/mkinputs.py` under `$RUNNER_TEMP`, then
 starts `run.ps1 all -Installer <exe> -Inputs <dir> -Out <dir>` as a child
 process, as described in [Windows](#windows), and fails when it exits 1 or 2.
-Every run has `result.json` in the artifact
-`harness-windows-result-<attempt>`, unless the harness could not run. A
-failed job also has `harness-windows-diagnostics-<attempt>`: the output of
-run.ps1 and, per case, `app.log` and `screen.png`.
+Every job has `result.json` in the artifact
+`harness-windows-<arch>-result-<attempt>`, unless the harness could not run.
+A failed job also has `harness-windows-<arch>-diagnostics-<attempt>`: the
+output of run.ps1 and, per case, the `app.log`, `app-restart.log`,
+`exported.txt` and `screen.png` it has. The output of run.ps1 says which
+`pdftotext` the `pdf-text` cases used.
 
-The job is red today: `csv-html-emoji` fails to open on Windows because of
-a known defect of the app, not of the harness. The case stays as it is.
+The jobs are red today because of known defects of the app, not of the
+harness: `csv-html-emoji` fails to open on Windows, and `docx-xlsx-content`
+opens instead of being refused. The cases stay as they are.
 
 ## Windows
 
@@ -127,11 +141,17 @@ case ok, 1 some case failed, 2 the harness could not run.
   refuses to start while the app is running or its recovery folder has
   entries.
 - run.ps1 closes the app with `WM_CLOSE`; it kills it only when a modified
-  document could not be saved.
-- The 17 TXT, CSV and Office cases take under 4 minutes: about 13 s per
-  save, 2-3 s per refused file, 38 s for `txt-nul`.
+  document could not be saved, or when the case is an `edit-kill-recover`.
+- The `pdf-text` check reads the PDF with `pdftotext`: the one on the
+  `PATH`, else the one Git for Windows has in `mingw64\bin`. run.ps1 writes
+  which one, and its version, when it starts. Without either, the case ends
+  in `no-pdftotext` and is not ok.
+- The 17 TXT, CSV, `docx-edit-save` and `xlsx-save` cases take under
+  4 minutes: about 13 s per save, 2-3 s per refused file, 38 s for `txt-nul`.
+  The other cases have not been timed.
 - `csv-html-emoji` fails today on Windows: the app does not open the file,
-  a known defect of the app, so `run.ps1 all` exits 1.
+  a known defect of the app. With `docx-xlsx-content` (see [Cases](#cases)),
+  `run.ps1 all` exits 1.
 
 ## Case files
 
@@ -143,12 +163,12 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `description` | one line for humans |
 | `generate` | `SCRIPT ARGS`: runs `python3 gen/SCRIPT OUT ARGS` to make the input |
 | `input` | file name of the input |
-| `input_sha256` | optional: the generated input must have this sha256 |
-| `action` | `open`, `open-save` (Ctrl+S) or `open-edit-save` |
-| `keys_before`, `type`, `keys_after` | for `open-edit-save`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
-| `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match` |
+| `input_sha256` | optional: the generated input must have this sha256. Left out for the deflated ZIPs of `mkdocx.py` and `mkxlsx.py`, whose bytes depend on the zlib of the Python that writes them |
+| `action` | `open`, `open-save` (Ctrl+S), `open-edit-save`, `open-export-pdf` or `edit-kill-recover` |
+| `keys_before`, `type`, `keys_after` | for `open-edit-save` and `edit-kill-recover`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
+| `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match`; for `open-export-pdf`, `pdf-text` |
 | `expected_generate`, `expected_sha256` | for `expected-bytes`: the generator of the file the save must write, and optionally its sha256 |
-| `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain |
+| `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain; for `pdf-text`: `REGEX`, an extended regex a line of the PDF's text must contain |
 | `expect` | the outcome that makes the case ok |
 | `control_expect` | optional: the outcome with `--control`, for a build without the fix |
 | `screenshot` | `on-failure` or `always` |
@@ -174,7 +194,39 @@ Outcomes:
 - `save-not-written`: Ctrl+S did not change the file within 30 s. Current
   builds do not write a document with no changes, so a case that needs a save
   types something first.
+- `exported-as-expected`, `exported-missing-content` (`pdf-text`): every
+  `match_N` is in the text of the PDF, or not. `exported-not-pdf`: the file
+  does not start with `%PDF-`. `no-pdftotext`: the harness found no
+  `pdftotext`; run.sh and run.ps1 write which one they use when they start.
+- `export-no-dialog`: no Save As dialog within 20 s of Ctrl+Shift+S.
+  `export-not-written`: no PDF within 120 s of the name being typed.
+- `recovery-offered`, `recovery-not-offered` (`edit-kill-recover`): the log
+  of the app started after the kill has `[RECOVER] candidates=N` with N at
+  least 1, or not. `recovery-not-started`: the log of the first start has no
+  `[RECOVER] begin session=`. `recovery-not-written`: the changes file of
+  that session was still empty 30 s after the edit.
 - `open-timeout`, `launch-failed`, `no-input`, `bad-case-file`.
+
+### Export to PDF
+
+`open-export-pdf` opens the input, presses Ctrl+Shift+S (Save As) and types
+the path of `exported.pdf`, in the folder of the case, into the native
+dialog, then Return. The app takes the format from the extension of the name.
+The case waits until the file has content and its sha256 holds for two
+seconds. The text `pdftotext` reads from it is kept as `exported.txt`.
+
+### Recovery after a kill
+
+`edit-kill-recover` opens the input and reads the id of its recovery session
+from `[RECOVER] begin session=ID` in the log. It edits the document like
+`open-edit-save`, then waits until `recover/ID/changes/changes0.json` in the
+config folder of the app has content and its sha256 holds for two seconds.
+It kills the app (`kill -9`, `Stop-Process -Force`) and starts it again with
+no document; the log of that second start is `app-restart.log`. The case is
+judged by the `[RECOVER] candidates=N` line the start screen leaves there.
+It does not press Recover, so it does not show that the typed text comes
+back. The second app is closed and the recovery folder is emptied, as after
+every case.
 
 ## Cases
 
@@ -188,6 +240,16 @@ wait for the editor with lone Shift presses and go to the end with
 Ctrl+End. The `Z` lands after the final line break, so the save must be the
 input with `Z` appended (`gen/mkmd.py`).
 
+The inputs `gen/mkooxml.py`, `gen/mkodf.py` and `gen/mkcfb.py` write are
+stored ZIPs (no compression) or plain bytes, so each has the same sha256 on
+every system. A template (`.dotx`, `.xltx`, `.potx`) is only opened: Ctrl+S
+writes in place the formats of `SAVE_IN_PLACE_EXTENSIONS`
+(`src-tauri/src/file_dialogs.rs`), and the others go through Save As.
+
+`docx-xlsx-content` fails today on both systems: the app takes any ZIP under
+`.docx` and the converter reads this one as a spreadsheet, so the open is not
+refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
+
 | case | input | ok when |
 |---|---|---|
 | `csv-bmp` | UTF-8 CSV, every character inside the BMP | saved with the `Z`, byte for byte |
@@ -197,10 +259,22 @@ input with `Z` appended (`gen/mkmd.py`).
 | `csv-emoji-utf16le-bom` | the same CSV in UTF-16 LE with a BOM | saved with the `Z`, encoding and BOM kept |
 | `csv-html-emoji` | `html-emoji.csv`: first cell `<html>`, and an emoji | opens as a sheet; saved with the `Z`, byte for byte |
 | `docx-edit-save` | DOCX with three paragraphs | the saved XML has the typed word and the paragraphs |
+| `docx-encrypted` | `.docx` that is a CFB with the `EncryptionInfo` and `EncryptedPackage` streams of a document with a password; the streams hold filler | refused with the open error dialog, file unchanged |
+| `docx-export-pdf` | DOCX with one paragraph | the text of the exported PDF has the paragraph |
+| `docx-plain-text` | `.docx` that holds plain text | refused with the open error dialog, file unchanged |
+| `docx-recover` | DOCX with two paragraphs | after typing and a kill, the next start gets the document to offer for recovery |
+| `docx-truncated-zip` | the first half of a DOCX: a ZIP without its central directory | refused with the open error dialog, file unchanged |
+| `docx-xlsx-content` | `.docx` that is an XLSX | refused with the open error dialog, file unchanged |
+| `dotx-open` | DOTX template with one paragraph | opens |
 | `md-crlf` | Markdown with CRLF | saved with the `Z`, CRLF kept |
 | `md-emoji` | UTF-8 Markdown with an emoji and U+20000 | saved with the `Z`, byte for byte |
 | `md-utf8` | UTF-8 Markdown, no BOM | saved with the `Z`, byte for byte |
 | `md-utf8-bom` | the same Markdown with a UTF-8 BOM | saved with the `Z`, BOM kept |
+| `odp-open` | ODP with one page covered by a text box | the saved `content.xml` has the typed word and the text |
+| `ods-open` | ODS with a number in A1 and a text in B1 | after typing in A2, row 1 keeps its values |
+| `odt-open` | ODT with one paragraph | the saved `content.xml` has the typed word and the paragraph |
+| `potx-open` | POTX template with one slide | opens |
+| `pptx-edit-save` | PPTX with one slide covered by a text box | the saved slide has the typed word and the text |
 | `txt-big-emoji-end` | TXT over 64 KiB, an emoji only in its last line | refused with the open error dialog |
 | `txt-bmp` | UTF-8 TXT inside the BMP | saved with the `Z`, byte for byte |
 | `txt-crlf` | ASCII TXT with CRLF | saved with the `Z`, CRLF kept |
@@ -210,7 +284,9 @@ input with `Z` appended (`gen/mkmd.py`).
 | `txt-utf16-bom-emoji` | UTF-16 LE TXT with a BOM and an emoji | refused with the open error dialog, file unchanged |
 | `txt-utf16be-nobom` | UTF-16 BE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
 | `txt-utf16le-nobom` | UTF-16 LE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
+| `xlsx-export-pdf` | the XLSX of `xlsx-save` | the text of the exported PDF has 1234.5 as `#,##0.00` shows it, with the separators of any locale |
 | `xlsx-save` | XLSX with a number, a formatted number and a date | after typing in A2, row 1 keeps its values |
+| `xltx-open` | XLTX template with a number and a text | opens |
 
 ## result.json
 

@@ -1,0 +1,15 @@
+# Open a PPTX whose only slide is covered by a text box, click in it, type a
+# word at the end of its text, Ctrl+S: the saved slide holds the new word and
+# the text it had.
+description = "PPTX: open, type at the end of the text box, Ctrl+S; the saved slide has the new text and the old one"
+generate = "mkooxml.py pptx"
+input = "slide.pptx"
+input_sha256 = "30d3dea0fe4857fa401835c2f502d5e5b9761de92f1beba4c865d4bc7db67625"
+action = "open-edit-save"
+keys_before = "ctrl+End"
+type = " Harness75pptx"
+check = "zip-match"
+match_1 = 'ppt/slides/slide1.xml Harness75pptx'
+match_2 = 'ppt/slides/slide1.xml Harness slide text'
+expect = "saved-as-expected"
+screenshot = "on-failure"

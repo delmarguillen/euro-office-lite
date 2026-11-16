@@ -167,6 +167,62 @@ function Read-Lines([string]$path) {
     return @([System.IO.File]::ReadAllLines($path) | Where-Object { $_ })
 }
 
+# --- PDF -----------------------------------------------------------------------
+
+# Whether a file starts with the five bytes every PDF starts with.
+function Test-PdfHeader([string]$path) {
+    $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $head = New-Object byte[] 5
+        $count = $stream.Read($head, 0, 5)
+    } finally {
+        $stream.Dispose()
+    }
+    if ($count -lt 5) { return $false }
+    return ([System.Text.Encoding]::ASCII.GetString($head) -ceq '%PDF-')
+}
+
+# The pdftotext of poppler or xpdf: the one on the PATH, else the one Git for
+# Windows has in mingw64\bin. Nothing when the machine has neither.
+function Find-PdfToText {
+    $command = Get-Command pdftotext -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) { return $command.Source }
+    $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $git) { return '' }
+    $gitRoot = Split-Path -Parent (Split-Path -Parent $git.Source)
+    $bundled = Join-Path (Join-Path (Join-Path $gitRoot 'mingw64') 'bin') 'pdftotext.exe'
+    if (Test-Path -LiteralPath $bundled -PathType Leaf) { return $bundled }
+    return ''
+}
+
+# The first line pdftotext -v prints: poppler writes it to standard error and
+# xpdf to standard output. A Process object, because 5.1 turns the standard
+# error of a native command into errors that stop the script.
+function Get-PdfToTextVersion([string]$tool) {
+    $start = New-Object System.Diagnostics.ProcessStartInfo $tool, '-v'
+    $start.UseShellExecute = $false
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.CreateNoWindow = $true
+    $process = [System.Diagnostics.Process]::Start($start)
+    $errorText = $process.StandardError.ReadToEnd()
+    $outputText = $process.StandardOutput.ReadToEnd()
+    $process.WaitForExit()
+    $lines = @(($errorText + $outputText) -split '\r?\n' | Where-Object { $_ })
+    if ($lines.Count -eq 0) { return '' }
+    return $lines[0]
+}
+
+# Says in the log which pdftotext the pdf-text check uses, or that there is none.
+function Write-PdfToTextInUse {
+    $tool = Find-PdfToText
+    if (-not $tool) {
+        Write-Log 'pdftotext: none found; pdf-text cases end in no-pdftotext'
+        return
+    }
+    Write-Log ('pdftotext: {0} ({1})' -f $tool, (Get-PdfToTextVersion $tool))
+}
+
 # --- JSON ----------------------------------------------------------------------
 
 function ConvertTo-JsonString([string]$text) {
@@ -472,6 +528,17 @@ function Start-App([string]$exe, [string]$file) {
     return $process.Id
 }
 
+# Starts the app with no document, on its start screen, and returns its process id.
+function Start-AppEmpty([string]$exe, [string]$folder) {
+    $process = Start-Process -FilePath $exe -WorkingDirectory $folder -PassThru
+    return $process.Id
+}
+
+# Ends the app at once, as a crash would: no window is closed, nothing is saved.
+function Stop-AppAbruptly([int]$processId) {
+    Stop-Process -Id $processId -Force
+}
+
 # The log of an instance is js-debug-<start ms>-<pid>.log; the newest for the pid.
 function Find-InstanceLog([int]$processId) {
     $root = Get-TempRoot
@@ -500,6 +567,13 @@ function Get-LogLine([string]$path, [string]$pattern) {
         if ([regex]::IsMatch($line, $pattern)) { return $line }
     }
     return ''
+}
+
+# The first group of a regex in the text of a log, or nothing.
+function Get-LogValue([string]$path, [string]$pattern) {
+    $found = [regex]::Match((Read-SharedText $path), $pattern)
+    if (-not $found.Success) { return '' }
+    return $found.Groups[1].Value
 }
 
 # Return on each dialog accepts its default button.

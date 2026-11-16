@@ -1,0 +1,10 @@
+# A file named .docx that holds plain text. A DOCX starts like a ZIP, or like
+# a CFB when it has a password, so the app refuses this one before the
+# converter runs and leaves the file as it was.
+description = "Plain text named .docx: refused with the open error dialog, file unchanged"
+generate = "mktxt.py crlf-utf8"
+input = "plain-text.docx"
+input_sha256 = "a6ad0f6d0647ff79b6c9fbce44e1f9955b395b563f661705a691949bf6e0a75e"
+action = "open"
+expect = "rejected-with-dialog"
+screenshot = "on-failure"

@@ -1,0 +1,9 @@
+# A Word template: a package whose main part has the template content type.
+# The app has no in-place save for .dotx, so the case only opens it.
+description = "DOTX template: opens"
+generate = "mkooxml.py dotx"
+input = "template.dotx"
+input_sha256 = "9ed4abefbc87d81cdfb3c7dbf9269cdeb62f2321cf2ee1196b7ac4d18c67aae7"
+action = "open"
+expect = "opens"
+screenshot = "on-failure"

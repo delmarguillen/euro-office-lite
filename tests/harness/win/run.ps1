@@ -485,6 +485,167 @@ function Check-ZipMatch($run) {
     Add-Note $run ('not found: ' + ($missing -join ', '))
 }
 
+# --- exporting to PDF ------------------------------------------------------------
+
+# The first export of a fresh install builds the font cache before it writes.
+$ExportWaitSeconds = 120
+
+# The PDF an open-export-pdf case writes, next to the document it opened.
+function Get-ExportFile([string]$doc) {
+    return (Join-Path (Split-Path -Parent $doc) 'exported.pdf')
+}
+
+function Test-HasContent([string]$path) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+    return ((Get-FileLength $path) -gt 0)
+}
+
+function Test-ExportEnded($run, [string]$pdf) {
+    if (Test-HasContent $pdf) { return $true }
+    return ((Get-LogLine $run.Log 'SaveAs failed') -ne '')
+}
+
+# Ctrl+Shift+S opens the native Save As dialog, and the app takes the format
+# from the extension of the name typed there. Returns exported, or the outcome
+# of a case whose PDF was not written.
+function Save-AsPdf($run, [string]$pdf) {
+    if (Test-Path -LiteralPath $pdf) { Remove-Item -LiteralPath $pdf -Force }
+    if (-not (Set-Foreground (Get-MainWindow $run.ProcessId))) { return 'not-in-foreground' }
+    Send-Keys 'ctrl+shift+s'
+    $dialogShown = Wait-Until 20 { Test-Dialog $run.ProcessId }
+    if (-not $dialogShown) { return 'export-no-dialog' }
+    $dialog = @(Get-Dialogs $run.ProcessId)[0]
+    Add-Note $run ("dialog: '" + $dialog.Title + "'")
+    if (-not (Set-Foreground $dialog.Handle)) { return 'not-in-foreground' }
+    Start-Sleep -Seconds 1
+    # The dialog offers the name of the document, selected or not: replace it.
+    Send-Keys 'ctrl+a'
+    Send-Text $pdf
+    Send-Keys 'Return'
+    [void](Wait-Until $ExportWaitSeconds { Test-ExportEnded $run $pdf })
+    if (-not (Test-HasContent $pdf)) {
+        Add-Note $run ('log: ' + (Get-LogLine $run.Log 'SaveAs failed'))
+        return 'export-not-written'
+    }
+    Wait-StableFile $pdf
+    return 'exported'
+}
+
+# The lines of the text of a PDF. The text stays next to the PDF, for a case
+# that fails.
+function Read-PdfText([string]$tool, [string]$pdf) {
+    $textFile = [System.IO.Path]::ChangeExtension($pdf, '.txt')
+    & $tool -q -enc UTF-8 $pdf $textFile | Out-Null
+    if (-not (Test-Path -LiteralPath $textFile -PathType Leaf)) { return @() }
+    return @([System.IO.File]::ReadAllLines($textFile, [System.Text.Encoding]::UTF8))
+}
+
+# Like grep -E PATTERN: some line matches.
+function Test-LineMatch($lines, [string]$pattern) {
+    $regex = New-Object System.Text.RegularExpressions.Regex (ConvertTo-DotNetRegex $pattern)
+    foreach ($line in $lines) {
+        if ($regex.IsMatch($line)) { return $true }
+    }
+    return $false
+}
+
+# Every match_N of the case is a regex some line of the PDF's text must
+# contain. Without pdftotext the case fails: the header alone says nothing
+# about the text.
+function Check-PdfText($run, [string]$pdf) {
+    Add-Note $run ('exported {0} bytes' -f (Get-FileLength $pdf))
+    if (-not (Test-PdfHeader $pdf)) {
+        $run.Observed = 'exported-not-pdf'
+        return
+    }
+    $tool = Find-PdfToText
+    if (-not $tool) {
+        $run.Observed = 'no-pdftotext'
+        return
+    }
+    $lines = Read-PdfText $tool $pdf
+    $missing = @(Get-CaseMatches $run.Case | Where-Object { -not (Test-LineMatch $lines $_) })
+    if ($missing.Count -eq 0) {
+        $run.Observed = 'exported-as-expected'
+        return
+    }
+    $run.Observed = 'exported-missing-content'
+    Add-Note $run ('not found: ' + ($missing -join ', '))
+}
+
+function Export-Pdf($run) {
+    $pdf = Get-ExportFile $run.Doc
+    $exported = Save-AsPdf $run $pdf
+    if ($exported -ne 'exported') {
+        $run.Observed = $exported
+        return
+    }
+    if ((Get-CaseValue $run.Case 'check') -eq 'pdf-text') {
+        Check-PdfText $run $pdf
+        return
+    }
+    $run.Observed = 'exported'
+    Add-Note $run 'no check for this case'
+}
+
+# --- recovery after a kill ---------------------------------------------------------
+
+$RecoveryWaitSeconds = 30
+
+# The id of the recovery session of a document: its folder under recover\.
+$SessionPattern = '\[RECOVER\] begin session=(\d+-\d+)'
+# The number of sessions the start screen got to offer.
+$CandidatesPattern = '\[RECOVER\] candidates=(\d+)'
+
+# The file the app appends every change of a recovery session to.
+function Get-RecoveryChanges([string]$session) {
+    $folder = Join-Path (Join-Path (Get-ConfigDir) 'recover') $session
+    return (Join-Path (Join-Path $folder 'changes') 'changes0.json')
+}
+
+# Starts the app with no document and returns the number of sessions its start
+# screen got to offer, or nothing when the log never says. The log of this
+# second instance is kept as app-restart.log.
+function Get-OfferedAfterRestart($options, $run) {
+    $run.ProcessId = Start-AppEmpty $options.Exe $run.Dir
+    $hasWindow = Wait-Until 60 { Test-MainWindow $run.ProcessId }
+    if (-not $hasWindow) { return '' }
+    [void](Wait-Until 60 { (Get-LogValue (Find-InstanceLog $run.ProcessId) $CandidatesPattern) -ne '' })
+    $restartLog = Find-InstanceLog $run.ProcessId
+    if ($restartLog) { Copy-Item -LiteralPath $restartLog -Destination (Join-Path $run.Dir 'app-restart.log') -Force }
+    return (Get-LogValue $restartLog $CandidatesPattern)
+}
+
+# Edits the document, waits for the app to record the changes, kills it and
+# starts it again with no document. The case does not press Recover.
+function Recover-AfterKill($options, $run) {
+    $began = Wait-Until 10 { (Get-LogValue $run.Log $SessionPattern) -ne '' }
+    if (-not $began) {
+        $run.Observed = 'recovery-not-started'
+        return
+    }
+    $session = Get-LogValue $run.Log $SessionPattern
+    $changes = Get-RecoveryChanges $session
+    if (-not (Edit-Document $run)) {
+        $run.Observed = 'not-in-foreground'
+        return
+    }
+    $recorded = Wait-Until $RecoveryWaitSeconds { Test-HasContent $changes }
+    if (-not $recorded) {
+        $run.Observed = 'recovery-not-written'
+        return
+    }
+    Wait-StableFile $changes
+    Add-Note $run ('session {0}: {1} bytes of changes' -f $session, (Get-FileLength $changes))
+    Stop-AppAbruptly $run.ProcessId
+    [void](Wait-Until 10 { -not (Test-ProcessAlive $run.ProcessId) })
+    $offered = Get-OfferedAfterRestart $options $run
+    $run.Observed = 'recovery-not-offered'
+    if (-not $offered) { return }
+    Add-Note $run ('log: [RECOVER] candidates=' + $offered)
+    if ([int]$offered -ge 1) { $run.Observed = 'recovery-offered' }
+}
+
 function Observe-OpenDocument($options, $run) {
     $action = Get-CaseValue $run.Case 'action'
     Add-Note $run ('log: ' + (Get-LogLine $run.Log '\[OPEN\] (markdown )?success'))
@@ -492,6 +653,14 @@ function Observe-OpenDocument($options, $run) {
     Start-Sleep -Seconds 3
     if ($action -eq 'open') {
         $run.Observed = 'opens'
+        return
+    }
+    if ($action -eq 'open-export-pdf') {
+        Export-Pdf $run
+        return
+    }
+    if ($action -eq 'edit-kill-recover') {
+        Recover-AfterKill $options $run
         return
     }
     if ($action -eq 'open-edit-save' -and -not (Edit-Document $run)) {
@@ -660,6 +829,7 @@ function Invoke-Harness($options) {
     $options.Exe = Get-AppExe
     Test-AppInstalled $options.Exe
     Set-InputSource $options
+    Write-PdfToTextInUse
     Initialize-Native
     foreach ($name in (Get-SelectedCases $options.Selection)) {
         # Nothing a case prints may end up in the exit status this function returns.

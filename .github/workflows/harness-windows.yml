@@ -1,13 +1,18 @@
 name: Harness (Windows)
 
 # Installs the NSIS installer of a "Windows Dev Build" run on a clean runner
-# and runs every case of tests/harness with tests/harness/win/run.ps1. The job
-# is red when a case is not ok (run.ps1 exits 1) or the harness could not run
-# (exit 2).
+# and runs every case of tests/harness with tests/harness/win/run.ps1, once per
+# architecture: x86_64 and aarch64, each on a runner of its own architecture.
+# A job is red when a case is not ok (run.ps1 exits 1) or the harness could
+# not run (exit 2).
 #
-# Known red: csv-html-emoji fails to open on Windows because of a defect of
-# the app, not of the harness. The case is run as it is; the job stays red
-# until the app is fixed.
+# Known red, because of defects of the app, not of the harness:
+# csv-html-emoji fails to open on Windows (both architectures), and
+# docx-xlsx-content, an XLSX named .docx, opens instead of being refused. The
+# cases are run as they are; the jobs stay red until the app is fixed.
+#
+# The pdf-text cases read the PDF with the pdftotext of Git for Windows; the
+# standard error of run.ps1, in the log of the harness step, says which one.
 #
 # result.json is uploaded on every run; the output of run.ps1, the app logs
 # and the screenshots only when the job fails.
@@ -16,11 +21,13 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Windows Dev Build run id to take installer-x86_64-pc-windows-msvc from"
+        description: "Windows Dev Build run id to take installer-<target> from"
         required: true
         type: string
 
   # After every Windows Dev Build; the job skips builds that did not succeed.
+  # The build succeeds only when every target does: a failed target skips
+  # both architectures here.
   # workflow_run only fires for the workflow file on the default branch, and
   # the checkout is then the default branch: its cases judge the build,
   # whatever branch the build came from.
@@ -42,8 +49,19 @@ concurrency:
 jobs:
   harness-windows:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      # The known red of csv-html-emoji must not cancel the other architecture.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: aarch64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
 
     steps:
       - name: Checkout
@@ -56,7 +74,7 @@ jobs:
       - name: Download the installer from the build run
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: installer-x86_64-pc-windows-msvc
+          name: installer-${{ matrix.target }}
           path: installer/
           run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -99,7 +117,7 @@ jobs:
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
           # Reading the handle now keeps the exit code readable after the end.
           $null = $child.Handle
-          # 30 minutes; the 17 cases take under 4.
+          # 30 minutes, below the step timeout.
           $finished = $child.WaitForExit(1800000)
           if (-not $finished) {
             Write-Output "ERROR: run.ps1 did not finish in 30 minutes; killing its process tree"
@@ -119,7 +137,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: harness-windows-result-${{ github.run_attempt }}
+          name: harness-windows-${{ matrix.arch }}-result-${{ github.run_attempt }}
           path: ${{ runner.temp }}/harness/result.json
           # There is none when the harness could not run (exit 2).
           if-no-files-found: warn
@@ -129,11 +147,13 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: harness-windows-diagnostics-${{ github.run_attempt }}
+          name: harness-windows-${{ matrix.arch }}-diagnostics-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/run.out.log
             ${{ runner.temp }}/run.err.log
             ${{ runner.temp }}/harness/*/app.log
+            ${{ runner.temp }}/harness/*/app-restart.log
+            ${{ runner.temp }}/harness/*/exported.txt
             ${{ runner.temp }}/harness/*/screen.png
           if-no-files-found: warn
           retention-days: 7

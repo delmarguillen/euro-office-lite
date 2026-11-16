@@ -1,0 +1,11 @@
+# A CFB with the EncryptionInfo and EncryptedPackage streams at its root, the
+# layout of an OOXML document with a password. The streams hold filler: the app
+# tells such a file by the two names, refuses it with the password error before
+# the converter runs, and leaves the file as it was.
+description = "DOCX with a password (CFB with EncryptionInfo and EncryptedPackage): refused with the open error dialog, file unchanged"
+generate = "mkcfb.py"
+input = "encrypted.docx"
+input_sha256 = "4464fbb49cfbc6216caaad4412649f279537f3e3d093bef9b7fa8a7cee9a7f4f"
+action = "open"
+expect = "rejected-with-dialog"
+screenshot = "on-failure"

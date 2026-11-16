@@ -1,0 +1,12 @@
+# An XLSX under the name of a DOCX: the content is not what the extension says.
+# The case expects the open error dialog and the file left as it was.
+# Known issue: the content check of the app takes any ZIP under .docx, and x2t
+# 10.0.0.169 converts this file as the spreadsheet it is, so the app logs
+# "[OPEN] success" for it and the case is not ok.
+description = "XLSX named .docx: refused with the open error dialog, file unchanged"
+generate = "mkooxml.py xlsx"
+input = "sheet-inside.docx"
+input_sha256 = "176a556ad58ba0172aca51c2993fb80f29a5c295e0733cec3259021d628b4916"
+action = "open"
+expect = "rejected-with-dialog"
+screenshot = "on-failure"
