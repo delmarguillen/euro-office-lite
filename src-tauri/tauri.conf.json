@@ -47,6 +47,11 @@
         "description": "Document"
       },
       {
+        "ext": ["dotx"],
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.template",
+        "description": "Document Template"
+      },
+      {
         "ext": ["doc"],
         "mimeType": "application/msword",
         "description": "Document"
@@ -67,6 +72,11 @@
         "description": "Spreadsheet"
       },
       {
+        "ext": ["xltx"],
+        "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
+        "description": "Spreadsheet Template"
+      },
+      {
         "ext": ["xls"],
         "mimeType": "application/vnd.ms-excel",
         "description": "Spreadsheet"
@@ -85,6 +95,11 @@
         "ext": ["pptx"],
         "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "description": "Presentation"
+      },
+      {
+        "ext": ["potx"],
+        "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.template",
+        "description": "Presentation Template"
       },
       {
         "ext": ["ppt"],
