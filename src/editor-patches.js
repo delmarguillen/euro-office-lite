@@ -421,10 +421,12 @@
       }
     }
 
-    // Runs fn once the frame has a <head>, for up to 30 s.
-    function _whenHeadReady(win, fn) {
+    // Runs fn once the frame holds the live editor document, for up to 30 s.
+    // about:blank has a head too, so the SDK being up is what tells them apart.
+    function _whenEditorReady(win, fn) {
       var interval = setInterval(function() {
         try {
+          if (!win.Asc || !win.Asc.editor) return;
           var head = win.document && win.document.head;
           if (!head) return;
           clearInterval(interval);
@@ -498,7 +500,6 @@
           // extension (_eoSaveAsFilters in bridge.js): anything else silently
           // saves in the document's current format instead of the chosen one.
           if (!win._eoSaveAsPanelStyled) {
-            win._eoSaveAsPanelStyled = true;
             var supportedFormats = [
               65, 67, 68, 69,      // word: docx, odt, rtf, txt
               257, 259, 260,       // cell: xlsx, ods, csv
@@ -513,6 +514,9 @@
             }
             var saveAsStyleInterval = setInterval(function() {
               try {
+                // about:blank has a head too, and a style put there is lost
+                // when the frame navigates to the editor: wait for the SDK.
+                if (!win.Asc || !win.Asc.editor) return;
                 var head = win.document && win.document.head;
                 if (!head) return;
                 var style = win.document.createElement('style');
@@ -525,6 +529,7 @@
                   '#panel-saveas .btn-doc-format' + formatFilter + ' { display: none !important; }';
                 head.appendChild(style);
                 clearInterval(saveAsStyleInterval);
+                win._eoSaveAsPanelStyled = true;
                 win._eoLog('[EO] Download As panel style installed');
               } catch(e) {
                 clearInterval(saveAsStyleInterval);
@@ -537,14 +542,17 @@
           // editor are built on them: the date field, the image button field and
           // the placeholder text of a field. Their controls are hidden rather
           // than left to create fields that do not work.
-          if (!win._eoPdfScriptFeaturesHidden && _isPdfEditorFrame(win)) {
-            win._eoPdfScriptFeaturesHidden = true;
-            _whenHeadReady(win, function(head) {
+          // The editor is only known once the frame has left about:blank.
+          if (!win._eoPdfScriptFeaturesHidden) {
+            _whenEditorReady(win, function(head) {
+              if (!_isPdfEditorFrame(win)) return;
               var style = win.document.createElement('style');
               style.textContent =
                 '#slot-btn-form-datetime, #slot-btn-form-image { display: none !important; }\n' +
                 'tr.form-text-combo:has(#form-txt-pholder) { display: none !important; }';
               head.appendChild(style);
+              win._eoPdfScriptFeaturesHidden = true;
+              win._eoLog('[EO] PDF form controls hidden');
             });
           }
 
@@ -571,9 +579,11 @@
           // the language pickers use, so they are inert in the editors that have
           // no language dialog.
           if (!win._eoLangPickerStyled) {
-            win._eoLangPickerStyled = true;
             var langStyleInterval = setInterval(function() {
               try {
+                // about:blank has a head too, and a style put there is lost
+                // when the frame navigates to the editor: wait for the SDK.
+                if (!win.Asc || !win.Asc.editor) return;
                 var head = win.document && win.document.head;
                 if (!head) return;
                 var langStyle = win.document.createElement('style');
@@ -586,6 +596,7 @@
                   '.combo-langs .input-icon:not(.spellcheck-lang) { display: none !important; }';
                 head.appendChild(langStyle);
                 clearInterval(langStyleInterval);
+                win._eoLangPickerStyled = true;
                 win._eoLog('[EO] Language picker style installed');
               } catch(e) {
                 clearInterval(langStyleInterval);
