@@ -64,7 +64,7 @@ function Test-Scripts {
 
 function Test-CaseFiles {
     $names = @(Get-SelectedCases 'all')
-    Assert-Equal 'number of cases' $names.Count 17
+    Assert-Equal 'number of cases' $names.Count 21
     foreach ($name in $names) {
         $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
         $complete = ($null -ne $case) -and (Get-CaseValue $case 'input') -and (Get-CaseValue $case 'generate') -and (Get-CaseValue $case 'expect')
@@ -134,7 +134,7 @@ function Test-ZipChecks([string]$inputs) {
     Assert-Equal 'a pattern matches within one line, like grep' (Test-ZipPartMatch $xlsx 'xl/worksheets/sheet1.xml' '<sheetData>[[:space:]]*<row') $false
 }
 
-# The three ways an open that failed shows, and the one of an open that worked.
+# The ways an open that failed shows, and those of an open that worked.
 function Test-OpenSignals {
     $Fake.Alive = $true
     $log = Join-Path $Work 'signals.log'
@@ -148,6 +148,10 @@ function Test-OpenSignals {
     Assert-Equal 'errorCode= from the editor' (Get-OpenState $run) 'failed'
     [System.IO.File]::WriteAllText($log, '[OPEN] failed file=a.txt error=x')
     Assert-Equal '[OPEN] failed' (Get-OpenState $run) 'failed'
+    [System.IO.File]::WriteAllText($log, '[OPEN] markdown success bytes=68')
+    Assert-Equal '[OPEN] markdown success' (Get-OpenState $run) 'ready'
+    [System.IO.File]::WriteAllText($log, '[OPEN] markdown failed: not a Markdown file')
+    Assert-Equal '[OPEN] markdown failed' (Get-OpenState $run) 'failed'
     [System.IO.File]::WriteAllText($log, '[STARTUP] begin')
     $Fake.Dialogs = @(New-Object PSObject -Property @{ Handle = [IntPtr]2; Title = 'Error' })
     Assert-Equal 'a native dialog' (Get-OpenState $run) 'failed'
@@ -191,7 +195,8 @@ function Save-Screenshot([string]$path) {
 }
 
 # Writes the log an instance would: a TXT with an emoji is refused with a
-# dialog unless the stand-in plays a build without that fix.
+# dialog unless the stand-in plays a build without that fix, and a .md opens
+# in the Markdown page, which logs only the backend's line.
 function Start-App([string]$exe, [string]$file) {
     $Fake.ProcessId++
     $Fake.Alive = $true
@@ -201,6 +206,7 @@ function Start-App([string]$exe, [string]$file) {
     $Fake.Chords = @()
     $name = Split-Path -Leaf $file
     $lines = @('[OPEN] success editor_bin=10 bytes media_files=0', '[EO] Document ready: docType=word')
+    if ($name -like '*.md') { $lines = @('[OPEN] markdown success bytes=10') }
     if ($Fake.Refuses -and $name -like '*emoji*.txt') {
         $lines = @('[OPEN] failed file=' + $name + ' error=character above U+FFFF')
         $Fake.Dialogs = @(New-Object PSObject -Property @{ Handle = [IntPtr]2; Title = 'Cannot open' })
@@ -257,7 +263,7 @@ function Test-FullRun([string]$inputs) {
     $result = Read-Result $options
     $notOk = @($result.cases | Where-Object { -not $_.ok } | ForEach-Object { $_.case + '=' + $_.observed })
     Assert-Equal 'all: exit status' $status 0
-    Assert-Equal 'all: cases in result.json' @($result.cases).Count 17
+    Assert-Equal 'all: cases in result.json' @($result.cases).Count 21
     Assert-Equal 'all: cases not ok' ($notOk -join ' ') ''
     Assert-Equal 'all: mode' $result.mode 'normal'
     Assert-Equal 'all: package' $result.package '0.0.0-selftest'

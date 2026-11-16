@@ -259,13 +259,17 @@ function New-CaseInputs($options, $run) {
 # What the app has said about the open so far: failed, ready or nothing.
 # A failed open shows as [OPEN] failed in the log, as a native dialog, or, when
 # the editor reports it inside the web view, only as errorCode= in the log.
+# A .md opens in the Markdown page, which says neither: the backend's
+# [OPEN] markdown lines stand for them.
 function Get-OpenState($run) {
     if (-not $run.Log) { $run.Log = Find-InstanceLog $run.ProcessId }
     $text = Read-SharedText $run.Log
     if ($text.Contains('[OPEN] failed')) { return 'failed' }
+    if ($text.Contains('[OPEN] markdown failed:')) { return 'failed' }
     if ($text.Contains('errorCode=')) { return 'failed' }
     if (Test-Dialog $run.ProcessId) { return 'failed' }
     if ($text.Contains('Document ready')) { return 'ready' }
+    if ($text.Contains('[OPEN] markdown success')) { return 'ready' }
     return ''
 }
 
@@ -293,7 +297,7 @@ function Wait-Open($run, [int]$limitSeconds) {
 }
 
 function Observe-Rejection($run) {
-    Add-Note $run ('log: ' + (Get-LogLine $run.Log '\[OPEN\] failed|errorCode='))
+    Add-Note $run ('log: ' + (Get-LogLine $run.Log '\[OPEN\] (markdown )?failed|errorCode='))
     $run.Observed = 'rejected-without-dialog'
     $dialogShown = Wait-Until 10 { Test-Dialog $run.ProcessId }
     if ($dialogShown) {
@@ -483,7 +487,7 @@ function Check-ZipMatch($run) {
 
 function Observe-OpenDocument($options, $run) {
     $action = Get-CaseValue $run.Case 'action'
-    Add-Note $run ('log: ' + (Get-LogLine $run.Log '\[OPEN\] success'))
+    Add-Note $run ('log: ' + (Get-LogLine $run.Log '\[OPEN\] (markdown )?success'))
     # The editor keeps loading for a moment after it says it is ready.
     Start-Sleep -Seconds 3
     if ($action -eq 'open') {

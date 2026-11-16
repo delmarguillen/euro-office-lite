@@ -18,6 +18,15 @@ const OPEN_EXTENSIONS: [&str; 28] = [
     "pptx", "ppt", "pptm", "ppsx", "potx", "odp", "otp", "fodp", "pdf",
 ];
 
+// Offered by the same Open filter, but read as text by the Markdown page
+// (markdown.rs), never converted.
+use crate::markdown::{HTML_EXTENSIONS, MARKDOWN_EXTENSIONS};
+
+// What the Open filter lists: the formats x2t converts, then Markdown.
+fn open_dialog_extensions() -> Vec<&'static str> {
+    OPEN_EXTENSIONS.iter().chain(MARKDOWN_EXTENSIONS.iter()).copied().collect()
+}
+
 // The start screen's Edit PDF.
 const PDF_EXTENSIONS: [&str; 1] = ["pdf"];
 
@@ -148,7 +157,7 @@ pub async fn pick_document(
     documents: String,
     all: String,
 ) -> Result<Option<GrantedFile>, String> {
-    let extensions = open_filter_extensions(&OPEN_EXTENSIONS);
+    let extensions = open_filter_extensions(&open_dialog_extensions());
     let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
     let dialog = file_dialog(&window)
         .add_filter(documents, &extensions)
@@ -242,6 +251,7 @@ pub async fn pick_save_target(
     state: State<'_, AppState>,
     filters: Vec<DialogFilter>,
     requested_ext: Option<String>,
+    suggested_name: Option<String>,
 ) -> Result<Option<GrantedFile>, String> {
     let fallback_ext = requested_ext
         .clone()
@@ -257,6 +267,8 @@ pub async fn pick_save_target(
             dialog = dialog.set_directory(dir);
         }
         dialog = dialog.set_file_name(file_name(&start));
+    } else if let Some(name) = suggested_name.as_deref().and_then(plain_file_name) {
+        dialog = dialog.set_file_name(name);
     }
     let Some(chosen) = pick_save(dialog).await? else {
         return Ok(None);
@@ -266,6 +278,17 @@ pub async fn pick_save_target(
         return Ok(None);
     }
     Ok(Some(state.grants.grant(path, GrantKind::Save)))
+}
+
+// A name the dialog may show for a document with no file yet (Untitled.md):
+// a file name only, never a path, so it cannot pick the dialog's folder.
+// ':' is refused for a Windows drive ("C:name").
+fn plain_file_name(name: &str) -> Option<&str> {
+    let has_separator = name.contains(['/', '\\', ':', '\0']);
+    if name.is_empty() || name == "." || name == ".." || has_separator {
+        return None;
+    }
+    Some(name)
 }
 
 // Asked from here, not from the webview: the answer decides the grant.
@@ -343,13 +366,26 @@ pub fn with_save_extension(path: PathBuf, fallback_ext: &str) -> PathBuf {
         .extension()
         .map(|ext| ext.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    if SAVE_EXTENSIONS.contains(&ext.as_str()) {
+    if keeps_its_extension(&ext, fallback_ext) {
         return path;
     }
     let mut name = path.into_os_string();
     name.push(".");
     name.push(fallback_ext);
     PathBuf::from(name)
+}
+
+// A Markdown Save As keeps .md and .markdown, and only those: the page writes
+// text, never an office format. Its Export as HTML keeps .html and .htm, which
+// export_markdown_html accepts. Every other Save As keeps the formats x2t writes.
+fn keeps_its_extension(ext: &str, fallback_ext: &str) -> bool {
+    if MARKDOWN_EXTENSIONS.contains(&fallback_ext) {
+        return MARKDOWN_EXTENSIONS.contains(&ext);
+    }
+    if HTML_EXTENSIONS.contains(&fallback_ext) {
+        return HTML_EXTENSIONS.contains(&ext);
+    }
+    SAVE_EXTENSIONS.contains(&ext)
 }
 
 // The native dialog asks before replacing the name it returns. A name the app
@@ -378,6 +414,14 @@ fn asks_before_replacing(chosen: &Path, final_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_plain_file_name_is_suggested() {
+        assert_eq!(plain_file_name("Untitled.md"), Some("Untitled.md"));
+        for name in ["", ".", "..", "../x.md", "/tmp/x.md", "a\\b.md", "C:x.md", "a\0.md"] {
+            assert_eq!(plain_file_name(name), None, "{name:?}");
+        }
+    }
 
     #[test]
     fn the_suggestion_takes_the_extension_asked_for() {
@@ -468,6 +512,55 @@ mod tests {
             with_save_extension(PathBuf::from("/docs/v1.2"), "docx"),
             PathBuf::from("/docs/v1.2.docx")
         );
+    }
+
+    #[test]
+    fn a_markdown_save_as_keeps_md_and_markdown_only() {
+        for name in ["/d/notes.md", "/d/notes.MD", "/d/notes.markdown"] {
+            assert_eq!(with_save_extension(PathBuf::from(name), "md"), PathBuf::from(name));
+        }
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/notes"), "md"),
+            PathBuf::from("/d/notes.md")
+        );
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/notes.docx"), "md"),
+            PathBuf::from("/d/notes.docx.md")
+        );
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/notes.md"), "docx"),
+            PathBuf::from("/d/notes.md.docx"),
+            "the other formats are as before"
+        );
+    }
+
+    #[test]
+    fn an_html_export_keeps_html_and_htm_only() {
+        for name in ["/d/report.html", "/d/report.HTML", "/d/report.htm"] {
+            assert_eq!(with_save_extension(PathBuf::from(name), "html"), PathBuf::from(name));
+        }
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/report"), "html"),
+            PathBuf::from("/d/report.html")
+        );
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/report.md"), "html"),
+            PathBuf::from("/d/report.md.html")
+        );
+        assert_eq!(
+            with_save_extension(PathBuf::from("/d/report.html"), "docx"),
+            PathBuf::from("/d/report.html.docx"),
+            "the other formats are as before"
+        );
+    }
+
+    #[test]
+    fn the_open_filter_also_offers_markdown() {
+        let offered = open_dialog_extensions();
+        for ext in ["md", "markdown", "docx", "pdf"] {
+            assert!(offered.contains(&ext), "{ext}");
+        }
+        assert_eq!(offered.len(), OPEN_EXTENSIONS.len() + 2);
     }
 
     #[test]

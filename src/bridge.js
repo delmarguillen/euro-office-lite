@@ -576,7 +576,7 @@ var _SUPPORTED_LANGS = [
 
 var _UI_STRINGS = {
   en: {
-    document: 'Document', spreadsheet: 'Spreadsheet', presentation: 'Presentation',
+    document: 'Document', spreadsheet: 'Spreadsheet', presentation: 'Presentation', markdown: 'Markdown',
     export: 'Export',
     openFile: 'Open file', editPdf: 'Edit PDF', newDocument: 'New document', newSpreadsheet: 'New spreadsheet',
     newPresentation: 'New presentation', unsavedChanges: 'Unsaved changes',
@@ -624,7 +624,7 @@ var _UI_STRINGS = {
     locateLinkedFile: 'Locate the linked file'
   },
   es: {
-    document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación',
+    document: 'Documento', spreadsheet: 'Hoja de cálculo', presentation: 'Presentación', markdown: 'Markdown',
     export: 'Exportar',
     openFile: 'Abrir archivo', editPdf: 'Editar PDF', newDocument: 'Nuevo documento', newSpreadsheet: 'Nueva hoja de cálculo',
     newPresentation: 'Nueva presentación', unsavedChanges: 'Cambios sin guardar',
@@ -1332,6 +1332,47 @@ async function _eoOpenRecent(path) {
   window.AscDesktopEditor.LocalFileOpen({ token: match.token, name: match.name });
 }
 
+// Markdown opens in its own page (src/markdown/), never in an editor: x2t
+// does not write Markdown back faithfully. MARKDOWN_EXTENSIONS in
+// src-tauri/src/markdown.rs and src/markdown/markdown-text.js must match
+// (scripts/test-bridge-markdown.mjs checks it).
+var _EO_MARKDOWN_EXTENSIONS = ['md', 'markdown'];
+var EO_MARKDOWN_PAGE = 'markdown/markdown.html';
+
+function _eoIsMarkdownPath(name) {
+  var text = String(name || '');
+  if (text.indexOf('.') === -1) return false;
+  return _EO_MARKDOWN_EXTENSIONS.indexOf(text.split('.').pop().toLowerCase()) !== -1;
+}
+window._eoIsMarkdownPath = _eoIsMarkdownPath;
+
+// What the Markdown page is to open goes in its address, one key and value,
+// which the page reads and takes out at once (markdown.js, takePending). Not
+// in localStorage: on WebKitGTK, with another process of the app open, the
+// page did not see what the start screen had just written there.
+function _eoGoToMarkdownPage(key, value) {
+  window.location.href = EO_MARKDOWN_PAGE + '?' + key + '=' + encodeURIComponent(value);
+}
+
+// From the start screen, where no document is open.
+function _eoOpenMarkdown(file) {
+  _eoGoToMarkdownPage('token', file.token);
+}
+window._eoOpenMarkdown = _eoOpenMarkdown;
+
+// The start screen's New Markdown: the page starts an empty document.
+function _eoNewMarkdown() {
+  _eoGoToMarkdownPage('new', '1');
+}
+window._eoNewMarkdown = _eoNewMarkdown;
+
+// The start screen's Recover for a Markdown document (recovery.rs, "Markdown
+// sessions"): the page loads it by its folder's id.
+function _eoRecoverMarkdown(id) {
+  _eoGoToMarkdownPage('recover', id);
+}
+window._eoRecoverMarkdown = _eoRecoverMarkdown;
+
 // A PDF is read as it is by open_pdf; everything else is converted by open_file.
 function _eoOpenCommandForPath(name) {
   return _eoDocTypeForPath(name) === 'pdf' ? 'open_pdf' : 'open_file';
@@ -1524,7 +1565,8 @@ async function _eoFailSave(ref, err, wasModified) {
   _eoEndSaveKeepingModified(ref, wasModified);
 }
 
-function _forceReload() {
+// `next`, when given, is the page to load instead of this one.
+function _forceReload(next) {
   window.onbeforeunload = null;
   var iframes = document.querySelectorAll('iframe');
   for (var i = 0; i < iframes.length; i++) iframes[i].remove();
@@ -1539,7 +1581,10 @@ function _forceReload() {
     // be told the file is open here.
     .then(function() { return invoke('close_document'); })
     .catch(function(){})
-    .finally(function() { window.location.reload(); });
+    .finally(function() {
+      if (next) window.location.href = next;
+      else window.location.reload();
+    });
 }
 
 // Note lines (#42), a toggle. The horizontal rules above the notes come from
@@ -3669,6 +3714,10 @@ listen('confirm-close', async () => {
 });
 
 async function _eoOpenGranted(file) {
+  if (_eoIsMarkdownPath(file.name)) {
+    _eoOpenMarkdown(file);
+    return;
+  }
   var docType = _eoDocTypeForPath(file.name);
   _eoShowOpening(_eoOpeningFileText(file.name));
 

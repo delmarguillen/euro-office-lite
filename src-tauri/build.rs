@@ -46,6 +46,14 @@ const APP_COMMANDS: &[&str] = &[
     "list_user_dictionaries",
     "import_dictionary",
     "set_presentation_fullscreen",
+    "read_markdown",
+    "new_markdown",
+    "export_markdown_html",
+    "markdown_recovery_write",
+    "markdown_recovery_load",
+    "markdown_recovery_reload",
+    "save_markdown",
+    "markdown_image",
 ];
 
 fn main() {
@@ -68,6 +76,11 @@ fn main() {
         "button-hint-patch.js",
         "font-patches.js",
         "editor-patches.js",
+        "markdown/markdown.html",
+        "markdown/markdown.js",
+        "markdown/markdown-text.js",
+        "markdown/markdown.css",
+        "markdown/markdown-preview.css",
     ] {
         println!("cargo:rerun-if-changed=../src-dist/{file}");
     }

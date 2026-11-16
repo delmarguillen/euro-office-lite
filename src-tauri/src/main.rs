@@ -11,6 +11,7 @@ mod file_dialogs;
 mod file_ops;
 mod fonts_state;
 mod launch_args;
+mod markdown;
 mod new_window;
 mod note_separator;
 mod odf_links;
@@ -538,6 +539,14 @@ fn main() {
             dictionaries::list_user_dictionaries,
             dictionary_import::import_dictionary,
             presentation::set_presentation_fullscreen,
+            markdown::read_markdown,
+            markdown::new_markdown,
+            markdown::export_markdown_html,
+            markdown::markdown_recovery_write,
+            markdown::markdown_recovery_load,
+            markdown::markdown_recovery_reload,
+            markdown::save_markdown,
+            markdown::markdown_image,
         ])
         .register_uri_scheme_protocol("ascdesktop", |ctx, request| {
             let allow_origin = protocol_limits::allow_origin();

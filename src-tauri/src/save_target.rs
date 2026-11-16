@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -70,11 +70,27 @@ fn is_sharing_violation(error: &std::io::Error) -> bool {
 // one. An existing `dest` keeps its permissions. On any failure `dest` is left
 // as it was and the copy is removed.
 pub fn write_beside_and_rename(from: &Path, dest: &Path) -> Result<(), String> {
+    replace_beside(dest, |file| {
+        let mut source = File::open(from)?;
+        std::io::copy(&mut source, file).map(|_| ())
+    })
+}
+
+// The same, for content already in memory.
+pub fn write_bytes_beside_and_rename(bytes: &[u8], dest: &Path) -> Result<(), String> {
+    replace_beside(dest, |file| file.write_all(bytes))
+}
+
+fn replace_beside(
+    dest: &Path,
+    write_content: impl FnOnce(&mut File) -> std::io::Result<()>,
+) -> Result<(), String> {
     check_writable_destination(dest)?;
     let target = resolved_target(dest);
     let tmp = temp_path_beside(&target);
     let file = create_temp(&tmp, &target).map_err(|e| save_error(dest, e))?;
-    let result = fill_temp(file, from, &target).and_then(|_| std::fs::rename(&tmp, &target));
+    let result =
+        fill_temp(file, write_content, &target).and_then(|_| std::fs::rename(&tmp, &target));
     let Err(error) = result else {
         return Ok(());
     };
@@ -225,9 +241,12 @@ fn create_temp(tmp: &Path, _target: &Path) -> std::io::Result<File> {
 }
 
 // The handle is dropped on return, before the rename.
-fn fill_temp(mut file: File, from: &Path, target: &Path) -> std::io::Result<()> {
-    let mut source = File::open(from)?;
-    std::io::copy(&mut source, &mut file)?;
+fn fill_temp(
+    mut file: File,
+    write_content: impl FnOnce(&mut File) -> std::io::Result<()>,
+    target: &Path,
+) -> std::io::Result<()> {
+    write_content(&mut file)?;
     // chown can clear the setuid and setgid bits, so the mode is set after it.
     keep_group(&file, target);
     keep_permissions(&file, target)?;
@@ -481,6 +500,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&source_dir);
     }
 
+    // What write_bytes_beside_and_rename does, with the write failing halfway.
+    #[test]
+    fn a_failed_write_of_bytes_leaves_no_temp_file_behind() {
+        let dir = test_dir("bytes-write-fails");
+        let dest = dir.join("notes.md");
+        std::fs::write(&dest, b"# old").unwrap();
+
+        let result = replace_beside(&dest, |file| {
+            file.write_all(b"# half")?;
+            Err(std::io::Error::other("disk full"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"# old");
+        assert_eq!(names_in(&dir), vec!["notes.md"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saved_bytes_that_cannot_be_renamed_leave_no_temp_file_behind() {
+        let dir = test_dir("bytes-rename");
+        // A rename cannot put a file over a non-empty directory.
+        let dest = dir.join("notes.md");
+        std::fs::create_dir_all(dest.join("inside")).unwrap();
+
+        let result = write_bytes_beside_and_rename(b"# new", &dest);
+
+        assert!(result.is_err());
+        assert!(dest.join("inside").is_dir());
+        assert_eq!(names_in(&dir), vec!["notes.md"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[cfg(unix)]
     mod unix {
         use super::*;
@@ -599,6 +651,74 @@ mod tests {
             assert_eq!(mode, 0o2750);
             let _ = std::fs::remove_dir_all(&dir);
             let _ = std::fs::remove_dir_all(&source_dir);
+        }
+
+        // Gives `dest` a group other than the one new files get: a
+        // supplementary group of this process or, as root, any other one.
+        // None when the process may not.
+        fn give_another_group(dest: &Path) -> Option<u32> {
+            let new_file_gid = gid_of(dest);
+            let gid = another_group_of_mine(new_file_gid).unwrap_or(new_file_gid + 1);
+            std::os::unix::fs::chown(dest, None, Some(gid)).ok()?;
+            Some(gid)
+        }
+
+        // The Markdown page saves bytes from memory (markdown.rs, store_markdown).
+        #[test]
+        fn saved_bytes_keep_the_mode_of_the_replaced_file() {
+            let dir = test_dir("bytes-mode");
+            let dest = dir.join("notes.md");
+            std::fs::write(&dest, b"# old").unwrap();
+            set_mode(&dest, 0o640);
+
+            write_bytes_beside_and_rename(b"# new", &dest).unwrap();
+
+            assert_eq!(std::fs::read(&dest).unwrap(), b"# new");
+            assert_eq!(mode_of(&dest), 0o640);
+            assert_eq!(names_in(&dir), vec!["notes.md"]);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn saved_bytes_keep_the_group_of_the_replaced_file() {
+            let dir = test_dir("bytes-group");
+            let dest = dir.join("notes.md");
+            std::fs::write(&dest, b"# old").unwrap();
+            let Some(gid) = give_another_group(&dest) else {
+                eprintln!("skipped: this process may not give the file another group");
+                let _ = std::fs::remove_dir_all(&dir);
+                return;
+            };
+            set_mode(&dest, 0o640);
+
+            write_bytes_beside_and_rename(b"# new", &dest).unwrap();
+
+            assert_eq!(std::fs::read(&dest).unwrap(), b"# new");
+            assert_eq!(gid_of(&dest), gid);
+            assert_eq!(mode_of(&dest), 0o640);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        // What write_bytes_beside_and_rename does, with the temp file's mode
+        // read while the bytes go in.
+        #[test]
+        fn saved_bytes_go_into_an_owner_only_temp_file() {
+            let dir = test_dir("bytes-temp-mode");
+            let dest = dir.join("notes.md");
+            std::fs::write(&dest, b"# old").unwrap();
+            set_mode(&dest, 0o640);
+            let mut temp_mode = None;
+
+            replace_beside(&dest, |file| {
+                temp_mode = Some(file.metadata()?.permissions().mode() & 0o777);
+                file.write_all(b"# new")
+            })
+            .unwrap();
+
+            assert_eq!(temp_mode, Some(0o600));
+            assert_eq!(std::fs::read(&dest).unwrap(), b"# new");
+            assert_eq!(mode_of(&dest), 0o640);
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         #[test]

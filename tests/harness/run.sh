@@ -153,7 +153,7 @@ generate_expected() {
 
 observe_rejection() {
   local pid=$1 doc=$2 sha_before=$3 log_file=$4 dialog
-  note "log: $(grep -m1 '\[OPEN\] failed' "$log_file")"
+  note "log: $(grep -m1 -E '\[OPEN\] (markdown )?failed' "$log_file")"
   if wait_for 10 has_dialog "$pid"; then
     dialog=$(dialogs_of "$pid" | head -1)
     OBSERVED=rejected-with-dialog
@@ -252,7 +252,7 @@ check_zip_match() {
 observe_open_document() {
   local pid=$1 doc=$2 source=$3 sha_before=$4 log_file=$5 action
   action=$(case_value action)
-  note "log: $(grep -m1 '\[OPEN\] success' "$log_file")"
+  note "log: $(grep -m1 -E '\[OPEN\] (markdown )?success' "$log_file")"
   # The editor keeps loading for a moment after it says it is ready.
   sleep 3
   if [ "$action" = open ]; then

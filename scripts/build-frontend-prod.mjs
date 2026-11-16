@@ -422,6 +422,9 @@ await copyRequired(
   path.join(projectRoot, 'src', 'editor-patches.js'),
   path.join(outputRoot, 'editor-patches.js'),
 );
+await cp(path.join(projectRoot, 'src', 'markdown'), path.join(outputRoot, 'markdown'), {
+  recursive: true,
+});
 await cp(path.join(projectRoot, 'src', 'fonts'), path.join(outputRoot, 'fonts'), {
   recursive: true,
 });

@@ -56,4 +56,21 @@ for (const command of CHAIN) {
   check(results, 'The page reloads even if every step fails', steps === EXPECTED, steps);
 }
 
+// `next` loads another page instead of this one: the document is closed first.
+{
+  const steps = [];
+  const invoke = {};
+  for (const command of CHAIN) invoke[command] = step(steps, command, []);
+  const bridge = await loadBridge({ invoke });
+  bridge.sandbox.location = {
+    reload: () => steps.push('reload'),
+    set href(page) { steps.push(`navigate ${page}`); },
+  };
+  bridge.run(`_forceReload('markdown/markdown.html')`);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  bridge.stopTimers();
+  const expected = [...CHAIN, 'navigate markdown/markdown.html'].join(' ');
+  check(results, 'With a next page, closes the document before navigating', steps.join(' ') === expected, steps.join(' '));
+}
+
 finish(results);
