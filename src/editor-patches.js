@@ -1443,6 +1443,20 @@
       if (state) _renderRecentFiles(state);
     }
 
+    // Picks the start screen icon for a recent file from its extension.
+    var RECENT_KINDS = {
+      docx: 'word', doc: 'word', docm: 'word', dotx: 'word', odt: 'word', ott: 'word', rtf: 'word', txt: 'word',
+      xlsx: 'cell', xls: 'cell', xlsm: 'cell', xltx: 'cell', ods: 'cell', ots: 'cell', csv: 'cell',
+      pptx: 'slide', ppt: 'slide', pptm: 'slide', potx: 'slide', odp: 'slide', otp: 'slide',
+      pdf: 'pdf', md: 'markdown', markdown: 'markdown'
+    };
+
+    function _recentKind(name) {
+      var dot = name.lastIndexOf('.');
+      if (dot < 0) return 'file';
+      return RECENT_KINDS[name.slice(dot + 1).toLowerCase()] || 'file';
+    }
+
     function _renderRecentFiles(state) {
       var list = document.getElementById('recent-list');
       var files = state.enabled ? state.files : [];
@@ -1460,6 +1474,11 @@
         row.type = 'button';
         row.className = 'recent-item';
         row.title = file.path;
+        var icon = document.createElement('span');
+        icon.className = 'recent-icon';
+        icon.dataset.kind = _recentKind(file.name);
+        icon.setAttribute('aria-hidden', 'true');
+        row.appendChild(icon);
         // File names are user data: build the row with textContent so a name
         // containing markup can never be parsed as HTML.
         var fields = [

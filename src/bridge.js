@@ -593,6 +593,7 @@ var _UI_STRINGS = {
     recoveredDocuments: 'Recovered documents', recover: 'Recover', discard: 'Discard', discardAll: 'Discard all',
     recentFiles: 'Recent files', rememberRecent: 'Remember recent files', clearRecent: 'Clear',
     settings: 'Settings', interfaceLanguage: 'Interface language', spellCheck: 'Spell check',
+    appearance: 'Appearance', themeDark: 'Dark', themeLight: 'Light',
     noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
     openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.',
     openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.',
@@ -640,6 +641,7 @@ var _UI_STRINGS = {
     recoveredDocuments: 'Documentos recuperados', recover: 'Recuperar', discard: 'Descartar', discardAll: 'Descartar todo',
     recentFiles: 'Archivos recientes', rememberRecent: 'Recordar archivos recientes', clearRecent: 'Limpiar',
     settings: 'Configuración', interfaceLanguage: 'Idioma de la interfaz', spellCheck: 'Corrector ortográfico', addLanguage: 'Añadir idioma del corrector…',
+    appearance: 'Apariencia', themeDark: 'Oscuro', themeLight: 'Claro',
     noRecentFiles: 'Todavía no hay archivos recientes', openFailed: 'No se pudo abrir el archivo',
     openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.',
     openErrorMsg: 'No se pudo abrir el archivo. No es un documento válido o está dañado.',
@@ -678,6 +680,7 @@ var _UI_STRINGS = {
     recoveredDocuments: 'Documents récupérés', recover: 'Récupérer', discard: 'Abandonner', discardAll: 'Tout abandonner',
     recentFiles: 'Fichiers récents', rememberRecent: 'Mémoriser les fichiers récents', clearRecent: 'Effacer',
     settings: 'Paramètres', interfaceLanguage: 'Langue de l\'interface', spellCheck: 'Vérification orthographique', addLanguage: 'Ajouter une langue de vérification…',
+    appearance: 'Apparence', themeDark: 'Sombre', themeLight: 'Clair',
     noRecentFiles: 'Aucun fichier récent pour le moment', openFailed: 'Impossible d\'ouvrir le fichier',
     openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.',
     openErrorMsg: 'Impossible d\'ouvrir le fichier. Ce n\'est pas un document valide ou il est endommagé.',
@@ -711,6 +714,7 @@ var _UI_STRINGS = {
     recoveredDocuments: 'Wiederhergestellte Dokumente', recover: 'Wiederherstellen', discard: 'Verwerfen', discardAll: 'Alle verwerfen',
     recentFiles: 'Zuletzt verwendete Dateien', rememberRecent: 'Zuletzt verwendete Dateien merken', clearRecent: 'Leeren',
     settings: 'Einstellungen', interfaceLanguage: 'Sprache der Benutzeroberfläche', spellCheck: 'Rechtschreibprüfung', addLanguage: 'Sprache für die Rechtschreibprüfung hinzufügen…',
+    appearance: 'Darstellung', themeDark: 'Dunkel', themeLight: 'Hell',
     noRecentFiles: 'Noch keine zuletzt verwendeten Dateien', openFailed: 'Datei konnte nicht geöffnet werden',
     openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.',
     openErrorMsg: 'Die Datei konnte nicht geöffnet werden. Sie ist kein gültiges Dokument oder sie ist beschädigt.',
@@ -744,6 +748,7 @@ var _UI_STRINGS = {
     recoveredDocuments: 'Documenti recuperati', recover: 'Recupera', discard: 'Scarta', discardAll: 'Scarta tutto',
     recentFiles: 'File recenti', rememberRecent: 'Ricorda i file recenti', clearRecent: 'Cancella',
     settings: 'Impostazioni', interfaceLanguage: 'Lingua dell\'interfaccia', spellCheck: 'Controllo ortografico', addLanguage: 'Aggiungi lingua di controllo ortografico…',
+    appearance: 'Aspetto', themeDark: 'Scuro', themeLight: 'Chiaro',
     noRecentFiles: 'Nessun file recente', openFailed: 'Impossibile aprire il file',
     openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.',
     openErrorMsg: 'Impossibile aprire il file. Non è un documento valido oppure è danneggiato.',
@@ -777,6 +782,7 @@ var _UI_STRINGS = {
     recoveredDocuments: 'Documentos recuperados', recover: 'Recuperar', discard: 'Descartar', discardAll: 'Descartar tudo',
     recentFiles: 'Arquivos recentes', rememberRecent: 'Lembrar arquivos recentes', clearRecent: 'Limpar',
     settings: 'Configurações', interfaceLanguage: 'Idioma da interface', spellCheck: 'Verificação ortográfica', addLanguage: 'Adicionar idioma de verificação ortográfica…',
+    appearance: 'Aparência', themeDark: 'Escuro', themeLight: 'Claro',
     noRecentFiles: 'Ainda não há arquivos recentes', openFailed: 'Não foi possível abrir o arquivo',
     openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.',
     openErrorMsg: 'Não foi possível abrir o arquivo. Não é um documento válido ou está danificado.',
@@ -810,6 +816,7 @@ var _UI_STRINGS = {
     recoveredDocuments: 'Восстановленные документы', recover: 'Восстановить', discard: 'Отклонить', discardAll: 'Отклонить всё',
     recentFiles: 'Недавние файлы', rememberRecent: 'Запоминать недавние файлы', clearRecent: 'Очистить',
     settings: 'Настройки', interfaceLanguage: 'Язык интерфейса', spellCheck: 'Проверка орфографии', addLanguage: 'Добавить язык проверки орфографии…',
+    appearance: 'Оформление', themeDark: 'Тёмная', themeLight: 'Светлая',
     noRecentFiles: 'Недавних файлов пока нет', openFailed: 'Не удалось открыть файл',
     openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.',
     openErrorMsg: 'Не удалось открыть файл. Это не действительный документ или он повреждён.',
@@ -843,6 +850,7 @@ var _UI_STRINGS = {
     recoveredDocuments: 'Відновлені документи', recover: 'Відновити', discard: 'Відхилити', discardAll: 'Відхилити все',
     recentFiles: 'Нещодавні файли', rememberRecent: 'Запам\'ятовувати нещодавні файли', clearRecent: 'Очистити',
     settings: 'Налаштування', interfaceLanguage: 'Мова інтерфейсу', spellCheck: 'Перевірка правопису', addLanguage: 'Додати мову перевірки правопису…',
+    appearance: 'Оформлення', themeDark: 'Темна', themeLight: 'Світла',
     noRecentFiles: 'Нещодавніх файлів поки немає', openFailed: 'Не вдалося відкрити файл',
     openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.',
     openErrorMsg: 'Не вдалося відкрити файл. Це не дійсний документ або його пошкоджено.',
@@ -876,6 +884,7 @@ var _UI_STRINGS = {
     recoveredDocuments: '已恢复的文档', recover: '恢复', discard: '丢弃', discardAll: '全部丢弃',
     recentFiles: '最近的文件', rememberRecent: '记住最近的文件', clearRecent: '清除',
     settings: '设置', interfaceLanguage: '界面语言', spellCheck: '拼写检查', addLanguage: '添加拼写检查语言…',
+    appearance: '外观', themeDark: '深色', themeLight: '浅色',
     noRecentFiles: '暂无最近的文件', openFailed: '无法打开文件',
     openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。',
     openErrorMsg: '无法打开文件。它不是有效的文档，或者已损坏。',
@@ -909,6 +918,7 @@ var _UI_STRINGS = {
     recoveredDocuments: '復元されたドキュメント', recover: '復元', discard: '破棄', discardAll: 'すべて破棄',
     recentFiles: '最近使用したファイル', rememberRecent: '最近使用したファイルを記憶する', clearRecent: 'クリア',
     settings: '設定', interfaceLanguage: '表示言語', spellCheck: 'スペルチェック', addLanguage: 'スペルチェックの言語を追加…',
+    appearance: '外観', themeDark: 'ダーク', themeLight: 'ライト',
     noRecentFiles: '最近使用したファイルはありません', openFailed: 'ファイルを開けませんでした',
     openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。',
     openErrorMsg: 'ファイルを開けませんでした。有効なドキュメントではないか、破損しています。',
@@ -1912,12 +1922,51 @@ function _eoOnSettingsOutsideClick(event) {
   _eoCloseSettings(lost);
 }
 
+// The start screen's own light or dark look. Only the start screen uses it:
+// the editors keep their own theme.
+var EO_THEME_KEY = 'eo-start-theme';
+
+function _eoStoredTheme() {
+  try {
+    return localStorage.getItem(EO_THEME_KEY) === 'light' ? 'light' : 'dark';
+  } catch (e) {
+    return 'dark';
+  }
+}
+
+function _eoApplyTheme(theme) {
+  var root = document.documentElement;
+  if (root && root.dataset) root.dataset.theme = theme;
+  document.querySelectorAll('[data-theme-choice]').forEach(function(button) {
+    button.setAttribute('aria-pressed', String(button.dataset.themeChoice === theme));
+  });
+}
+
+function _eoChooseTheme(theme) {
+  try {
+    localStorage.setItem(EO_THEME_KEY, theme);
+  } catch (e) {
+    if (window._eoLog) window._eoLog('[EO] Theme not stored: ' + (e.message || e));
+  }
+  _eoApplyTheme(theme);
+}
+
+function _eoInitThemeChoice() {
+  _eoApplyTheme(_eoStoredTheme());
+  document.querySelectorAll('[data-theme-choice]').forEach(function(button) {
+    button.addEventListener('click', function() { _eoChooseTheme(button.dataset.themeChoice); });
+  });
+  var shortcut = document.getElementById('open-shortcut');
+  if (shortcut && /Mac/.test(navigator.platform)) shortcut.textContent = '⌘ O';
+}
+
 // options.onLanguageChange: runs after the UI language is stored.
 // options.onRecentChange: runs after the recent files switch is stored.
 function _eoInitStartSettings(options) {
   var parts = _eoSettingsParts();
   if (!parts) return;
   options = options || {};
+  _eoInitThemeChoice();
 
   parts.toggle.addEventListener('click', _eoOnSettingsToggleClick);
   document.addEventListener('keydown', _eoOnSettingsKeydown);
