@@ -6,6 +6,12 @@ name: Harness (Linux)
 # A job is red when a case is not ok (run.sh exits 1) or the harness could not
 # run (exit 2).
 #
+# Known red: docx-xlsx-content, an XLSX named .docx, opens instead of being
+# refused because of a defect of the app, not of the harness. The case is run
+# as it is; the jobs stay red until the app is fixed.
+#
+# The log of the harness step says which pdftotext the pdf-text cases used.
+#
 # result.json is uploaded on every run; the package install log, the app logs
 # and the screenshots only when the job fails.
 
@@ -76,7 +82,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            xvfb openbox xdotool wmctrl x11-utils imagemagick unzip python3 dbus
+            xvfb openbox xdotool wmctrl x11-utils imagemagick unzip python3 dbus poppler-utils
 
       - name: Run the harness
         # Below the job timeout, so the upload steps still run.
@@ -111,6 +117,8 @@ jobs:
           path: |
             ${{ runner.temp }}/harness/apt.log
             ${{ runner.temp }}/harness/*/app.log
+            ${{ runner.temp }}/harness/*/app-restart.log
+            ${{ runner.temp }}/harness/*/exported.txt
             ${{ runner.temp }}/harness/*/screen.png
           if-no-files-found: warn
           retention-days: 7

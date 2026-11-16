@@ -6,9 +6,13 @@ name: Harness (Windows)
 # A job is red when a case is not ok (run.ps1 exits 1) or the harness could
 # not run (exit 2).
 #
-# Known red: csv-html-emoji fails to open on Windows (both architectures)
-# because of a defect of the app, not of the harness. The case is run as it
-# is; the jobs stay red until the app is fixed.
+# Known red, because of defects of the app, not of the harness:
+# csv-html-emoji fails to open on Windows (both architectures), and
+# docx-xlsx-content, an XLSX named .docx, opens instead of being refused. The
+# cases are run as they are; the jobs stay red until the app is fixed.
+#
+# The pdf-text cases read the PDF with the pdftotext of Git for Windows; the
+# standard error of run.ps1, in the log of the harness step, says which one.
 #
 # result.json is uploaded on every run; the output of run.ps1, the app logs
 # and the screenshots only when the job fails.
@@ -113,7 +117,7 @@ jobs:
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
           # Reading the handle now keeps the exit code readable after the end.
           $null = $child.Handle
-          # 30 minutes; the 17 cases take under 4.
+          # 30 minutes, below the step timeout.
           $finished = $child.WaitForExit(1800000)
           if (-not $finished) {
             Write-Output "ERROR: run.ps1 did not finish in 30 minutes; killing its process tree"
@@ -148,6 +152,8 @@ jobs:
             ${{ runner.temp }}/run.out.log
             ${{ runner.temp }}/run.err.log
             ${{ runner.temp }}/harness/*/app.log
+            ${{ runner.temp }}/harness/*/app-restart.log
+            ${{ runner.temp }}/harness/*/exported.txt
             ${{ runner.temp }}/harness/*/screen.png
           if-no-files-found: warn
           retention-days: 7
