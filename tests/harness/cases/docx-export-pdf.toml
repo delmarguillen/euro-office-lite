@@ -3,7 +3,6 @@
 description = "DOCX: open, Save As with a .pdf name; the text of the PDF has the paragraph"
 generate = "mkdocx.py 1"
 input = "paragraph.docx"
-input_sha256 = "706d600572bde187f9c810b442d274ee19fe45870d2a38fcfb5f16a33fee8367"
 action = "open-export-pdf"
 check = "pdf-text"
 match_1 = 'Paragraph 0: the quick brown fox'

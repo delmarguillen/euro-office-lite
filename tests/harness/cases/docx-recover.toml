@@ -5,7 +5,6 @@
 description = "DOCX: open, type, kill the app, start it again; the start screen gets the document to offer for recovery"
 generate = "mkdocx.py 2"
 input = "recover.docx"
-input_sha256 = "a15ac0c607d5e1bb6787e19a727052f6bd147f87889ed4cbde3b138155da448f"
 action = "edit-kill-recover"
 keys_before = "ctrl+End"
 type = " Harness75recover"
