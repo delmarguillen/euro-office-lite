@@ -2,7 +2,7 @@
 
 Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~89 MB (Windows), ~123-129 MB (macOS), ~137 MB (Linux x64 .deb), ~133 MB (Linux arm64 .deb), ~92 MB (Flatpak). No cloud, no telemetry.
 
-Supports Word, Excel and PowerPoint documents, OpenDocument files, RTF, CSV and plain text, with native file operations and printing. PDF files open in a PDF editor where you can add comments, highlights and free text and save them. Older formats such as .doc, .xls and .ppt open too, and are saved as .docx, .xlsx or .pptx. With a document open, opening another one starts a new window. The window opens with the size and position it had when it was last closed (on Linux with Wayland, only whether it was maximized). Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
+Supports Word, Excel and PowerPoint documents, OpenDocument files, RTF, CSV and plain text, with native file operations and printing. Markdown files (.md) open in their own editor, with the text on one side and a live preview on the other; you can create one from the start screen and export it as HTML. PDF files open in a PDF editor where you can add comments, highlights and free text and save them. Older formats such as .doc, .xls and .ppt open too, and are saved as .docx, .xlsx or .pptx. Office templates (.dotx, .xltx, .potx) open as well, but saving as a template is not supported yet. With a document open, opening another one starts a new window, and a file that is already open in one window is not opened again in another. The start screen has a dark and a light theme. The window opens with the size and position it had when it was last closed (on Linux with Wayland, only whether it was maximized). Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
 
 > **Alpha**: This project is in early development. Core features work (create, open, edit, save, PDF export), but expect rough edges. Printing sends the document to a printer on Windows and opens it in the system PDF viewer on macOS and Linux.
 
@@ -17,7 +17,8 @@ Supports Word, Excel and PowerPoint documents, OpenDocument files, RTF, CSV and 
 Euro-Office Lite is alpha. A few things you will run into early:
 
 - **Only English and Spanish are checked out of the box** (#6). Dictionaries for both ship with the app (every regional Spanish variant is checked). Text in other languages is left unchecked, not marked as wrong, and you can add any other language yourself: see [Adding more spellcheck languages](#adding-more-spellcheck-languages).
-- **The Windows installers are not signed yet.** Windows may show a SmartScreen warning the first time you run the installer; choose "More info" and then "Run anyway".
+- **The Windows installers are not signed yet.** Windows may show a SmartScreen warning the first time you run the installer; choose "More info" and then "Run anyway". On Windows 11 with Smart App Control turned on, the installer is blocked and there is no option to run it anyway. You can turn it off in Windows Security > App & browser control > Smart App Control, install the app, and turn it back on.
+- **Text files with emoji or other characters outside the Basic Multilingual Plane are refused** with a message instead of opening.
 
 ## Requirements
 
