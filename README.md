@@ -1,78 +1,48 @@
 # Euro-Office Lite
 
-Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. Installers: ~89 MB (Windows), ~123-129 MB (macOS), ~137 MB (Linux x64 .deb), ~133 MB (Linux arm64 .deb), ~92 MB (Flatpak). No cloud, no telemetry.
-
-Supports Word, Excel and PowerPoint documents, OpenDocument files, RTF, CSV and plain text, with native file operations and printing. Markdown files (.md) open in their own editor, with the text on one side and a live preview on the other; you can create one from the start screen and export it as HTML. PDF files open in a PDF editor where you can add comments, highlights and free text and save them. Older formats such as .doc, .xls and .ppt open too, and are saved as .docx, .xlsx or .pptx. Office templates (.dotx, .xltx, .potx) open as well, but saving as a template is not supported yet. With a document open, opening another one starts a new window, and a file that is already open in one window is not opened again in another. The start screen has a dark and a light theme. The window opens with the size and position it had when it was last closed (on Linux with Wayland, only whether it was maximized). Available for Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64 and ARM64 .deb, x64 Flatpak).
-
-> **Alpha**: This project is in early development. Core features work (create, open, edit, save, PDF export), but expect rough edges. Printing sends the document to a printer on Windows and opens it in the system PDF viewer on macOS and Linux.
-
 <p align="center">
   <img src="assets/demo.gif" alt="Euro-Office Lite demo" width="800">
   <br><br>
   <a href="https://github.com/delmarguillen/euro-office-lite/releases"><strong>Download the latest release</strong></a>
 </p>
 
-## Known issues
+Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. **No cloud, no telemetry.**
 
-Euro-Office Lite is alpha. A few things you will run into early:
+## What it opens
 
-- **Only English and Spanish are checked out of the box** (#6). Dictionaries for both ship with the app (every regional Spanish variant is checked). Text in other languages is left unchecked, not marked as wrong, and you can add any other language yourself: see [Adding more spellcheck languages](#adding-more-spellcheck-languages).
-- **The Windows installers are not signed yet.** Windows may show a SmartScreen warning the first time you run the installer; choose "More info" and then "Run anyway". On Windows 11 with Smart App Control turned on, the installer is blocked and there is no option to run it anyway. You can turn it off in Windows Security > App & browser control > Smart App Control, install the app, and turn it back on.
-- **Text files with emoji or other characters outside the Basic Multilingual Plane are refused** with a message instead of opening.
+- **Documents, spreadsheets and presentations**: Word, Excel and PowerPoint, OpenDocument, RTF, CSV and plain text, with native file operations and printing.
+- **Markdown** (.md): its own editor, with the text on one side and a live preview on the other. Create one from the start screen and export it as HTML.
+- **PDF**: a PDF editor where you can add comments, highlights and free text and save them.
+- **Older formats** (.doc, .xls, .ppt): they open and are saved as .docx, .xlsx or .pptx.
+- **Office templates** (.dotx, .xltx, .potx): they open, but saving as a template is not supported yet.
 
-## Requirements
+## Platforms
 
-- [Node.js](https://nodejs.org/) 18+
-- [Rust](https://rustup.rs/) 1.77+
-- Visual Studio 2022 with C++ desktop workload (for native compilation)
+| Platform | Package | Installer size |
+|---|---|---|
+| [Windows](#windows) | x64, ARM64 | ~89 MB |
+| [macOS](#macos) | Apple Silicon and Intel, signed and notarized | ~123-129 MB |
+| [Linux x64](#linux) | .deb | ~137 MB |
+| [Linux ARM64](#linux) | .deb | ~133 MB |
+| [Linux x64](#linux) | Flatpak | ~92 MB |
 
-## Getting started
+> **Alpha**: This project is in early development. Core features work (create, open, edit, save, PDF export), but expect rough edges. Printing sends the document to a printer on Windows and opens it in the system PDF viewer on macOS and Linux.
 
-```powershell
-git clone --recursive https://github.com/delmarguillen/euro-office-lite.git
-cd euro-office-lite
-npm install
-.\scripts\setup.ps1       # generates sdkjs develop scripts and fonts
-.\scripts\get-x2t.ps1     # downloads x2t converter binaries (requires admin)
-npx tauri dev
-```
+## Installing
 
-`setup.ps1` runs `grunt develop` inside sdkjs to generate the JS module loaders (`scripts.js`) that each editor needs at runtime. Run it again after updating the sdkjs submodule.
+### Windows
 
-`get-x2t.ps1` downloads the x2t converter binaries (~47 MB) from the repo's `dependencies` release into `src-tauri/binaries/`. Requires [GitHub CLI](https://cli.github.com/) (`gh`) authenticated.
+Download the installer that matches your machine: `x64-setup.exe` for most PCs, `arm64-setup.exe` for Windows on ARM (for example a Surface Pro X or a Snapdragon laptop). Run it and follow the steps.
 
-## Build installer
+The installers are not signed yet. The first time you run one, Windows may show a SmartScreen warning: choose "More info" and then "Run anyway".
 
-```powershell
-.\scripts\prepare-dist.ps1    # stages slim frontend into src-dist/
-npx tauri build
-```
+On Windows 11 with Smart App Control turned on, the installer is blocked and there is no option to run it anyway. You can turn it off in Windows Security > App & browser control > Smart App Control, install the app, and turn it back on.
 
-Output goes to `src-tauri/target/release/bundle/nsis/`.
-
-## Architecture
-
-```
-User <-> Tauri webview <-> sdkjs/web-apps (editor UI)
-                        <-> bridge.js (desktop bridge shim)
-                        <-> Rust backend <-> x2t (format conversion)
-                                         <-> tauri-plugin-printer-v2 (Windows printing)
-```
-
-- **sdkjs / web-apps**: Editor frontend (submodules, do not modify)
-- **bridge.js**: Implements the `AscDesktopEditor` API that sdkjs expects from a desktop host
-- **x2t**: Converts between DOCX/XLSX/PPTX and Editor.bin (sdkjs internal format)
-- **Printing**: Generates PDF via x2t + DoctRenderer. On Windows, sends to printer via bundled SumatraPDF. On macOS and Linux, opens the PDF in the system viewer
-
-## CI/CD
-
-Pushing a tag `v*` triggers the GitHub Actions workflow which builds Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64, ARM64) installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
-
-## Installing on macOS
+### macOS
 
 DMG builds are signed and notarized by Apple: download, open the DMG, drag to Applications and double-click. No Gatekeeper workarounds needed. Requires macOS 12 (Monterey) or later. Since v0.16.0-alpha, DMGs are available for both Apple Silicon (`aarch64`) and Intel (`x86_64`) Macs; download the one matching your machine.
 
-## Installing on Linux
+### Linux
 
 Install the `.deb` with `apt` so dependencies are resolved automatically. Use the `amd64` file on x64 machines and the `arm64` file on 64-bit ARM machines (for example a Raspberry Pi with a 64-bit OS):
 
@@ -114,6 +84,14 @@ With the `.deb`, copy the desktop file to `~/.local/share/applications/` and cha
 
 **Slow scrolling.** The DMABUF renderer is off by default on Linux because it made text look jagged with the proprietary NVIDIA driver ([#27](https://github.com/delmarguillen/euro-office-lite/issues/27)). On other GPUs, scrolling can be smoother with it on. To try it with the `.deb`, start the app from a terminal with `WEBKIT_DISABLE_DMABUF_RENDERER=0 euro-office-lite`.
 
+## Known issues
+
+Euro-Office Lite is alpha. A few things you will run into early:
+
+- **Only English and Spanish are checked out of the box** (#6). Dictionaries for both ship with the app (every regional Spanish variant is checked). Text in other languages is left unchecked, not marked as wrong, and you can add any other language yourself: see [Adding more spellcheck languages](#adding-more-spellcheck-languages).
+- **The Windows installers are not signed yet**, so Windows may warn you or block the installer: see [Installing on Windows](#windows).
+- **Text files with emoji or other characters outside the Basic Multilingual Plane are refused** with a message instead of opening.
+
 ## Adding more spellcheck languages
 
 The spell checker works with any language from the [Euro-Office dictionaries repository](https://github.com/Euro-Office/dictionaries). Each language there is a folder named after its locale, holding the two files hunspell needs. A language the repository names `xx_YY` goes in as `xx_YY/xx_YY.aff` and `xx_YY/xx_YY.dic`, inside your dictionaries folder:
@@ -134,6 +112,58 @@ Each window of the app writes its own log, `js-debug-<number>-<number>.log`. The
 
 - **Windows**: `%TEMP%\euro-office-lite\`
 - **macOS / Linux**: `/tmp/euro-office-lite-<user id>/` (`id -u` shows your user id)
+
+## Building from source
+
+You only need this to work on the app itself. To use it, download an installer from the [releases page](https://github.com/delmarguillen/euro-office-lite/releases).
+
+### Requirements
+
+- [Node.js](https://nodejs.org/) 18+
+- [Rust](https://rustup.rs/) 1.77+
+- Visual Studio 2022 with C++ desktop workload (for native compilation)
+
+### Run from source
+
+```powershell
+git clone --recursive https://github.com/delmarguillen/euro-office-lite.git
+cd euro-office-lite
+npm install
+.\scripts\setup.ps1       # generates sdkjs develop scripts and fonts
+.\scripts\get-x2t.ps1     # downloads x2t converter binaries (requires admin)
+npx tauri dev
+```
+
+`setup.ps1` runs `grunt develop` inside sdkjs to generate the JS module loaders (`scripts.js`) that each editor needs at runtime. Run it again after updating the sdkjs submodule.
+
+`get-x2t.ps1` downloads the x2t converter binaries (~47 MB) from the repo's `dependencies` release into `src-tauri/binaries/`. Requires [GitHub CLI](https://cli.github.com/) (`gh`) authenticated.
+
+### Build installer
+
+```powershell
+.\scripts\prepare-dist.ps1    # stages slim frontend into src-dist/
+npx tauri build
+```
+
+Output goes to `src-tauri/target/release/bundle/nsis/`.
+
+### Architecture
+
+```
+User <-> Tauri webview <-> sdkjs/web-apps (editor UI)
+                        <-> bridge.js (desktop bridge shim)
+                        <-> Rust backend <-> x2t (format conversion)
+                                         <-> tauri-plugin-printer-v2 (Windows printing)
+```
+
+- **sdkjs / web-apps**: Editor frontend (submodules, do not modify)
+- **bridge.js**: Implements the `AscDesktopEditor` API that sdkjs expects from a desktop host
+- **x2t**: Converts between DOCX/XLSX/PPTX and Editor.bin (sdkjs internal format)
+- **Printing**: Generates PDF via x2t + DoctRenderer. On Windows, sends to printer via bundled SumatraPDF. On macOS and Linux, opens the PDF in the system viewer
+
+### CI/CD
+
+Pushing a tag `v*` triggers the GitHub Actions workflow which builds Windows (x64, ARM64), macOS (Apple Silicon and Intel, signed and notarized), and Linux (x64, ARM64) installers and creates a GitHub Release. Tags containing `alpha`, `beta`, or `rc` are marked as pre-release.
 
 ## Credits and attribution
 
