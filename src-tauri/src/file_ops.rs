@@ -1111,10 +1111,13 @@ pub fn current_document(state: State<'_, AppState>) -> Option<GrantedFile> {
 }
 
 // The page is going back to the start screen while this process lives on, so
-// the other windows must stop seeing the file as open here.
+// the other windows must stop seeing the file as open here, and the title
+// stops naming it.
 #[tauri::command]
-pub fn close_document(state: State<'_, AppState>) {
+pub fn close_document(window: tauri::WebviewWindow, state: State<'_, AppState>) {
     set_current_file(&state, None);
+    // Only the title: the document is closed whether or not it changes.
+    let _ = window.set_title(crate::bridge::WINDOW_TITLE);
 }
 
 // Asked once by the frontend; "fonts-ready" carries the change after that.

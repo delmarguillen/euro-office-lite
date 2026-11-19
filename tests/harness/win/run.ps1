@@ -189,6 +189,8 @@ function New-Run([string]$name) {
         ShaBefore = ''
         ProcessId = 0
         Log = ''
+        # Lines the log had when Ctrl+S was sent.
+        LogLinesBefore = 0
         DialogsAnswered = 0
     }
 }
@@ -337,8 +339,20 @@ function Answer-SaveDialogs($run) {
     }
 }
 
+function Get-LogLineCount([string]$path) {
+    return [regex]::Matches((Read-SharedText $path), "`n").Count
+}
+
+# The [SAVE] markdown lines the log got after its first $count lines. The
+# Markdown page saves through the backend, which logs both.
+function Get-NewSaveLines([string]$path, [int]$count) {
+    $lines = @((Read-SharedText $path) -split '\r?\n' | Select-Object -Skip $count)
+    return @($lines | Where-Object { $_ -match '\[SAVE\] markdown (success|failed)' })
+}
+
 function Test-SaveWritten($run) {
     if ((Get-Sha256 $run.Doc) -ne $run.ShaBefore) { return $true }
+    if (@(Get-NewSaveLines $run.Log $run.LogLinesBefore).Count -gt 0) { return $true }
     Answer-SaveDialogs $run
     return $false
 }
@@ -352,13 +366,25 @@ function Wait-StableFile([string]$path) {
     }
 }
 
-# Ctrl+S, then waits for the file to change. Returns saved, save-not-written
-# or not-in-foreground.
+# Ctrl+S, then waits for the file to change or for a logged Markdown save.
+# Returns saved, save-not-written, save-failed, saved-unchanged or
+# not-in-foreground.
 function Save-Document($options, $run) {
     if (-not (Set-Foreground (Get-MainWindow $run.ProcessId))) { return 'not-in-foreground' }
+    $run.LogLinesBefore = Get-LogLineCount $run.Log
     Send-Keys 'ctrl+s'
     $written = Wait-Until $options.SaveWait { Test-SaveWritten $run }
     if (-not $written) { return 'save-not-written' }
+    $logged = @(Get-NewSaveLines $run.Log $run.LogLinesBefore)
+    $failed = @($logged | Where-Object { $_ -match 'markdown failed' })
+    if ($failed.Count -gt 0) {
+        Add-Note $run ('log: ' + $failed[0])
+        return 'save-failed'
+    }
+    if ((Get-Sha256 $run.Doc) -eq $run.ShaBefore) {
+        Add-Note $run ('log: ' + $logged[0])
+        return 'saved-unchanged'
+    }
     Wait-StableFile $run.Doc
     return 'saved'
 }

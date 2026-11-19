@@ -86,7 +86,7 @@ function Test-Scripts {
 
 function Test-CaseFiles {
     $names = @(Get-SelectedCases 'all')
-    Assert-Equal 'number of cases' $names.Count 35
+    Assert-Equal 'number of cases' $names.Count 37
     foreach ($name in $names) {
         $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
         $complete = ($null -ne $case) -and (Get-CaseValue $case 'input') -and (Get-CaseValue $case 'generate') -and (Get-CaseValue $case 'expect')
@@ -240,7 +240,7 @@ function Test-Json {
 
 # --- a stand-in for the app -----------------------------------------------------
 
-$Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false; SaveDialog = $false; Session = ''; KeepsRecovery = $true }
+$Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Log = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false; SaveFails = $false; LogsOldSave = $false; SaveDialog = $false; Session = ''; KeepsRecovery = $true }
 
 function Start-Sleep { }
 function Test-Windows { return $true }
@@ -313,12 +313,20 @@ $FakeNeverOpens = @('encrypted.docx', 'plain-text.docx', 'sheet-inside.docx', 't
 function Get-FakeOpenError([string]$name) {
     if ($FakeNeverOpens -contains $name) { return 'This file is not a valid .docx' }
     if ($Fake.Refuses -and $name -like '*emoji*.txt') { return 'character above U+FFFF' }
+    if ($Fake.Refuses -and $name -eq 'latin1.md') { return 'markdown-not-utf8: the file is not UTF-8' }
     return ''
 }
 
-# Writes the log an instance would: a TXT with an emoji is refused with a
-# dialog unless the stand-in plays a build without that fix, and a .md opens
-# in the Markdown page, which logs only the backend's line.
+# The backend's line for an open the stand-in refuses.
+function Get-FakeFailedLine([string]$name, [string]$openError) {
+    if ($name -like '*.md') { return '[OPEN] markdown failed: ' + $openError }
+    return '[OPEN] failed file=' + $name + ' error=' + $openError
+}
+
+# Writes the log an instance would: a TXT with an emoji and a .md that is not
+# UTF-8 are refused with a dialog unless the stand-in plays a build without
+# that fix, and a .md opens in the Markdown page, which logs only the
+# backend's line.
 function Start-App([string]$exe, [string]$file) {
     $Fake.ProcessId++
     $Fake.Alive = $true
@@ -333,13 +341,31 @@ function Start-App([string]$exe, [string]$file) {
     if ($name -like '*.md') { $lines = @('[OPEN] markdown success bytes=10') }
     $openError = Get-FakeOpenError $name
     if ($openError) {
-        $lines = @('[OPEN] failed file=' + $name + ' error=' + $openError)
+        $lines = @(Get-FakeFailedLine $name $openError)
         $Fake.Dialogs = @(New-Object PSObject -Property @{ Handle = [IntPtr]2; Title = 'Cannot open' })
     }
+    # A save logged before Ctrl+S, which the harness must not take for its own.
+    if ($Fake.LogsOldSave) { $lines += '[SAVE] markdown success' }
     New-Item -ItemType Directory -Force -Path (Get-TempRoot) | Out-Null
     $log = Join-Path (Get-TempRoot) ('js-debug-1700000000000-{0}.log' -f $Fake.ProcessId)
     [System.IO.File]::WriteAllLines($log, [string[]]$lines)
+    $Fake.Log = $log
     return $Fake.ProcessId
+}
+
+# The Markdown page writes the text it has, the same bytes without an edit,
+# and the backend logs how the save went.
+function Save-FakeMarkdown {
+    if ($Fake.SaveFails) {
+        [System.IO.File]::AppendAllLines($Fake.Log, [string[]]@('[SAVE] markdown failed: disk full'))
+        return
+    }
+    $name = Split-Path -Leaf $Fake.File
+    $expected = Get-ExpectedFile (Join-Path (Join-Path (Split-Path -Parent $Fake.File) 'source') $name)
+    if ($Fake.Typed -and (Test-Path -LiteralPath $expected)) {
+        Copy-Item -LiteralPath $expected -Destination $Fake.File -Force
+    }
+    [System.IO.File]::AppendAllLines($Fake.Log, [string[]]@('[SAVE] markdown success'))
 }
 
 # What Ctrl+S leaves on disk: nothing without an edit, else the expected file
@@ -347,6 +373,10 @@ function Start-App([string]$exe, [string]$file) {
 function Save-FakeDocument {
     $name = Split-Path -Leaf $Fake.File
     if ($Fake.WritesNothing) { return }
+    if ($name -like '*.md') {
+        Save-FakeMarkdown
+        return
+    }
     if (-not $Fake.Refuses -and $name -like '*emoji*.txt') {
         [System.IO.File]::WriteAllBytes($Fake.File, [byte[]](0x0A))
         return
@@ -425,7 +455,7 @@ function Test-FullRun([string]$inputs) {
         $wantedNotOk = 'docx-export-pdf=no-pdftotext xlsx-export-pdf=no-pdftotext'
     }
     Assert-Equal 'all: exit status' $status $wantedStatus
-    Assert-Equal 'all: cases in result.json' @($result.cases).Count 35
+    Assert-Equal 'all: cases in result.json' @($result.cases).Count 37
     $export = Join-Path (Join-Path $options.Out 'docx-export-pdf') 'exported.pdf'
     Assert-Equal 'all: the export of a case is a PDF' (Test-PdfHeader $export) $true
     Assert-Equal 'all: cases not ok' ($notOk -join ' ') $wantedNotOk
@@ -457,6 +487,25 @@ function Test-FailingRun([string]$inputs) {
     Assert-Equal 'fail: observed' $only.observed 'save-not-written'
     Assert-Equal 'fail: ok' $only.ok $false
     Assert-Equal 'fail: screenshot path' $only.screenshot 'txt-crlf/screen.png'
+}
+
+function Get-MarkdownSaveOutcome([string]$inputs, [string]$outName) {
+    $options = New-FakeOptions 'md-mixed-eol' $inputs $false $outName
+    $status = Invoke-Harness $options
+    return ('{0} {1}' -f $status, (Read-Result $options).cases[0].observed)
+}
+
+# md-mixed-eol is ok only with a save logged after its Ctrl+S.
+function Test-MarkdownSaveOutcomes([string]$inputs) {
+    Assert-Equal 'md save: same bytes, logged' (Get-MarkdownSaveOutcome $inputs 'run-md-unchanged') '0 saved-unchanged'
+    $Fake.SaveFails = $true
+    Assert-Equal 'md save: failed' (Get-MarkdownSaveOutcome $inputs 'run-md-failed') '1 save-failed'
+    $Fake.SaveFails = $false
+    $Fake.WritesNothing = $true
+    $Fake.LogsOldSave = $true
+    Assert-Equal 'md save: only an old save in the log' (Get-MarkdownSaveOutcome $inputs 'run-md-old-line') '1 save-not-written'
+    $Fake.WritesNothing = $false
+    $Fake.LogsOldSave = $false
 }
 
 function Test-ExportNotWritten([string]$inputs) {
@@ -580,6 +629,7 @@ Test-OpenSignals
 Test-FullRun $TestInputs
 Test-KeysOfACase $TestInputs
 Test-FailingRun $TestInputs
+Test-MarkdownSaveOutcomes $TestInputs
 Test-ExportNotWritten $TestInputs
 Test-RecoveryRun $TestInputs
 Test-ControlRun $TestInputs

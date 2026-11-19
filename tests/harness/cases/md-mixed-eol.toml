@@ -1,0 +1,13 @@
+# Markdown that mixes CRLF, LF and a lone CR. Ctrl+S without an edit writes
+# the file's own bytes again: the backend logs the save and the sha256 does
+# not change, saved-unchanged. Builds that put one line end on every line
+# rewrote it: saved-changed.
+description = "Markdown with CRLF, LF and CR mixed: Ctrl+S without edits keeps every byte"
+generate = "mkmd.py mixed-eol"
+input = "mixed-eol.md"
+input_sha256 = "6c3b6978ee29a8b471c0fc995faa67eb5288c327320de2842d8db1bfb30e04d7"
+action = "open-save"
+check = "same-text"
+expect = "saved-unchanged"
+control_expect = "saved-changed"
+screenshot = "on-failure"

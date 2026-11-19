@@ -196,6 +196,16 @@ const Text = await loadMarkdownText();
   bridge.stopTimers();
 }
 
+// ── The page explains the backend's refusal of a file that is not UTF-8 ──
+{
+  const rust = await readFile(path.join(projectRoot, 'src-tauri', 'src', 'markdown.rs'), 'utf8');
+  const page = await readFile(path.join(projectRoot, 'src', 'markdown', 'markdown.js'), 'utf8');
+  const rustError = (/NOT_UTF8_ERROR: &str = "([^"]*)"/.exec(rust) || [])[1];
+  const pageError = (/NOT_UTF8_ERROR = '([^']*)'/.exec(page) || [])[1];
+  check(results, 'markdown.rs and markdown.js name the not-UTF-8 error alike',
+    rustError !== undefined && rustError === pageError, `${rustError} / ${pageError}`);
+}
+
 // ── Load and save without changes: same bytes ──
 // What a <textarea> does to its value: CRLF and lone CR become LF.
 const throughTextarea = (text) => text.replace(/\r\n?/g, '\n');
@@ -241,6 +251,89 @@ for (const [label, bytes] of Object.entries(files)) {
   check(results, 'a recovery copy with a NUL decodes to its text', decoded !== null && decoded.text === draft);
   const utf8 = Text.decodeFile(new Uint8Array([0x63, 0x61, 0x66, 0xc3, 0xa9, 0x0a]));
   check(results, 'a UTF-8 file without a NUL still opens', utf8.text === 'café\n');
+}
+
+// ── Mixed and CR-only line ends: opened and saved untouched, the same bytes ──
+// The textarea and CodeMirror only hold LF, so no single line end gives these
+// files back.
+{
+  const unusual = {
+    'CRLF and LF mixed': bytesOf('a\r\nb\nc\r\n'),
+    'CR only': bytesOf('a\rb\rc\r'),
+    'CRLF, CR and LF mixed': bytesOf('# T\r\none\rtwo\nthree\r\n'),
+    'BOM, CRLF and LF mixed': bytesOf(BOM, 'a\r\nb\nc\r\n'),
+  };
+  for (const [label, bytes] of Object.entries(unusual)) {
+    const decoded = Text.decodeFile(new Uint8Array(bytes));
+    const saved = Buffer.from(Text.encode(throughTextarea(decoded.text), decoded));
+    check(results, `${label}: opened and saved untouched, the bytes are the same`, saved.equals(bytes),
+      'saved ' + JSON.stringify(saved.toString('utf8')));
+  }
+}
+{
+  // Edited, a file is saved with the line end most of its lines use.
+  const edit = (bytes) => {
+    const decoded = Text.decodeFile(new Uint8Array(bytes));
+    return Buffer.from(Text.encode(decoded.text + 'Z\n', decoded)).toString('utf8');
+  };
+  const crOnly = edit(bytesOf('a\rb\r'));
+  check(results, 'an edited CR-only file keeps CR', crOnly === 'a\rb\rZ\r', JSON.stringify(crOnly));
+  const mostlyCrlf = edit(bytesOf('a\r\nb\r\nc\n'));
+  check(results, 'an edited mixed file takes the line end most lines use', mostlyCrlf === 'a\r\nb\r\nc\r\nZ\r\n', JSON.stringify(mostlyCrlf));
+  const tie = edit(bytesOf('a\rb\n'));
+  check(results, 'an edited file with a tie gets LF', tie === 'a\nb\nZ\n', JSON.stringify(tie));
+}
+
+// ── Saving while the text changes ──
+// A save that takes a while, and an undo back to the saved text before it
+// ends: the file is still being written, so the document counts as unsaved
+// until then, and Close and Quit wait for the write.
+{
+  const api = ['savedState', 'afterSaveEvent', 'unsavedChanges', 'closeAction'];
+  const missing = api.filter((name) => typeof Text[name] !== 'function');
+  check(results, 'markdown-text.js has the save state helpers', missing.length === 0,
+    missing.length ? 'missing: ' + missing.join(', ') : '');
+  if (missing.length === 0) {
+    const flags = (state, text) => JSON.stringify(Text.unsavedChanges(state, text));
+    const unsaved = (modified, savePending) => JSON.stringify({ modified, savePending });
+    const writeStart = (state, text) => Text.afterSaveEvent(state, { type: 'write-start', text });
+    const writeEnd = (state, ok) => Text.afterSaveEvent(state, { type: 'write-end', ok });
+
+    // Opened A, edited to B, Save writes B; undo back to A while it writes.
+    let state = Text.savedState('A');
+    check(results, 'an edit is a change', flags(state, 'B') === unsaved(true, false), flags(state, 'B'));
+    state = writeStart(state, 'B');
+    check(results, 'undoing to the saved text during a save leaves the save pending',
+      flags(state, 'A') === unsaved(false, true), flags(state, 'A'));
+    check(results, 'Close and Quit wait for the save that is writing',
+      Text.closeAction(state, 'A') === 'wait', Text.closeAction(state, 'A'));
+    state = writeEnd(state, true);
+    check(results, 'once B is written, the undone text A is a change',
+      flags(state, 'A') === unsaved(true, false), flags(state, 'A'));
+    check(results, 'and Close asks before discarding it', Text.closeAction(state, 'A') === 'ask', Text.closeAction(state, 'A'));
+
+    // The same, but the write fails: the file still holds A.
+    state = writeEnd(writeStart(Text.savedState('A'), 'B'), false);
+    check(results, 'after a failed write the saved text is still the file\'s',
+      flags(state, 'A') === unsaved(false, false), flags(state, 'A'));
+    check(results, 'and Close closes without asking', Text.closeAction(state, 'A') === 'close', Text.closeAction(state, 'A'));
+
+    // Typing on while the write runs.
+    state = writeStart(Text.savedState('A'), 'B');
+    check(results, 'typing during a save is a change, and the save is pending',
+      flags(state, 'BC') === unsaved(true, true), flags(state, 'BC'));
+    state = writeEnd(state, true);
+    check(results, 'what was typed during the save is still a change',
+      flags(state, 'BC') === unsaved(true, false), flags(state, 'BC'));
+
+    // A save of the text on screen, and recovered text that was never saved.
+    state = writeEnd(writeStart(Text.savedState('A'), 'B'), true);
+    check(results, 'a finished save of the text on screen leaves nothing unsaved',
+      flags(state, 'B') === unsaved(false, false), flags(state, 'B'));
+    const recovered = Text.savedState(null);
+    check(results, 'recovered text is a change until it is saved',
+      flags(recovered, 'A') === unsaved(true, false), flags(recovered, 'A'));
+  }
 }
 
 // ── Image references ──

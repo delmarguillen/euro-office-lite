@@ -25,6 +25,8 @@
   var PREVIEW_STYLESHEET = 'markdown-preview.css';
   var SAVE_DENIED_ERROR = 'save-denied';
   var TOO_LARGE_ERROR = 'markdown-too-large';
+  // markdown.rs refuses a file that is not UTF-8 text with this.
+  var NOT_UTF8_ERROR = 'markdown-not-utf8';
   // The file is open in another window (new_window.rs, OPEN_ELSEWHERE).
   var OPEN_ELSEWHERE_ERROR = 'open-elsewhere';
   var CODEMIRROR_SCRIPT = 'vendor/codemirror.min.js';
@@ -125,15 +127,19 @@
   }
 
   // ── The open file ──
-  // The file's own BOM and line end (EoMarkdownText.decode), and the text as
-  // last read or saved: the document is modified while the editor differs.
-  // savedText is null for recovered text, which is modified until it is saved.
+  // The file's own BOM, line end and bytes (EoMarkdownText.decode).
   var format = NEW_FORMAT;
-  var savedText = '';
+  // The text last read or saved, and the one a save is writing
+  // (EoMarkdownText.savedState): the document is modified while the editor
+  // differs. savedState(null) for recovered text, modified until it is saved.
+  var saveState = Text.savedState('');
   // False for a new document until its first save, which goes through Save As.
   var hasFile = false;
   var reportedModified = false;
   var saving = false;
+  // The Save under way, its dialog included: Close and Quit wait for it while
+  // it writes.
+  var saveRun = Promise.resolve();
 
   // Set once CodeMirror has taken over from the textarea.
   var codeMirror = null;
@@ -145,7 +151,7 @@
   }
 
   function isModified() {
-    return currentText() !== savedText;
+    return Text.unsavedChanges(saveState, currentText()).modified;
   }
 
   // set_document_modified gates the close warning in Rust and marks the title.
@@ -435,19 +441,46 @@
   }
 
   // Save writes over the open file; Save As (asNew) where the user picks. A
-  // new document's first Save is a Save As.
-  async function save(asNew) {
-    if (saving) return;
+  // new document's first Save is a Save As. One at a time.
+  function save(asNew) {
+    if (saving) return saveRun;
     saving = true;
+    saveRun = runSave(asNew);
+    return saveRun;
+  }
+
+  // The backend counts the document as unsaved from here until the write ends
+  // (app_quit::has_unsaved_changes), also while the last recovery copy is
+  // still being written and when the text goes back to the saved one
+  // meanwhile: the file is about to change.
+  async function writeSave(text, data, target) {
+    saveState = Text.afterSaveEvent(saveState, { type: 'write-start', text: text });
+    await invoke('set_save_pending', { pending: true }).catch(function() {});
+    try {
+      // A copy written after the save would be offered for saved text.
+      await recoveryWrite;
+      var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
+      saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: true });
+      return name;
+    } catch (error) {
+      saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: false });
+      // The modified flag first, so the backend never sees both off.
+      await reportModified(true);
+      await invoke('set_save_pending', { pending: false }).catch(function() {});
+      throw error;
+    }
+  }
+
+  async function runSave(asNew) {
     if (!hasFile) asNew = true;
     try {
       var target = asNew ? await pickSaveTarget() : null;
       if (asNew && !target) return;
+      // The page was closed while the dialog was open.
+      if (leaving) return;
       var text = currentText();
       var data = bytesToBase64(Text.encode(text, format));
-      await recoveryWrite;
-      var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
-      savedText = text;
+      var name = await writeSave(text, data, target);
       hasFile = true;
       // Relative images now resolve against the new file's folder.
       if (target) {
@@ -466,8 +499,14 @@
     }
   }
 
+  // Close, the window's close button and Quit decide once no save is
+  // writing: the write can still fail, or end with other text on screen.
   async function confirmDiscard() {
-    if (!isModified()) return true;
+    // A write always ends inside its saveRun, so this cannot spin.
+    while (Text.closeAction(saveState, currentText()) === 'wait') {
+      await saveRun.catch(function() {});
+    }
+    if (Text.closeAction(saveState, currentText()) === 'close') return true;
     return tauri.dialog.confirm(t('unsavedDiscardClose'),
       { title: t('unsavedChanges'), kind: 'warning' });
   }
@@ -616,6 +655,13 @@
     return text || baseName(currentName);
   }
 
+  // The stylesheet goes into the serialized text: a <style> added to the
+  // document breaks the page's style-src, which that document shares. The
+  // first </head> is the head's own, since the title's text is escaped.
+  function withStyles(html, css) {
+    return html.replace('</head>', function() { return '<style>' + css + '</style></head>'; });
+  }
+
   // The exported file's text. Built in a document of its own, which loads
   // and runs nothing; the CSP <meta> is one more stop for scripts.
   function exportHtmlText(text) {
@@ -628,12 +674,10 @@
     policy.setAttribute('http-equiv', 'Content-Security-Policy');
     policy.setAttribute('content', "script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'");
     charset.after(policy);
-    var style = doc.createElement('style');
-    style.textContent = previewStyles();
-    doc.head.appendChild(style);
     doc.body.className = 'markdown-body';
     doc.body.appendChild(doc.importNode(fragment, true));
-    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML + '\n';
+    var html = withStyles(doc.documentElement.outerHTML, previewStyles());
+    return '<!DOCTYPE html>\n' + html + '\n';
   }
 
   async function exportHtml() {
@@ -684,6 +728,7 @@
 
   function openErrorText(error) {
     if (error && error.code === 'not-utf8') return t('notUtf8Msg');
+    if (errorText(error).indexOf(NOT_UTF8_ERROR) === 0) return t('notUtf8Msg');
     if (errorText(error).indexOf(TOO_LARGE_ERROR) === 0) return t('tooLargeMsg');
     return t('openErrorMsg');
   }
@@ -759,11 +804,12 @@
       await releaseRecoveryCopy(error);
       return;
     }
-    format = { bom: decoded.bom, eol: decoded.eol };
+    format = decoded;
     source.value = decoded.text;
-    savedText = null;
+    saveState = Text.savedState(null);
     showName(recovered.name);
-    invoke('set_window_title', { name: recovered.name }).catch(function() {});
+    // set_document_modified marks the title it finds: the name goes first.
+    await invoke('set_window_title', { name: recovered.name }).catch(function() {});
     await reportModified(true);
     await framed;
     render();
@@ -790,12 +836,13 @@
       await releaseRecoveryCopy(error);
       return true;
     }
-    format = { bom: decoded.bom, eol: decoded.eol };
+    format = decoded;
     hasFile = reloaded.hasFile;
     source.value = decoded.text;
-    savedText = null;
+    saveState = Text.savedState(null);
     showName(reloaded.name);
-    invoke('set_window_title', { name: reloaded.name }).catch(function() {});
+    // set_document_modified marks the title it finds: the name goes first.
+    await invoke('set_window_title', { name: reloaded.name }).catch(function() {});
     await reportModified(true);
     await framed;
     render();
@@ -824,10 +871,10 @@
       await showThenLeave(function() { return showOpenFailed(error); });
       return;
     }
-    format = { bom: file.decoded.bom, eol: file.decoded.eol };
+    format = file.decoded;
     hasFile = true;
     source.value = file.decoded.text;
-    savedText = source.value;
+    saveState = Text.savedState(source.value);
     showName(file.name);
     invoke('set_window_title', { name: file.name }).catch(function() {});
     await framed;
