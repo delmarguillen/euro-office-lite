@@ -1,10 +1,13 @@
 use crate::file_ops::AppState;
 use tauri::{State, WebviewWindow};
 
+// The window's title with no document, as tauri.conf.json sets it.
+pub const WINDOW_TITLE: &str = "Euro-Office Lite";
+
 #[tauri::command]
 pub fn set_window_title(window: WebviewWindow, name: String) -> Result<(), String> {
     window
-        .set_title(&format!("Euro-Office Lite — {}", name))
+        .set_title(&format!("{} — {}", WINDOW_TITLE, name))
         .map_err(|e| e.to_string())
 }
 
