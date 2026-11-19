@@ -240,7 +240,7 @@ function Test-Json {
 
 # --- a stand-in for the app -----------------------------------------------------
 
-$Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false; SaveDialog = $false; Session = ''; KeepsRecovery = $true }
+$Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Log = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false; SaveFails = $false; LogsOldSave = $false; SaveDialog = $false; Session = ''; KeepsRecovery = $true }
 
 function Start-Sleep { }
 function Test-Windows { return $true }
@@ -344,10 +344,28 @@ function Start-App([string]$exe, [string]$file) {
         $lines = @(Get-FakeFailedLine $name $openError)
         $Fake.Dialogs = @(New-Object PSObject -Property @{ Handle = [IntPtr]2; Title = 'Cannot open' })
     }
+    # A save logged before Ctrl+S, which the harness must not take for its own.
+    if ($Fake.LogsOldSave) { $lines += '[SAVE] markdown success' }
     New-Item -ItemType Directory -Force -Path (Get-TempRoot) | Out-Null
     $log = Join-Path (Get-TempRoot) ('js-debug-1700000000000-{0}.log' -f $Fake.ProcessId)
     [System.IO.File]::WriteAllLines($log, [string[]]$lines)
+    $Fake.Log = $log
     return $Fake.ProcessId
+}
+
+# The Markdown page writes the text it has, the same bytes without an edit,
+# and the backend logs how the save went.
+function Save-FakeMarkdown {
+    if ($Fake.SaveFails) {
+        [System.IO.File]::AppendAllLines($Fake.Log, [string[]]@('[SAVE] markdown failed: disk full'))
+        return
+    }
+    $name = Split-Path -Leaf $Fake.File
+    $expected = Get-ExpectedFile (Join-Path (Join-Path (Split-Path -Parent $Fake.File) 'source') $name)
+    if ($Fake.Typed -and (Test-Path -LiteralPath $expected)) {
+        Copy-Item -LiteralPath $expected -Destination $Fake.File -Force
+    }
+    [System.IO.File]::AppendAllLines($Fake.Log, [string[]]@('[SAVE] markdown success'))
 }
 
 # What Ctrl+S leaves on disk: nothing without an edit, else the expected file
@@ -355,6 +373,10 @@ function Start-App([string]$exe, [string]$file) {
 function Save-FakeDocument {
     $name = Split-Path -Leaf $Fake.File
     if ($Fake.WritesNothing) { return }
+    if ($name -like '*.md') {
+        Save-FakeMarkdown
+        return
+    }
     if (-not $Fake.Refuses -and $name -like '*emoji*.txt') {
         [System.IO.File]::WriteAllBytes($Fake.File, [byte[]](0x0A))
         return
@@ -465,6 +487,25 @@ function Test-FailingRun([string]$inputs) {
     Assert-Equal 'fail: observed' $only.observed 'save-not-written'
     Assert-Equal 'fail: ok' $only.ok $false
     Assert-Equal 'fail: screenshot path' $only.screenshot 'txt-crlf/screen.png'
+}
+
+function Get-MarkdownSaveOutcome([string]$inputs, [string]$outName) {
+    $options = New-FakeOptions 'md-mixed-eol' $inputs $false $outName
+    $status = Invoke-Harness $options
+    return ('{0} {1}' -f $status, (Read-Result $options).cases[0].observed)
+}
+
+# md-mixed-eol is ok only with a save logged after its Ctrl+S.
+function Test-MarkdownSaveOutcomes([string]$inputs) {
+    Assert-Equal 'md save: same bytes, logged' (Get-MarkdownSaveOutcome $inputs 'run-md-unchanged') '0 saved-unchanged'
+    $Fake.SaveFails = $true
+    Assert-Equal 'md save: failed' (Get-MarkdownSaveOutcome $inputs 'run-md-failed') '1 save-failed'
+    $Fake.SaveFails = $false
+    $Fake.WritesNothing = $true
+    $Fake.LogsOldSave = $true
+    Assert-Equal 'md save: only an old save in the log' (Get-MarkdownSaveOutcome $inputs 'run-md-old-line') '1 save-not-written'
+    $Fake.WritesNothing = $false
+    $Fake.LogsOldSave = $false
 }
 
 function Test-ExportNotWritten([string]$inputs) {
@@ -588,6 +629,7 @@ Test-OpenSignals
 Test-FullRun $TestInputs
 Test-KeysOfACase $TestInputs
 Test-FailingRun $TestInputs
+Test-MarkdownSaveOutcomes $TestInputs
 Test-ExportNotWritten $TestInputs
 Test-RecoveryRun $TestInputs
 Test-ControlRun $TestInputs

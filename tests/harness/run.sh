@@ -187,11 +187,39 @@ edit_document() {
 
 file_changed() { [ "$(sha256_of "$1")" != "$2" ]; }
 
-# save_document PID DOC SHA: Ctrl+S, then waits for the file to change.
+# new_save_lines LOG COUNT: the [SAVE] markdown lines LOG got after its first
+# COUNT lines. The Markdown page saves through the backend, which logs both.
+new_save_lines() {
+  tail -n +"$(( $2 + 1 ))" "$1" | grep -E '\[SAVE\] markdown (success|failed)'
+}
+
+markdown_save_logged() { [ -n "$(new_save_lines "$1" "$2")" ]; }
+
+# save_ended DOC SHA LOG COUNT: the file changed, or a .md save was logged.
+save_ended() { file_changed "$1" "$2" || markdown_save_logged "$3" "$4"; }
+
+# save_document PID DOC SHA LOG: Ctrl+S, then waits for the file to change or
+# for a logged Markdown save. Returns 1, with OBSERVED set, when there are no
+# saved bytes to check: save-not-written, save-failed or saved-unchanged.
 save_document() {
-  local pid=$1 doc=$2 sha_before=$3
+  local pid=$1 doc=$2 sha_before=$3 log_file=$4 lines_before logged
+  lines_before=$(wc -l < "$log_file")
   x xdotool windowactivate --sync "$(main_window "$pid")" key ctrl+s
-  wait_for 30 file_changed "$doc" "$sha_before" || return 1
+  if ! wait_for 30 save_ended "$doc" "$sha_before" "$log_file" "$lines_before"; then
+    OBSERVED=save-not-written
+    return 1
+  fi
+  logged=$(new_save_lines "$log_file" "$lines_before")
+  if grep -q 'markdown failed' <<< "$logged"; then
+    OBSERVED=save-failed
+    note "log: $(grep -m1 'markdown failed' <<< "$logged")"
+    return 1
+  fi
+  if ! file_changed "$doc" "$sha_before"; then
+    OBSERVED=saved-unchanged
+    note "log: $(head -1 <<< "$logged")"
+    return 1
+  fi
   # Let the writer finish: the hash must hold for two seconds.
   local last=""
   while [ "$last" != "$(sha256_of "$doc")" ]; do
@@ -416,10 +444,7 @@ observe_open_document() {
     return
   fi
   [ "$action" = open-edit-save ] && edit_document "$pid"
-  if ! save_document "$pid" "$doc" "$sha_before"; then
-    OBSERVED=save-not-written
-    return
-  fi
+  save_document "$pid" "$doc" "$sha_before" "$log_file" || return
   case $(case_value check) in
     same-text) check_same_text "$doc" "$source" ;;
     zip-match) check_zip_match "$doc" ;;

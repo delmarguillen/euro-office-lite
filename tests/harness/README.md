@@ -191,9 +191,14 @@ Outcomes:
 - `saved-as-expected`, `saved-changed` (`expected-bytes`): the saved file is
   byte for byte the expected one, or not.
 - `saved-as-expected`, `saved-missing-content` (`zip-match`).
-- `save-not-written`: Ctrl+S did not change the file within 30 s. Current
-  builds do not write a document with no changes, so a case that needs a save
-  types something first.
+- `save-not-written`: within 30 s Ctrl+S neither changed the file nor, for a
+  `.md`, left a new `[SAVE] markdown` line in the log. The editors do not
+  write a document with no changes, so a case that needs a save types
+  something first.
+- `saved-unchanged`, `save-failed` (a `.md`): a `[SAVE] markdown success`
+  line logged after the Ctrl+S and the file byte for byte as before, or a
+  new `[SAVE] markdown failed:` line. Lines already in the log before the
+  Ctrl+S do not count.
 - `exported-as-expected`, `exported-missing-content` (`pdf-text`): every
   `match_N` is in the text of the PDF, or not. `exported-not-pdf`: the file
   does not start with `%PDF-`. `no-pdftotext`: the harness found no
@@ -268,7 +273,7 @@ refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 | `dotx-open` | DOTX template with one paragraph | opens |
 | `md-crlf` | Markdown with CRLF | saved with the `Z`, CRLF kept |
 | `md-emoji` | UTF-8 Markdown with an emoji and U+20000 | saved with the `Z`, byte for byte |
-| `md-mixed-eol` | Markdown with CRLF, LF and a lone CR mixed | Ctrl+S without edits writes the same bytes (`save-not-written`) |
+| `md-mixed-eol` | Markdown with CRLF, LF and a lone CR mixed | Ctrl+S without edits logs a save and keeps every byte (`saved-unchanged`) |
 | `md-reject` | Markdown in Latin-1, not UTF-8 | refused with the open error dialog, file unchanged |
 | `md-utf8` | UTF-8 Markdown, no BOM | saved with the `Z`, byte for byte |
 | `md-utf8-bom` | the same Markdown with a UTF-8 BOM | saved with the `Z`, BOM kept |
