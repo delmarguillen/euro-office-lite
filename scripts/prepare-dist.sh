@@ -150,6 +150,10 @@ for mod in word cell slide; do
     copy_tree "$SRC/sdkjs/develop/sdkjs/$mod" "$DIST/sdkjs/develop/sdkjs/$mod" "sdkjs/develop/sdkjs/$mod"
 done
 
+# --- Spell check language codes, read by the start screen ---
+node "$PROJECT_ROOT/scripts/spell-languages.mjs" "$DIST"
+log "GEN:  spell-languages.json"
+
 for d in tests build visio .docker .github; do
     log "$(printf 'EXCL: %-55s (not needed at runtime)' "sdkjs/$d")"
 done

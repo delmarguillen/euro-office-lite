@@ -1776,39 +1776,48 @@ var _EO_IMPORT_MESSAGES = {
   'busy': 'languageBusy'
 };
 
-// sdkjs defines its language table (AscCommon.spellcheckGetLanguages) in this
-// file. The start screen has no editor loaded, so the table is read from it.
-var _EO_SPELL_TABLE_URL = 'sdkjs/common/spell/spell.js';
-var _EO_SPELL_TABLE = /\['spellcheckGetLanguages'\]=function\(\)\{return (\{[\s\S]*?\})\};/;
+// sdkjs's language table (AscCommon.spellcheckGetLanguages) is compiled into
+// the editor bundles, and the start screen has no editor loaded. The build
+// writes the table's folder names to this file (scripts/spell-languages.mjs).
+var _EO_SPELL_LANGUAGES_URL = 'spell-languages.json';
 
-async function _eoSpellTable() {
+function _eoTableNames(table) {
+  var names = [];
+  for (var lcid in table) {
+    names.push(table[lcid] && table[lcid].name);
+  }
+  return names;
+}
+
+async function _eoSpellLanguages() {
   var ew = window.AscDesktopEditor && window.AscDesktopEditor._editorWindow;
   var common = ew && ew.AscCommon;
   if (common && typeof common.spellcheckGetLanguages === 'function') {
-    return common.spellcheckGetLanguages();
+    return _eoTableNames(common.spellcheckGetLanguages());
   }
-  var response = await fetch(_EO_SPELL_TABLE_URL);
-  var match = _EO_SPELL_TABLE.exec(await response.text());
-  if (!match) throw new Error('no language table in ' + _EO_SPELL_TABLE_URL);
-  return JSON.parse(match[1]);
+  var response = await fetch(_EO_SPELL_LANGUAGES_URL);
+  // A missing asset is answered with index.html, which fails to parse here.
+  var names = JSON.parse(await response.text());
+  if (!Array.isArray(names)) throw new Error('no language list in ' + _EO_SPELL_LANGUAGES_URL);
+  return names;
 }
 
 // The folder names the spell checker offers languages for (fr_FR, en_US…).
 // The backend installs a dictionary under one of these. Codes, never paths.
 async function _eoKnownLanguages() {
-  var table;
+  var names;
   try {
-    table = await _eoSpellTable();
+    names = await _eoSpellLanguages();
   } catch (e) {
     window._eoLog('[SPELL] language table unreadable: ' + ((e && e.message) || e));
     return [];
   }
   var known = [];
-  for (var lcid in table) {
-    var name = table[lcid] && table[lcid].name;
-    if (!name || known.indexOf(name) !== -1) continue;
+  names.forEach(function(name) {
+    if (typeof name !== 'string' || name === '') return;
+    if (known.indexOf(name) !== -1) return;
     known.push(name);
-  }
+  });
   return known.sort();
 }
 

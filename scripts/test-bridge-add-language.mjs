@@ -7,12 +7,9 @@ import { check, finish, loadBridge } from './bridge-test-harness.mjs';
 
 const results = [];
 
-// The start of sdkjs's spell.js, where the language table is defined.
-const SPELL_JS = "window['AscCommon']['spellcheckGetLanguages']=function(){return "
-  + '{"1033":{"hyphen":true,"name":"en_US"},"1036":{"hyphen":true,"name":"fr_FR"},'
-  + '"2070":{"hyphen":true,"name":"pt_PT"},"1046":{"hyphen":true,"name":"pt_BR"},'
-  + '"2049":{"hyphen":false,"name":"ar"},"3073":{"hyphen":false,"name":"ar"}}};\n'
-  + "window['AscCommon'].spellcheckGetLanguages = window['AscCommon']['spellcheckGetLanguages'];\n";
+// A spell-languages.json as the build stages it, here unsorted and with a
+// repeated code.
+const SPELL_LANGUAGES = '["en_US","fr_FR","pt_PT","pt_BR","ar","ar"]\n';
 
 // answers: what import_dictionary does on each call, in order.
 async function setup(answers) {
@@ -32,7 +29,7 @@ async function setup(answers) {
   const fetched = [];
   bridge.sandbox.fetch = (url) => {
     fetched.push(url);
-    return Promise.resolve({ text: () => Promise.resolve(SPELL_JS) });
+    return Promise.resolve({ text: () => Promise.resolve(SPELL_LANGUAGES) });
   };
   const messages = [];
   const confirms = [];
@@ -61,11 +58,11 @@ async function addLanguage(env) {
   const env = await setup(['fr_FR']);
   await addLanguage(env);
   const known = env.imports[0] && env.imports[0].known;
-  check(results, 'the import sends the checker codes read from spell.js',
+  check(results, 'the import sends the checker codes read from the staged list',
     JSON.stringify(known) === JSON.stringify(['ar', 'en_US', 'fr_FR', 'pt_BR', 'pt_PT']),
     JSON.stringify(known));
-  check(results, 'the codes come from the sdkjs file',
-    env.fetched.length === 1 && env.fetched[0] === 'sdkjs/common/spell/spell.js', JSON.stringify(env.fetched));
+  check(results, 'the codes come from the file the build stages',
+    env.fetched.length === 1 && env.fetched[0] === 'spell-languages.json', JSON.stringify(env.fetched));
   check(results, 'the success message names the folder the backend chose',
     env.messages[0].text === env.t('languageAdded').replace('{lang}', 'fr_FR'));
 }
