@@ -15,6 +15,7 @@ $dist    = Join-Path $ProjectRoot 'src-dist'
 $logDir  = Join-Path $env:TEMP 'euro-office-lite'
 $logFile = Join-Path $logDir 'prepare-dist.log'
 $applyPatches = Join-Path $ProjectRoot 'scripts\apply-patches.mjs'
+$spellLanguages = Join-Path $ProjectRoot 'scripts\spell-languages.mjs'
 $patchRecord  = Join-Path $logDir 'applied-patches.json'
 
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
@@ -157,6 +158,11 @@ $developModules = @('word', 'cell', 'slide')
 foreach ($mod in $developModules) {
     Copy-Tree "$src\sdkjs\develop\sdkjs\$mod" "$dist\sdkjs\develop\sdkjs\$mod" @() "sdkjs/develop/sdkjs/$mod"
 }
+
+# --- Spell check language codes, read by the start screen ---
+& node $spellLanguages $dist
+if ($LASTEXITCODE -ne 0) { throw 'spell-languages.mjs failed' }
+Log "GEN:  spell-languages.json"
 
 $excludedSdk = @('tests', 'build', 'visio', '.docker', '.github')
 foreach ($d in $excludedSdk) {

@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyPatches, revertPatches } from './apply-patches.mjs';
+import { writeSpellLanguages } from './spell-languages.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, '..');
@@ -429,6 +430,10 @@ await cp(path.join(projectRoot, 'src', 'fonts'), path.join(outputRoot, 'fonts'),
   recursive: true,
 });
 await copyDictionaries();
+// grunt compiles sdkjs's language table into the bundles and copies no file
+// with it, so the start screen gets the codes in a file of their own.
+const spellLanguages = await writeSpellLanguages(outputRoot);
+console.log(`[frontend-prod] spell check language codes staged: ${spellLanguages.length}`);
 await cp(path.join(buildRoot, 'sdkjs'), path.join(outputRoot, 'sdkjs'), {
   recursive: true,
 });

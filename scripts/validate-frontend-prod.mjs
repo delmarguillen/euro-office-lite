@@ -45,7 +45,26 @@ const required = [
   'sdkjs/common/spell/spell/spell.js',
   'sdkjs/common/spell/spell/spell.wasm',
   'dictionaries/manifest.json',
+  'spell-languages.json',
 ];
+
+// "Add spell check language…" on the start screen installs a dictionary only
+// under a code from this list (bridge.js, _eoSpellLanguages).
+const spellLanguagesPath = path.join(distRoot, 'spell-languages.json');
+if (existsSync(spellLanguagesPath)) {
+  let codes = null;
+  try {
+    codes = JSON.parse(await readFile(spellLanguagesPath, 'utf8'));
+  } catch (error) {
+    fail(`staged spell-languages.json is not valid JSON: ${error.message}`);
+  }
+  const isCodeList = Array.isArray(codes)
+    && codes.length > 0
+    && codes.every((code) => typeof code === 'string');
+  if (codes !== null && !isCodeList) {
+    fail('staged spell-languages.json must be a non-empty array of language codes');
+  }
+}
 
 // Every language the manifest offers must be answerable: the shell advertises
 // exactly this list to the editor, and a language advertised without its two
