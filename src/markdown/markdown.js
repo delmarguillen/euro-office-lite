@@ -449,13 +449,16 @@
     return saveRun;
   }
 
-  // The backend counts the document as unsaved until the write ends
-  // (app_quit::has_unsaved_changes), also when the text goes back to the
-  // saved one meanwhile: the file is still changing.
+  // The backend counts the document as unsaved from here until the write ends
+  // (app_quit::has_unsaved_changes), also while the last recovery copy is
+  // still being written and when the text goes back to the saved one
+  // meanwhile: the file is about to change.
   async function writeSave(text, data, target) {
     saveState = Text.afterSaveEvent(saveState, { type: 'write-start', text: text });
     await invoke('set_save_pending', { pending: true }).catch(function() {});
     try {
+      // A copy written after the save would be offered for saved text.
+      await recoveryWrite;
       var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
       saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: true });
       return name;
@@ -477,7 +480,6 @@
       if (leaving) return;
       var text = currentText();
       var data = bytesToBase64(Text.encode(text, format));
-      await recoveryWrite;
       var name = await writeSave(text, data, target);
       hasFile = true;
       // Relative images now resolve against the new file's folder.
