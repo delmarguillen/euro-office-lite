@@ -4,9 +4,12 @@ name: Harness probe (macOS)
 # file, type into the editor and save with keystrokes sent through System
 # Events, then compare the file on disk. It also prints which privacy
 # permissions (TCC) the runner image grants, so the full macOS harness can be
-# designed on facts. Manual runs only.
+# designed on facts. Manual runs, or a push to the probe branch.
 
 on:
+  push:
+    branches: [feat/88-macos-harness-probe]
+    paths: [.github/workflows/harness-macos-probe.yml]
   workflow_dispatch:
     inputs:
       release:
@@ -38,7 +41,7 @@ jobs:
       - name: Download the release .dmg
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE: ${{ inputs.release }}
+          RELEASE: ${{ inputs.release || 'v0.18.0-alpha' }}
         run: |
           mkdir -p "$PROBE_DIR"
           gh release download "$RELEASE" --repo "$GITHUB_REPOSITORY" \
