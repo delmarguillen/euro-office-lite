@@ -15,6 +15,7 @@ on:
       - 'scripts/test-sdkjs-*.mjs'
       - 'scripts/test-bridge-*.mjs'
       - 'scripts/bridge-test-harness.mjs'
+      - 'scripts/spell-languages.mjs'
       - 'src/bridge.js'
       - '.github/workflows/tests.yml'
   pull_request:
@@ -26,6 +27,7 @@ on:
       - 'scripts/test-sdkjs-*.mjs'
       - 'scripts/test-bridge-*.mjs'
       - 'scripts/bridge-test-harness.mjs'
+      - 'scripts/spell-languages.mjs'
       - 'src/bridge.js'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
