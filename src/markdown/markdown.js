@@ -801,7 +801,8 @@
     source.value = decoded.text;
     saveState = Text.savedState(null);
     showName(recovered.name);
-    invoke('set_window_title', { name: recovered.name }).catch(function() {});
+    // set_document_modified marks the title it finds: the name goes first.
+    await invoke('set_window_title', { name: recovered.name }).catch(function() {});
     await reportModified(true);
     await framed;
     render();
@@ -833,7 +834,8 @@
     source.value = decoded.text;
     saveState = Text.savedState(null);
     showName(reloaded.name);
-    invoke('set_window_title', { name: reloaded.name }).catch(function() {});
+    // set_document_modified marks the title it finds: the name goes first.
+    await invoke('set_window_title', { name: reloaded.name }).catch(function() {});
     await reportModified(true);
     await framed;
     render();
