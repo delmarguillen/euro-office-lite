@@ -25,6 +25,8 @@
   var PREVIEW_STYLESHEET = 'markdown-preview.css';
   var SAVE_DENIED_ERROR = 'save-denied';
   var TOO_LARGE_ERROR = 'markdown-too-large';
+  // markdown.rs refuses a file that is not UTF-8 text with this.
+  var NOT_UTF8_ERROR = 'markdown-not-utf8';
   // The file is open in another window (new_window.rs, OPEN_ELSEWHERE).
   var OPEN_ELSEWHERE_ERROR = 'open-elsewhere';
   var CODEMIRROR_SCRIPT = 'vendor/codemirror.min.js';
@@ -719,6 +721,7 @@
 
   function openErrorText(error) {
     if (error && error.code === 'not-utf8') return t('notUtf8Msg');
+    if (errorText(error).indexOf(NOT_UTF8_ERROR) === 0) return t('notUtf8Msg');
     if (errorText(error).indexOf(TOO_LARGE_ERROR) === 0) return t('tooLargeMsg');
     return t('openErrorMsg');
   }

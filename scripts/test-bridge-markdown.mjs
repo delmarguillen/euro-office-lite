@@ -196,6 +196,16 @@ const Text = await loadMarkdownText();
   bridge.stopTimers();
 }
 
+// ── The page explains the backend's refusal of a file that is not UTF-8 ──
+{
+  const rust = await readFile(path.join(projectRoot, 'src-tauri', 'src', 'markdown.rs'), 'utf8');
+  const page = await readFile(path.join(projectRoot, 'src', 'markdown', 'markdown.js'), 'utf8');
+  const rustError = (/NOT_UTF8_ERROR: &str = "([^"]*)"/.exec(rust) || [])[1];
+  const pageError = (/NOT_UTF8_ERROR = '([^']*)'/.exec(page) || [])[1];
+  check(results, 'markdown.rs and markdown.js name the not-UTF-8 error alike',
+    rustError !== undefined && rustError === pageError, `${rustError} / ${pageError}`);
+}
+
 // ── Load and save without changes: same bytes ──
 // What a <textarea> does to its value: CRLF and lone CR become LF.
 const throughTextarea = (text) => text.replace(/\r\n?/g, '\n');

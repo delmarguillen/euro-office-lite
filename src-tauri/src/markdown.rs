@@ -28,6 +28,11 @@ pub const HTML_EXTENSIONS: [&str; 2] = ["html", "htm"];
 // Start of the error for a file over MARKDOWN_MAX_BYTES, so the page can say why.
 pub const TOO_LARGE_ERROR: &str = "markdown-too-large";
 
+// Start of the error for a file that is not UTF-8 text, so the page can say why.
+pub const NOT_UTF8_ERROR: &str = "markdown-not-utf8";
+
+const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+
 // The image types an <img> shows, with the type its data: URL declares.
 const IMAGE_TYPES: [(&str, &str); 7] = [
     ("png", "image/png"),
@@ -80,6 +85,21 @@ fn read_limited(path: &Path, max: u64) -> Result<Vec<u8>, String> {
         return Err(too_large(max));
     }
     Ok(bytes)
+}
+
+// The page edits a .md as UTF-8 text and writes back what it edits, so a file
+// that is not UTF-8, or has a NUL (never in a text file; UTF-16 without a BOM
+// is full of them), would change on save. Refused before it opens, so it is
+// neither the open document nor in Recents.
+fn refuse_unless_utf8_text(bytes: &[u8]) -> Result<(), String> {
+    let body = bytes.strip_prefix(&UTF8_BOM).unwrap_or(bytes);
+    if body.contains(&0) {
+        return Err(format!("{}: the file has a NUL byte", NOT_UTF8_ERROR));
+    }
+    if std::str::from_utf8(body).is_err() {
+        return Err(format!("{}: the file is not UTF-8", NOT_UTF8_ERROR));
+    }
+    Ok(())
 }
 
 // The Markdown file an Open token names.
@@ -233,6 +253,7 @@ fn open_markdown(state: &AppState, token: &str) -> Result<(PathBuf, Vec<u8>), St
     let path = markdown_file_to_open(&state.grants, token)?;
     let claim = crate::new_window::claim_for_open(state, &path)?;
     let bytes = read_limited(&path, MARKDOWN_MAX_BYTES)?;
+    refuse_unless_utf8_text(&bytes)?;
     start_markdown_document(state, Some(path.clone()));
     // open-document names the file now.
     drop(claim);
@@ -677,6 +698,44 @@ mod tests {
         assert!(saved.new_file);
         assert!(published(&state, &copy));
         assert!(!published(&state, &old));
+    }
+
+    #[test]
+    fn only_utf8_text_without_a_nul_opens() {
+        let opens = [
+            &b"# Title\r\nAccents \xC3\xA1\xC3\xB1\n"[..],
+            &b"\xEF\xBB\xBF# Title\n"[..],
+            &b""[..],
+            &b"\xEF\xBB\xBF"[..],
+        ];
+        for bytes in opens {
+            assert_eq!(refuse_unless_utf8_text(bytes), Ok(()), "{bytes:?}");
+        }
+        let refused = [
+            // Latin-1, not UTF-8.
+            &b"# Caf\xE9\n"[..],
+            // UTF-16 LE without a BOM: every byte is valid UTF-8, NULs included.
+            &b"#\x00 \x00N\x00\r\x00\n\x00"[..],
+            &b"\xEF\xBB\xBFtext\x00\n"[..],
+            // A UTF-8 BOM followed by a lone continuation byte.
+            &b"\xEF\xBB\xBF\x80"[..],
+        ];
+        for bytes in refused {
+            let error = refuse_unless_utf8_text(bytes).unwrap_err();
+            assert!(error.starts_with(NOT_UTF8_ERROR), "{bytes:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_file_that_is_not_utf8_is_refused_before_it_opens() {
+        let dir = test_dir("open-not-utf8");
+        let file = file_with(&dir, "latin1.md", b"# Caf\xE9\n");
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        let error = open_markdown(&state, &token).unwrap_err();
+        assert!(error.starts_with(NOT_UTF8_ERROR), "{error}");
+        assert_eq!(*state.current_file.lock().unwrap(), None);
+        assert!(!published(&state, &file));
     }
 
     #[test]
