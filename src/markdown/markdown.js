@@ -653,6 +653,13 @@
     return text || baseName(currentName);
   }
 
+  // The stylesheet goes into the serialized text: a <style> added to the
+  // document breaks the page's style-src, which that document shares. The
+  // first </head> is the head's own, since the title's text is escaped.
+  function withStyles(html, css) {
+    return html.replace('</head>', function() { return '<style>' + css + '</style></head>'; });
+  }
+
   // The exported file's text. Built in a document of its own, which loads
   // and runs nothing; the CSP <meta> is one more stop for scripts.
   function exportHtmlText(text) {
@@ -665,12 +672,10 @@
     policy.setAttribute('http-equiv', 'Content-Security-Policy');
     policy.setAttribute('content', "script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'");
     charset.after(policy);
-    var style = doc.createElement('style');
-    style.textContent = previewStyles();
-    doc.head.appendChild(style);
     doc.body.className = 'markdown-body';
     doc.body.appendChild(doc.importNode(fragment, true));
-    return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML + '\n';
+    var html = withStyles(doc.documentElement.outerHTML, previewStyles());
+    return '<!DOCTYPE html>\n' + html + '\n';
   }
 
   async function exportHtml() {
