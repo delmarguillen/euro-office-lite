@@ -268,6 +268,8 @@ refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 | `dotx-open` | DOTX template with one paragraph | opens |
 | `md-crlf` | Markdown with CRLF | saved with the `Z`, CRLF kept |
 | `md-emoji` | UTF-8 Markdown with an emoji and U+20000 | saved with the `Z`, byte for byte |
+| `md-mixed-eol` | Markdown with CRLF, LF and a lone CR mixed | Ctrl+S without edits writes the same bytes (`save-not-written`) |
+| `md-reject` | Markdown in Latin-1, not UTF-8 | refused with the open error dialog, file unchanged |
 | `md-utf8` | UTF-8 Markdown, no BOM | saved with the `Z`, byte for byte |
 | `md-utf8-bom` | the same Markdown with a UTF-8 BOM | saved with the `Z`, BOM kept |
 | `odp-open` | ODP with one page covered by a text box | the saved `content.xml` has the typed word and the text |

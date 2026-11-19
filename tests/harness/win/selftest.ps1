@@ -86,7 +86,7 @@ function Test-Scripts {
 
 function Test-CaseFiles {
     $names = @(Get-SelectedCases 'all')
-    Assert-Equal 'number of cases' $names.Count 35
+    Assert-Equal 'number of cases' $names.Count 37
     foreach ($name in $names) {
         $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
         $complete = ($null -ne $case) -and (Get-CaseValue $case 'input') -and (Get-CaseValue $case 'generate') -and (Get-CaseValue $case 'expect')
@@ -313,12 +313,20 @@ $FakeNeverOpens = @('encrypted.docx', 'plain-text.docx', 'sheet-inside.docx', 't
 function Get-FakeOpenError([string]$name) {
     if ($FakeNeverOpens -contains $name) { return 'This file is not a valid .docx' }
     if ($Fake.Refuses -and $name -like '*emoji*.txt') { return 'character above U+FFFF' }
+    if ($Fake.Refuses -and $name -eq 'latin1.md') { return 'markdown-not-utf8: the file is not UTF-8' }
     return ''
 }
 
-# Writes the log an instance would: a TXT with an emoji is refused with a
-# dialog unless the stand-in plays a build without that fix, and a .md opens
-# in the Markdown page, which logs only the backend's line.
+# The backend's line for an open the stand-in refuses.
+function Get-FakeFailedLine([string]$name, [string]$openError) {
+    if ($name -like '*.md') { return '[OPEN] markdown failed: ' + $openError }
+    return '[OPEN] failed file=' + $name + ' error=' + $openError
+}
+
+# Writes the log an instance would: a TXT with an emoji and a .md that is not
+# UTF-8 are refused with a dialog unless the stand-in plays a build without
+# that fix, and a .md opens in the Markdown page, which logs only the
+# backend's line.
 function Start-App([string]$exe, [string]$file) {
     $Fake.ProcessId++
     $Fake.Alive = $true
@@ -333,7 +341,7 @@ function Start-App([string]$exe, [string]$file) {
     if ($name -like '*.md') { $lines = @('[OPEN] markdown success bytes=10') }
     $openError = Get-FakeOpenError $name
     if ($openError) {
-        $lines = @('[OPEN] failed file=' + $name + ' error=' + $openError)
+        $lines = @(Get-FakeFailedLine $name $openError)
         $Fake.Dialogs = @(New-Object PSObject -Property @{ Handle = [IntPtr]2; Title = 'Cannot open' })
     }
     New-Item -ItemType Directory -Force -Path (Get-TempRoot) | Out-Null
@@ -425,7 +433,7 @@ function Test-FullRun([string]$inputs) {
         $wantedNotOk = 'docx-export-pdf=no-pdftotext xlsx-export-pdf=no-pdftotext'
     }
     Assert-Equal 'all: exit status' $status $wantedStatus
-    Assert-Equal 'all: cases in result.json' @($result.cases).Count 35
+    Assert-Equal 'all: cases in result.json' @($result.cases).Count 37
     $export = Join-Path (Join-Path $options.Out 'docx-export-pdf') 'exported.pdf'
     Assert-Equal 'all: the export of a case is a PDF' (Test-PdfHeader $export) $true
     Assert-Equal 'all: cases not ok' ($notOk -join ' ') $wantedNotOk
