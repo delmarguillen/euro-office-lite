@@ -243,6 +243,37 @@ for (const [label, bytes] of Object.entries(files)) {
   check(results, 'a UTF-8 file without a NUL still opens', utf8.text === 'café\n');
 }
 
+// ── Mixed and CR-only line ends: opened and saved untouched, the same bytes ──
+// The textarea and CodeMirror only hold LF, so no single line end gives these
+// files back.
+{
+  const unusual = {
+    'CRLF and LF mixed': bytesOf('a\r\nb\nc\r\n'),
+    'CR only': bytesOf('a\rb\rc\r'),
+    'CRLF, CR and LF mixed': bytesOf('# T\r\none\rtwo\nthree\r\n'),
+    'BOM, CRLF and LF mixed': bytesOf(BOM, 'a\r\nb\nc\r\n'),
+  };
+  for (const [label, bytes] of Object.entries(unusual)) {
+    const decoded = Text.decodeFile(new Uint8Array(bytes));
+    const saved = Buffer.from(Text.encode(throughTextarea(decoded.text), decoded));
+    check(results, `${label}: opened and saved untouched, the bytes are the same`, saved.equals(bytes),
+      'saved ' + JSON.stringify(saved.toString('utf8')));
+  }
+}
+{
+  // Edited, a file is saved with the line end most of its lines use.
+  const edit = (bytes) => {
+    const decoded = Text.decodeFile(new Uint8Array(bytes));
+    return Buffer.from(Text.encode(decoded.text + 'Z\n', decoded)).toString('utf8');
+  };
+  const crOnly = edit(bytesOf('a\rb\r'));
+  check(results, 'an edited CR-only file keeps CR', crOnly === 'a\rb\rZ\r', JSON.stringify(crOnly));
+  const mostlyCrlf = edit(bytesOf('a\r\nb\r\nc\n'));
+  check(results, 'an edited mixed file takes the line end most lines use', mostlyCrlf === 'a\r\nb\r\nc\r\nZ\r\n', JSON.stringify(mostlyCrlf));
+  const tie = edit(bytesOf('a\rb\n'));
+  check(results, 'an edited file with a tie gets LF', tie === 'a\nb\nZ\n', JSON.stringify(tie));
+}
+
 // ── Image references ──
 {
   const local = (src) => {

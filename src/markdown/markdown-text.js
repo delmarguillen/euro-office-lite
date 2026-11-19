@@ -1,7 +1,8 @@
 // The Markdown page's pure helpers, shared with the Node tests:
 // - the bytes of a .md to the text the textarea edits, and back. A textarea's
 //   value always ends lines with LF, so the file's BOM and line end are kept
-//   aside and put back on save; saving untouched text gives the same bytes.
+//   aside and put back on save; saving untouched text writes the file's own
+//   bytes again, whatever line ends they mix.
 // - which image references the preview may show (local, inside the
 //   document's folder) and which it blocks.
 (function(global) {
@@ -14,11 +15,19 @@
     return bytes.length >= 3 && bytes[0] === BOM[0] && bytes[1] === BOM[1] && bytes[2] === BOM[2];
   }
 
-  // The line end most lines use. A file that mixes both is saved with it.
+  function countOf(text, pattern) {
+    return (text.match(pattern) || []).length;
+  }
+
+  // The line end most lines use: CRLF, LF or a lone CR. An edited file that
+  // mixes them is saved with it; a tie keeps LF.
   function lineEndOf(text) {
-    var crlf = (text.match(/\r\n/g) || []).length;
-    var lf = (text.match(/\n/g) || []).length - crlf;
-    return crlf > lf ? '\r\n' : '\n';
+    var crlf = countOf(text, /\r\n/g);
+    var lf = countOf(text, /\n/g) - crlf;
+    var cr = countOf(text, /\r/g) - crlf;
+    if (crlf > lf && crlf >= cr) return '\r\n';
+    if (cr > lf) return '\r';
+    return '\n';
   }
 
   function notUtf8Error() {
@@ -27,7 +36,7 @@
     return error;
   }
 
-  // { text, bom, eol }. Throws an Error with code 'not-utf8' for bytes that
+  // { text, bom, eol, bytes }. Throws an Error with code 'not-utf8' for bytes that
   // are not UTF-8: decoding them anyway would change them on save. Used as it
   // is for the page's own recovery copies, which hold whatever encode wrote,
   // a pasted NUL included.
@@ -44,7 +53,10 @@
       // What a textarea's value turns the text into anyway.
       text: raw.replace(/\r\n?/g, '\n'),
       bom: bom,
-      eol: lineEndOf(raw)
+      eol: lineEndOf(raw),
+      // What saving `text` untouched writes: one eol cannot give back a
+      // file that mixes line ends.
+      bytes: bytes
     };
   }
 
@@ -57,10 +69,12 @@
     return decode(bytes);
   }
 
-  // The bytes to write for `text` in the format `decode` found.
+  // The bytes to write for `text` in the format `decode` found: its own bytes
+  // when the text is as decoded.
   function encode(text, format) {
+    if (format.bytes && text === format.text) return format.bytes;
     var lines = text.replace(/\r\n?/g, '\n');
-    var withEol = format.eol === '\r\n' ? lines.replace(/\n/g, '\r\n') : lines;
+    var withEol = format.eol === '\n' ? lines : lines.replace(/\n/g, format.eol);
     var body = new TextEncoder().encode(withEol);
     if (!format.bom) return body;
     var bytes = new Uint8Array(body.length + 3);

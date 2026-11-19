@@ -125,10 +125,11 @@
   }
 
   // ── The open file ──
-  // The file's own BOM and line end (EoMarkdownText.decode), and the text as
-  // last read or saved: the document is modified while the editor differs.
-  // savedText is null for recovered text, which is modified until it is saved.
+  // The file's own BOM, line end and bytes (EoMarkdownText.decode).
   var format = NEW_FORMAT;
+  // The text last read or saved: the document is modified while the editor
+  // differs. savedText is null for recovered text, which is modified until it
+  // is saved.
   var savedText = '';
   // False for a new document until its first save, which goes through Save As.
   var hasFile = false;
@@ -759,7 +760,7 @@
       await releaseRecoveryCopy(error);
       return;
     }
-    format = { bom: decoded.bom, eol: decoded.eol };
+    format = decoded;
     source.value = decoded.text;
     savedText = null;
     showName(recovered.name);
@@ -790,7 +791,7 @@
       await releaseRecoveryCopy(error);
       return true;
     }
-    format = { bom: decoded.bom, eol: decoded.eol };
+    format = decoded;
     hasFile = reloaded.hasFile;
     source.value = decoded.text;
     savedText = null;
@@ -824,7 +825,7 @@
       await showThenLeave(function() { return showOpenFailed(error); });
       return;
     }
-    format = { bom: file.decoded.bom, eol: file.decoded.eol };
+    format = file.decoded;
     hasFile = true;
     source.value = file.decoded.text;
     savedText = source.value;
