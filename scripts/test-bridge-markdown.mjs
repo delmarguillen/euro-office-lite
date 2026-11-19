@@ -274,6 +274,58 @@ for (const [label, bytes] of Object.entries(files)) {
   check(results, 'an edited file with a tie gets LF', tie === 'a\nb\nZ\n', JSON.stringify(tie));
 }
 
+// ── Saving while the text changes ──
+// A save that takes a while, and an undo back to the saved text before it
+// ends: the file is still being written, so the document counts as unsaved
+// until then, and Close and Quit wait for the write.
+{
+  const api = ['savedState', 'afterSaveEvent', 'unsavedChanges', 'closeAction'];
+  const missing = api.filter((name) => typeof Text[name] !== 'function');
+  check(results, 'markdown-text.js has the save state helpers', missing.length === 0,
+    missing.length ? 'missing: ' + missing.join(', ') : '');
+  if (missing.length === 0) {
+    const flags = (state, text) => JSON.stringify(Text.unsavedChanges(state, text));
+    const unsaved = (modified, savePending) => JSON.stringify({ modified, savePending });
+    const writeStart = (state, text) => Text.afterSaveEvent(state, { type: 'write-start', text });
+    const writeEnd = (state, ok) => Text.afterSaveEvent(state, { type: 'write-end', ok });
+
+    // Opened A, edited to B, Save writes B; undo back to A while it writes.
+    let state = Text.savedState('A');
+    check(results, 'an edit is a change', flags(state, 'B') === unsaved(true, false), flags(state, 'B'));
+    state = writeStart(state, 'B');
+    check(results, 'undoing to the saved text during a save leaves the save pending',
+      flags(state, 'A') === unsaved(false, true), flags(state, 'A'));
+    check(results, 'Close and Quit wait for the save that is writing',
+      Text.closeAction(state, 'A') === 'wait', Text.closeAction(state, 'A'));
+    state = writeEnd(state, true);
+    check(results, 'once B is written, the undone text A is a change',
+      flags(state, 'A') === unsaved(true, false), flags(state, 'A'));
+    check(results, 'and Close asks before discarding it', Text.closeAction(state, 'A') === 'ask', Text.closeAction(state, 'A'));
+
+    // The same, but the write fails: the file still holds A.
+    state = writeEnd(writeStart(Text.savedState('A'), 'B'), false);
+    check(results, 'after a failed write the saved text is still the file\'s',
+      flags(state, 'A') === unsaved(false, false), flags(state, 'A'));
+    check(results, 'and Close closes without asking', Text.closeAction(state, 'A') === 'close', Text.closeAction(state, 'A'));
+
+    // Typing on while the write runs.
+    state = writeStart(Text.savedState('A'), 'B');
+    check(results, 'typing during a save is a change, and the save is pending',
+      flags(state, 'BC') === unsaved(true, true), flags(state, 'BC'));
+    state = writeEnd(state, true);
+    check(results, 'what was typed during the save is still a change',
+      flags(state, 'BC') === unsaved(true, false), flags(state, 'BC'));
+
+    // A save of the text on screen, and recovered text that was never saved.
+    state = writeEnd(writeStart(Text.savedState('A'), 'B'), true);
+    check(results, 'a finished save of the text on screen leaves nothing unsaved',
+      flags(state, 'B') === unsaved(false, false), flags(state, 'B'));
+    const recovered = Text.savedState(null);
+    check(results, 'recovered text is a change until it is saved',
+      flags(recovered, 'A') === unsaved(true, false), flags(recovered, 'A'));
+  }
+}
+
 // ── Image references ──
 {
   const local = (src) => {
