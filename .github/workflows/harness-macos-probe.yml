@@ -1,0 +1,119 @@
+name: Harness probe (macOS)
+
+# Checks whether a GitHub macOS runner can drive the app's GUI: open a text
+# file, type into the editor and save with keystrokes sent through System
+# Events, then compare the file on disk. It also prints which privacy
+# permissions (TCC) the runner image grants, so the full macOS harness can be
+# designed on facts. Manual runs only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Release tag whose .dmg is tested
+        default: v0.18.0-alpha
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            dmg: aarch64
+          - runner: macos-15-intel
+            dmg: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      APP_NAME: Euro-Office-Lite
+    steps:
+      - name: Set the evidence folder
+        run: echo "PROBE_DIR=$RUNNER_TEMP/probe" >> "$GITHUB_ENV"
+
+      - name: Download the release .dmg
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          mkdir -p "$PROBE_DIR"
+          gh release download "$RELEASE" --repo "$GITHUB_REPOSITORY" \
+            --pattern "*_${{ matrix.dmg }}.dmg" --dir "$PROBE_DIR"
+          ls -l "$PROBE_DIR"
+
+      - name: Install the app
+        run: |
+          dmg=$(ls "$PROBE_DIR"/*.dmg)
+          mount=$(hdiutil attach -nobrowse "$dmg" | awk -F'\t' '/\/Volumes\// {print $NF}')
+          cp -R "$mount/$APP_NAME.app" /Applications/
+          hdiutil detach "$mount"
+          codesign --verify --deep --strict "/Applications/$APP_NAME.app"
+          spctl --assess --type execute -v "/Applications/$APP_NAME.app" || true
+
+      - name: Show the privacy permissions of the image
+        run: |
+          echo "== system TCC.db"
+          sudo sqlite3 /Library/Application\ Support/com.apple.TCC/TCC.db \
+            "select service, client, auth_value from access;" || true
+          echo "== user TCC.db"
+          sqlite3 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
+            "select service, client, auth_value from access;" || true
+
+      - name: Open a text file in the app
+        run: |
+          printf 'hello\n' > "$PROBE_DIR/probe.txt"
+          shasum -a 256 "$PROBE_DIR/probe.txt" | tee "$PROBE_DIR/before.sha"
+          open -a "/Applications/$APP_NAME.app" "$PROBE_DIR/probe.txt"
+          tmp="/tmp/euro-office-lite-$(id -u)"
+          for i in $(seq 1 180); do
+            if grep -rqs 'Document ready' "$tmp" 2>/dev/null; then
+              echo "Document ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "No 'Document ready' after 180 s"
+          exit 1
+
+      - name: Type and save with System Events
+        run: |
+          osascript -e "tell application \"$APP_NAME\" to activate"
+          sleep 2
+          osascript \
+            -e 'tell application "System Events"' \
+            -e 'key code 125 using command down' \
+            -e 'keystroke "Z"' \
+            -e 'keystroke "s" using command down' \
+            -e 'end tell'
+          sleep 15
+
+      - name: Check the saved file
+        run: |
+          echo "== before"; cat "$PROBE_DIR/before.sha"
+          echo "== after"; shasum -a 256 "$PROBE_DIR/probe.txt"
+          echo "== bytes"; xxd "$PROBE_DIR/probe.txt"
+          grep -q 'Z' "$PROBE_DIR/probe.txt"
+
+      - name: Try a screenshot
+        if: always()
+        run: screencapture -x "$PROBE_DIR/screen.png" || echo "screencapture failed"
+
+      - name: Collect the app logs
+        if: always()
+        run: |
+          mkdir -p "$PROBE_DIR/logs"
+          cp -R "/tmp/euro-office-lite-$(id -u)" "$PROBE_DIR/logs/tmp" 2>/dev/null || true
+          cp -R "$HOME/Library/Caches/org.euro-office.lite" "$PROBE_DIR/logs/cache" 2>/dev/null || true
+          rm -f "$PROBE_DIR"/*.dmg
+
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: harness-macos-probe-${{ matrix.dmg }}
+          path: ${{ runner.temp }}/probe
+          retention-days: 7
