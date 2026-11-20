@@ -167,12 +167,23 @@ observe_rejection() {
   OBSERVED=rejected-but-file-changed
 }
 
+# press_case_button PID: presses the button the case names, if it names one.
+# Each system's lib.sh says how (press_button).
+press_case_button() {
+  local label
+  label=$(case_value button)
+  [ -n "$label" ] || return 0
+  press_button "$1" "$label" && return 0
+  note "button $label: not pressed"
+}
+
 edit_document() {
   local pid=$1 keys_before text keys_after
   keys_before=$(case_value keys_before)
   text=$(case_value type)
   keys_after=$(case_value keys_after)
   focus_document "$pid"
+  press_case_button "$pid"
   [ -n "$keys_before" ] && send_keys "$keys_before"
   [ -n "$text" ] && send_text "$text"
   [ -n "$keys_after" ] && send_keys "$keys_after"

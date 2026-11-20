@@ -197,11 +197,44 @@ send_keys_to() {
   send_keys "$2"
 }
 
+# press_named PID LABEL: one try of press.applescript; its error, if any, goes
+# to the harness log.
+press_named() { osascript "$MAC_DIR/press.applescript" "$1" "$2" >/dev/null; }
+
+# press_button PID LABEL: clicks the element of the window whose accessible
+# name is LABEL. A few tries: the web view may still be filling its tree.
+press_button() {
+  local i
+  activate_app
+  for (( i = 0; i < 3; i++ )); do
+    press_named "$1" "$2" && return 0
+    sleep 2
+  done
+  return 1
+}
+
+is_presentation_window() {
+  window_lines "$1" | grep -qE '^AXStandardWindow.*\.(pptx|ppsx|potx|ppt|pps|odp|otp)$'
+}
+
+# close_feature_tip PID: the presentation editor of a fresh profile opens
+# with a "New: GIF playback in slideshow mode" tip over the slide. It is
+# closed with its own button, not Escape, which the editor may take as a command.
+close_feature_tip() {
+  is_presentation_window "$1" || return 0
+  if press_button "$1" "Got it"; then
+    log "closed the tip with Got it"
+    return 0
+  fi
+  log "no Got it tip in the window"
+}
+
 # focus_document PID: brings the app to the front and clicks in the middle
 # of its window, like the Linux harness.
 focus_document() {
   activate_app
   sleep 0.5
+  close_feature_tip "$1"
   osascript "$MAC_DIR/click.applescript" "$1" >/dev/null
   sleep 0.5
 }

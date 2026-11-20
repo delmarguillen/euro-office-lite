@@ -113,11 +113,14 @@ echo "osascript $*" >> "$FAKE_LOG"
 case "$*" in
   *windows.applescript*)
     kill -0 "$2" 2>/dev/null || exit 0
-    printf 'AXStandardWindow\tdocument\n'
+    printf 'AXStandardWindow\t%s\n' "${FAKE_TITLE:-document}"
     [ -n "$FAKE_DIALOG" ] && printf 'AXDialog\t%s\n' "$FAKE_DIALOG"
     ;;
   *" to quit"*)
     [ -n "$FAKE_IGNORE_QUIT" ] || pkill -f "$HARNESS_MAC_APP/Contents/MacOS/"
+    ;;
+  *press.applescript*)
+    [ -z "$FAKE_NOTHING_NAMED" ] || exit 1
     ;;
 esac
 exit 0
@@ -256,6 +259,61 @@ test_follower() {
     grep -qx partial "$d/out" && ! grep -qx old "$d/out"
 }
 
+# edit_case CASE: runs edit_document of mac/run.sh for CASE against a live pid
+# (this shell's), with the fake osascript logging to FAKE_LOG.
+edit_case() {
+  (
+    . "$MAC/run.sh"
+    read_case "$HARNESS/cases/$1.toml" || exit 1
+    : > "$FAKE_LOG"
+    edit_document $$ 2>/dev/null
+    echo "$DETAIL" > "$T/detail"
+  )
+}
+
+# A Markdown case presses Edit by its name: no Tab and no Space reach System Events.
+test_markdown_presses_edit() {
+  edit_case md-utf8 || return 1
+  grep -q 'press\.applescript [0-9]* Edit$' "$FAKE_LOG" || return 1
+  ! grep -q 'Got it' "$FAKE_LOG" || return 1
+  ! grep -qE 'key code (48|49)' "$FAKE_LOG"
+}
+
+# In a presentation the tip goes with Got it, before the click in the window.
+test_presentation_closes_tip() {
+  FAKE_TITLE='Euro-Office Lite - slide.pptx' edit_case pptx-edit-save || return 1
+  local tip click
+  tip=$(grep -n 'press\.applescript [0-9]* Got it$' "$FAKE_LOG" | cut -d: -f1)
+  click=$(grep -n 'click\.applescript' "$FAKE_LOG" | cut -d: -f1)
+  [ -n "$tip" ] && [ -n "$click" ] && [ "$tip" -lt "$click" ]
+}
+
+test_missing_button_is_noted() {
+  FAKE_NOTHING_NAMED=1 edit_case md-utf8 || return 1
+  grep -q 'button Edit: not pressed' "$T/detail"
+}
+
+# ../run.sh with ../lib.sh, as on Linux: Edit is pressed with the keys that
+# reach it from the preview, then come the keys of the case.
+test_linux_button_keys() {
+  (
+    . "$HARNESS/run.sh"
+    focus_document() { :; }
+    send_keys() { echo "$1" >> "$T/linux-keys"; }
+    send_text() { :; }
+    sleep() { :; }
+    : > "$T/linux-keys"
+    read_case "$HARNESS/cases/md-utf8.toml" || exit 1
+    edit_document 1
+    [ "$(sed -n 1p "$T/linux-keys")" = "shift+Tab shift+Tab shift+Tab shift+Tab space" ] || exit 1
+    [ "$(sed -n 2p "$T/linux-keys")" = "$(case_value keys_before)" ] || exit 1
+    CASE[button]=Nope
+    DETAIL=""
+    edit_document 1 2>/dev/null
+    [ "$DETAIL" = "button Nope: not pressed" ]
+  )
+}
+
 # --- runs against the fake app ---------------------------------------------------
 
 test_install_and_open() {
@@ -336,6 +394,10 @@ check "xdotool chords become System Events lines" test_chords
 check "typed text goes to osascript as an argument" test_text_is_an_argument
 check "a case with an unknown key is skipped with its reason" test_skip_unknown_key
 check "follow_log.py copies only the new lines" test_follower
+check "a Markdown case presses Edit by name, without Tab" test_markdown_presses_edit
+check "a presentation closes the Got it tip before the click" test_presentation_closes_tip
+check "a button that is not there is noted" test_missing_button_is_noted
+check "Linux presses Edit with its keys, then keys_before" test_linux_button_keys
 check "install from .dmg, open, quit" test_install_and_open
 check "a failed codesign --verify stops the run" test_bad_signature_stops
 check "a refused file with a dialog" test_rejection_with_dialog

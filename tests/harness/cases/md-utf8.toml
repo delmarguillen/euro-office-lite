@@ -1,12 +1,13 @@
 # UTF-8 Markdown without a BOM. Z is typed at the end of the document and
 # the save must be the input with that Z after its final line break.
-# Keys: the page opens in preview; 4 Shift+Tab reach Edit, Space presses it, the lone Shifts wait for the editor.
+# The page opens in preview: the runner presses Edit, the lone Shifts wait for the editor.
 description = "UTF-8 Markdown, no BOM: opens, and Ctrl+S after typing Z at the end keeps every byte"
 generate = "mkmd.py utf8"
 input = "notes.md"
 input_sha256 = "de83be15a3b2e0a1fc5cdf54b10d7c3cbf6e001eead836abe2742cff838cb6b0"
 action = "open-edit-save"
-keys_before = "shift+Tab shift+Tab shift+Tab shift+Tab space shift shift shift shift shift shift shift shift shift shift ctrl+End"
+button = "Edit"
+keys_before = "shift shift shift shift shift shift shift shift shift shift ctrl+End"
 type = "Z"
 check = "expected-bytes"
 expected_generate = "mkmd.py utf8 z"

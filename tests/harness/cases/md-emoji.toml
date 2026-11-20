@@ -1,12 +1,13 @@
 # UTF-8 Markdown with an emoji and a CJK Extension B character, both above
 # U+FFFF. The save must be the input with Z at the end.
-# Keys: the page opens in preview; 4 Shift+Tab reach Edit, Space presses it, the lone Shifts wait for the editor.
+# The page opens in preview: the runner presses Edit, the lone Shifts wait for the editor.
 description = "Markdown with an emoji and U+20000: Ctrl+S after typing Z keeps every byte"
 generate = "mkmd.py emoji"
 input = "emoji.md"
 input_sha256 = "3c318400ffe87c5fd8b12e3ddd5e17212bf2e1605fdbfe40d86536885a35869d"
 action = "open-edit-save"
-keys_before = "shift+Tab shift+Tab shift+Tab shift+Tab space shift shift shift shift shift shift shift shift shift shift ctrl+End"
+button = "Edit"
+keys_before = "shift shift shift shift shift shift shift shift shift shift ctrl+End"
 type = "Z"
 check = "expected-bytes"
 expected_generate = "mkmd.py emoji z"

@@ -211,10 +211,15 @@ Exit status as in run.sh.
 - `backup.sh` saves `~/Library/Application Support/org.euro-office.lite`
   (recovery, recent files) and `~/Library/Caches/org.euro-office.lite`
   (fonts) whole; `restore.sh` removes both and puts the saved ones back.
-- The Markdown cases reach the Edit button with Shift+Tab. macOS moves the
-  focus only between text fields unless Full Keyboard Access is on
-  (`defaults write NSGlobalDomain AppleKeyboardUIMode -int 2`, before the
-  app starts); the CI workflow turns it on.
+- `button` is pressed by its accessible name: `mac/press.applescript`
+  searches the window through System Events, level by level, for the first
+  element whose name, description or value is the label, and clicks its
+  middle. Shift+Tab is not used: in WKWebView it does not reach Edit from
+  the preview.
+- In a presentation, the editor of a fresh profile shows a "New: GIF
+  playback in slideshow mode" tip over the slide. Before the click in the
+  middle of the window, `focus_document` closes it with its "Got it" button,
+  not with Escape.
 
 ## Case files
 
@@ -229,6 +234,7 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `input_sha256` | optional: the generated input must have this sha256. Left out for the deflated ZIPs of `mkdocx.py` and `mkxlsx.py`, whose bytes depend on the zlib of the Python that writes them |
 | `action` | `open`, `open-save` (Ctrl+S), `open-edit-save`, `open-export-pdf` or `edit-kill-recover` |
 | `keys_before`, `type`, `keys_after` | for `open-edit-save` and `edit-kill-recover`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
+| `button` | optional, for the same actions: the label of a button of the page, pressed after the click and before `keys_before`. macOS (System Events) and Windows (UI Automation) find it by its accessible name; the Linux runner has no accessibility bus and presses it with the keys `button_keys` in `lib.sh` gives for that label |
 | `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match`; for `open-export-pdf`, `pdf-text` |
 | `expected_generate`, `expected_sha256` | for `expected-bytes`: the generator of the file the save must write, and optionally its sha256 |
 | `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain; for `pdf-text`: `REGEX`, an extended regex a line of the PDF's text must contain |
@@ -303,9 +309,8 @@ of the last line of a TXT, or added to the last cell of a CSV. The save must
 then be the input with that `Z` and nothing else changed.
 
 A Markdown case does the same on the Markdown page, which opens in preview:
-its keys go from the preview to Edit with Shift+Tab, press it with Space,
-wait for the editor with lone Shift presses and go to the end with
-Ctrl+End. The `Z` lands after the final line break, so the save must be the
+the case presses its Edit button (`button = "Edit"`), and its keys wait for
+the editor with lone Shift presses and go to the end with Ctrl+End. The `Z` lands after the final line break, so the save must be the
 input with `Z` appended (`gen/mkmd.py`).
 
 The inputs `gen/mkooxml.py`, `gen/mkodf.py` and `gen/mkcfb.py` write are

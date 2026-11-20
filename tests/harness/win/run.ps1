@@ -311,14 +311,26 @@ function Observe-Rejection($run) {
     $run.Observed = 'rejected-but-file-changed'
 }
 
-# Click in the middle of the window, keys_before, type, keys_after. False when
-# the window could not be brought to the foreground: nothing was typed.
+# Presses the button the case names, if it names one, by its accessible name.
+# The page may still be building its tree, so it tries for a few seconds.
+function Press-CaseButton($run, [IntPtr]$window) {
+    $label = Get-CaseValue $run.Case 'button'
+    if (-not $label) { return }
+    $pressed = Wait-Until 5 { Invoke-NamedButton $window $label }
+    if ($pressed) { return }
+    Add-Note $run ('button ' + $label + ': not pressed')
+}
+
+# Click in the middle of the window, the button of the case, keys_before,
+# type, keys_after. False when the window could not be brought to the
+# foreground: nothing was typed.
 function Edit-Document($run) {
     $window = Get-MainWindow $run.ProcessId
     if (-not (Set-Foreground $window)) { return $false }
     Start-Sleep -Milliseconds 500
     Click-WindowCenter $window
     Start-Sleep -Milliseconds 500
+    Press-CaseButton $run $window
     Send-Keys (Get-CaseValue $run.Case 'keys_before')
     Send-Text (Get-CaseValue $run.Case 'type')
     Send-Keys (Get-CaseValue $run.Case 'keys_after')

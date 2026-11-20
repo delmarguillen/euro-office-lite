@@ -158,6 +158,24 @@ send_keys() {
 
 send_text() { x xdotool type --delay 40 "$1"; }
 
+# button_keys LABEL: the keys that press a button of the page from where the
+# click in the middle of the window leaves the focus. The runner has no
+# accessibility bus to find a button by its name.
+button_keys() {
+  case $1 in
+    # The Markdown page opens in its preview: four Shift+Tab reach Edit.
+    Edit) echo "shift+Tab shift+Tab shift+Tab shift+Tab space" ;;
+    *) return 1 ;;
+  esac
+}
+
+# press_button PID LABEL: presses the button LABEL of the focused window.
+press_button() {
+  local keys
+  keys=$(button_keys "$2") || { log "no keys for the button $2"; return 1; }
+  send_keys "$keys"
+}
+
 # send_keys_to PID KEYS: KEYS to the editor window of PID.
 send_keys_to() {
   # shellcheck disable=SC2086 # a key list
