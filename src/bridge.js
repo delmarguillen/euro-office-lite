@@ -1219,11 +1219,22 @@ function _eoSavesInPlace(name) {
 // export, a template): SAVED_COPY in src-tauri/src/file_ops.rs.
 var _EO_SAVED_COPY = 'copy';
 
-// What Save As proposes for a document Ctrl+S cannot write back.
+// The templates Save As writes: TEMPLATE_EXTENSIONS in
+// src-tauri/src/file_dialogs.rs.
+var _EO_TEMPLATES = ['dotx', 'xltx', 'potx'];
+
 function _eoFamilyFormat(docType) {
   if (docType === 'cell') return 'xlsx';
   if (docType === 'slide') return 'pptx';
   return 'docx';
+}
+
+// What Save As proposes for a document Ctrl+S cannot write back: a template
+// keeps its own format, anything else (a .doc, a .dotm) gets its family's.
+function _eoProposedFormat(docType, name) {
+  var ext = String(name || '').split('.').pop().toLowerCase();
+  if (_EO_TEMPLATES.indexOf(ext) !== -1) return ext;
+  return _eoFamilyFormat(docType);
 }
 
 // Files reach the backend only as the tokens it handed out (path_grants.rs).
@@ -3167,10 +3178,10 @@ window.AscDesktopEditor = {
       var current = await invoke('current_document');
       var currentName = current ? current.name : null;
       if (!isSaveAs && !current) isSaveAs = true;
-      var familyExt = null;
+      var proposedExt = null;
       if (!isSaveAs && !_eoSavesInPlace(currentName)) {
         isSaveAs = true;
-        familyExt = _eoFamilyFormat(docType);
+        proposedExt = _eoProposedFormat(docType, currentName);
       }
       var wasModified = _eoUnsavedChanges;
       // A cancelled Save As or a PDF export leaves the open document where it
@@ -3185,8 +3196,8 @@ window.AscDesktopEditor = {
           513: 'pdf'
         };
         // Ctrl+S on a .doc arrives with the .doc format (66), which x2t 10
-        // does not write: the family's format wins over the document's own.
-        var requestedExt = familyExt || formatExtensions[fileType] || null;
+        // does not write: the proposed format wins over the document's own.
+        var requestedExt = proposedExt || formatExtensions[fileType] || null;
 
         // The backend opens the dialog: where it starts after a recovery and
         // the extension the chosen name gets are decided there.

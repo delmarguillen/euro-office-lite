@@ -1,8 +1,9 @@
 // Checks Ctrl+S on a document whose format the app does not write back
-// (a .doc, a .dotx, an .xlsm, a .fodt): it goes through Save As with the
-// family's format proposed, and save_file is never called. A .docx, .xlsx,
-// .odt... is still saved in place. Also checks that _EO_SAVE_IN_PLACE matches
-// SAVE_IN_PLACE_EXTENSIONS in src-tauri/src/file_dialogs.rs.
+// (a .doc, a .dotx, an .xlsm, a .fodt): it goes through Save As, and save_file
+// is never called. A template proposes its own format, anything else its
+// family's. A .docx, .xlsx, .odt... is still saved in place. Also checks that
+// _EO_SAVE_IN_PLACE and _EO_TEMPLATES match SAVE_IN_PLACE_EXTENSIONS and
+// TEMPLATE_EXTENSIONS in src-tauri/src/file_dialogs.rs.
 //
 // Run: node scripts/test-bridge-save-unwritable-format.mjs [path/to/bridge.js]
 import fs from 'node:fs';
@@ -37,12 +38,16 @@ async function ctrlS({ name, docType, fileType, answer = null }) {
 }
 
 const cases = [
-  { name: 'Letter.dotx', docType: 'word', fileType: 76, proposed: 'docx' },
+  { name: 'Letter.dotx', docType: 'word', fileType: 76, proposed: 'dotx' },
+  { name: 'Budget.XLTX', docType: 'cell', fileType: 262, proposed: 'xltx' },
+  { name: 'Deck.potx', docType: 'slide', fileType: 135, proposed: 'potx' },
+  { name: 'Form.dotm', docType: 'word', fileType: 77, proposed: 'docx' },
+  { name: 'Model.ott', docType: 'word', fileType: 79, proposed: 'docx' },
+  { name: 'Model.xltm', docType: 'cell', fileType: 263, proposed: 'xlsx' },
   { name: 'Macros.docm', docType: 'word', fileType: 75, proposed: 'docx' },
   { name: 'Flat.fodt', docType: 'word', fileType: 78, proposed: 'docx' },
   { name: 'Book.xlsm', docType: 'cell', fileType: 261, proposed: 'xlsx' },
   { name: 'Book.XLSB', docType: 'cell', fileType: 264, proposed: 'xlsx' },
-  { name: 'Deck.potx', docType: 'slide', fileType: 135, proposed: 'pptx' },
   { name: 'Old.doc', docType: 'word', fileType: 66, proposed: 'docx' },
   { name: 'Sheet.xls', docType: 'cell', fileType: 258, proposed: 'xlsx' },
   { name: 'Talk.PPT', docType: 'slide', fileType: 130, proposed: 'pptx' },
@@ -54,7 +59,17 @@ for (const c of cases) {
   check(results, `... and does not write ${c.name} in place`, calls.savedInPlace === 0, String(calls.savedInPlace));
 }
 
-let calls = await ctrlS({ name: 'Book.xlsm', docType: 'cell', fileType: 261,
+// The open template saved over itself: the dialog asks before replacing it,
+// and the save goes to the token the dialog returned.
+let calls = await ctrlS({ name: 'Letter.dotx', docType: 'word', fileType: 76,
+  answer: { token: 't-own', name: 'Letter.dotx' } });
+check(results, 'Ctrl+S on a template offers only its own format',
+  JSON.stringify(calls.picked[0].filters) === JSON.stringify([{ name: 'DOTX', extensions: ['dotx'] }]),
+  JSON.stringify(calls.picked[0].filters));
+check(results, '... and saves with the token the dialog returned',
+  calls.savedTo.join() === 't-own' && calls.savedInPlace === 0, calls.savedTo.join());
+
+calls = await ctrlS({ name: 'Book.xlsm', docType: 'cell', fileType: 261,
   answer: { token: 't-new', name: 'Book.xlsx' } });
 check(results, 'the Save As it opens saves with the token it got back',
   calls.savedTo.join() === 't-new' && calls.savedInPlace === 0, calls.savedTo.join());
@@ -65,21 +80,32 @@ for (const name of ['Report.docx', 'Book.xlsx', 'Deck.pptx', 'Letter.odt', 'Data
     calls.savedInPlace === 1 && calls.picked.length === 0, JSON.stringify(calls));
 }
 
-// The extensions in SAVE_IN_PLACE_EXTENSIONS, read from the Rust source.
-function rustSaveInPlaceExtensions() {
+// The extensions of one list in file_dialogs.rs, read from the Rust source.
+function rustExtensions(constName) {
   const source = fs.readFileSync(path.join(projectRoot, 'src-tauri/src/file_dialogs.rs'), 'utf8');
-  const match = source.match(/const SAVE_IN_PLACE_EXTENSIONS: \[&str; \d+\] = \[([^\]]*)\]/);
+  const pattern = new RegExp(`const ${constName}: \\[&str; \\d+\\] = \\[([^\\]]*)\\]`);
+  const match = source.match(pattern);
   if (!match) return null;
   return [...match[1].matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
 }
 
+function sameList(a, b) {
+  if (a === null || b === null) return false;
+  return [...a].sort().join() === [...b].sort().join();
+}
+
 const bridge = await loadBridge();
 const inBridge = JSON.parse(bridge.run('JSON.stringify(_EO_SAVE_IN_PLACE)'));
+const templatesInBridge = JSON.parse(bridge.run(
+  'typeof _EO_TEMPLATES === "undefined" ? "null" : JSON.stringify(_EO_TEMPLATES)'));
 bridge.stopTimers();
-const inRust = rustSaveInPlaceExtensions();
+const inRust = rustExtensions('SAVE_IN_PLACE_EXTENSIONS');
 check(results, 'the bridge saves in place exactly the formats Rust does',
-  inRust !== null && [...inBridge].sort().join() === [...inRust].sort().join(),
-  `bridge: ${inBridge.join()} rust: ${inRust && inRust.join()}`);
+  sameList(inBridge, inRust), `bridge: ${inBridge.join()} rust: ${inRust && inRust.join()}`);
+const templatesInRust = rustExtensions('TEMPLATE_EXTENSIONS');
+check(results, 'the bridge knows exactly the templates Rust writes',
+  sameList(templatesInBridge, templatesInRust),
+  `bridge: ${templatesInBridge && templatesInBridge.join()} rust: ${templatesInRust && templatesInRust.join()}`);
 
 const savesInPlace = (name) => bridge.run(`_eoSavesInPlace(${JSON.stringify(name)})`);
 for (const name of ['a.doc', 'a.DOC', 'a.xls', 'a.ppt', 'a.dotx', 'a.fodt', 'a']) {
