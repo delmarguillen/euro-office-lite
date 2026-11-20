@@ -1,0 +1,734 @@
+Origin: own
+
+diff --git a/cell/api.js b/cell/api.js
+index 86f9bf72f1..0332e83c81 100644
+--- a/cell/api.js
++++ b/cell/api.js
+@@ -6492,6 +6492,52 @@ var editor;
+     this.wb.restoreFocus();
+   };
+ 
++  // Returns c_oAscError.ID.No or the reason a new style cannot take this name.
++  spreadsheet_api.prototype.asc_checkCellStyleName = function(name) {
++    return this.wbModel.checkNewCellStyleName(name);
++  };
++  // The xfs of the style the gallery shows under this name, or null.
++  spreadsheet_api.prototype.asc_getCellStyleXfs = function(name) {
++    var style = this.wbModel.CellStyles.getStyleByName(name);
++    return style ? style.xfs.clone() : null;
++  };
++  // Adds a style built from xfs (asc_CellXfs). One undo step. Returns c_oAscError.ID.No or the error.
++  spreadsheet_api.prototype.asc_addCellStyle = function(name, xfs) {
++    return this._editCellStyle(xfs, function(wbModel) {
++      return wbModel.addCellStyle(name, xfs);
++    });
++  };
++  // Gives the style the values of xfs and updates the cells that use it. One undo step.
++  spreadsheet_api.prototype.asc_modifyCellStyle = function(name, xfs) {
++    return this._editCellStyle(xfs, function(wbModel) {
++      return wbModel.modifyCellStyle(name, xfs);
++    });
++  };
++  spreadsheet_api.prototype._editCellStyle = function(xfs, editModel) {
++    if (this.collaborativeEditing.getGlobalLock() || !this.canEdit()) {
++      return c_oAscError.ID.EditingError;
++    }
++    var result = editModel(this.wbModel);
++    if (c_oAscError.ID.No !== result) {
++      return result;
++    }
++    var t = this;
++    var point = AscCommon.History.Points[AscCommon.History.Index];
++    // The style can name a font the document has not loaded yet: the cells and
++    // the gallery are drawn once it is loaded, as asc_setCellFontName does.
++    var fonts = {};
++    fonts[xfs.getFont2().getName()] = 1;
++    this._loadFonts(fonts, function() {
++      // Redraw what the edit changed, on every sheet.
++      for (var sheetId in point.UpdateRigions) {
++        t.wbModel.handlers.trigger("cleanCellCache", sheetId, [point.UpdateRigions[sheetId]]);
++      }
++      t.wb.getWorksheet().draw();
++      t._sendWorkbookStyles();
++    });
++    return result;
++  };
++
+   spreadsheet_api.prototype.asc_ChangeTextCase = function(nType) {
+     if (this.collaborativeEditing.getGlobalLock() || !this.canEdit()) {
+       return;
+@@ -10414,6 +10460,10 @@ var editor;
+   prot["asc_setCellFormat"] = prot.asc_setCellFormat;
+   prot["asc_setCellAngle"] = prot.asc_setCellAngle;
+   prot["asc_setCellStyle"] = prot.asc_setCellStyle;
++  prot["asc_checkCellStyleName"] = prot.asc_checkCellStyleName;
++  prot["asc_getCellStyleXfs"] = prot.asc_getCellStyleXfs;
++  prot["asc_addCellStyle"] = prot.asc_addCellStyle;
++  prot["asc_modifyCellStyle"] = prot.asc_modifyCellStyle;
+   prot["asc_increaseCellDigitNumbers"] = prot.asc_increaseCellDigitNumbers;
+   prot["asc_decreaseCellDigitNumbers"] = prot.asc_decreaseCellDigitNumbers;
+   prot["asc_increaseFontSize"] = prot.asc_increaseFontSize;
+diff --git a/cell/model/History.js b/cell/model/History.js
+index 3475e4b21a..10e07006cd 100644
+--- a/cell/model/History.js
++++ b/cell/model/History.js
+@@ -56,6 +56,7 @@ function (window, undefined) {
+ 	window['AscCH'].historyitem_Workbook_RichValueStructures = 22;
+ 	window['AscCH'].historyitem_Workbook_RichValueTypesInfo = 23;
+ 	window['AscCH'].historyitem_Workbook_RichValueData = 24;
++	window['AscCH'].historyitem_Workbook_CellStyle = 25;
+ 
+ 	window['AscCH'].historyitem_Worksheet_RemoveCell = 1;
+ 	window['AscCH'].historyitem_Worksheet_RemoveRows = 2;
+diff --git a/cell/model/Serialize.js b/cell/model/Serialize.js
+index 7a1fe8512e..0a2fbfe4d5 100644
+--- a/cell/model/Serialize.js
++++ b/cell/model/Serialize.js
+@@ -2985,6 +2985,8 @@
+ 		this.oBorderMap = new StyleWriteMap(g_StyleCache.addBorder);
+ 		this.oNumMap = new StyleWriteMap(g_StyleCache.addNum);
+ 		this.oXfsStylesMap = [];
++		// XfId of each cell style -> its position in cellStyleXfs, set by finalizeCellStyles.
++		this.cellStyleXfIndexes = new Map();
+ 	}
+ 
+ 	StylesForWrite.prototype.init = function() {
+@@ -3005,6 +3007,24 @@
+ 		this.oXfsStylesMap.sort(function(a, b) {
+ 			return a.XfId - b.XfId;
+ 		});
++		this.cellStyleXfIndexes = indexCellStyleXfs(this.oXfsStylesMap);
++	};
++	/**
++	 * A file points to a cell style by its position in cellStyleXfs. The XfIds of a
++	 * workbook can have gaps (undoing a new style leaves its XfId unused), so the
++	 * cell styles and the cells are written with the position instead of the XfId.
++	 */
++	function indexCellStyleXfs(elems) {
++		var indexes = new Map();
++		elems.forEach(function(elem, index) {
++			indexes.set(elem.XfId, index);
++		});
++		return indexes;
++	}
++	// The position in cellStyleXfs of the style with this XfId, or null when it has none.
++	StylesForWrite.prototype.getCellStyleXfIndex = function(xfId) {
++		var index = this.cellStyleXfIndexes.get(xfId);
++		return undefined === index ? null : index;
+ 	};
+ 	StylesForWrite.prototype.getNumIdByFormat = function(num) {
+ 		var numid = null;
+@@ -3433,9 +3453,11 @@
+ 				}
+ 				if(!isCellStyle && null != xf.XfId)
+ 				{
++					// A cell whose style is not written takes Normal, at position 0, as the reader does.
++					var xfIndex = this.stylesForWrite.getCellStyleXfIndex(xf.XfId);
+ 					this.memory.WriteByte(c_oSerXfsTypes.XfId);
+ 					this.memory.WriteByte(c_oSerPropLenType.Long);
+-					this.memory.WriteLong(xf.XfId);
++					this.memory.WriteLong(null === xfIndex ? 0 : xfIndex);
+ 				}
+                 if(null != xf.applyProtection)
+                 {
+@@ -3554,6 +3576,9 @@
+             for(var i = 0, length = cellStyles.length; i < length; ++i)
+             {
+                 var style = cellStyles[i];
++                // A style without an entry in cellStyleXfs has no position to point to.
++                if (null === this.stylesForWrite.getCellStyleXfIndex(style.XfId))
++                    continue;
+                 this.bs.WriteItem(c_oSerStylesTypes.CellStyle, function(){oThis.WriteCellStyle(style);});
+             }
+         };
+@@ -3572,7 +3597,7 @@
+                 this.memory.WriteString2(oCellStyle.Name);
+             }
+             if (null != oCellStyle.XfId)
+-                this.bs.WriteItem(c_oSer_CellStyle.XfId, function(){oThis.memory.WriteLong(oCellStyle.XfId);});
++                this.bs.WriteItem(c_oSer_CellStyle.XfId, function(){oThis.memory.WriteLong(oThis.stylesForWrite.getCellStyleXfIndex(oCellStyle.XfId));});
+         };
+         this.WriteSlicerStyles = function(slicerStyles)
+         {
+@@ -14618,6 +14643,8 @@
+                 // ApplyNumberFormat (ToDo возможно это свойство должно быть в xfs)
+                 if (null !== oStyleObject.xfs.ApplyNumberFormat)
+                     oCellStyle.ApplyNumberFormat = oStyleObject.xfs.ApplyNumberFormat;
++                if (null !== oStyleObject.xfs.ApplyAlignment)
++                    oCellStyle.ApplyAlignment = oStyleObject.xfs.ApplyAlignment;
+                 oCellStyle.xfs = g_StyleCache.addXf(newXf);
+ 
+                 oOutput.push(oCellStyle);
+@@ -15225,6 +15252,8 @@
+             // ApplyNumberFormat (ToDo возможно это свойство должно быть в xfs)
+             if (null !== oCellStyleXfs.ApplyNumberFormat)
+                 oCellStyle.ApplyNumberFormat = oCellStyleXfs.ApplyNumberFormat;
++            if (null !== oCellStyleXfs.ApplyAlignment)
++                oCellStyle.ApplyAlignment = oCellStyleXfs.ApplyAlignment;
+ 
+             oCellStyle.xfs = g_StyleCache.addXf(newXf);
+             // ToDo при отсутствии имени все не очень хорошо будет!
+diff --git a/cell/model/UndoRedo.js b/cell/model/UndoRedo.js
+index 97bfa31cfb..8691859850 100644
+--- a/cell/model/UndoRedo.js
++++ b/cell/model/UndoRedo.js
+@@ -674,6 +674,7 @@ function (window, undefined) {
+ 		this.RichValueStructures = 196;
+ 		this.RichValueTypesInfo = 197;
+ 		this.RichValueData = 198;
++		this.CellStyle = 199;
+ 
+ 		this.Create = function (nType) {
+ 			switch (nType) {
+@@ -860,6 +861,8 @@ function (window, undefined) {
+ 					return new AscCommonExcel.CRichValueTypesInfo();
+ 				case this.RichValueData:
+ 					return new AscCommonExcel.CRichValueData();
++				case this.CellStyle:
++					return new AscCommonExcel.CCellStyle();
+ 			}
+ 			return null;
+ 		};
+@@ -3113,6 +3116,11 @@ function (window, undefined) {
+ 				// clear traces
+ 				wb.oApi.asc_RemoveTraceArrows(Asc.c_oAscRemoveArrowsType.all);
+ 			}
++		} else if (AscCH.historyitem_Workbook_CellStyle === Type) {
++			// Data.from is null when the edit added the style to the document.
++			var xfId = (Data.to || Data.from).XfId;
++			wb.CellStyles.setCustomStyleByXfId(xfId, bUndo ? Data.from : Data.to);
++			wb.oApi._sendWorkbookStyles();
+ 		} else if (AscCH.historyitem_Workbook_Calculate === Type) {
+ 			if (!bUndo && wb.bCollaborativeChanges) {
+ 				wb.calculate(Data.elem, nSheetId);
+diff --git a/cell/model/Workbook.js b/cell/model/Workbook.js
+index eed6dbdcdb..e3a3799b64 100644
+--- a/cell/model/Workbook.js
++++ b/cell/model/Workbook.js
+@@ -4339,6 +4339,208 @@
+ 	Workbook.prototype.addDefName = function (name, ref, sheetId, hidden, isTable) {
+ 		return this.dependencyFormulas.addDefName(name, ref, sheetId, hidden, isTable);
+ 	};
++	Workbook.prototype.checkNewCellStyleName = function (name) {
++		if (!name || !name.trim()) {
++			return c_oAscError.ID.CellStyleNameEmpty;
++		}
++		if (this.CellStyles.isStyleNameUsed(name)) {
++			return c_oAscError.ID.CellStyleNameExists;
++		}
++		return c_oAscError.ID.No;
++	};
++	Workbook.prototype.addCellStyle = function (name, xfs) {
++		var nameCheck = this.checkNewCellStyleName(name);
++		if (c_oAscError.ID.No !== nameCheck) {
++			return nameCheck;
++		}
++		var style = new AscCommonExcel.CCellStyle();
++		style.Name = name;
++		style.XfId = this.CellStyles.getNextXfId();
++		style.xfs = createCellStyleXfs(xfs);
++		style.ApplyAlignment = null !== style.xfs.align;
++
++		AscCommon.History.Create_NewPoint();
++		AscCommon.History.StartTransaction();
++		this._replaceCellStyle(null, style);
++		AscCommon.History.EndTransaction();
++		return c_oAscError.ID.No;
++	};
++	/**
++	 * Gives the style a new xfs. A predefined style the document does not carry
++	 * yet is copied into it first. Cells, rows and columns with the style take the
++	 * new values only where they still had the old style's: a value the user set
++	 * by hand stays.
++	 */
++	Workbook.prototype.modifyCellStyle = function (name, xfs) {
++		var oldStyle = this.CellStyles.getStyleByName(name);
++		if (!oldStyle) {
++			return c_oAscError.ID.CellStyleNotFound;
++		}
++		// Cells without formatting draw with the workbook defaults, not with Normal.
++		if (0 === oldStyle.BuiltinId) {
++			return c_oAscError.ID.CellStyleNormalNotEditable;
++		}
++		var isInDocument = this.CellStyles.isCustomStyle(oldStyle);
++		var newStyle = oldStyle.clone();
++		newStyle.XfId = isInDocument ? oldStyle.XfId : this.CellStyles.getNextXfId();
++		newStyle.xfs = createCellStyleXfs(xfs);
++		// A file can give a style an alignment it does not apply: that stays so until the alignment changes.
++		if (!newStyle.getAlign().isEqual(oldStyle.getAlign())) {
++			newStyle.ApplyAlignment = true;
++		}
++		// Predefined styles such as Good do not apply a border or a number format until one is set.
++		if (!newStyle.getBorder().isEqual(oldStyle.getBorder())) {
++			newStyle.ApplyBorder = true;
++		}
++		if (newStyle.getNumFormatStr() !== oldStyle.getNumFormatStr()) {
++			newStyle.ApplyNumberFormat = true;
++		}
++
++		AscCommon.History.Create_NewPoint();
++		AscCommon.History.StartTransaction();
++		this._replaceCellStyle(isInDocument ? oldStyle : null, newStyle);
++		if (isInDocument) {
++			this.forEach(function (ws) {
++				updateWorksheetCellStyle(ws, oldStyle, newStyle);
++			});
++		}
++		AscCommon.History.EndTransaction();
++		return c_oAscError.ID.No;
++	};
++	// oldStyle is null when the style is new to the document.
++	Workbook.prototype._replaceCellStyle = function (oldStyle, newStyle) {
++		AscCommon.History.Add(AscCommonExcel.g_oUndoRedoWorkbook, AscCH.historyitem_Workbook_CellStyle, null, null,
++			new UndoRedoData_FromTo(oldStyle, newStyle));
++		this.CellStyles.setCustomStyleByXfId(newStyle.XfId, newStyle);
++	};
++	// A style keeps what a style defines: font, fill, border, number format and alignment.
++	function createCellStyleXfs(xfs) {
++		var styleXfs = new AscCommonExcel.CellXfs();
++		styleXfs.font = xfs.font ? xfs.font.clone() : null;
++		styleXfs.fill = xfs.fill ? xfs.fill.clone() : null;
++		styleXfs.border = xfs.border ? xfs.border.clone() : null;
++		styleXfs.num = xfs.num ? xfs.num.clone() : null;
++		styleXfs.align = xfs.align ? xfs.align.clone() : null;
++		return g_StyleCache.addXf(styleXfs);
++	}
++	function updateWorksheetCellStyle(ws, oldStyle, newStyle) {
++		var updateItem = function (item) {
++			updateItemCellStyle(item, oldStyle, newStyle);
++		};
++		if (ws.oAllCol) {
++			updateItem(ws.oAllCol);
++		}
++		ws.aCols.forEach(function (col) {
++			if (col) {
++				updateItem(col);
++			}
++		});
++		ws.getRange3(0, 0, gc_nMaxRow0, gc_nMaxCol0)._foreachNoEmpty(updateItem, updateItem);
++	}
++	// A value follows the style when the item had the old style's value.
++	function followsCellStyle(itemValue, oldValue, newValue, isEqual) {
++		return isEqual(itemValue, oldValue) && !isEqual(itemValue, newValue);
++	}
++	function isSameValue(a, b) {
++		return a === b;
++	}
++	function isSameObject(a, b) {
++		return a.isEqual(b);
++	}
++	function isSameColor(a, b) {
++		return AscCommonExcel.g_oColorManager.isEqual(a, b);
++	}
++	var cellStyleFontProperties = [
++		{get: AscCommonExcel.Font.prototype.getSize, set: AscCommonExcel.Font.prototype.setSize},
++		{get: AscCommonExcel.Font.prototype.getBold, set: AscCommonExcel.Font.prototype.setBold},
++		{get: AscCommonExcel.Font.prototype.getItalic, set: AscCommonExcel.Font.prototype.setItalic},
++		{get: AscCommonExcel.Font.prototype.getUnderline, set: AscCommonExcel.Font.prototype.setUnderline},
++		{get: AscCommonExcel.Font.prototype.getStrikeout, set: AscCommonExcel.Font.prototype.setStrikeout},
++		{get: AscCommonExcel.Font.prototype.getVerticalAlign, set: AscCommonExcel.Font.prototype.setVerticalAlign}
++	];
++	var cellStyleAlignProperties = [
++		{get: AscCommonExcel.Align.prototype.getAlignHorizontal, set: AscCommonExcel.Align.prototype.setAlignHorizontal},
++		{get: AscCommonExcel.Align.prototype.getAlignVertical, set: AscCommonExcel.Align.prototype.setAlignVertical},
++		{get: AscCommonExcel.Align.prototype.getWrap, set: AscCommonExcel.Align.prototype.setWrap},
++		{get: AscCommonExcel.Align.prototype.getShrinkToFit, set: AscCommonExcel.Align.prototype.setShrinkToFit},
++		{get: AscCommonExcel.Align.prototype.getIndent, set: AscCommonExcel.Align.prototype.setIndent},
++		{get: AscCommonExcel.Align.prototype.getReadingOrder, set: AscCommonExcel.Align.prototype.setReadingOrder},
++		{get: AscCommonExcel.Align.prototype.getAngle, set: AscCommonExcel.Align.prototype.setAngle}
++	];
++	// Returns the font with the new style's values, or null when nothing changes.
++	function getFontForCellStyle(font, oldFont, newFont) {
++		var result = font.clone();
++		var isChanged = false;
++		if (followsCellStyle(font.getName(), oldFont.getName(), newFont.getName(), isSameValue)) {
++			result.setName(newFont.getName());
++			result.setScheme(newFont.getScheme());
++			isChanged = true;
++		}
++		// getColor gives the automatic color for a font without one; the copy keeps it without one.
++		if (followsCellStyle(font.getColor(), oldFont.getColor(), newFont.getColor(), isSameColor)) {
++			result.setColor(newFont.getColorNotDefault());
++			isChanged = true;
++		}
++		cellStyleFontProperties.forEach(function (property) {
++			var newValue = property.get.call(newFont);
++			if (followsCellStyle(property.get.call(font), property.get.call(oldFont), newValue, isSameValue)) {
++				property.set.call(result, newValue);
++				isChanged = true;
++			}
++		});
++		return isChanged ? result : null;
++	}
++	// Returns the alignment with the new style's values, or null when nothing changes.
++	function getAlignForCellStyle(align, oldAlign, newAlign) {
++		var result = align.clone();
++		var isChanged = false;
++		cellStyleAlignProperties.forEach(function (property) {
++			var newValue = property.get.call(newAlign);
++			if (followsCellStyle(property.get.call(align), property.get.call(oldAlign), newValue, isSameValue)) {
++				property.set.call(result, newValue);
++				isChanged = true;
++			}
++		});
++		return isChanged ? result : null;
++	}
++	// item is a cell, a row or a column: each keeps its own xfs and setStyle adds it to the history.
++	function updateItemCellStyle(item, oldStyle, newStyle) {
++		var xfs = item.xfs;
++		if (!xfs || xfs.XfId !== newStyle.XfId) {
++			return;
++		}
++		var newXfs = xfs.clone();
++		var isChanged = false;
++		if (newStyle.ApplyFont) {
++			var font = getFontForCellStyle(xfs.getFont2(), oldStyle.getFont(), newStyle.getFont());
++			if (font) {
++				newXfs.font = font;
++				isChanged = true;
++			}
++		}
++		if (newStyle.ApplyFill && followsCellStyle(xfs.getFill2(), oldStyle.getFill(), newStyle.getFill(), isSameObject)) {
++			newXfs.fill = newStyle.xfs.fill;
++			isChanged = true;
++		}
++		if (newStyle.ApplyBorder && followsCellStyle(xfs.border || g_oDefaultFormat.Border, oldStyle.getBorder(), newStyle.getBorder(), isSameObject)) {
++			newXfs.border = newStyle.xfs.border;
++			isChanged = true;
++		}
++		if (newStyle.ApplyNumberFormat && followsCellStyle(xfs.getNum2().getFormat(), oldStyle.getNumFormatStr(), newStyle.getNumFormatStr(), isSameValue)) {
++			newXfs.num = newStyle.xfs.num;
++			isChanged = true;
++		}
++		if (newStyle.isAlignmentApplied()) {
++			var align = getAlignForCellStyle(xfs.getAlign2(), oldStyle.getAlign(), newStyle.getAlign());
++			if (align) {
++				newXfs.align = align;
++				isChanged = true;
++			}
++		}
++		if (isChanged) {
++			item.setStyle(newXfs);
++		}
++	}
+ 	Workbook.prototype.getDefinesNames = function ( name, sheetId, isDirectSearch ) {
+ 		return this.dependencyFormulas.getDefNameByName( name, sheetId, isDirectSearch );
+ 	};
+@@ -15862,6 +16064,8 @@
+ 				this.setBorder(oStyle.getBorder());
+ 			if (oStyle.ApplyNumberFormat)
+ 				this.setNumFormat(oStyle.getNumFormatStr());
++			if (oStyle.isAlignmentApplied())
++				oStyle.setAlignTo(this);
+ 		}
+ 		return oStyle;
+ 	};
+diff --git a/cell/model/WorkbookElems.js b/cell/model/WorkbookElems.js
+index ca747b4de6..b45c7e5857 100644
+--- a/cell/model/WorkbookElems.js
++++ b/cell/model/WorkbookElems.js
+@@ -4978,6 +4978,8 @@ var g_oFontProperties = {
+ 			this.font = new AscCommonExcel.Font();
+ 		}
+ 		this.getFont().setName(val);
++		// As setFontname on cells: a theme scheme would replace the name when the file opens.
++		this.getFont().setScheme(null);
+ 	};
+ 	CellXfs.prototype.asc_setFontSize = function (val) {
+ 		if (!this.font) {
+@@ -5073,6 +5075,25 @@ var g_oFontProperties = {
+ 	CellXfs.prototype.asc_setNumFormatInfo = function (val) {
+ 		this.num = new AscCommonExcel.Num({f:val});
+ 	};
++	// Align objects are shared through the style cache: the setters change a copy.
++	CellXfs.prototype._getAlignCopy = function () {
++		return this.align ? this.align.clone() : new Align();
++	};
++	CellXfs.prototype.asc_setHorAlign = function (val) {
++		var align = this._getAlignCopy();
++		align.setAlignHorizontal(val);
++		this.align = align;
++	};
++	CellXfs.prototype.asc_setVertAlign = function (val) {
++		var align = this._getAlignCopy();
++		align.setAlignVertical(val);
++		this.align = align;
++	};
++	CellXfs.prototype.asc_setWrapText = function (val) {
++		var align = this._getAlignCopy();
++		align.setWrap(val);
++		this.align = align;
++	};
+ 
+ 
+ 	/** @enum */
+@@ -5492,6 +5513,70 @@ CCellStyles.prototype._prepareCellStyle = function (name) {
+ 	}
+ 	return g_oDefaultFormat.XfId;
+ };
++/**
++ * Returns the style the gallery shows under this name: the document's copy of a
++ * predefined style when there is one, else the predefined style itself.
++ */
++CCellStyles.prototype.getStyleByName = function (name) {
++	var i, length;
++	for (i = 0, length = this.DefaultStyles.length; i < length; ++i) {
++		if (name === this.DefaultStyles[i].Name) {
++			return this.getCustomStyleByBuiltinId(this.DefaultStyles[i].BuiltinId) || this.DefaultStyles[i];
++		}
++	}
++	for (i = 0, length = this.CustomStyles.length; i < length; ++i) {
++		if (name === this.CustomStyles[i].Name) {
++			return this.CustomStyles[i];
++		}
++	}
++	return null;
++};
++// Style names are compared without case, as in spreadsheet applications.
++CCellStyles.prototype.isStyleNameUsed = function (name) {
++	var lowerName = name.toLowerCase();
++	var hasName = function (style) {
++		return null !== style.Name && lowerName === style.Name.toLowerCase();
++	};
++	return this.DefaultStyles.some(hasName) || this.CustomStyles.some(hasName);
++};
++CCellStyles.prototype.isCustomStyle = function (style) {
++	return -1 !== this.CustomStyles.indexOf(style);
++};
++// The writer numbers cellStyleXfs by XfId, so a new style takes the next one.
++CCellStyles.prototype.getNextXfId = function () {
++	var maxXfId = -1;
++	for (var i = 0, length = this.CustomStyles.length; i < length; ++i) {
++		maxXfId = Math.max(maxXfId, this.CustomStyles[i].XfId);
++	}
++	return maxXfId + 1;
++};
++/**
++ * Puts a copy of style in CustomStyles in place of the style with this XfId, or
++ * adds it. A null style removes the style with this XfId.
++ */
++CCellStyles.prototype.setCustomStyleByXfId = function (xfId, style) {
++	var index = -1;
++	for (var i = 0, length = this.CustomStyles.length; i < length; ++i) {
++		if (xfId === this.CustomStyles[i].XfId) {
++			index = i;
++			break;
++		}
++	}
++	if (null === style) {
++		if (-1 !== index) {
++			this.CustomStyles.splice(index, 1);
++		}
++		return;
++	}
++	var copy = style.clone();
++	copy.XfId = xfId;
++	copy.xfs = g_StyleCache.addXf(copy.xfs);
++	if (-1 === index) {
++		this.CustomStyles.push(copy);
++	} else {
++		this.CustomStyles[index] = copy;
++	}
++};
+ /** @constructor */
+ function CCellStyle() {
+ 	this.BuiltinId = null;
+@@ -5507,6 +5592,7 @@ function CCellStyle() {
+ 	this.ApplyFill = true;
+ 	this.ApplyFont = true;
+ 	this.ApplyNumberFormat = true;
++	this.ApplyAlignment = true;
+ }
+ CCellStyle.prototype.clone = function () {
+ 	var oNewStyle = new CCellStyle();
+@@ -5520,6 +5606,7 @@ CCellStyle.prototype.clone = function () {
+ 	oNewStyle.ApplyFill = this.ApplyFill;
+ 	oNewStyle.ApplyFont = this.ApplyFont;
+ 	oNewStyle.ApplyNumberFormat = this.ApplyNumberFormat;
++	oNewStyle.ApplyAlignment = this.ApplyAlignment;
+ 
+ 	oNewStyle.xfs = this.xfs.clone();
+ 	return oNewStyle;
+@@ -5551,6 +5638,125 @@ CCellStyle.prototype.getNumFormatStr = function () {
+ 		return this.xfs.num.getFormat();
+ 	return g_oDefaultFormat.Num.getFormat();
+ };
++CCellStyle.prototype.getAlign = function () {
++	if (null != this.xfs && null != this.xfs.align)
++		return this.xfs.align;
++	return g_oDefaultFormat.AlignAbs;
++};
++/**
++ * Whether applying the style sets the alignment. sdkjs did not keep the
++ * cellStyleXfs applyAlignment before, so the files it saved carry none and read
++ * as applying it. A style without alignment of its own therefore leaves the cell
++ * as it is, except Normal, which applies the default alignment.
++ */
++CCellStyle.prototype.isAlignmentApplied = function () {
++	return false !== this.ApplyAlignment && (null != this.xfs.align || 0 === this.BuiltinId);
++};
++/**
++ * Gives item (a cell, a row or a column) the style's alignment. Each setter adds
++ * its own history item. relativeIndent is left out: it only applies to dxf.
++ */
++CCellStyle.prototype.setAlignTo = function (item) {
++	var align = this.getAlign();
++	item.setAlignHorizontal(align.getAlignHorizontal());
++	item.setAlignVertical(align.getAlignVertical());
++	// getWrap reports true for justified text; the style's own value is copied.
++	item.setWrap(align.wrap);
++	item.setShrinkToFit(align.getShrinkToFit());
++	item.setIndent(align.getIndent());
++	item.setReadingOrder(align.getReadingOrder());
++	item.setAngle(AscCommonExcel.angleFormatToInterface2(align.angle));
++};
++// History and co-editing serialization of a cell style edit.
++CCellStyle.prototype.Properties = {
++	BuiltinId: 0,
++	CustomBuiltin: 1,
++	Hidden: 2,
++	ILevel: 3,
++	Name: 4,
++	XfId: 5,
++	xfs: 6,
++	ApplyBorder: 7,
++	ApplyFill: 8,
++	ApplyFont: 9,
++	ApplyNumberFormat: 10,
++	ApplyAlignment: 11
++};
++CCellStyle.prototype.getType = function () {
++	return UndoRedoDataTypes.CellStyle;
++};
++CCellStyle.prototype.getProperties = function () {
++	return this.Properties;
++};
++CCellStyle.prototype.getProperty = function (nType) {
++	switch (nType) {
++		case this.Properties.BuiltinId:
++			return this.BuiltinId;
++		case this.Properties.CustomBuiltin:
++			return this.CustomBuiltin;
++		case this.Properties.Hidden:
++			return this.Hidden;
++		case this.Properties.ILevel:
++			return this.ILevel;
++		case this.Properties.Name:
++			return this.Name;
++		case this.Properties.XfId:
++			return this.XfId;
++		case this.Properties.xfs:
++			return this.xfs;
++		case this.Properties.ApplyBorder:
++			return this.ApplyBorder;
++		case this.Properties.ApplyFill:
++			return this.ApplyFill;
++		case this.Properties.ApplyFont:
++			return this.ApplyFont;
++		case this.Properties.ApplyNumberFormat:
++			return this.ApplyNumberFormat;
++		case this.Properties.ApplyAlignment:
++			return this.ApplyAlignment;
++	}
++	return null;
++};
++CCellStyle.prototype.setProperty = function (nType, value) {
++	switch (nType) {
++		case this.Properties.BuiltinId:
++			this.BuiltinId = value;
++			break;
++		case this.Properties.CustomBuiltin:
++			this.CustomBuiltin = value;
++			break;
++		case this.Properties.Hidden:
++			this.Hidden = value;
++			break;
++		case this.Properties.ILevel:
++			this.ILevel = value;
++			break;
++		case this.Properties.Name:
++			this.Name = value;
++			break;
++		case this.Properties.XfId:
++			this.XfId = value;
++			break;
++		case this.Properties.xfs:
++			this.xfs = value;
++			break;
++		case this.Properties.ApplyBorder:
++			this.ApplyBorder = value;
++			break;
++		case this.Properties.ApplyFill:
++			this.ApplyFill = value;
++			break;
++		case this.Properties.ApplyFont:
++			this.ApplyFont = value;
++			break;
++		case this.Properties.ApplyNumberFormat:
++			this.ApplyNumberFormat = value;
++			break;
++		case this.Properties.ApplyAlignment:
++			this.ApplyAlignment = value;
++			break;
++	}
++};
+ /** @constructor */
+ function StyleManager(){
+ }
+@@ -6475,6 +6681,9 @@ StyleManager.prototype =
+ 			if (oStyle.ApplyNumberFormat) {
+ 				this.setNumFormat(oStyle.getNumFormatStr());
+ 			}
++			if (oStyle.isAlignmentApplied()) {
++				oStyle.setAlignTo(this);
++			}
+ 		}
+ 		return oStyle;
+ 	};
+@@ -6884,6 +7093,9 @@ StyleManager.prototype =
+ 			if (oStyle.ApplyNumberFormat) {
+ 				this.setNumFormat(oStyle.getNumFormatStr());
+ 			}
++			if (oStyle.isAlignmentApplied()) {
++				oStyle.setAlignTo(this);
++			}
+ 		}
+ 		return oStyle;
+ 	};
+@@ -22125,6 +22337,9 @@ function RangeDataManagerElem(bbox, data)
+ 	prot["asc_setFontSuperscript"] = prot.asc_setFontSuperscript;
+ 	prot["asc_setBorder"] = prot.asc_setBorder;
+ 	prot["asc_setNumFormatInfo"] = prot.asc_setNumFormatInfo;
++	prot["asc_setHorAlign"] = prot.asc_setHorAlign;
++	prot["asc_setVertAlign"] = prot.asc_setVertAlign;
++	prot["asc_setWrapText"] = prot.asc_setWrapText;
+ 
+ 
+ 	window['AscCommonExcel'].Align = Align;
+diff --git a/common/errorCodes.js b/common/errorCodes.js
+index eefe19e7e1..b26108f38f 100644
+--- a/common/errorCodes.js
++++ b/common/errorCodes.js
+@@ -180,6 +180,11 @@
+ 			WrongDataFieldSubtotalForCalculatedItems: -324,
+ 			PivotFieldCustomSubtotalsWithCalculatedItems: -325,
+ 
++			CellStyleNameEmpty          : -326,
++			CellStyleNameExists         : -327,
++			CellStyleNotFound           : -328,
++			CellStyleNormalNotEditable  : -329,
++
+ 			ForceSaveButton: -331,
+ 			ForceSaveTimeout: -332,
+ 			Submit: -333,
+@@ -392,6 +397,10 @@
+ 	prot['NotUniqueFieldWithCalculated']     = prot.NotUniqueFieldWithCalculated
+ 	prot['WrongDataFieldSubtotalForCalculatedItems'] = prot.WrongDataFieldSubtotalForCalculatedItems;
+ 	prot['PivotFieldCustomSubtotalsWithCalculatedItems'] = prot.PivotFieldCustomSubtotalsWithCalculatedItems;
++	prot['CellStyleNameEmpty'] = prot.CellStyleNameEmpty;
++	prot['CellStyleNameExists'] = prot.CellStyleNameExists;
++	prot['CellStyleNotFound'] = prot.CellStyleNotFound;
++	prot['CellStyleNormalNotEditable'] = prot.CellStyleNormalNotEditable;
+ 	prot['PasteInPivot']                     = prot.PasteInPivot;
+ 	prot['PivotLabledColumns']               = prot.PivotLabledColumns;
+ 	prot['PivotOverlap']                     = prot.PivotOverlap;

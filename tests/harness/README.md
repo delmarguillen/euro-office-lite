@@ -359,6 +359,7 @@ refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 | `txt-utf16-bom-emoji` | UTF-16 LE TXT with a BOM and an emoji | refused with the open error dialog, file unchanged |
 | `txt-utf16be-nobom` | UTF-16 BE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
 | `txt-utf16le-nobom` | UTF-16 LE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
+| `xlsx-cell-style-roundtrip` | XLSX with a new cell style, a changed predefined one, a changed copy of a predefined one and an unchanged predefined one (`gen/mkxlsxstyles.py`) | after typing in A3, `styles.xml` keeps the four styles with their fonts, borders, number format and alignment, and row 1 keeps its values |
 | `xlsx-export-pdf` | the XLSX of `xlsx-save` | the text of the exported PDF has 1234.5 as `#,##0.00` shows it, with the separators of any locale |
 | `xlsx-save` | XLSX with a number, a formatted number and a date | after typing in A2, row 1 keeps its values |
 | `xltx-open` | XLTX template with a number and a text | opens |

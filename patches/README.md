@@ -31,7 +31,9 @@ usually means upstream already has the change: remove that patch from here.
 | `web-apps/0004-onlyoffice-4bb7a73f6.patch` | ONLYOFFICE/web-apps `4bb7a73f652a83f6424fc77caa957f3a07ae108a` |
 | `web-apps/0005-onlyoffice-c34647af7.patch` | ONLYOFFICE/web-apps `c34647af7fcf92e90deab92d59993c2d3ca61e1a` (applies after 0004) |
 | `web-apps/0006-pdfeditor-es-redact-censurar.patch` | own |
+| `web-apps/0007-spreadsheet-cell-styles-edit.patch` | own, needs `sdkjs/0004-cell-styles-edit.patch` |
 | `sdkjs/0001-document-custom-functions-follow-macros.patch` | own |
 | `sdkjs/0002-speech-text-as-plain-text.patch` | own |
 | `sdkjs/0003-pdf-no-document-javascript.patch` | own |
+| `sdkjs/0004-cell-styles-edit.patch` | own |
 | `doctrenderer-sdkjs/0001-skip-document-custom-functions-in-converter.patch` | own, against ONLYOFFICE/sdkjs `v10.0.0.169` (`3679e0375a758d7dc59d31337a45461be3525ed8`) |
