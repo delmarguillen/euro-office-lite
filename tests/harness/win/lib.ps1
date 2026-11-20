@@ -404,37 +404,13 @@ function Click-YesButton([IntPtr]$dialog) {
     return $true
 }
 
-function Initialize-Automation {
-    if ('System.Windows.Automation.AutomationElement' -as [type]) { return }
-    Add-Type -AssemblyName UIAutomationClient
-    Add-Type -AssemblyName UIAutomationTypes
-}
-
-# The first element inside WINDOW that has the accessible name LABEL and can
-# be invoked, or nothing. WebView2 gives UI Automation the buttons of the page too.
-function Find-NamedButton([IntPtr]$window, [string]$label) {
-    $element = [System.Windows.Automation.AutomationElement]
-    $named = New-Object System.Windows.Automation.PropertyCondition($element::NameProperty, $label)
-    $invokable = New-Object System.Windows.Automation.PropertyCondition($element::IsInvokePatternAvailableProperty, $true)
-    $both = New-Object System.Windows.Automation.AndCondition($named, $invokable)
-    $root = $element::FromHandle($window)
-    return $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $both)
-}
-
-# Presses a button by its accessible name with its Invoke pattern, which needs
-# neither the mouse nor the focus. False when the window has no such button.
-function Invoke-NamedButton([IntPtr]$window, [string]$label) {
-    if ($window -eq [IntPtr]::Zero) { return $false }
-    Initialize-Automation
-    try {
-        $button = Find-NamedButton $window $label
-        if ($null -eq $button) { return $false }
-        $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        return $true
-    } catch {
-        Write-Log ('UI Automation could not press ' + $label + ': ' + $_.Exception.Message)
-        return $false
-    }
+# The keys that press a button of the page from where the click in the middle
+# of the window leaves the focus, or nothing for a label without them. UI
+# Automation does not find the buttons of the page in WebView2.
+function Get-ButtonKeys([string]$label) {
+    # The Markdown page opens in its preview: four Shift+Tab reach Edit.
+    if ($label -ceq 'Edit') { return 'shift+Tab shift+Tab shift+Tab shift+Tab space' }
+    return ''
 }
 
 # The whole desktop as a PNG. False when it cannot be captured.

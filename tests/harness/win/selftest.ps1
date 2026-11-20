@@ -82,8 +82,6 @@ function Test-Scripts {
     }
     Initialize-Native
     Assert-Equal 'the user32 declarations compile' ($null -ne ('EolNative' -as [type])) $true
-    Initialize-Automation
-    Assert-Equal 'UI Automation loads' ($null -ne ('System.Windows.Automation.AutomationElement' -as [type])) $true
 }
 
 function Test-CaseFiles {
@@ -242,7 +240,7 @@ function Test-Json {
 
 # --- a stand-in for the app -----------------------------------------------------
 
-$Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Log = ''; Typed = ''; Dialogs = @(); Chords = @(); Buttons = @(); HasButtons = $true; Refuses = $true; WritesNothing = $false; SaveFails = $false; LogsOldSave = $false; SaveDialog = $false; Session = ''; KeepsRecovery = $true }
+$Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Log = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false; SaveFails = $false; LogsOldSave = $false; SaveDialog = $false; Session = ''; KeepsRecovery = $true }
 
 function Start-Sleep { }
 function Test-Windows { return $true }
@@ -256,13 +254,6 @@ function Click-WindowCenter([IntPtr]$window) { }
 function Click-YesButton([IntPtr]$dialog) { return $false }
 function Stop-ProcessTree([int]$processId) { $Fake.Alive = $false }
 function Get-Dialogs([int]$processId) { return $Fake.Dialogs }
-
-# The stand-in has every button the cases name, unless HasButtons is off.
-function Invoke-NamedButton([IntPtr]$window, [string]$label) {
-    if (-not $Fake.HasButtons) { return $false }
-    $Fake.Buttons += $label
-    return $true
-}
 
 function Remove-FakeSession {
     if (-not $Fake.Session) { return }
@@ -343,7 +334,6 @@ function Start-App([string]$exe, [string]$file) {
     $Fake.Typed = ''
     $Fake.Dialogs = @()
     $Fake.Chords = @()
-    $Fake.Buttons = @()
     $Fake.SaveDialog = $false
     $Fake.Session = '1700000000000-{0}' -f $Fake.ProcessId
     $name = Split-Path -Leaf $file
@@ -487,19 +477,20 @@ function Test-KeysOfACase([string]$inputs) {
     Assert-Equal 'keys: chords sent for xlsx-save' ($Fake.Chords -join ', ') '11 24, 28, 0D, 11 53'
 }
 
-# A Markdown case presses Edit by its name: no Shift+Tab (10 09) or Space (20).
+# A Markdown case presses Edit with its keys, four Shift+Tab (10 09) and Space
+# (20), before the keys of the case: ten lone Shift (10) and Ctrl+End.
 function Test-ButtonOfACase([string]$inputs) {
     $options = New-FakeOptions 'md-utf8' $inputs $false 'run-button'
     $status = Invoke-Harness $options
+    $edit = '10 09, 10 09, 10 09, 10 09, 20'
     $shifts = @(1..10 | ForEach-Object { '10' }) -join ', '
     Assert-Equal 'button: exit status' $status 0
-    Assert-Equal 'button: pressed by name' ($Fake.Buttons -join ', ') 'Edit'
-    Assert-Equal 'button: chords sent for md-utf8' ($Fake.Chords -join ', ') ($shifts + ', 11 23, 11 53')
-    $Fake.HasButtons = $false
-    $options = New-FakeOptions 'md-utf8' $inputs $false 'run-no-button'
-    [void](Invoke-Harness $options)
-    $Fake.HasButtons = $true
-    Assert-Equal 'button: a missing one is noted' ((Read-Result $options).cases[0].detail.Contains('button Edit: not pressed')) $true
+    Assert-Equal 'button: chords sent for md-utf8' ($Fake.Chords -join ', ') ($edit + ', ' + $shifts + ', 11 23, 11 53')
+    Assert-Equal 'button: labels match case' (Get-ButtonKeys 'edit') ''
+    $run = New-Run 'button'
+    $run.Case = @{ button = 'Nope' }
+    Press-CaseButton $run
+    Assert-Equal 'button: one without keys is noted' $run.Detail 'button Nope: not pressed'
 }
 
 function Test-FailingRun([string]$inputs) {

@@ -311,14 +311,16 @@ function Observe-Rejection($run) {
     $run.Observed = 'rejected-but-file-changed'
 }
 
-# Presses the button the case names, if it names one, by its accessible name.
-# The page may still be building its tree, so it tries for a few seconds.
-function Press-CaseButton($run, [IntPtr]$window) {
+# Presses the button the case names, if it names one, with its keys (Get-ButtonKeys).
+function Press-CaseButton($run) {
     $label = Get-CaseValue $run.Case 'button'
     if (-not $label) { return }
-    $pressed = Wait-Until 5 { Invoke-NamedButton $window $label }
-    if ($pressed) { return }
-    Add-Note $run ('button ' + $label + ': not pressed')
+    $keys = Get-ButtonKeys $label
+    if (-not $keys) {
+        Add-Note $run ('button ' + $label + ': not pressed')
+        return
+    }
+    Send-Keys $keys
 }
 
 # Click in the middle of the window, the button of the case, keys_before,
@@ -330,7 +332,7 @@ function Edit-Document($run) {
     Start-Sleep -Milliseconds 500
     Click-WindowCenter $window
     Start-Sleep -Milliseconds 500
-    Press-CaseButton $run $window
+    Press-CaseButton $run
     Send-Keys (Get-CaseValue $run.Case 'keys_before')
     Send-Text (Get-CaseValue $run.Case 'type')
     Send-Keys (Get-CaseValue $run.Case 'keys_after')

@@ -234,7 +234,7 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `input_sha256` | optional: the generated input must have this sha256. Left out for the deflated ZIPs of `mkdocx.py` and `mkxlsx.py`, whose bytes depend on the zlib of the Python that writes them |
 | `action` | `open`, `open-save` (Ctrl+S), `open-edit-save`, `open-export-pdf` or `edit-kill-recover` |
 | `keys_before`, `type`, `keys_after` | for `open-edit-save` and `edit-kill-recover`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
-| `button` | optional, for the same actions: the label of a button of the page, pressed after the click and before `keys_before`. macOS (System Events) and Windows (UI Automation) find it by its accessible name; the Linux runner has no accessibility bus and presses it with the keys `button_keys` in `lib.sh` gives for that label |
+| `button` | optional, for the same actions: the label of a button of the page, pressed after the click and before `keys_before`. macOS finds it by its accessible name through System Events. Linux, which has no accessibility bus on the runner, and Windows, where UI Automation does not find the buttons of the page in WebView2, press it with the keys `button_keys` in `lib.sh` and `Get-ButtonKeys` in `win/lib.ps1` give for that label |
 | `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match`; for `open-export-pdf`, `pdf-text` |
 | `expected_generate`, `expected_sha256` | for `expected-bytes`: the generator of the file the save must write, and optionally its sha256 |
 | `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain; for `pdf-text`: `REGEX`, an extended regex a line of the PDF's text must contain |
