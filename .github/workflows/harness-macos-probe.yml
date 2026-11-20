@@ -8,7 +8,7 @@ name: Harness probe (macOS)
 
 on:
   push:
-    branches: [feat/88-macos-harness-probe]
+    branches: [feat/89-macos-harness-probe]
     paths: [.github/workflows/harness-macos-probe.yml]
   workflow_dispatch:
     inputs:
