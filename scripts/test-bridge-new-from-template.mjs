@@ -8,7 +8,9 @@
 // the template's name in the format it saves, as a name only.
 //
 // Run: node scripts/test-bridge-new-from-template.mjs [path/to/bridge.js]
-import { check, finish, loadBridge } from './bridge-test-harness.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { check, finish, loadBridge, projectRoot } from './bridge-test-harness.mjs';
 
 const results = [];
 const LETTER = { token: 'tok-letter', name: 'Letter.dotx' };
@@ -141,6 +143,40 @@ function commands(env) {
   await settle(env);
   check(results, 'a template that does not convert shows the open error and mounts no editor',
     env.editors.length === 0 && env.messages.length === 1, env.messages.join());
+}
+
+// The start screen's button: in index.html next to Open file, wired in
+// editor-patches.js to _eoNewFromTemplate, which asks in the interface language.
+{
+  const html = fs.readFileSync(path.join(projectRoot, 'src/index.html'), 'utf8');
+  const button = html.match(/<button class="btn btn-open" data-new-from-template="true">[\s\S]*?<\/button>/);
+  check(results, 'the start screen has a New from template button beside Open file',
+    button !== null && button[0].includes('data-i18n="newFromTemplate"')
+      && /<div class="open-row">\s*<button class="btn btn-open" data-open="true">/.test(html),
+    button ? 'found' : 'missing');
+  const patches = fs.readFileSync(path.join(projectRoot, 'src/editor-patches.js'), 'utf8');
+  check(results, '... and a click on it calls _eoNewFromTemplate',
+    /querySelector\('\.btn\[data-new-from-template\]'\)\.addEventListener\('click'[\s\S]{0,120}window\._eoNewFromTemplate\(\)/.test(patches));
+}
+
+for (const [lang, label] of [['es', 'Plantillas'], ['ja', 'テンプレート']]) {
+  const env = await setup({ picked: null });
+  env.bridge.run(`window._eoCurrentLang = ${JSON.stringify(lang)}`);
+  await env.bridge.run('_eoNewFromTemplate()');
+  await settle(env);
+  check(results, `in ${lang} the template dialog's filter is "${label}"`,
+    env.calls[0] && env.calls[0].args.templates === label, JSON.stringify(env.calls[0]));
+}
+
+{
+  const env = await setup();
+  const langs = JSON.parse(env.bridge.run('JSON.stringify(Object.keys(_UI_STRINGS))'));
+  const missing = JSON.parse(env.bridge.run(`JSON.stringify(Object.keys(_UI_STRINGS).filter(function(lang) {
+    return !_UI_STRINGS[lang].newFromTemplate || !_UI_STRINGS[lang].templates;
+  }))`));
+  env.bridge.stopTimers();
+  check(results, `the ${langs.length} interface languages all have both texts`,
+    langs.length === 10 && missing.length === 0, 'missing: ' + missing.join());
 }
 
 // The first Save As of the new document.

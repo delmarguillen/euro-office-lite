@@ -1240,6 +1240,11 @@
       window._eoEditPdf();
     });
 
+    document.querySelector('.btn[data-new-from-template]').addEventListener('click', function() {
+      if (!window.AscDesktopEditor) return;
+      window._eoNewFromTemplate();
+    });
+
     // Every opening goes through open_file or open_pdf, which is where the Rust
     // side records the recent files entry. `file` is { token, name } from the backend.
     // Returns false when the open failed and the caller may still explain why.
