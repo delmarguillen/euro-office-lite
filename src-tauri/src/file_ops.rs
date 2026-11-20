@@ -531,10 +531,7 @@ pub async fn save_file(
     _data: String,
 ) -> Result<String, String> {
     let current = state.current_file.lock().unwrap().clone();
-    let dest = current.ok_or("No file is currently open")?;
-    if !crate::file_dialogs::saves_in_place(&dest) {
-        return Err(format!("{} can only be saved with Save As", dest.display()));
-    }
+    let dest = in_place_destination(current)?;
     // x2t only reports a failed write as a generic exit code.
     crate::save_target::check_writable_destination(&dest)?;
 
@@ -551,6 +548,18 @@ pub async fn save_file(
     Ok("ok".to_string())
 }
 
+// Ctrl+S writes only over the open file, and only in a format it can write
+// back. A document with no file, or a template, goes through Save As.
+fn in_place_destination(current: Option<PathBuf>) -> Result<PathBuf, String> {
+    let Some(dest) = current else {
+        return Err("No file is currently open".to_string());
+    };
+    if !crate::file_dialogs::saves_in_place(&dest) {
+        return Err(format!("{} can only be saved with Save As", dest.display()));
+    }
+    Ok(dest)
+}
+
 #[tauri::command]
 pub async fn save_file_as(
     app: tauri::AppHandle,
@@ -564,13 +573,13 @@ pub async fn save_file_as(
     let claim = crate::new_window::claim_for_save(&state, &dest)?;
     crate::save_target::check_writable_destination(&dest)?;
     let path = dest.to_string_lossy().to_string();
-    let format_to = detect_format(&dest);
     let current = state.current_file.lock().unwrap().clone();
-    save_editor_bin(&app, &state, &dest, format_to, lcid).await?;
+    let plan = save_as_plan(current.as_deref(), &dest);
+    save_editor_bin(&app, &state, &dest, plan.format_to, lcid).await?;
 
     // A copy leaves the document itself untouched (current_file keeps pointing
     // at the editable file), so it does not belong in the list either.
-    if writes_a_copy(format_to, current.as_deref(), &dest) {
+    if plan.copy {
         return Ok(SAVED_COPY.to_string());
     }
     // Same reason a copy does not end the pending 0-byte entry, while a real
@@ -587,6 +596,21 @@ pub async fn save_file_as(
 // What save_file_as answers when the open document stays where it was and as
 // modified as it was. _EO_SAVED_COPY in src/bridge.js must match.
 pub const SAVED_COPY: &str = "copy";
+
+// What a Save As to `dest` writes, and whether the window keeps its document.
+// The format comes from the destination's name and nothing else, so x2t never
+// writes a template under a document's name or a document under a template's.
+#[derive(Debug, PartialEq)]
+struct SaveAsPlan {
+    format_to: i32,
+    copy: bool,
+}
+
+fn save_as_plan(current: Option<&Path>, dest: &Path) -> SaveAsPlan {
+    let format_to = detect_format(dest);
+    let copy = writes_a_copy(format_to, current, dest);
+    SaveAsPlan { format_to, copy }
+}
 
 // A PDF export and a template are copies: the window keeps the document it had.
 // A template written over the open template itself is that document's save.
@@ -1407,9 +1431,67 @@ mod tests {
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
+    fn plan_for(current: Option<&str>, dest: &str) -> SaveAsPlan {
+        save_as_plan(current.map(Path::new), Path::new(dest))
+    }
+
     fn copy_when_saved_to(current: Option<&str>, dest: &str) -> bool {
-        let dest = Path::new(dest);
-        writes_a_copy(detect_format(dest), current.map(Path::new), dest)
+        plan_for(current, dest).copy
+    }
+
+    // The documents a Save As starts from: none yet, a document, the template
+    // the window is editing (Ctrl+S on it goes through Save As).
+    const OPEN_DOCUMENTS: [Option<&str>; 5] = [
+        None,
+        Some("/d/Letter.docx"),
+        Some("/d/Letter.dotx"),
+        Some("/d/Budget.xltx"),
+        Some("/d/Deck.potx"),
+    ];
+
+    #[test]
+    fn save_as_writes_the_format_its_destination_is_named_after() {
+        let names = [("docx", 65), ("dotx", 76), ("xlsx", 257), ("xltx", 262), ("pptx", 129), ("potx", 135)];
+        for (ext, format) in names {
+            for current in OPEN_DOCUMENTS {
+                let lower = format!("/d/Out.{ext}");
+                let upper = format!("/d/Out.{}", ext.to_uppercase());
+                assert_eq!(plan_for(current, &lower).format_to, format, "{lower} from {current:?}");
+                assert_eq!(plan_for(current, &upper).format_to, format, "{upper} from {current:?}");
+            }
+        }
+    }
+
+    // A template name typed in a document's Save As writes a template, beside
+    // the document; a document name typed in a template's Save As writes a
+    // document, which the window then edits.
+    #[test]
+    fn the_typed_name_decides_between_template_and_document() {
+        let families = [("docx", 65, "dotx", 76), ("xlsx", 257, "xltx", 262), ("pptx", 129, "potx", 135)];
+        for (document_ext, document_format, template_ext, template_format) in families {
+            let open = format!("/d/Open.{document_ext}");
+            let typed = format!("/d/Model.{template_ext}");
+            let dest = crate::file_dialogs::with_save_extension(PathBuf::from(&typed), document_ext);
+            assert_eq!(dest, PathBuf::from(&typed));
+            let plan = save_as_plan(Some(Path::new(&open)), &dest);
+            assert_eq!(plan, SaveAsPlan { format_to: template_format, copy: true }, "{typed}");
+
+            let typed = format!("/d/Model.{document_ext}");
+            let dest = crate::file_dialogs::with_save_extension(PathBuf::from(&typed), template_ext);
+            assert_eq!(dest, PathBuf::from(&typed));
+            let plan = save_as_plan(Some(Path::new(&open)), &dest);
+            assert_eq!(plan, SaveAsPlan { format_to: document_format, copy: false }, "{typed}");
+        }
+    }
+
+    #[test]
+    fn ctrl_s_never_writes_without_an_open_file_or_over_a_template() {
+        assert!(in_place_destination(None).is_err());
+        for name in ["/d/Letter.dotx", "/d/Budget.XLTX", "/d/Deck.potx", "/d/Macros.dotm", "/d/Odf.ott"] {
+            assert!(in_place_destination(Some(PathBuf::from(name))).is_err(), "{name}");
+        }
+        let open = PathBuf::from("/d/Letter.docx");
+        assert_eq!(in_place_destination(Some(open.clone())), Ok(open));
     }
 
     #[test]
