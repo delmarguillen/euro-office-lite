@@ -1203,11 +1203,26 @@ pub fn fonts_status(state: State<'_, AppState>) -> crate::fonts_state::FontsStat
     state.fonts.status()
 }
 
+// A waiting file as the page gets it. newDocument: start a new document from
+// this template (create_from_template) instead of editing it.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingOpenFile {
+    token: String,
+    name: String,
+    new_document: bool,
+}
+
 // Hands over the next waiting file once: a page reload must not open it again.
 #[tauri::command]
-pub fn take_pending_open_file(state: State<'_, AppState>) -> Option<GrantedFile> {
-    let path = state.pending_open.take()?;
-    Some(state.grants.grant(path, GrantKind::Open))
+pub fn take_pending_open_file(state: State<'_, AppState>) -> Option<PendingOpenFile> {
+    let pending = state.pending_open.take()?;
+    let granted = state.grants.grant(pending.path, GrantKind::Open);
+    Some(PendingOpenFile {
+        token: granted.token,
+        name: granted.name,
+        new_document: pending.new_document,
+    })
 }
 
 #[tauri::command]

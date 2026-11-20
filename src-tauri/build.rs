@@ -20,6 +20,7 @@ const APP_COMMANDS: &[&str] = &[
     "locate_linked_file",
     "take_pending_open_file",
     "open_in_new_window",
+    "new_document_in_new_window",
     "open_pdf_viewer",
     "print_to_printer",
     "convert_for_insert",

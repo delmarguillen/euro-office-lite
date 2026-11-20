@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use tauri::State;
 
 use crate::file_ops::{log_event, AppState};
-use crate::launch_args::NEW_WINDOW;
+use crate::launch_args::{FROM_TEMPLATE, NEW_WINDOW};
 use crate::path_grants::{GrantKind, PathGrants};
 use crate::temp_layout::DocumentClaim;
 
@@ -136,6 +136,39 @@ pub fn open_in_new_window(state: State<'_, AppState>, token: String) -> Result<S
     Ok(OPENED.to_string())
 }
 
+// A new document from a template in a second window: NEW_WINDOW and
+// FROM_TEMPLATE, then the path. None for any other file.
+pub fn new_document_launch(
+    grants: &PathGrants,
+    token: &str,
+    title_bar_args: &[&str],
+) -> Result<Option<NewWindowLaunch>, String> {
+    let mut launch = new_window_launch(grants, token, title_bar_args)?;
+    if !crate::file_dialogs::is_template_source(&launch.document) {
+        return Ok(None);
+    }
+    // The path stays the last argument.
+    let path_at = launch.args.len() - 1;
+    launch.args.insert(path_at, OsString::from(FROM_TEMPLATE));
+    Ok(Some(launch))
+}
+
+// A template handed over by the system while this window has a document. The
+// template is only read, so it may be this window's file or open in another
+// one. Any other file goes through open_in_new_window and its checks.
+#[tauri::command]
+pub fn new_document_in_new_window(state: State<'_, AppState>, token: String) -> Result<String, String> {
+    let Some(launch) = new_document_launch(&state.grants, &token, &state.title_bar_args)? else {
+        return open_in_new_window(state, token);
+    };
+    spawn_this_app(&launch.args).map_err(|e| {
+        log_event(&state, &format!("[NEW WINDOW] launch failed: {e}"));
+        e
+    })?;
+    log_event(&state, "[NEW WINDOW] launched a new document from a template");
+    Ok(OPENED.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +194,39 @@ mod tests {
                 absolute_document().into_os_string(),
             ]
         );
+    }
+
+    #[test]
+    fn a_template_gets_from_template_before_its_path() {
+        let grants = PathGrants::default();
+        let template = std::env::temp_dir().join("Letter.dotx");
+        let file = grants.grant(template.clone(), GrantKind::Open);
+        let launch = new_document_launch(&grants, &file.token, &[SYSTEM_TITLE_BAR]).unwrap().unwrap();
+        assert_eq!(launch.document, template);
+        assert_eq!(
+            launch.args,
+            vec![
+                OsString::from(SYSTEM_TITLE_BAR),
+                OsString::from(NEW_WINDOW),
+                OsString::from(FROM_TEMPLATE),
+                template.clone().into_os_string(),
+            ]
+        );
+        // The new process reads it back as a new document from the template.
+        let parsed = crate::launch_args::parse_launch_args(launch.args.iter().map(|arg| arg.to_string_lossy().to_string()));
+        let pending = crate::pending_open::launch_file(template, &parsed);
+        assert!(pending.new_document);
+    }
+
+    // Any other file gets no new-document launch, so it goes through
+    // open_in_new_window and its "open in another window" check.
+    #[test]
+    fn a_document_gets_no_new_document_launch() {
+        let grants = PathGrants::default();
+        for name in ["report.docx", "book.xlsx", "deck.pptx", "notes.md", "scan.pdf"] {
+            let file = grants.grant(std::env::temp_dir().join(name), GrantKind::Open);
+            assert_eq!(new_document_launch(&grants, &file.token, &[]), Ok(None), "{name}");
+        }
     }
 
     #[test]
