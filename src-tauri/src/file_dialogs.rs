@@ -41,6 +41,13 @@ const SAVE_EXTENSIONS: [&str; 16] = [
 // content type of its family (format ids 76, 262 and 135).
 const TEMPLATE_EXTENSIONS: [&str; 3] = ["dotx", "xltx", "potx"];
 
+// The templates a new document can start from: also the macro and OpenDocument
+// ones, which x2t 10.0.0.169 reads but Save As does not write. The new document
+// is saved in a document format, without macros.
+const TEMPLATE_SOURCE_EXTENSIONS: [&str; 9] = [
+    "dotx", "dotm", "ott", "xltx", "xltm", "ots", "potx", "potm", "otp",
+];
+
 // The formats Ctrl+S writes back to the document's own path. Its own list,
 // not SAVE_EXTENSIONS: x2t 10 refuses to write .doc and .ppt (exit 80/88)
 // and its .xls output is not checked against the original, so a .doc, .xls
@@ -187,6 +194,23 @@ pub async fn pick_pdf(
     let dialog = file_dialog(&window)
         .add_filter(pdf_label, &extensions)
         .add_filter(all, &ALL_FILES);
+    let Some(path) = pick_one(dialog).await? else {
+        return Ok(None);
+    };
+    Ok(Some(state.grants.grant(path, GrantKind::Open)))
+}
+
+// The start screen's New from template: only templates, since
+// create_from_template refuses anything else.
+#[tauri::command]
+pub async fn pick_template(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    templates: String,
+) -> Result<Option<GrantedFile>, String> {
+    let extensions = open_filter_extensions(&TEMPLATE_SOURCE_EXTENSIONS);
+    let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
+    let dialog = file_dialog(&window).add_filter(templates, &extensions);
     let Some(path) = pick_one(dialog).await? else {
         return Ok(None);
     };
@@ -371,6 +395,15 @@ pub fn is_template(path: &Path) -> bool {
         .map(|ext| ext.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     TEMPLATE_EXTENSIONS.contains(&ext.as_str())
+}
+
+// Whether a new document can start from this file.
+pub fn is_template_source(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    TEMPLATE_SOURCE_EXTENSIONS.contains(&ext.as_str())
 }
 
 // A name typed without a known extension gets the format's: x2t picks the
@@ -705,6 +738,24 @@ mod tests {
         }
         for name in ["a.docx", "a.dotm", "a.xltm", "a.potm", "a.ott", "a.pdf", "dotx"] {
             assert!(!is_template(Path::new(name)), "{name}");
+        }
+    }
+
+    // Every template Save As writes can start a new document, and so can the
+    // macro and OpenDocument ones, which x2t converts.
+    #[test]
+    fn a_new_document_starts_from_every_template_x2t_reads() {
+        for ext in TEMPLATE_EXTENSIONS {
+            assert!(TEMPLATE_SOURCE_EXTENSIONS.contains(&ext), "{ext}");
+        }
+        for ext in TEMPLATE_SOURCE_EXTENSIONS {
+            let path = PathBuf::from(format!("/t/Model.{ext}"));
+            assert!(is_template_source(&path), "{ext}");
+            assert_ne!(crate::x2t_task::detect_format(&path), 0, "{ext}");
+        }
+        assert!(is_template_source(Path::new("/t/MODEL.XLTM")));
+        for name in ["a.docx", "a.docm", "a.xlsm", "a.pptx", "a.odt", "a.pdf", "a.md", "dotx"] {
+            assert!(!is_template_source(Path::new(name)), "{name}");
         }
     }
 
