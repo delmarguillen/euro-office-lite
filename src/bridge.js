@@ -1528,8 +1528,11 @@ function _eoMarkSavedChanges() {
 // it too. While a save of unsaved changes runs, set_save_pending keeps the
 // backend counting them as unsaved; a backend save that writes the document
 // clears it there as well.
+var _eoSavePending = false;
+
 function _eoBeginSave() {
   if (!_eoUnsavedChanges) return false;
+  _eoSavePending = true;
   invoke('set_save_pending', { pending: true }).catch(function(){});
   return true;
 }
@@ -1538,7 +1541,15 @@ function _eoBeginSave() {
 // modified flag back (_eoRestoreModified), so the backend never sees both off.
 function _eoEndSave(begun) {
   if (!begun) return;
+  _eoSavePending = false;
   invoke('set_save_pending', { pending: false }).catch(function(){});
+}
+
+// The rule app_quit::has_unsaved_changes applies: modified, or a save of
+// unsaved changes still running. Anything that would drop the document asks
+// with this, not with _isModified, which sdkjs clears as a save begins.
+function _eoHasUnsavedChanges() {
+  return window.AscDesktopEditor._isModified || _eoSavePending;
 }
 
 // Puts the modified mark back, in the JS and in Rust, when something that
@@ -1631,7 +1642,7 @@ async function _eoRemoveNoteSeparator() {
     return dialog.message(_t(key), { title: _t('noteSeparator'), kind: 'info' });
   }
 
-  if (window.AscDesktopEditor._isModified) {
+  if (_eoHasUnsavedChanges()) {
     await _tell('noteSeparatorSaveFirst');
     return;
   }
@@ -3570,7 +3581,7 @@ window.AscDesktopEditor = {
         var btn = JSON.parse(param);
         if (btn.click === 'home') {
           (async function() {
-            if (window.AscDesktopEditor._isModified) {
+            if (_eoHasUnsavedChanges()) {
               var discard = await window.__TAURI__.dialog.confirm(
                 _t('unsavedDiscardClose'),
                 { title: _t('unsavedChanges'), kind: 'warning' }
@@ -3583,7 +3594,7 @@ window.AscDesktopEditor = {
       } catch(e) {}
     } else if (cmd === 'go:folder') {
       (async function() {
-        if (window.AscDesktopEditor._isModified) {
+        if (_eoHasUnsavedChanges()) {
           var discard = await window.__TAURI__.dialog.confirm(
             _t('unsavedDiscardClose'),
             { title: _t('unsavedChanges'), kind: 'warning' }
@@ -3613,7 +3624,7 @@ window.AscDesktopEditor = {
           window.AscDesktopEditor.LocalFileOpen();
         } else if (evt.action === 'file:close') {
           (async function() {
-            if (window.AscDesktopEditor._isModified) {
+            if (_eoHasUnsavedChanges()) {
               var discard = await window.__TAURI__.dialog.confirm(
                 _t('unsavedDiscardClose'),
                 { title: _t('unsavedChanges'), kind: 'warning' }
@@ -3758,7 +3769,7 @@ listen('confirm-close', async () => {
   if (_closeDialogOpen) return;
   _closeDialogOpen = true;
   try {
-    if (window.AscDesktopEditor._isModified) {
+    if (_eoHasUnsavedChanges()) {
       var discard = await window.__TAURI__.dialog.confirm(
         _t('unsavedDiscardClose'),
         { title: _t('unsavedChanges'), kind: 'warning' }
