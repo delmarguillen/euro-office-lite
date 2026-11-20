@@ -501,9 +501,9 @@
           // saves in the document's current format instead of the chosen one.
           if (!win._eoSaveAsPanelStyled) {
             var supportedFormats = [
-              65, 67, 68, 69,      // word: docx, odt, rtf, txt
-              257, 259, 260,       // cell: xlsx, ods, csv
-              129, 131,            // slide: pptx, odp
+              65, 67, 68, 69, 76,  // word: docx, odt, rtf, txt, dotx
+              257, 259, 260, 262,  // cell: xlsx, ods, csv, xltx
+              129, 131, 135,       // slide: pptx, odp, potx
               513                  // pdf (all editors)
             ];
             var formatFilter = '';

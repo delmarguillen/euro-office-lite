@@ -565,21 +565,39 @@ pub async fn save_file_as(
     crate::save_target::check_writable_destination(&dest)?;
     let path = dest.to_string_lossy().to_string();
     let format_to = detect_format(&dest);
+    let current = state.current_file.lock().unwrap().clone();
     save_editor_bin(&app, &state, &dest, format_to, lcid).await?;
 
-    // A PDF export leaves the document itself untouched (current_file keeps
-    // pointing at the editable file), so it does not belong in the list either.
-    if format_to != 513 {
-        // Same reason a PDF export does not end the pending 0-byte entry, while
-        // a real Save As does: record below files the path actually written,
-        // which when the entry is consumed is that same path (#33).
-        end_pending_recent(&state.pending_recent, &dest);
-        set_current_file(&state, Some(dest));
-        crate::app_quit::mark_document_saved(&state);
-        super::recent::record(&app, &path);
+    // A copy leaves the document itself untouched (current_file keeps pointing
+    // at the editable file), so it does not belong in the list either.
+    if writes_a_copy(format_to, current.as_deref(), &dest) {
+        return Ok(SAVED_COPY.to_string());
     }
+    // Same reason a copy does not end the pending 0-byte entry, while a real
+    // Save As does: record below files the path actually written, which when
+    // the entry is consumed is that same path (#33).
+    end_pending_recent(&state.pending_recent, &dest);
+    set_current_file(&state, Some(dest));
+    crate::app_quit::mark_document_saved(&state);
+    super::recent::record(&app, &path);
     drop(claim);
     Ok("ok".to_string())
+}
+
+// What save_file_as answers when the open document stays where it was and as
+// modified as it was. _EO_SAVED_COPY in src/bridge.js must match.
+pub const SAVED_COPY: &str = "copy";
+
+// A PDF export and a template are copies: the window keeps the document it had.
+// A template written over the open template itself is that document's save.
+fn writes_a_copy(format_to: i32, current: Option<&Path>, dest: &Path) -> bool {
+    if format_to == 513 {
+        return true;
+    }
+    if !crate::file_dialogs::is_template(dest) {
+        return false;
+    }
+    !current.is_some_and(|open| same_path(open, dest))
 }
 
 // Converts Editor.bin to `format_to` (513 is the PDF export) and puts the
@@ -1388,6 +1406,37 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn copy_when_saved_to(current: Option<&str>, dest: &str) -> bool {
+        let dest = Path::new(dest);
+        writes_a_copy(detect_format(dest), current.map(Path::new), dest)
+    }
+
+    #[test]
+    fn a_template_saved_from_a_document_is_a_copy() {
+        for dest in ["/d/Letter.dotx", "/d/Budget.xltx", "/d/Deck.potx"] {
+            assert!(copy_when_saved_to(Some("/d/Letter.docx"), dest), "{dest}");
+            assert!(copy_when_saved_to(None, dest), "{dest} from an unsaved document");
+        }
+    }
+
+    #[test]
+    fn a_template_saved_from_another_template_is_a_copy() {
+        assert!(copy_when_saved_to(Some("/d/Letter.dotx"), "/d/Letter 2.dotx"));
+    }
+
+    #[test]
+    fn a_template_saved_over_the_open_template_is_a_save() {
+        assert!(!copy_when_saved_to(Some("/d/Letter.dotx"), "/d/Letter.dotx"));
+    }
+
+    #[test]
+    fn a_pdf_is_a_copy_and_a_document_is_a_save() {
+        assert!(copy_when_saved_to(Some("/d/Letter.docx"), "/d/Letter.pdf"));
+        assert!(!copy_when_saved_to(Some("/d/Letter.docx"), "/d/Copy.docx"));
+        assert!(!copy_when_saved_to(Some("/d/Letter.dotx"), "/d/Letter.docx"));
+        assert!(!copy_when_saved_to(None, "/d/Letter.odt"));
+    }
 
     // A throwaway temp dir laid out like the app's: media/ with one inserted
     // image, plus the changes/ an older version left behind.

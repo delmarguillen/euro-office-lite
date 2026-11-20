@@ -32,9 +32,14 @@ const PDF_EXTENSIONS: [&str; 1] = ["pdf"];
 
 // The formats Save As writes. A chosen name without one of them gets the
 // format asked for.
-const SAVE_EXTENSIONS: [&str; 13] = [
+const SAVE_EXTENSIONS: [&str; 16] = [
     "docx", "doc", "odt", "rtf", "txt", "xlsx", "xls", "ods", "csv", "pptx", "ppt", "odp", "pdf",
+    "dotx", "xltx", "potx",
 ];
+
+// The templates Save As writes. x2t 10.0.0.169 gives each one the template
+// content type of its family (format ids 76, 262 and 135).
+const TEMPLATE_EXTENSIONS: [&str; 3] = ["dotx", "xltx", "potx"];
 
 // The formats Ctrl+S writes back to the document's own path. Its own list,
 // not SAVE_EXTENSIONS: x2t 10 refuses to write .doc and .ppt (exit 80/88)
@@ -359,6 +364,15 @@ pub fn saves_in_place(path: &Path) -> bool {
     SAVE_IN_PLACE_EXTENSIONS.contains(&ext.as_str())
 }
 
+// Whether a save to this path writes a template.
+pub fn is_template(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    TEMPLATE_EXTENSIONS.contains(&ext.as_str())
+}
+
 // A name typed without a known extension gets the format's: x2t picks the
 // format from the extension.
 pub fn with_save_extension(path: PathBuf, fallback_ext: &str) -> PathBuf {
@@ -658,13 +672,57 @@ mod tests {
         assert!(!needs_replace_confirmation(&chosen, &final_path, true));
     }
 
-    // .dotx is not a format Save As writes, so the name gains .docx.
+    // .dotm is not a format Save As writes, so the name gains .docx.
     #[test]
     fn an_unknown_extension_gains_the_format_and_asks_if_that_exists() {
-        let chosen = PathBuf::from("/docs/plantilla.dotx");
+        let chosen = PathBuf::from("/docs/plantilla.dotm");
         let final_path = with_save_extension(chosen.clone(), "docx");
-        assert_eq!(final_path, PathBuf::from("/docs/plantilla.dotx.docx"));
+        assert_eq!(final_path, PathBuf::from("/docs/plantilla.dotm.docx"));
         assert!(needs_replace_confirmation(&chosen, &final_path, true));
+    }
+
+    #[test]
+    fn a_template_name_keeps_its_extension() {
+        for name in ["/docs/Letter.dotx", "/docs/Budget.XLTX", "/docs/Deck.potx"] {
+            let chosen = PathBuf::from(name);
+            assert_eq!(with_save_extension(chosen.clone(), "docx"), chosen, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_name_without_extension_gains_the_template_asked_for() {
+        let cases = [("dotx", "/docs/Letter.dotx"), ("xltx", "/docs/Letter.xltx"), ("potx", "/docs/Letter.potx")];
+        for (ext, expected) in cases {
+            let final_path = with_save_extension(PathBuf::from("/docs/Letter"), ext);
+            assert_eq!(final_path, PathBuf::from(expected));
+        }
+    }
+
+    #[test]
+    fn the_three_templates_are_templates_and_the_macro_ones_are_not() {
+        for name in ["a.dotx", "a.xltx", "a.potx", "A.DOTX"] {
+            assert!(is_template(Path::new(name)), "{name}");
+        }
+        for name in ["a.docx", "a.dotm", "a.xltm", "a.potm", "a.ott", "a.pdf", "dotx"] {
+            assert!(!is_template(Path::new(name)), "{name}");
+        }
+    }
+
+    // Ctrl+S never writes a template back: it goes through Save As.
+    #[test]
+    fn a_template_is_not_saved_in_place() {
+        for name in ["a.dotx", "a.xltx", "a.potx"] {
+            assert!(!saves_in_place(Path::new(name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_template_is_offered_next_to_the_open_document() {
+        let current = Path::new("/home/u/Docs/Letter.docx");
+        assert_eq!(
+            save_start_path(Some(current), None, Some("dotx")),
+            Some(PathBuf::from("/home/u/Docs/Letter.dotx"))
+        );
     }
 
     #[test]

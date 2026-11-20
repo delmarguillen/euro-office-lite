@@ -1215,6 +1215,10 @@ function _eoSavesInPlace(name) {
   return _EO_SAVE_IN_PLACE.indexOf(ext) !== -1;
 }
 
+// What save_file_as answers when the open document stays where it was (a PDF
+// export, a template): SAVED_COPY in src-tauri/src/file_ops.rs.
+var _EO_SAVED_COPY = 'copy';
+
 // What Save As proposes for a document Ctrl+S cannot write back.
 function _eoFamilyFormat(docType) {
   if (docType === 'cell') return 'xlsx';
@@ -3175,9 +3179,9 @@ window.AscDesktopEditor = {
 
       if (isSaveAs) {
         var formatExtensions = {
-          65: 'docx', 66: 'doc', 67: 'odt', 68: 'rtf', 69: 'txt',
-          129: 'pptx', 130: 'ppt', 131: 'odp',
-          257: 'xlsx', 258: 'xls', 259: 'ods', 260: 'csv',
+          65: 'docx', 66: 'doc', 67: 'odt', 68: 'rtf', 69: 'txt', 76: 'dotx',
+          129: 'pptx', 130: 'ppt', 131: 'odp', 135: 'potx',
+          257: 'xlsx', 258: 'xls', 259: 'ods', 260: 'csv', 262: 'xltx',
           513: 'pdf'
         };
         // Ctrl+S on a .doc arrives with the .doc format (66), which x2t 10
@@ -3194,12 +3198,13 @@ window.AscDesktopEditor = {
           try {
             var saveArgs = { token: target.token };
             if (pathExt === 'pdf') saveArgs = _eoWithSheetLocale(ref, saveArgs);
-            await invoke('save_file_as', saveArgs);
-            keepsDocument = pathExt === 'pdf';
-            if (pathExt !== 'pdf') {
+            var answer = await invoke('save_file_as', saveArgs);
+            keepsDocument = pathExt === 'pdf' || answer === _EO_SAVED_COPY;
+            if (!keepsDocument) {
               // A Save As moves the document and the session follows it, so a
-              // later recovery writes where it lives now. A PDF export only
-              // writes a copy, so it is not a save for recovery purposes.
+              // later recovery writes where it lives now. A PDF export or a
+              // template only writes a copy, so it is not a save for recovery
+              // purposes.
               invoke('recovery_mark_saved', {}).catch(function(){});
               _eoShowSavedName(target.name);
             }
