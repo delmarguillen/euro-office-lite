@@ -404,6 +404,15 @@ function Click-YesButton([IntPtr]$dialog) {
     return $true
 }
 
+# The keys that press a button of the page from where the click in the middle
+# of the window leaves the focus, or nothing for a label without them. UI
+# Automation does not find the buttons of the page in WebView2.
+function Get-ButtonKeys([string]$label) {
+    # The Markdown page opens in its preview: four Shift+Tab reach Edit.
+    if ($label -ceq 'Edit') { return 'shift+Tab shift+Tab shift+Tab shift+Tab space' }
+    return ''
+}
+
 # The whole desktop as a PNG. False when it cannot be captured.
 function Save-Screenshot([string]$path) {
     try {

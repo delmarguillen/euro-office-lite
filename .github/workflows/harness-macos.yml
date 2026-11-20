@@ -1,0 +1,123 @@
+name: Harness (macOS)
+
+# Installs the .dmg of a "macOS Dev Build" run on a clean runner and runs every
+# case of tests/harness with tests/harness/mac/run.sh, once per architecture:
+# aarch64 on macos-15 and x86_64 on macos-15-intel. A job is red when a case is
+# not ok (run.sh exits 1) or the harness could not run (exit 2).
+#
+# The images grant Accessibility, Apple Events, PostEvent and Screen Recording
+# to /bin/bash and /usr/bin/osascript: the harness step runs under /bin/bash.
+#
+# result.json is uploaded on every run; codesign.log, the app logs and the
+# screenshots only when the job fails.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "macOS Dev Build run id to take dmg-<target> from"
+        required: true
+        type: string
+
+  # After every macOS Dev Build; the job skips builds that did not succeed.
+  # workflow_run only fires for the workflow file on the default branch, and
+  # the checkout is then the default branch: its cases judge the build,
+  # whatever branch the build came from.
+  workflow_run:
+    workflows: ["macOS Dev Build"]
+    types: [completed]
+
+permissions:
+  contents: read
+  # Downloading an artifact of another run goes through the Actions API.
+  actions: read
+
+concurrency:
+  group: harness-macos-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness-macos:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 80
+    strategy:
+      # A red architecture does not cancel the other.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # The job runs an app built from another branch: leave no token in
+          # .git/config.
+          persist-credentials: false
+
+      - name: Download the .dmg from the build run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dmg-${{ matrix.target }}
+          path: dmg/
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install harness dependencies
+        # bash 4 for mac/run.sh, pdftotext for the pdf-text cases.
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install bash poppler
+
+      - name: Let Tab reach buttons
+        # The Markdown cases go from the preview to Edit with Shift+Tab; without
+        # Full Keyboard Access macOS moves the focus only between text fields.
+        run: defaults write NSGlobalDomain AppleKeyboardUIMode -int 2
+
+      - name: Run the harness
+        # Below the job timeout, so the upload steps still run.
+        timeout-minutes: 65
+        shell: /bin/bash -e {0}
+        run: |
+          DMG=$(find dmg -name '*.dmg' -print -quit)
+          if [ -z "$DMG" ]; then
+            echo "ERROR: the downloaded artifact has no .dmg"
+            ls -laR dmg
+            exit 1
+          fi
+          echo "::group::Disk image under test"
+          ls -l "$DMG"
+          shasum -a 256 "$DMG"
+          echo "::endgroup::"
+          /bin/bash tests/harness/mac/run.sh all --dmg "$DMG" --out "$RUNNER_TEMP/harness"
+
+      - name: Upload result.json
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: harness-macos-${{ matrix.arch }}-result-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/harness/result.json
+          # There is none when the harness could not run (exit 2).
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload logs and screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: harness-macos-${{ matrix.arch }}-diagnostics-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/harness/codesign.log
+            ${{ runner.temp }}/harness/*/app.log
+            ${{ runner.temp }}/harness/*/app-restart.log
+            ${{ runner.temp }}/harness/*/exported.txt
+            ${{ runner.temp }}/harness/*/screen.png
+          if-no-files-found: warn
+          retention-days: 7

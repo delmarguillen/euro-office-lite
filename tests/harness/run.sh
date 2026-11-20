@@ -7,7 +7,7 @@
 # judges each case by its control_expect (what a build without the fix does).
 # Exit status: 0 every case ok, 1 some case not ok, 2 the harness could not run.
 
-HERE=$(cd "$(dirname "$0")" && pwd)
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$HERE/lib.sh"
 
 SELECTION=""
@@ -167,21 +167,26 @@ observe_rejection() {
   OBSERVED=rejected-but-file-changed
 }
 
+# press_case_button PID: presses the button the case names, if it names one.
+# Each system's lib.sh says how (press_button).
+press_case_button() {
+  local label
+  label=$(case_value button)
+  [ -n "$label" ] || return 0
+  press_button "$1" "$label" && return 0
+  note "button $label: not pressed"
+}
+
 edit_document() {
-  local pid=$1 w keys_before text keys_after
+  local pid=$1 keys_before text keys_after
   keys_before=$(case_value keys_before)
   text=$(case_value type)
   keys_after=$(case_value keys_after)
-  w=$(main_window "$pid")
-  x xdotool windowactivate --sync "$w"
-  sleep 0.5
-  click_window_center "$w"
-  sleep 0.5
-  # shellcheck disable=SC2086 # a key list
-  [ -n "$keys_before" ] && x xdotool key --delay 200 $keys_before
-  [ -n "$text" ] && x xdotool type --delay 40 "$text"
-  # shellcheck disable=SC2086 # a key list
-  [ -n "$keys_after" ] && x xdotool key --delay 200 $keys_after
+  focus_document "$pid"
+  press_case_button "$pid"
+  [ -n "$keys_before" ] && send_keys "$keys_before"
+  [ -n "$text" ] && send_text "$text"
+  [ -n "$keys_after" ] && send_keys "$keys_after"
   sleep 1
 }
 
@@ -204,7 +209,7 @@ save_ended() { file_changed "$1" "$2" || markdown_save_logged "$3" "$4"; }
 save_document() {
   local pid=$1 doc=$2 sha_before=$3 log_file=$4 lines_before logged
   lines_before=$(wc -l < "$log_file")
-  x xdotool windowactivate --sync "$(main_window "$pid")" key ctrl+s
+  send_keys_to "$pid" ctrl+s
   if ! wait_for 30 save_ended "$doc" "$sha_before" "$log_file" "$lines_before"; then
     OBSERVED=save-not-written
     return 1
@@ -302,19 +307,14 @@ export_ended() { has_content "$1" || grep -q 'SaveAs failed' "$2"; }
 save_as_pdf() {
   local pid=$1 pdf=$2 log_file=$3 dialog
   rm -f "$pdf"
-  x xdotool windowactivate --sync "$(main_window "$pid")" key ctrl+shift+s
+  send_keys_to "$pid" ctrl+shift+s
   if ! wait_for 20 has_dialog "$pid"; then
     OBSERVED=export-no-dialog
     return 1
   fi
   dialog=$(dialogs_of "$pid" | head -1)
   note "dialog: '${dialog#* }'"
-  x xdotool windowactivate --sync "${dialog%% *}"
-  sleep 1
-  # The dialog offers the name of the document, selected or not: replace it.
-  x xdotool key --delay 200 ctrl+a
-  x xdotool type --delay 40 "$pdf"
-  x xdotool key --delay 200 Return
+  type_save_path "${dialog%% *}" "$pdf"
   # The first export of a fresh install builds the font cache before it writes.
   wait_for 120 export_ended "$pdf" "$log_file"
   if ! has_content "$pdf"; then
@@ -461,11 +461,14 @@ wants_screenshot() {
 
 # Leaves the user's recovery folder as the run found it: empty.
 clear_new_recovery() {
-  local entries
+  local entries entry
   entries=$(recover_entries | tr '\n' ' ')
   [ -z "$entries" ] && return 0
   note "the case left recovery data, removed: $entries"
-  recover_entries | xargs -r rm -rf --
+  # One by one: the macOS config folder has a space in its path.
+  while IFS= read -r entry; do
+    rm -rf -- "$entry"
+  done < <(recover_entries)
 }
 
 RESULTS=()
@@ -535,7 +538,7 @@ write_result() {
   $CONTROL && mode=control
   {
     echo "{"
-    echo "  \"date\": $(json_str "$(date -Is)"),"
+    echo "  \"date\": $(json_str "$(iso_now)"),"
     echo "  \"mode\": $(json_str "$mode"),"
     echo "  \"package\": $(json_str "$(installed_version)"),"
     echo "  \"binary_sha256\": $(json_str "$(installed_sha256)"),"
@@ -576,4 +579,7 @@ main() {
   all_ok || exit 1
 }
 
-main "$@"
+# mac/run.sh sources this file for its case logic and runs its own main.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

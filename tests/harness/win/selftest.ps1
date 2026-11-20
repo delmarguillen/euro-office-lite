@@ -477,6 +477,22 @@ function Test-KeysOfACase([string]$inputs) {
     Assert-Equal 'keys: chords sent for xlsx-save' ($Fake.Chords -join ', ') '11 24, 28, 0D, 11 53'
 }
 
+# A Markdown case presses Edit with its keys, four Shift+Tab (10 09) and Space
+# (20), before the keys of the case: ten lone Shift (10) and Ctrl+End.
+function Test-ButtonOfACase([string]$inputs) {
+    $options = New-FakeOptions 'md-utf8' $inputs $false 'run-button'
+    $status = Invoke-Harness $options
+    $edit = '10 09, 10 09, 10 09, 10 09, 20'
+    $shifts = @(1..10 | ForEach-Object { '10' }) -join ', '
+    Assert-Equal 'button: exit status' $status 0
+    Assert-Equal 'button: chords sent for md-utf8' ($Fake.Chords -join ', ') ($edit + ', ' + $shifts + ', 11 23, 11 53')
+    Assert-Equal 'button: labels match case' (Get-ButtonKeys 'edit') ''
+    $run = New-Run 'button'
+    $run.Case = @{ button = 'Nope' }
+    Press-CaseButton $run
+    Assert-Equal 'button: one without keys is noted' $run.Detail 'button Nope: not pressed'
+}
+
 function Test-FailingRun([string]$inputs) {
     $Fake.WritesNothing = $true
     $options = New-FakeOptions 'txt-crlf' $inputs $false 'run-fail'
@@ -628,6 +644,7 @@ Test-Json
 Test-OpenSignals
 Test-FullRun $TestInputs
 Test-KeysOfACase $TestInputs
+Test-ButtonOfACase $TestInputs
 Test-FailingRun $TestInputs
 Test-MarkdownSaveOutcomes $TestInputs
 Test-ExportNotWritten $TestInputs
