@@ -581,6 +581,42 @@ same('no gap, opened from the file: the same bytes', reopened('writesXfIdsAsThey
 reopened = openGapEditor(saved);
 same('no gap, the workbook of the save check: the same bytes', reopened('writesXfIdsAsTheyAre()'), true);
 
+// --- A style with an alignment it does not apply, as a file can have ---
+run = openEditor(null);
+run(`
+  var keptXfs = new AscCommonExcel.CellXfs();
+  keptXfs.asc_setHorAlign(AscCommon.align_Center);
+  api.asc_addCellStyle('Kept alignment', keptXfs);
+  api.wbModel.CellStyles.getStyleByName('Kept alignment').ApplyAlignment = false;
+`);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(`
+  function horOf(ref) { return (cellXfs(ref) || new AscCommonExcel.CellXfs()).getAlign2().getAlignHorizontal(); }
+  function keptApplies() { return api.wbModel.CellStyles.getStyleByName('Kept alignment').ApplyAlignment; }
+  ['A1', 'A2', 'A3'].forEach(function (ref) {
+    ws().getRange2(ref).setValue('1');
+    ws().getRange2(ref).setAlignHorizontal(AscCommon.align_Right);
+  });
+  select('A1'); api.asc_setCellStyle('Kept alignment');
+  var keptBefore = [keptApplies(), api.asc_getCellStyleXfs('Kept alignment').getAlign2().getAlignHorizontal(), horOf('A1')];
+  var keptBold = api.asc_getCellStyleXfs('Kept alignment');
+  keptBold.asc_setFontBold(true);
+  var keptBoldResult = api.asc_modifyCellStyle('Kept alignment', keptBold);
+  select('A2'); api.asc_setCellStyle('Kept alignment');
+`);
+same('kept alignment: opened with its alignment, not applying it', run('keptBefore'), [false, center, right]);
+same('kept alignment, bold only: A1 turns bold', run("[keptBoldResult, describe('A1').bold]"), [No, true]);
+same('kept alignment, bold only: the style still does not apply alignment', run('keptApplies()'), false);
+same('kept alignment, bold only: A1 keeps its right alignment', run("horOf('A1')"), right);
+same('kept alignment, bold only: applying it to A2 keeps its right alignment', run("horOf('A2')"), right);
+run(`
+  var keptLeft = api.asc_getCellStyleXfs('Kept alignment');
+  keptLeft.asc_setHorAlign(AscCommon.align_Left);
+  var keptLeftResult = api.asc_modifyCellStyle('Kept alignment', keptLeft);
+  select('A3'); api.asc_setCellStyle('Kept alignment');
+`);
+same('kept alignment, new alignment: the style applies it', run("[keptLeftResult, keptApplies(), horOf('A3')]"), [No, true, left]);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {
