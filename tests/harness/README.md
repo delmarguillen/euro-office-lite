@@ -153,6 +153,69 @@ case ok, 1 some case failed, 2 the harness could not run.
   a known defect of the app. With `docx-xlsx-content` (see [Cases](#cases)),
   `run.ps1 all` exits 1.
 
+## macOS
+
+`mac/` is the same harness for the app installed from the `.dmg` of the
+"macOS Dev Build": `mac/run.sh`, `mac/status.sh`, `mac/backup.sh` and
+`mac/restore.sh` do what their namesakes do, read the same case files and
+write `result.json` with the same schema. `mac/run.sh` sources `../run.sh`
+for the case logic (reading cases, generating inputs, the checks, the
+result) and `mac/lib.sh` for everything that touches the system.
+`mac/selftest.sh` checks it on any system with bash 4, python3 and pgrep,
+Linux included, with fakes for `open`, `osascript`, `hdiutil`, `codesign`,
+`ditto`, `screencapture`, `shasum` and `PlistBuddy`; it does not show that
+keys reach a real window.
+
+```
+mac/backup.sh ~/harness-backup        # Application Support and Caches folders of the app
+mac/status.sh some.dmg                # version from Info.plist, binary sha256, codesign, .dmg match
+mac/run.sh all --dmg some.dmg         # all cases, installing some.dmg if needed
+mac/restore.sh ~/harness-backup       # put the user state back, checked by sha256
+mac/selftest.sh                       # no macOS needed
+```
+
+`mac/run.sh CASE|all [--dmg FILE] [--control] [--screenshots] [--out DIR]`.
+Exit status as in run.sh.
+
+- Bash 4 or later: `../run.sh` keeps a case in an associative array. Started
+  with the bash 3.2 of macOS, `mac/run.sh` runs itself again with
+  `/opt/homebrew/bin/bash` or `/usr/local/bin/bash` (`brew install bash`).
+  The other macOS scripts work with bash 3.2.
+- Permissions: the terminal or process that starts the harness needs
+  Accessibility and Automation (System Events) for `osascript`, and Screen
+  Recording for `screencapture`. The GitHub macOS images grant them to
+  `/bin/bash` and `/usr/bin/osascript`.
+- `--dmg` mounts the image with `hdiutil`, copies the `.app` to
+  `/Applications/Euro-Office-Lite.app` with `ditto` when its binary differs
+  from the installed one, and stops (exit 2) unless
+  `codesign --verify --deep --strict` passes.
+- The app is started with `open -a`; its log is
+  `/tmp/euro-office-lite-<uid>/js-debug-*.log`. `mac/follow_log.py` copies
+  to the `app.log` of the case the lines that log gets after the start, and
+  the standard output and error of the app, which `open --stdout --stderr`
+  write next to it (`app.log.stdout`, `app.log.stderr`).
+- Keys go through System Events. The xdotool names of the case files map to
+  key codes in `mac/lib.sh` (`key_code`); `ctrl` presses Cmd
+  (`HARNESS_MAC_CTRL=control` makes it Ctrl), and `ctrl+End` is Cmd+End.
+  A case with a key that has no mapping is skipped: `"ok": true`,
+  `"observed": "skipped"`, `"skipped": true` and the key in `detail`. No case
+  is skipped today.
+- Dialogs are the windows of the app that are not `AXStandardWindow`, and
+  their sheets (`mac/windows.applescript`).
+- Save As to PDF types the folder into Go to Folder (Cmd+Shift+G) and the
+  name into the name field: a `/` typed into the name field opens Go to
+  Folder by itself.
+- The app is closed with `quit` through AppleScript, then `kill` and
+  `kill -9` when it is still there after 20 s and 10 s. `edit-kill-recover`
+  kills it with `kill -9` as on Linux.
+- `backup.sh` saves `~/Library/Application Support/org.euro-office.lite`
+  (recovery, recent files) and `~/Library/Caches/org.euro-office.lite`
+  (fonts) whole; `restore.sh` removes both and puts the saved ones back.
+- The Markdown cases reach the Edit button with Shift+Tab. macOS moves the
+  focus only between text fields unless Full Keyboard Access is on
+  (`defaults write NSGlobalDomain AppleKeyboardUIMode -int 2`, before the
+  app starts); the CI workflow turns it on.
+
 ## Case files
 
 `cases/NAME.toml`, one `key = "value"` (or `key = 'value'`, taken

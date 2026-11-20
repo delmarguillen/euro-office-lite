@@ -12,6 +12,8 @@ die() { log "$*"; exit 2; }
 
 x() { DISPLAY=$HARNESS_DISPLAY "$@"; }
 
+iso_now() { date -Is; }
+
 # wait_for SECONDS COMMAND...: retries COMMAND every half second.
 wait_for() {
   local tries=$(( $1 * 2 ))
@@ -135,6 +137,42 @@ find_new_pid() {
 }
 
 has_main_window() { [ -n "$(main_window "$1")" ]; }
+
+# --- input ---------------------------------------------------------------------
+
+# focus_document PID: brings the editor window up and clicks in its middle.
+focus_document() {
+  local w
+  w=$(main_window "$1")
+  x xdotool windowactivate --sync "$w"
+  sleep 0.5
+  click_window_center "$w"
+  sleep 0.5
+}
+
+# send_keys KEYS: an xdotool key list, as the case files write it.
+send_keys() {
+  # shellcheck disable=SC2086 # a key list
+  x xdotool key --delay 200 $1
+}
+
+send_text() { x xdotool type --delay 40 "$1"; }
+
+# send_keys_to PID KEYS: KEYS to the editor window of PID.
+send_keys_to() {
+  # shellcheck disable=SC2086 # a key list
+  x xdotool windowactivate --sync "$(main_window "$1")" key $2
+}
+
+# type_save_path DIALOG PATH: the dialog offers the name of the document,
+# selected or not: replace it with PATH and confirm.
+type_save_path() {
+  x xdotool windowactivate --sync "$1"
+  sleep 1
+  send_keys ctrl+a
+  send_text "$2"
+  send_keys Return
+}
 
 # launch_app FILE LOG: starts the app on FILE and prints its pid once it has a window.
 # With an empty FILE the app starts on its start screen, with no document.
