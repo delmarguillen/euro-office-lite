@@ -437,6 +437,44 @@ run = openEditor(fontSaved);
 run('function fontOf(xfs) { return [xfs.getFont2().getName(), xfs.getFont2().getScheme()]; }');
 same('font name, reopen: styles and cells keep Courier New', run("[api.wbModel.CellStyles.getStyleByName('Good').xfs, api.wbModel.CellStyles.getStyleByName('Bad 2').xfs, api.wbModel.CellStyles.getStyleByName('From Normal').xfs, cellXfs('A1'), cellXfs('B1'), cellXfs('C2')].map(fontOf)"), [courier, courier, courier, courier, courier, courier]);
 
+// --- Border and number format of a predefined style that did not apply them ---
+run = openEditor(null);
+run(`
+  function bottomOf(ref) { return (cellXfs(ref) || new AscCommonExcel.CellXfs()).getBorder().b.s; }
+  function flagsOf(name) { var s = api.wbModel.CellStyles.getStyleByName(name); return [s.ApplyBorder, s.ApplyNumberFormat]; }
+  ws().getRange2('A1').setValue('1');
+  ws().getRange2('A2').setValue('1');
+  ws().getRange2('A2').setNumFormat('0.0');
+  select('A1:A2'); api.asc_setCellStyle('Good');
+  var flagsBefore = flagsOf('Good');
+  var fontOnlyXfs = api.asc_getCellStyleXfs('Good');
+  fontOnlyXfs.asc_setFontBold(true);
+  api.asc_modifyCellStyle('Good', fontOnlyXfs);
+  var flagsFontOnly = flagsOf('Good');
+
+  var borderXfs = api.asc_getCellStyleXfs('Good');
+  var borders = [];
+  borders[Asc.c_oAscBorderOptions.Bottom] = {style: Asc.c_oAscBorderStyles.Thin, color: new Asc.asc_CColor(0, 0, 0)};
+  borderXfs.asc_setBorder(borders);
+  borderXfs.asc_setNumFormatInfo('0.000');
+  var borderResult = api.asc_modifyCellStyle('Good', borderXfs);
+`);
+const thin = run('Asc.c_oAscBorderStyles.Thin');
+same('border and format: Good applies neither at first', run('flagsBefore'), [false, false]);
+same('border and format: a font change leaves both off', run('flagsFontOnly'), [false, false]);
+same('border and format: setting them turns both on', run("[borderResult, flagsOf('Good')]"), [No, [true, true]]);
+same('border and format: A1 takes the border and the format', run("[bottomOf('A1'), describe('A1').num]"), [thin, '0.000']);
+same('border and format: A2 takes the border, keeps its own format', run("[bottomOf('A2'), describe('A2').num]"), [thin, '0.0']);
+run('AscCommon.History.Undo();');
+same('border and format, undo: the flags and A1 are back', run("[flagsOf('Good'), bottomOf('A1'), describe('A1').num]"), [[false, false], run('Asc.c_oAscBorderStyles.None'), 'General']);
+run('AscCommon.History.Redo();');
+run("ws().getRange2('A3').setValue('1'); select('A3'); api.asc_setCellStyle('Good');");
+same('border and format: applying Good now sets both', run("[bottomOf('A3'), describe('A3').num]"), [thin, '0.000']);
+const borderSaved = run('api.asc_nativeGetFile()');
+run = openEditor(borderSaved);
+run('function flagsOf(name) { var s = api.wbModel.CellStyles.getStyleByName(name); return [s.ApplyBorder, s.ApplyNumberFormat]; }');
+same('border and format, reopen: Good still applies both', run("flagsOf('Good')"), [true, true]);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {

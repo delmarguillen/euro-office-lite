@@ -129,10 +129,10 @@ index 97bfa31cfb..8691859850 100644
  			if (!bUndo && wb.bCollaborativeChanges) {
  				wb.calculate(Data.elem, nSheetId);
 diff --git a/cell/model/Workbook.js b/cell/model/Workbook.js
-index eed6dbdcdb..3a12b40787 100644
+index eed6dbdcdb..92c57b280f 100644
 --- a/cell/model/Workbook.js
 +++ b/cell/model/Workbook.js
-@@ -4339,6 +4339,200 @@
+@@ -4339,6 +4339,207 @@
  	Workbook.prototype.addDefName = function (name, ref, sheetId, hidden, isTable) {
  		return this.dependencyFormulas.addDefName(name, ref, sheetId, hidden, isTable);
  	};
@@ -183,6 +183,13 @@ index eed6dbdcdb..3a12b40787 100644
 +		newStyle.xfs = createCellStyleXfs(xfs);
 +		if (null !== newStyle.xfs.align) {
 +			newStyle.ApplyAlignment = true;
++		}
++		// Predefined styles such as Good do not apply a border or a number format until one is set.
++		if (!newStyle.getBorder().isEqual(oldStyle.getBorder())) {
++			newStyle.ApplyBorder = true;
++		}
++		if (newStyle.getNumFormatStr() !== oldStyle.getNumFormatStr()) {
++			newStyle.ApplyNumberFormat = true;
 +		}
 +
 +		AscCommon.History.Create_NewPoint();
@@ -333,7 +340,7 @@ index eed6dbdcdb..3a12b40787 100644
  	Workbook.prototype.getDefinesNames = function ( name, sheetId, isDirectSearch ) {
  		return this.dependencyFormulas.getDefNameByName( name, sheetId, isDirectSearch );
  	};
-@@ -15862,6 +16056,8 @@
+@@ -15862,6 +16063,8 @@
  				this.setBorder(oStyle.getBorder());
  			if (oStyle.ApplyNumberFormat)
  				this.setNumFormat(oStyle.getNumFormatStr());
