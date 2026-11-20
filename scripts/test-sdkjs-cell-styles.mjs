@@ -617,6 +617,46 @@ run(`
 `);
 same('kept alignment, new alignment: the style applies it', run("[keptLeftResult, keptApplies(), horOf('A3')]"), [No, true, left]);
 
+// --- A font the document has not loaded yet ---
+// The cells and the gallery are drawn once the font loads; here the load waits until the test lets it end.
+run = openEditor(null);
+run(`
+  var fontLoads = [];
+  var draws = 0;
+  api._loadFonts = function (fonts, callback) { fontLoads.push({ fonts: Object.keys(fonts), callback: callback }); };
+  AscCommonExcel.WorksheetView.prototype.draw = function () { draws++; };
+  function lastFontLoad() { return fontLoads.length ? fontLoads[fontLoads.length - 1] : { fonts: [], callback: function () {} }; }
+  function drawState() { return { gallery: galleryUpdates.length, draws: draws }; }
+  function drawnSince(before) { return [galleryUpdates.length > before.gallery, draws > before.draws]; }
+  ws().getRange2('A1').setValue('1');
+  select('A1'); api.asc_setCellStyle('Good');
+
+  var courierXfs = api.asc_getCellStyleXfs('Good');
+  courierXfs.asc_setFontName('Courier New');
+  var beforeCourier = drawState();
+  var courierResult = api.asc_modifyCellStyle('Good', courierXfs);
+  var courierWaiting = drawnSince(beforeCourier);
+  var courierLoad = lastFontLoad();
+  courierLoad.callback.call(api);
+  var courierLoaded = drawnSince(beforeCourier);
+
+  var timesXfs = api.asc_getCellStyleXfs('Bad');
+  timesXfs.asc_setFontName('Times New Roman');
+  var beforeTimes = drawState();
+  var timesResult = api.asc_addCellStyle('Bad 2', timesXfs);
+  var timesWaiting = drawnSince(beforeTimes);
+  var timesLoad = lastFontLoad();
+  timesLoad.callback.call(api);
+  var timesLoaded = drawnSince(beforeTimes);
+`);
+same('new font, modify: the result comes at once and the font is loaded', run('[courierResult, courierLoad.fonts]'), [No, ['Courier New']]);
+same('new font, modify: no gallery or sheet drawn before the font loads', run('courierWaiting'), [false, false]);
+same('new font, modify: both drawn once it loads', run('courierLoaded'), [true, true]);
+same('new font, modify: A1 has the font', run("cellXfs('A1').getFont2().getName()"), 'Courier New');
+same('new font, duplicate: the result comes at once and the font is loaded', run('[timesResult, timesLoad.fonts]'), [No, ['Times New Roman']]);
+same('new font, duplicate: no gallery or sheet drawn before the font loads', run('timesWaiting'), [false, false]);
+same('new font, duplicate: both drawn once it loads', run('timesLoaded'), [true, true]);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {

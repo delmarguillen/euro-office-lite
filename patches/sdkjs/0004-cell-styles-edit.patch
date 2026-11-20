@@ -1,10 +1,10 @@
 Origin: own
 
 diff --git a/cell/api.js b/cell/api.js
-index 86f9bf72f1..0224b3c3b7 100644
+index 86f9bf72f1..0332e83c81 100644
 --- a/cell/api.js
 +++ b/cell/api.js
-@@ -6492,6 +6492,45 @@ var editor;
+@@ -6492,6 +6492,52 @@ var editor;
      this.wb.restoreFocus();
    };
  
@@ -19,17 +19,17 @@ index 86f9bf72f1..0224b3c3b7 100644
 +  };
 +  // Adds a style built from xfs (asc_CellXfs). One undo step. Returns c_oAscError.ID.No or the error.
 +  spreadsheet_api.prototype.asc_addCellStyle = function(name, xfs) {
-+    return this._editCellStyle(function(wbModel) {
++    return this._editCellStyle(xfs, function(wbModel) {
 +      return wbModel.addCellStyle(name, xfs);
 +    });
 +  };
 +  // Gives the style the values of xfs and updates the cells that use it. One undo step.
 +  spreadsheet_api.prototype.asc_modifyCellStyle = function(name, xfs) {
-+    return this._editCellStyle(function(wbModel) {
++    return this._editCellStyle(xfs, function(wbModel) {
 +      return wbModel.modifyCellStyle(name, xfs);
 +    });
 +  };
-+  spreadsheet_api.prototype._editCellStyle = function(editModel) {
++  spreadsheet_api.prototype._editCellStyle = function(xfs, editModel) {
 +    if (this.collaborativeEditing.getGlobalLock() || !this.canEdit()) {
 +      return c_oAscError.ID.EditingError;
 +    }
@@ -37,20 +37,27 @@ index 86f9bf72f1..0224b3c3b7 100644
 +    if (c_oAscError.ID.No !== result) {
 +      return result;
 +    }
-+    // Redraw what the edit changed, on every sheet.
++    var t = this;
 +    var point = AscCommon.History.Points[AscCommon.History.Index];
-+    for (var sheetId in point.UpdateRigions) {
-+      this.wbModel.handlers.trigger("cleanCellCache", sheetId, [point.UpdateRigions[sheetId]]);
-+    }
-+    this.wb.getWorksheet().draw();
-+    this._sendWorkbookStyles();
++    // The style can name a font the document has not loaded yet: the cells and
++    // the gallery are drawn once it is loaded, as asc_setCellFontName does.
++    var fonts = {};
++    fonts[xfs.getFont2().getName()] = 1;
++    this._loadFonts(fonts, function() {
++      // Redraw what the edit changed, on every sheet.
++      for (var sheetId in point.UpdateRigions) {
++        t.wbModel.handlers.trigger("cleanCellCache", sheetId, [point.UpdateRigions[sheetId]]);
++      }
++      t.wb.getWorksheet().draw();
++      t._sendWorkbookStyles();
++    });
 +    return result;
 +  };
 +
    spreadsheet_api.prototype.asc_ChangeTextCase = function(nType) {
      if (this.collaborativeEditing.getGlobalLock() || !this.canEdit()) {
        return;
-@@ -10414,6 +10453,10 @@ var editor;
+@@ -10414,6 +10460,10 @@ var editor;
    prot["asc_setCellFormat"] = prot.asc_setCellFormat;
    prot["asc_setCellAngle"] = prot.asc_setCellAngle;
    prot["asc_setCellStyle"] = prot.asc_setCellStyle;
