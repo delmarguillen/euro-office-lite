@@ -19,6 +19,12 @@ on:
         required: true
         type: string
 
+  # TEMPORARY, first run of feat/92-harness-macos only: workflow_dispatch and
+  # workflow_run need this file on main. A push takes the .dmg of a fixed
+  # Dev Build of 27cd2e5 (same tree as main 1dd58cf). Remove before merging.
+  push:
+    branches: [feat/92-harness-macos]
+
   # After every macOS Dev Build; the job skips builds that did not succeed.
   # workflow_run only fires for the workflow file on the default branch, and
   # the checkout is then the default branch: its cases judge the build,
@@ -66,7 +72,7 @@ jobs:
         with:
           name: dmg-${{ matrix.target }}
           path: dmg/
-          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id || '44620960050' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install harness dependencies
