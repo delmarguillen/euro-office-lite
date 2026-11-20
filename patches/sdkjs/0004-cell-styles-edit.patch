@@ -343,10 +343,19 @@ index eed6dbdcdb..3a12b40787 100644
  		return oStyle;
  	};
 diff --git a/cell/model/WorkbookElems.js b/cell/model/WorkbookElems.js
-index ca747b4de6..4e305422f9 100644
+index ca747b4de6..b45c7e5857 100644
 --- a/cell/model/WorkbookElems.js
 +++ b/cell/model/WorkbookElems.js
-@@ -5073,6 +5073,25 @@ var g_oFontProperties = {
+@@ -4978,6 +4978,8 @@ var g_oFontProperties = {
+ 			this.font = new AscCommonExcel.Font();
+ 		}
+ 		this.getFont().setName(val);
++		// As setFontname on cells: a theme scheme would replace the name when the file opens.
++		this.getFont().setScheme(null);
+ 	};
+ 	CellXfs.prototype.asc_setFontSize = function (val) {
+ 		if (!this.font) {
+@@ -5073,6 +5075,25 @@ var g_oFontProperties = {
  	CellXfs.prototype.asc_setNumFormatInfo = function (val) {
  		this.num = new AscCommonExcel.Num({f:val});
  	};
@@ -372,7 +381,7 @@ index ca747b4de6..4e305422f9 100644
  
  
  	/** @enum */
-@@ -5492,6 +5511,70 @@ CCellStyles.prototype._prepareCellStyle = function (name) {
+@@ -5492,6 +5513,70 @@ CCellStyles.prototype._prepareCellStyle = function (name) {
  	}
  	return g_oDefaultFormat.XfId;
  };
@@ -443,7 +452,7 @@ index ca747b4de6..4e305422f9 100644
  /** @constructor */
  function CCellStyle() {
  	this.BuiltinId = null;
-@@ -5507,6 +5590,7 @@ function CCellStyle() {
+@@ -5507,6 +5592,7 @@ function CCellStyle() {
  	this.ApplyFill = true;
  	this.ApplyFont = true;
  	this.ApplyNumberFormat = true;
@@ -451,7 +460,7 @@ index ca747b4de6..4e305422f9 100644
  }
  CCellStyle.prototype.clone = function () {
  	var oNewStyle = new CCellStyle();
-@@ -5520,6 +5604,7 @@ CCellStyle.prototype.clone = function () {
+@@ -5520,6 +5606,7 @@ CCellStyle.prototype.clone = function () {
  	oNewStyle.ApplyFill = this.ApplyFill;
  	oNewStyle.ApplyFont = this.ApplyFont;
  	oNewStyle.ApplyNumberFormat = this.ApplyNumberFormat;
@@ -459,7 +468,7 @@ index ca747b4de6..4e305422f9 100644
  
  	oNewStyle.xfs = this.xfs.clone();
  	return oNewStyle;
-@@ -5551,6 +5636,125 @@ CCellStyle.prototype.getNumFormatStr = function () {
+@@ -5551,6 +5638,125 @@ CCellStyle.prototype.getNumFormatStr = function () {
  		return this.xfs.num.getFormat();
  	return g_oDefaultFormat.Num.getFormat();
  };
@@ -585,7 +594,7 @@ index ca747b4de6..4e305422f9 100644
  /** @constructor */
  function StyleManager(){
  }
-@@ -6475,6 +6679,9 @@ StyleManager.prototype =
+@@ -6475,6 +6681,9 @@ StyleManager.prototype =
  			if (oStyle.ApplyNumberFormat) {
  				this.setNumFormat(oStyle.getNumFormatStr());
  			}
@@ -595,7 +604,7 @@ index ca747b4de6..4e305422f9 100644
  		}
  		return oStyle;
  	};
-@@ -6884,6 +7091,9 @@ StyleManager.prototype =
+@@ -6884,6 +7093,9 @@ StyleManager.prototype =
  			if (oStyle.ApplyNumberFormat) {
  				this.setNumFormat(oStyle.getNumFormatStr());
  			}
@@ -605,7 +614,7 @@ index ca747b4de6..4e305422f9 100644
  		}
  		return oStyle;
  	};
-@@ -22125,6 +22335,9 @@ function RangeDataManagerElem(bbox, data)
+@@ -22125,6 +22337,9 @@ function RangeDataManagerElem(bbox, data)
  	prot["asc_setFontSuperscript"] = prot.asc_setFontSuperscript;
  	prot["asc_setBorder"] = prot.asc_setBorder;
  	prot["asc_setNumFormatInfo"] = prot.asc_setNumFormatInfo;

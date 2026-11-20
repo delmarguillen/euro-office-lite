@@ -396,6 +396,47 @@ run(`
 same('reopen: Good leaves G1 alignment, Centered aligns G2', run("[describe('G1').hor, describe('G2').hor]"), [right, left]);
 same('reopen: modify still works and reaches B1', run("[afterOpenResult, describe('B1').bold]"), [No, false]);
 
+// --- A font picked by name replaces the theme font ---
+// A font that keeps a theme scheme is saved with it, and on opening the theme font wins over the name.
+run = openEditor(null);
+run(`
+  function fontOf(xfs) { return [xfs.getFont2().getName(), xfs.getFont2().getScheme()]; }
+  function styleFont(name) { return fontOf(api.wbModel.CellStyles.getStyleByName(name).xfs); }
+  function cellFont(ref) { return fontOf(cellXfs(ref)); }
+  var noScheme = Asc.EFontScheme.fontschemeNone;
+  ws().getRange2('A1').setValue('1');
+  select('A1'); api.asc_setCellStyle('Good');
+  ws().getRange2('C1').setValue('1');
+  var schemesBefore = [api.asc_getCellStyleXfs('Good'), api.asc_getCellStyleXfs('Bad'), ws().getRange2('C1').getXfs(false)].map(function (x) { return x.getFont2().getScheme(); });
+
+  var goodFontXfs = api.asc_getCellStyleXfs('Good');
+  goodFontXfs.asc_setFontName('Courier New');
+  var goodFontResult = api.asc_modifyCellStyle('Good', goodFontXfs);
+
+  var bad2Xfs = api.asc_getCellStyleXfs('Bad');
+  bad2Xfs.asc_setFontName('Courier New');
+  var bad2Result = api.asc_addCellStyle('Bad 2', bad2Xfs);
+  select('B1'); api.asc_setCellStyle('Bad 2');
+
+  var fromNormalXfs = ws().getRange2('C1').getXfs(false).clone();
+  fromNormalXfs.asc_setFontName('Courier New');
+  var fromNormalResult = api.asc_addCellStyle('From Normal', fromNormalXfs);
+  select('C2'); api.asc_setCellStyle('From Normal');
+`);
+check('font name: Good, Bad and a Normal cell start with a theme font', run('schemesBefore.every(function (s) { return s !== noScheme; })'), run('JSON.stringify(schemesBefore)'));
+same('font name: the styles are saved', run('[goodFontResult, bad2Result, fromNormalResult]'), [No, No, No]);
+const courier = run("['Courier New', noScheme]");
+same('font name, modified Good: the style has no theme font', run("styleFont('Good')"), courier);
+same('font name, modified Good: A1 follows without a theme font', run("cellFont('A1')"), courier);
+same('font name, copy of Bad: the style has no theme font', run("styleFont('Bad 2')"), courier);
+same('font name, copy of Bad: B1 has no theme font', run("cellFont('B1')"), courier);
+same('font name, from a Normal cell: the style has no theme font', run("styleFont('From Normal')"), courier);
+same('font name, from a Normal cell: C2 has no theme font', run("cellFont('C2')"), courier);
+const fontSaved = run('api.asc_nativeGetFile()');
+run = openEditor(fontSaved);
+run('function fontOf(xfs) { return [xfs.getFont2().getName(), xfs.getFont2().getScheme()]; }');
+same('font name, reopen: styles and cells keep Courier New', run("[api.wbModel.CellStyles.getStyleByName('Good').xfs, api.wbModel.CellStyles.getStyleByName('Bad 2').xfs, api.wbModel.CellStyles.getStyleByName('From Normal').xfs, cellXfs('A1'), cellXfs('B1'), cellXfs('C2')].map(fontOf)"), [courier, courier, courier, courier, courier, courier]);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {
