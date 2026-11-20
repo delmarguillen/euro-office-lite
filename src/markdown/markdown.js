@@ -551,11 +551,14 @@
   }
 
   // The backend answers 'already-open' for this document itself (nothing to
-  // do) and OPEN_ELSEWHERE for a file another window has open.
+  // do) and OPEN_ELSEWHERE for a file another window has open. A template the
+  // Finder hands over (file.newDocument) starts a new document there instead
+  // of being edited (new_document_in_new_window).
   async function openInNewWindow(file) {
+    var command = file.newDocument ? 'new_document_in_new_window' : 'open_in_new_window';
     var result;
     try {
-      result = await invoke('open_in_new_window', { token: file.token });
+      result = await invoke(command, { token: file.token });
     } catch (error) {
       log('open in new window failed: ' + errorText(error));
       await tauri.dialog.message(t('openErrorMsg'), { title: t('openFailed'), kind: 'error' });
