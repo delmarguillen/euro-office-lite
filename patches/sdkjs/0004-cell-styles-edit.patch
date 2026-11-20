@@ -74,10 +74,76 @@ index 3475e4b21a..10e07006cd 100644
  	window['AscCH'].historyitem_Worksheet_RemoveCell = 1;
  	window['AscCH'].historyitem_Worksheet_RemoveRows = 2;
 diff --git a/cell/model/Serialize.js b/cell/model/Serialize.js
-index 7a1fe8512e..85c8b8cc1a 100644
+index 7a1fe8512e..0a2fbfe4d5 100644
 --- a/cell/model/Serialize.js
 +++ b/cell/model/Serialize.js
-@@ -14618,6 +14618,8 @@
+@@ -2985,6 +2985,8 @@
+ 		this.oBorderMap = new StyleWriteMap(g_StyleCache.addBorder);
+ 		this.oNumMap = new StyleWriteMap(g_StyleCache.addNum);
+ 		this.oXfsStylesMap = [];
++		// XfId of each cell style -> its position in cellStyleXfs, set by finalizeCellStyles.
++		this.cellStyleXfIndexes = new Map();
+ 	}
+ 
+ 	StylesForWrite.prototype.init = function() {
+@@ -3005,6 +3007,24 @@
+ 		this.oXfsStylesMap.sort(function(a, b) {
+ 			return a.XfId - b.XfId;
+ 		});
++		this.cellStyleXfIndexes = indexCellStyleXfs(this.oXfsStylesMap);
++	};
++	/**
++	 * A file points to a cell style by its position in cellStyleXfs. The XfIds of a
++	 * workbook can have gaps (undoing a new style leaves its XfId unused), so the
++	 * cell styles and the cells are written with the position instead of the XfId.
++	 */
++	function indexCellStyleXfs(elems) {
++		var indexes = new Map();
++		elems.forEach(function(elem, index) {
++			indexes.set(elem.XfId, index);
++		});
++		return indexes;
++	}
++	// The position in cellStyleXfs of the style with this XfId, or null when it has none.
++	StylesForWrite.prototype.getCellStyleXfIndex = function(xfId) {
++		var index = this.cellStyleXfIndexes.get(xfId);
++		return undefined === index ? null : index;
+ 	};
+ 	StylesForWrite.prototype.getNumIdByFormat = function(num) {
+ 		var numid = null;
+@@ -3433,9 +3453,11 @@
+ 				}
+ 				if(!isCellStyle && null != xf.XfId)
+ 				{
++					// A cell whose style is not written takes Normal, at position 0, as the reader does.
++					var xfIndex = this.stylesForWrite.getCellStyleXfIndex(xf.XfId);
+ 					this.memory.WriteByte(c_oSerXfsTypes.XfId);
+ 					this.memory.WriteByte(c_oSerPropLenType.Long);
+-					this.memory.WriteLong(xf.XfId);
++					this.memory.WriteLong(null === xfIndex ? 0 : xfIndex);
+ 				}
+                 if(null != xf.applyProtection)
+                 {
+@@ -3554,6 +3576,9 @@
+             for(var i = 0, length = cellStyles.length; i < length; ++i)
+             {
+                 var style = cellStyles[i];
++                // A style without an entry in cellStyleXfs has no position to point to.
++                if (null === this.stylesForWrite.getCellStyleXfIndex(style.XfId))
++                    continue;
+                 this.bs.WriteItem(c_oSerStylesTypes.CellStyle, function(){oThis.WriteCellStyle(style);});
+             }
+         };
+@@ -3572,7 +3597,7 @@
+                 this.memory.WriteString2(oCellStyle.Name);
+             }
+             if (null != oCellStyle.XfId)
+-                this.bs.WriteItem(c_oSer_CellStyle.XfId, function(){oThis.memory.WriteLong(oCellStyle.XfId);});
++                this.bs.WriteItem(c_oSer_CellStyle.XfId, function(){oThis.memory.WriteLong(oThis.stylesForWrite.getCellStyleXfIndex(oCellStyle.XfId));});
+         };
+         this.WriteSlicerStyles = function(slicerStyles)
+         {
+@@ -14618,6 +14643,8 @@
                  // ApplyNumberFormat (ToDo возможно это свойство должно быть в xfs)
                  if (null !== oStyleObject.xfs.ApplyNumberFormat)
                      oCellStyle.ApplyNumberFormat = oStyleObject.xfs.ApplyNumberFormat;
@@ -86,7 +152,7 @@ index 7a1fe8512e..85c8b8cc1a 100644
                  oCellStyle.xfs = g_StyleCache.addXf(newXf);
  
                  oOutput.push(oCellStyle);
-@@ -15225,6 +15227,8 @@
+@@ -15225,6 +15252,8 @@
              // ApplyNumberFormat (ToDo возможно это свойство должно быть в xfs)
              if (null !== oCellStyleXfs.ApplyNumberFormat)
                  oCellStyle.ApplyNumberFormat = oCellStyleXfs.ApplyNumberFormat;

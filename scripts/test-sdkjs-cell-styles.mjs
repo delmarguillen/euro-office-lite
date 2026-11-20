@@ -475,6 +475,112 @@ run = openEditor(borderSaved);
 run('function flagsOf(name) { var s = api.wbModel.CellStyles.getStyleByName(name); return [s.ApplyBorder, s.ApplyNumberFormat]; }');
 same('border and format, reopen: Good still applies both', run("flagsOf('Good')"), [true, true]);
 
+// --- XfIds with a gap ---
+// A predefined style comes into the document without a history item, so undoing
+// a new style added before it leaves that style's XfId unused.
+const GAP_HELPERS = `
+  function fillOf(xfs) {
+    var fill = xfs && xfs.asc_getFillColor();
+    return fill ? [fill.asc_getR(), fill.asc_getG(), fill.asc_getB()].join(',') : 'none';
+  }
+  function styleFill(name) {
+    var style = api.wbModel.CellStyles.getStyleByName(name);
+    return api.wbModel.CellStyles.isCustomStyle(style) ? fillOf(style.xfs) : 'not in the document';
+  }
+  function cellStyleAndFill(ref) { return [describe(ref).style, describe(ref).fill]; }
+  function xfIds() {
+    return api.wbModel.CellStyles.CustomStyles.map(function (s) { return s.XfId; }).sort(function (a, b) { return a - b; });
+  }
+  // The bytes the writer gives with each XfId written as it is, as it did before
+  // it wrote them as positions in cellStyleXfs.
+  var cellStyleXfIndex = AscCommonExcel.StylesForWrite.prototype.getCellStyleXfIndex;
+  function writeXfIdsAsTheyAre() {
+    AscCommonExcel.StylesForWrite.prototype.getCellStyleXfIndex = function (xfId) { return xfId; };
+    try {
+      return api.asc_nativeGetFile();
+    } finally {
+      AscCommonExcel.StylesForWrite.prototype.getCellStyleXfIndex = cellStyleXfIndex;
+    }
+  }
+  function writesXfIdsAsTheyAre() { return api.asc_nativeGetFile() === writeXfIdsAsTheyAre(); }
+`;
+function openGapEditor(data) {
+  const editor = openEditor(data);
+  editor(GAP_HELPERS);
+  return editor;
+}
+run = openGapEditor(null);
+run(`
+  var goodFill = fillOf(api.asc_getCellStyleXfs('Good'));
+  var badFill = fillOf(api.asc_getCellStyleXfs('Bad'));
+  ws().getRange2('A1').setValue('1');
+  var temporaryXfs = new AscCommonExcel.CellXfs();
+  temporaryXfs.asc_setFillColor(color(1, 2, 3));
+  api.asc_addCellStyle('Temporary', temporaryXfs);
+  select('A1'); api.asc_setCellStyle('Good');
+  AscCommon.History.Undo();
+  AscCommon.History.Undo();
+  select('A1'); api.asc_setCellStyle('Good');
+`);
+const goodFill = run('goodFill');
+const badFill = run('badFill');
+same('gap: undo leaves XfId 1 unused', run("[styleNames().indexOf('Temporary'), xfIds()]"), [-1, [0, 2]]);
+same('gap: A1 has Good', run("cellStyleAndFill('A1')"), ['Good', goodFill]);
+check('gap: the writer does not write the XfIds as they are', run('!writesXfIdsAsTheyAre()'), 'same bytes');
+let reopened = openGapEditor(run('api.asc_nativeGetFile()'));
+same('gap, reopen: Good is in the document with its fill', reopened("styleFill('Good')"), goodFill);
+same('gap, reopen: A1 keeps Good', reopened("cellStyleAndFill('A1')"), ['Good', goodFill]);
+
+// Three styles after the gap, each with its own fill.
+run(`
+  ws().getRange2('B1').setValue('1');
+  ws().getRange2('C1').setValue('1');
+  select('B1'); api.asc_setCellStyle('Bad');
+  var laterXfs = new AscCommonExcel.CellXfs();
+  laterXfs.asc_setFillColor(color(4, 5, 6));
+  api.asc_addCellStyle('Later', laterXfs);
+  select('C1'); api.asc_setCellStyle('Later');
+`);
+same('gap in the middle: XfId 1 unused among four styles', run('xfIds()'), [0, 2, 3, 4]);
+reopened = openGapEditor(run('api.asc_nativeGetFile()'));
+same('gap in the middle, reopen: each style keeps its own fill', reopened("['Good', 'Bad', 'Later'].map(styleFill)"), [goodFill, badFill, '4,5,6']);
+same('gap in the middle, reopen: each cell keeps its style and fill', reopened("['A1', 'B1', 'C1'].map(cellStyleAndFill)"), [['Good', goodFill], ['Bad', badFill], ['Later', '4,5,6']]);
+same('gap in the middle, reopen: the XfIds are 0..3', reopened('xfIds()'), [0, 1, 2, 3]);
+reopened(`
+  ['D1', 'E1', 'F1'].forEach(function (ref) { ws().getRange2(ref).setValue('1'); });
+  select('D1'); api.asc_setCellStyle('Good');
+  select('E1'); api.asc_setCellStyle('Bad');
+  select('F1'); api.asc_setCellStyle('Later');
+`);
+same('gap in the middle, reopen: applying each style again gives its fill', reopened("['D1', 'E1', 'F1'].map(cellStyleAndFill)"), [['Good', goodFill], ['Bad', badFill], ['Later', '4,5,6']]);
+same('gap in the middle, reopen: the next save writes the XfIds as they are', reopened('writesXfIdsAsTheyAre()'), true);
+
+// --- Without a gap the bytes do not change ---
+// A new style, a modified predefined one and a copy of a predefined one, and
+// the same workbook opened from the file.
+run = openGapEditor(null);
+run(`
+  ['A1', 'B1', 'C1', 'D1'].forEach(function (ref) { ws().getRange2(ref).setValue('1'); });
+  ws().getRange2('A1').setBold(true);
+  api.asc_addCellStyle('Totals', cellXfs('A1').clone());
+  var noGapGood = api.asc_getCellStyleXfs('Good');
+  noGapGood.asc_setFontItalic(true);
+  api.asc_modifyCellStyle('Good', noGapGood);
+  var noGapBad = api.asc_getCellStyleXfs('Bad');
+  noGapBad.asc_setFillColor(color(7, 8, 9));
+  api.asc_addCellStyle('Bad 2', noGapBad);
+  select('A1'); api.asc_setCellStyle('Totals');
+  select('B1'); api.asc_setCellStyle('Good');
+  select('C1'); api.asc_setCellStyle('Bad 2');
+  select('D1'); api.asc_setCellStyle('Neutral');
+`);
+same('no gap: the XfIds are 0..n-1', run('xfIds()'), [0, 1, 2, 3, 4]);
+same('no gap: the bytes are the same as with the XfIds as they are', run('writesXfIdsAsTheyAre()'), true);
+reopened = openGapEditor(run('api.asc_nativeGetFile()'));
+same('no gap, opened from the file: the same bytes', reopened('writesXfIdsAsTheyAre()'), true);
+reopened = openGapEditor(saved);
+same('no gap, the workbook of the save check: the same bytes', reopened('writesXfIdsAsTheyAre()'), true);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {

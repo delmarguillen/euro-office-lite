@@ -12,6 +12,11 @@
 // document, the predefined styles and the cells (value, formula, style and
 // formatting).
 //
+// A second workbook undoes a new style after a predefined one came in, which
+// leaves an XfId unused; its xlsx must point only to cellStyleXfs it has. The
+// workbook opened from the saved xlsx, without that gap, must be written with
+// the same bytes as when each XfId is written as it is.
+//
 // Needs x2t 10.0.0.169 (scripts/get-x2t-ci.sh) and the sdkjs patches:
 //   node scripts/apply-patches.mjs apply --only sdkjs
 //   node scripts/test-x2t-cell-styles-roundtrip.mjs path/to/x2t-folder [path/to/sdkjs]
@@ -181,19 +186,27 @@ const HELPERS = `
     sides.forEach(function (side) { list[Asc.c_oAscBorderOptions[side]] = line(c); });
     return list;
   }
+  // A border with no line on any side reads as no border: x2t gives a style
+  // without one the empty border of the file.
+  function describeBorder(border) {
+    if (!border) return 'none';
+    var sides = ['l', 't', 'r', 'b'].filter(function (side) {
+      return border[side] && border[side].s !== Asc.c_oAscBorderStyles.None;
+    });
+    if (sides.length === 0) return 'none';
+    return ['l', 't', 'r', 'b'].map(function (side) {
+      return side + '=' + (sides.indexOf(side) !== -1 ? border[side].s + ':' + borderHex(border[side].c) : 'none');
+    }).join(' ');
+  }
   function describeXfs(xfs) {
     xfs = xfs || new AscCommonExcel.CellXfs();
     var font = xfs.getFont2();
     var fill = xfs.asc_getFillColor();
-    var border = xfs.border;
     var align = xfs.getAlign2();
     return {
       font: [font.getName(), font.getSize(), !!font.getBold(), !!font.getItalic(), font.getUnderline(), hex(font.getColor())].join(' '),
       fill: fill ? [fill.asc_getR(), fill.asc_getG(), fill.asc_getB()].join(',') : 'none',
-      border: border ? ['l', 't', 'r', 'b'].map(function (side) {
-        var prop = border[side];
-        return side + '=' + (prop && prop.s !== Asc.c_oAscBorderStyles.None ? prop.s + ':' + borderHex(prop.c) : 'none');
-      }).join(' ') : 'none',
+      border: describeBorder(xfs.border),
       numFormat: xfs.getNum2().getFormat(),
       alignment: [align.getAlignHorizontal(), align.getAlignVertical(), !!align.getWrap(), align.getIndent(), align.getAngle()].join(' '),
     };
@@ -340,8 +353,8 @@ function compare(label, saved, reopened) {
   console.log((found === 0 ? 'ok   ' : 'DIFF ') + label + (found === 0 ? '' : ' (' + found + ' differences)'));
 }
 
-function snapshotOf(run) {
-  return JSON.parse(run('JSON.stringify(snapshot(' + JSON.stringify(CELLS) + '))'));
+function snapshotOf(run, refs = CELLS) {
+  return JSON.parse(run('JSON.stringify(snapshot(' + JSON.stringify(refs) + '))'));
 }
 
 function zipPart(file, part) {
@@ -359,6 +372,65 @@ function odsStyleNames(file) {
     .map((m) => m[0])
     .filter((tag) => tag.includes('style:family="table-cell"'))
     .map((tag) => (tag.match(/style:display-name="([^"]*)"/) || tag.match(/style:name="([^"]*)"/))[1]);
+}
+
+function xmlSection(xml, name) {
+  const match = xml.match(new RegExp('<' + name + '\\b[^>]*>([\\s\\S]*?)</' + name + '>'));
+  return match ? match[1] : '';
+}
+
+function xfIdsIn(xml) {
+  return [...xml.matchAll(/\bxfId="(\d+)"/g)].map((m) => Number(m[1]));
+}
+
+// The cellStyleXfs of xl/styles.xml and the xfId values of cellXfs and
+// cellStyles: each one is a position in cellStyleXfs.
+function xfIdReferences(file) {
+  const styles = zipPart(file, 'xl/styles.xml');
+  const count = (xmlSection(styles, 'cellStyleXfs').match(/<xf\b/g) || []).length;
+  const used = [...xfIdsIn(xmlSection(styles, 'cellXfs')), ...xfIdsIn(xmlSection(styles, 'cellStyles'))];
+  return { count, used, broken: used.filter((id) => id >= count) };
+}
+
+// A predefined style comes into the document without a history item, so
+// undoing a new style added before it leaves that style's XfId unused. The
+// result is the XfIds of the workbook.
+const GAP_CELLS = ['A1', 'A2', 'A3'];
+const GAP_EDIT = `
+  ['A1', 'A2', 'A3'].forEach(function (ref) { ws().getRange2(ref).setValue('0.25'); });
+  var temporary = new AscCommonExcel.CellXfs();
+  temporary.asc_setFillColor(color(1, 2, 3));
+  api.asc_addCellStyle('Temporary', temporary);
+  select('A1'); api.asc_setCellStyle('Good');
+  AscCommon.History.Undo();
+  AscCommon.History.Undo();
+  select('A1'); api.asc_setCellStyle('Good');
+  select('A2'); api.asc_setCellStyle('Bad');
+  var later = new AscCommonExcel.CellXfs();
+  later.asc_setFillColor(color(4, 5, 6));
+  api.asc_addCellStyle('Later', later);
+  select('A3'); api.asc_setCellStyle('Later');
+  api.wbModel.CellStyles.CustomStyles.map(function (s) { return s.XfId; }).sort(function (a, b) { return a - b; }).join(',');
+`;
+
+// Whether the writer gives the same bytes as with each XfId written as it is,
+// the way it wrote them before it wrote positions in cellStyleXfs.
+const WRITES_XFIDS_AS_THEY_ARE = `(function () {
+  var prototype = AscCommonExcel.StylesForWrite.prototype;
+  var cellStyleXfIndex = prototype.getCellStyleXfIndex;
+  var written = api.asc_nativeGetFile();
+  prototype.getCellStyleXfIndex = function (xfId) { return xfId; };
+  try {
+    return written === api.asc_nativeGetFile();
+  } finally {
+    prototype.getCellStyleXfIndex = cellStyleXfIndex;
+  }
+})()`;
+
+function checkSameBytes(label, run) {
+  const same = run(WRITES_XFIDS_AS_THEY_ARE);
+  if (!same) differences.push({ label, what: 'Editor.bin', property: 'bytes', saved: 'XfIds as they are', reopened: 'other bytes' });
+  console.log((same ? 'ok   ' : 'DIFF ') + label);
 }
 
 // --- Run ---
@@ -391,6 +463,20 @@ compare('xlsx -> xlsx', saved, snapshotOf(openFile(xlsxAgain)));
 
 const odsToXlsx = saveFile(fromOds, path.join(workDir, 'ods-then.xlsx'));
 compare('xlsx -> ods -> xlsx', saved, snapshotOf(openFile(odsToXlsx)));
+
+// Opened from an xlsx with cell styles and no gap in the XfIds.
+checkSameBytes('xlsx opened: the bytes of the XfIds as they are', fromXlsx);
+
+const gapEditor = openFile(blank);
+console.log('after undo, XfIds of the workbook: ' + gapEditor(GAP_EDIT));
+const gapSaved = snapshotOf(gapEditor, GAP_CELLS);
+const gapXlsx = saveFile(gapEditor, path.join(workDir, 'gap.xlsx'));
+const references = xfIdReferences(gapXlsx);
+console.log('after undo, xlsx: ' + references.count + ' cellStyleXfs, xfId used ' + [...new Set(references.used)].join(','));
+if (references.broken.length > 0) {
+  differences.push({ label: 'xlsx after undo', what: 'styles.xml', property: 'xfId', saved: 'below ' + references.count, reopened: references.broken.join(',') });
+}
+compare('xlsx after undo', gapSaved, snapshotOf(openFile(gapXlsx), GAP_CELLS));
 
 for (const d of differences) {
   console.log('  ' + d.label + ': ' + d.what + ' ' + d.property + ': ' + d.saved + ' -> ' + d.reopened);
