@@ -25,12 +25,6 @@ on:
         required: true
         type: string
 
-  # TEMPORARY, first run of feat/92-harness-macos only: workflow_dispatch and
-  # workflow_run need this file on main. A push takes the installer of a fixed
-  # Dev Build of 27cd2e5 (same tree as main 1dd58cf). Remove before merging.
-  push:
-    branches: [feat/92-harness-macos]
-
   # After every Windows Dev Build; the job skips builds that did not succeed.
   # The build succeeds only when every target does: a failed target skips
   # both architectures here.
@@ -82,7 +76,7 @@ jobs:
         with:
           name: installer-${{ matrix.target }}
           path: installer/
-          run-id: ${{ inputs.run_id || github.event.workflow_run.id || '44620956407' }}
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate the inputs
