@@ -24,6 +24,8 @@ mod recent;
 mod recovery;
 mod save_target;
 mod temp_layout;
+#[cfg(test)]
+mod template_round_trip_tests;
 mod text_import;
 mod window_state;
 mod x2t_task;
