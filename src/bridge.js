@@ -1738,11 +1738,13 @@ function _eoSaveAsFilters(docType, requestedExt, currentName, isLinux) {
       { name: 'Excel', extensions: ['xlsx'] },
       { name: 'OpenDocument Spreadsheet', extensions: ['ods'] },
       { name: 'CSV', extensions: ['csv'] },
+      { name: 'Excel template', extensions: ['xltx'] },
       { name: 'PDF', extensions: ['pdf'] },
     ],
     slide: [
       { name: 'PowerPoint', extensions: ['pptx'] },
       { name: 'OpenDocument Presentation', extensions: ['odp'] },
+      { name: 'PowerPoint template', extensions: ['potx'] },
       { name: 'PDF', extensions: ['pdf'] },
     ],
     word: [
@@ -1750,6 +1752,7 @@ function _eoSaveAsFilters(docType, requestedExt, currentName, isLinux) {
       { name: 'OpenDocument Text', extensions: ['odt'] },
       { name: 'Rich Text', extensions: ['rtf'] },
       { name: _t('plainText'), extensions: ['txt'] },
+      { name: 'Word template', extensions: ['dotx'] },
       { name: 'PDF', extensions: ['pdf'] },
     ]
   };
