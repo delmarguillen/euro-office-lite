@@ -1,12 +1,13 @@
 # The same Markdown with CRLF line endings. The save must be the input with
 # Z at the end, every line still ending in CRLF.
-# Keys: the page opens in preview; 4 Shift+Tab reach Edit, Space presses it, the lone Shifts wait for the editor.
+# The page opens in preview: the runner presses Edit, the lone Shifts wait for the editor.
 description = "Markdown with CRLF: Ctrl+S after typing Z keeps CRLF on every line and every byte"
 generate = "mkmd.py crlf"
 input = "notes-crlf.md"
 input_sha256 = "db93347bb9ea15fb2fd98a7f89f78bba696d6d02016724d8803df269d3ed70b7"
 action = "open-edit-save"
-keys_before = "shift+Tab shift+Tab shift+Tab shift+Tab space shift shift shift shift shift shift shift shift shift shift ctrl+End"
+button = "Edit"
+keys_before = "shift shift shift shift shift shift shift shift shift shift ctrl+End"
 type = "Z"
 check = "expected-bytes"
 expected_generate = "mkmd.py crlf z"

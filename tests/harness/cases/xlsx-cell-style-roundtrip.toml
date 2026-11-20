@@ -1,0 +1,36 @@
+# Open an XLSX with cell styles (one new, one changed predefined, one copy of a
+# predefined style changed, one predefined unchanged), type a label in A3,
+# Ctrl+S: the saved styles.xml keeps every style with its font, border, number
+# format and alignment, and the cells keep their values.
+description = "XLSX with cell styles: open, type in A3, Ctrl+S; the styles and the cells keep their values"
+generate = "mkxlsxstyles.py"
+input = "styles.xlsx"
+input_sha256 = "1e2e85487fb2f613a2509b45ce8a2d1ef894f0446d581578fa8ebaf1d7134a74"
+action = "open-edit-save"
+keys_before = "ctrl+Home Down Down"
+type = "Harness75"
+keys_after = "Return"
+check = "zip-match"
+match_1 = 'xl/worksheets/sheet1.xml <c r="A1"[^>]*><v>1234.5</v>'
+match_2 = 'xl/worksheets/sheet1.xml <c r="B1" s="[0-9]+"[^>]*><v>0.25</v>'
+match_3 = 'xl/worksheets/sheet1.xml <c r="C1" s="[0-9]+"[^>]*><v>0.25</v>'
+match_4 = 'xl/worksheets/sheet1.xml <c r="D1" s="[0-9]+"[^>]*><v>0.25</v>'
+match_5 = 'xl/worksheets/sheet1.xml <c r="E1" s="[0-9]+"[^>]*><v>0.25</v>'
+match_6 = 'xl/sharedStrings.xml Harness styled text'
+match_7 = 'xl/sharedStrings.xml Harness75'
+match_8 = 'xl/styles.xml <cellStyle name="Totals" xfId="[0-9]+"/>'
+match_9 = 'xl/styles.xml <cellStyle name="Good" xfId="[0-9]+" builtinId="26"/>'
+match_10 = 'xl/styles.xml <cellStyle name="Bad 2" xfId="[0-9]+"/>'
+match_11 = 'xl/styles.xml <cellStyle name="Neutral" xfId="[0-9]+" builtinId="28"/>'
+match_12 = 'xl/styles.xml <b/><sz val="14[.0]*"/><color [^>]*/><name val="Arial"/></font>'
+match_13 = 'xl/styles.xml <i/><sz val="12[.0]*"/><color [^>]*/><name val="Courier New"/></font>'
+match_14 = 'xl/styles.xml <u/><sz val="11[.0]*"/><color [^>]*/><name val="Times New Roman"/></font>'
+match_15 = 'xl/styles.xml <bottom style="thin"><color [^>]*/></bottom>'
+match_16 = 'xl/styles.xml <top style="medium"><color rgb="FF9C0006"/></top><bottom style="medium"><color rgb="FF9C0006"/></bottom>'
+match_17 = 'xl/styles.xml <numFmt numFmtId="[0-9]+" formatCode="#,##0.000"/>'
+match_18 = 'xl/styles.xml <alignment horizontal="center" vertical="top" wrapText="1"/>'
+match_19 = 'xl/styles.xml <alignment horizontal="right" vertical="center"/>'
+match_20 = 'xl/styles.xml <alignment horizontal="left" wrapText="1"/>'
+match_21 = 'xl/styles.xml <fgColor rgb="FFFFEB9C"/>'
+expect = "saved-as-expected"
+screenshot = "on-failure"

@@ -153,6 +153,74 @@ case ok, 1 some case failed, 2 the harness could not run.
   a known defect of the app. With `docx-xlsx-content` (see [Cases](#cases)),
   `run.ps1 all` exits 1.
 
+## macOS
+
+`mac/` is the same harness for the app installed from the `.dmg` of the
+"macOS Dev Build": `mac/run.sh`, `mac/status.sh`, `mac/backup.sh` and
+`mac/restore.sh` do what their namesakes do, read the same case files and
+write `result.json` with the same schema. `mac/run.sh` sources `../run.sh`
+for the case logic (reading cases, generating inputs, the checks, the
+result) and `mac/lib.sh` for everything that touches the system.
+`mac/selftest.sh` checks it on any system with bash 4, python3 and pgrep,
+Linux included, with fakes for `open`, `osascript`, `hdiutil`, `codesign`,
+`ditto`, `screencapture`, `shasum` and `PlistBuddy`; it does not show that
+keys reach a real window.
+
+```
+mac/backup.sh ~/harness-backup        # Application Support and Caches folders of the app
+mac/status.sh some.dmg                # version from Info.plist, binary sha256, codesign, .dmg match
+mac/run.sh all --dmg some.dmg         # all cases, installing some.dmg if needed
+mac/restore.sh ~/harness-backup       # put the user state back, checked by sha256
+mac/selftest.sh                       # no macOS needed
+```
+
+`mac/run.sh CASE|all [--dmg FILE] [--control] [--screenshots] [--out DIR]`.
+Exit status as in run.sh.
+
+- Bash 4 or later: `../run.sh` keeps a case in an associative array. Started
+  with the bash 3.2 of macOS, `mac/run.sh` runs itself again with
+  `/opt/homebrew/bin/bash` or `/usr/local/bin/bash` (`brew install bash`).
+  The other macOS scripts work with bash 3.2.
+- Permissions: the terminal or process that starts the harness needs
+  Accessibility and Automation (System Events) for `osascript`, and Screen
+  Recording for `screencapture`. The GitHub macOS images grant them to
+  `/bin/bash` and `/usr/bin/osascript`.
+- `--dmg` mounts the image with `hdiutil`, copies the `.app` to
+  `/Applications/Euro-Office-Lite.app` with `ditto` when its binary differs
+  from the installed one, and stops (exit 2) unless
+  `codesign --verify --deep --strict` passes.
+- The app is started with `open -a`; its log is
+  `/tmp/euro-office-lite-<uid>/js-debug-*.log`. `mac/follow_log.py` copies
+  to the `app.log` of the case the lines that log gets after the start, and
+  the standard output and error of the app, which `open --stdout --stderr`
+  write next to it (`app.log.stdout`, `app.log.stderr`).
+- Keys go through System Events. The xdotool names of the case files map to
+  key codes in `mac/lib.sh` (`key_code`); `ctrl` presses Cmd
+  (`HARNESS_MAC_CTRL=control` makes it Ctrl), and `ctrl+End` is Cmd+End.
+  A case with a key that has no mapping is skipped: `"ok": true`,
+  `"observed": "skipped"`, `"skipped": true` and the key in `detail`. No case
+  is skipped today.
+- Dialogs are the windows of the app that are not `AXStandardWindow`, and
+  their sheets (`mac/windows.applescript`).
+- Save As to PDF types the folder into Go to Folder (Cmd+Shift+G) and the
+  name into the name field: a `/` typed into the name field opens Go to
+  Folder by itself.
+- The app is closed with `quit` through AppleScript, then `kill` and
+  `kill -9` when it is still there after 20 s and 10 s. `edit-kill-recover`
+  kills it with `kill -9` as on Linux.
+- `backup.sh` saves `~/Library/Application Support/org.euro-office.lite`
+  (recovery, recent files) and `~/Library/Caches/org.euro-office.lite`
+  (fonts) whole; `restore.sh` removes both and puts the saved ones back.
+- `button` is pressed by its accessible name: `mac/press.applescript`
+  searches the window through System Events, level by level, for the first
+  element whose name, description or value is the label, and clicks its
+  middle. Shift+Tab is not used: in WKWebView it does not reach Edit from
+  the preview.
+- In a presentation, the editor of a fresh profile shows a "New: GIF
+  playback in slideshow mode" tip over the slide. Before the click in the
+  middle of the window, `focus_document` closes it with its "Got it" button,
+  not with Escape.
+
 ## Case files
 
 `cases/NAME.toml`, one `key = "value"` (or `key = 'value'`, taken
@@ -166,6 +234,7 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `input_sha256` | optional: the generated input must have this sha256. Left out for the deflated ZIPs of `mkdocx.py` and `mkxlsx.py`, whose bytes depend on the zlib of the Python that writes them |
 | `action` | `open`, `open-save` (Ctrl+S), `open-edit-save`, `open-export-pdf` or `edit-kill-recover` |
 | `keys_before`, `type`, `keys_after` | for `open-edit-save` and `edit-kill-recover`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
+| `button` | optional, for the same actions: the label of a button of the page, pressed after the click and before `keys_before`. macOS finds it by its accessible name through System Events. Linux, which has no accessibility bus on the runner, and Windows, where UI Automation does not find the buttons of the page in WebView2, press it with the keys `button_keys` in `lib.sh` and `Get-ButtonKeys` in `win/lib.ps1` give for that label |
 | `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match`; for `open-export-pdf`, `pdf-text` |
 | `expected_generate`, `expected_sha256` | for `expected-bytes`: the generator of the file the save must write, and optionally its sha256 |
 | `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain; for `pdf-text`: `REGEX`, an extended regex a line of the PDF's text must contain |
@@ -240,9 +309,8 @@ of the last line of a TXT, or added to the last cell of a CSV. The save must
 then be the input with that `Z` and nothing else changed.
 
 A Markdown case does the same on the Markdown page, which opens in preview:
-its keys go from the preview to Edit with Shift+Tab, press it with Space,
-wait for the editor with lone Shift presses and go to the end with
-Ctrl+End. The `Z` lands after the final line break, so the save must be the
+the case presses its Edit button (`button = "Edit"`), and its keys wait for
+the editor with lone Shift presses and go to the end with Ctrl+End. The `Z` lands after the final line break, so the save must be the
 input with `Z` appended (`gen/mkmd.py`).
 
 The inputs `gen/mkooxml.py`, `gen/mkodf.py` and `gen/mkcfb.py` write are
@@ -291,6 +359,7 @@ refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 | `txt-utf16-bom-emoji` | UTF-16 LE TXT with a BOM and an emoji | refused with the open error dialog, file unchanged |
 | `txt-utf16be-nobom` | UTF-16 BE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
 | `txt-utf16le-nobom` | UTF-16 LE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
+| `xlsx-cell-style-roundtrip` | XLSX with a new cell style, a changed predefined one, a changed copy of a predefined one and an unchanged predefined one (`gen/mkxlsxstyles.py`) | after typing in A3, `styles.xml` keeps the four styles with their fonts, borders, number format and alignment, and row 1 keeps its values |
 | `xlsx-export-pdf` | the XLSX of `xlsx-save` | the text of the exported PDF has 1234.5 as `#,##0.00` shows it, with the separators of any locale |
 | `xlsx-save` | XLSX with a number, a formatted number and a date | after typing in A2, row 1 keeps its values |
 | `xltx-open` | XLTX template with a number and a text | opens |
