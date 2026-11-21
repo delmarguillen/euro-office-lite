@@ -1,10 +1,10 @@
 Origin: own
 
 diff --git a/cell/api.js b/cell/api.js
-index 86f9bf72f1..0332e83c81 100644
+index 86f9bf72f1..b4b7856492 100644
 --- a/cell/api.js
 +++ b/cell/api.js
-@@ -6492,6 +6492,52 @@ var editor;
+@@ -6492,6 +6492,53 @@ var editor;
      this.wb.restoreFocus();
    };
  
@@ -18,9 +18,10 @@ index 86f9bf72f1..0332e83c81 100644
 +    return style ? style.xfs.clone() : null;
 +  };
 +  // Adds a style built from xfs (asc_CellXfs). One undo step. Returns c_oAscError.ID.No or the error.
-+  spreadsheet_api.prototype.asc_addCellStyle = function(name, xfs) {
++  // A copy names its source style: it applies what the source applies, and what xfs changes.
++  spreadsheet_api.prototype.asc_addCellStyle = function(name, xfs, sourceName) {
 +    return this._editCellStyle(xfs, function(wbModel) {
-+      return wbModel.addCellStyle(name, xfs);
++      return wbModel.addCellStyle(name, xfs, sourceName);
 +    });
 +  };
 +  // Gives the style the values of xfs and updates the cells that use it. One undo step.
@@ -57,7 +58,7 @@ index 86f9bf72f1..0332e83c81 100644
    spreadsheet_api.prototype.asc_ChangeTextCase = function(nType) {
      if (this.collaborativeEditing.getGlobalLock() || !this.canEdit()) {
        return;
-@@ -10414,6 +10460,10 @@ var editor;
+@@ -10414,6 +10461,10 @@ var editor;
    prot["asc_setCellFormat"] = prot.asc_setCellFormat;
    prot["asc_setCellAngle"] = prot.asc_setCellAngle;
    prot["asc_setCellStyle"] = prot.asc_setCellStyle;
@@ -81,7 +82,7 @@ index 3475e4b21a..10e07006cd 100644
  	window['AscCH'].historyitem_Worksheet_RemoveCell = 1;
  	window['AscCH'].historyitem_Worksheet_RemoveRows = 2;
 diff --git a/cell/model/Serialize.js b/cell/model/Serialize.js
-index 7a1fe8512e..0a2fbfe4d5 100644
+index 7a1fe8512e..3d96b0c019 100644
 --- a/cell/model/Serialize.js
 +++ b/cell/model/Serialize.js
 @@ -2985,6 +2985,8 @@
@@ -159,7 +160,60 @@ index 7a1fe8512e..0a2fbfe4d5 100644
                  oCellStyle.xfs = g_StyleCache.addXf(newXf);
  
                  oOutput.push(oCellStyle);
-@@ -15225,6 +15252,8 @@
+@@ -14629,6 +14656,10 @@
+         var res = bcr.Read1(length, function (t, l) {
+             return fReadStyles(t, l, oOutput);
+         });
++        // The list above gives Accent3 no builtinId. The gallery and asc_setCellStyle find the
++        // document's copy of a predefined style by builtinId: without one, Accent3 matches the
++        // first style of the document that has none, such as a style the user made.
++        setPresetCellStyleBuiltinId(oOutput, "Accent3", 37);
+ 
+         // Если нет стилей в документе, то добавим
+         if (0 === wb.CellStyles.CustomStyles.length && 0 < oOutput.length) {
+@@ -14640,6 +14671,41 @@
+             g_oDefaultFormat.XfId = 0;
+         }
+     }
++    // builtinId is the number ECMA-376 gives the predefined style (Accent3 is 37).
++    function setPresetCellStyleBuiltinId(styles, name, builtinId) {
++        for (var i = 0; i < styles.length; ++i) {
++            var style = styles[i];
++            if (name === style.Name && null === style.BuiltinId) {
++                style.BuiltinId = builtinId;
++            }
++        }
++    }
++    function findCellStyle(styles, isWanted) {
++        for (var i = 0; i < styles.length; ++i) {
++            if (isWanted(styles[i])) {
++                return styles[i];
++            }
++        }
++        return null;
++    }
++    /**
++     * Reads the first style of the document named exactly name and without builtinId as the
++     * predefined style. A document that already has the predefined style is left as it is.
++     */
++    function readAsPresetCellStyle(styles, name, builtinId) {
++        var hasPreset = findCellStyle(styles, function (style) {
++            return builtinId === style.BuiltinId;
++        });
++        if (hasPreset) {
++            return;
++        }
++        var style = findCellStyle(styles, function (style) {
++            return name === style.Name && null === style.BuiltinId;
++        });
++        if (style) {
++            style.BuiltinId = builtinId;
++        }
++    }
+     function RenameDefSlicerStyle(oStyleObject){
+         var tableStyles = oStyleObject.oCustomTableStyles;
+         var tableStylesRenamed = {}, i;
+@@ -15225,6 +15291,8 @@
              // ApplyNumberFormat (ToDo возможно это свойство должно быть в xfs)
              if (null !== oCellStyleXfs.ApplyNumberFormat)
                  oCellStyle.ApplyNumberFormat = oCellStyleXfs.ApplyNumberFormat;
@@ -168,6 +222,15 @@ index 7a1fe8512e..0a2fbfe4d5 100644
  
              oCellStyle.xfs = g_StyleCache.addXf(newXf);
              // ToDo при отсутствии имени все не очень хорошо будет!
+@@ -15244,6 +15312,8 @@
+                 this.wb.CellStyles.CustomStyles[i].Name = newStyleName;
+             }
+         }
++        // Files saved while the preset Accent3 had no builtinId carry the Accent3 a cell took without one.
++        readAsPresetCellStyle(this.wb.CellStyles.CustomStyles, "Accent3", 37);
+ 
+         // ToDo это нужно будет переделать (проходимся по всем стилям и меняем у них XfId по порядку)
+ 
 diff --git a/cell/model/UndoRedo.js b/cell/model/UndoRedo.js
 index 97bfa31cfb..8691859850 100644
 --- a/cell/model/UndoRedo.js
@@ -202,10 +265,10 @@ index 97bfa31cfb..8691859850 100644
  			if (!bUndo && wb.bCollaborativeChanges) {
  				wb.calculate(Data.elem, nSheetId);
 diff --git a/cell/model/Workbook.js b/cell/model/Workbook.js
-index eed6dbdcdb..e3a3799b64 100644
+index eed6dbdcdb..f6feb1e85d 100644
 --- a/cell/model/Workbook.js
 +++ b/cell/model/Workbook.js
-@@ -4339,6 +4339,208 @@
+@@ -4339,6 +4339,243 @@
  	Workbook.prototype.addDefName = function (name, ref, sheetId, hidden, isTable) {
  		return this.dependencyFormulas.addDefName(name, ref, sheetId, hidden, isTable);
  	};
@@ -218,16 +281,26 @@ index eed6dbdcdb..e3a3799b64 100644
 +		}
 +		return c_oAscError.ID.No;
 +	};
-+	Workbook.prototype.addCellStyle = function (name, xfs) {
++	// sourceName is the style a copy is made from; without it the style applies every part it has.
++	Workbook.prototype.addCellStyle = function (name, xfs, sourceName) {
 +		var nameCheck = this.checkNewCellStyleName(name);
 +		if (c_oAscError.ID.No !== nameCheck) {
 +			return nameCheck;
++		}
++		var sourceStyle = sourceName ? this.CellStyles.getStyleByName(sourceName) : null;
++		if (sourceName && !sourceStyle) {
++			return c_oAscError.ID.CellStyleNotFound;
 +		}
 +		var style = new AscCommonExcel.CCellStyle();
 +		style.Name = name;
 +		style.XfId = this.CellStyles.getNextXfId();
 +		style.xfs = createCellStyleXfs(xfs);
-+		style.ApplyAlignment = null !== style.xfs.align;
++		if (sourceStyle) {
++			copyCellStyleApplies(sourceStyle, style);
++			applyChangedCellStyleParts(style, sourceStyle);
++		} else {
++			style.ApplyAlignment = null !== style.xfs.align;
++		}
 +
 +		AscCommon.History.Create_NewPoint();
 +		AscCommon.History.StartTransaction();
@@ -254,17 +327,7 @@ index eed6dbdcdb..e3a3799b64 100644
 +		var newStyle = oldStyle.clone();
 +		newStyle.XfId = isInDocument ? oldStyle.XfId : this.CellStyles.getNextXfId();
 +		newStyle.xfs = createCellStyleXfs(xfs);
-+		// A file can give a style an alignment it does not apply: that stays so until the alignment changes.
-+		if (!newStyle.getAlign().isEqual(oldStyle.getAlign())) {
-+			newStyle.ApplyAlignment = true;
-+		}
-+		// Predefined styles such as Good do not apply a border or a number format until one is set.
-+		if (!newStyle.getBorder().isEqual(oldStyle.getBorder())) {
-+			newStyle.ApplyBorder = true;
-+		}
-+		if (newStyle.getNumFormatStr() !== oldStyle.getNumFormatStr()) {
-+			newStyle.ApplyNumberFormat = true;
-+		}
++		applyChangedCellStyleParts(newStyle, oldStyle);
 +
 +		AscCommon.History.Create_NewPoint();
 +		AscCommon.History.StartTransaction();
@@ -283,6 +346,41 @@ index eed6dbdcdb..e3a3799b64 100644
 +			new UndoRedoData_FromTo(oldStyle, newStyle));
 +		this.CellStyles.setCustomStyleByXfId(newStyle.XfId, newStyle);
 +	};
++	function copyCellStyleApplies(fromStyle, toStyle) {
++		toStyle.ApplyFont = fromStyle.ApplyFont;
++		toStyle.ApplyFill = fromStyle.ApplyFill;
++		toStyle.ApplyBorder = fromStyle.ApplyBorder;
++		toStyle.ApplyNumberFormat = fromStyle.ApplyNumberFormat;
++		toStyle.ApplyAlignment = fromStyle.ApplyAlignment;
++	}
++	function isSameCellStylePart(a, b) {
++		return a === b || a.isEqual(b);
++	}
++	// Fill.isEqual gives false for two fills without a pattern, though neither draws anything.
++	function isSameCellStyleFill(a, b) {
++		var bothEmpty = !a.notEmpty() && !b.notEmpty();
++		return bothEmpty || isSameCellStylePart(a, b);
++	}
++	// A part the old style does not apply turns on once its value changes. Predefined
++	// styles such as Good apply no border or number format, and a file can give a
++	// style an alignment it does not apply.
++	function applyChangedCellStyleParts(newStyle, oldStyle) {
++		if (!isSameCellStylePart(newStyle.getFont(), oldStyle.getFont())) {
++			newStyle.ApplyFont = true;
++		}
++		if (!isSameCellStyleFill(newStyle.getFill(), oldStyle.getFill())) {
++			newStyle.ApplyFill = true;
++		}
++		if (!isSameCellStylePart(newStyle.getBorder(), oldStyle.getBorder())) {
++			newStyle.ApplyBorder = true;
++		}
++		if (newStyle.getNumFormatStr() !== oldStyle.getNumFormatStr()) {
++			newStyle.ApplyNumberFormat = true;
++		}
++		if (!isSameCellStylePart(newStyle.getAlign(), oldStyle.getAlign())) {
++			newStyle.ApplyAlignment = true;
++		}
++	}
 +	// A style keeps what a style defines: font, fill, border, number format and alignment.
 +	function createCellStyleXfs(xfs) {
 +		var styleXfs = new AscCommonExcel.CellXfs();
@@ -414,7 +512,7 @@ index eed6dbdcdb..e3a3799b64 100644
  	Workbook.prototype.getDefinesNames = function ( name, sheetId, isDirectSearch ) {
  		return this.dependencyFormulas.getDefNameByName( name, sheetId, isDirectSearch );
  	};
-@@ -15862,6 +16064,8 @@
+@@ -15862,6 +16099,8 @@
  				this.setBorder(oStyle.getBorder());
  			if (oStyle.ApplyNumberFormat)
  				this.setNumFormat(oStyle.getNumFormatStr());

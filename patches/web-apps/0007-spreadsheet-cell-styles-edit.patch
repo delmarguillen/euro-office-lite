@@ -1,7 +1,7 @@
 Origin: own
 
 diff --git a/apps/spreadsheeteditor/main/app/controller/Toolbar.js b/apps/spreadsheeteditor/main/app/controller/Toolbar.js
-index c3be91bd4f..a2d7de656a 100644
+index c3be91bd4f..800d5dee14 100644
 --- a/apps/spreadsheeteditor/main/app/controller/Toolbar.js
 +++ b/apps/spreadsheeteditor/main/app/controller/Toolbar.js
 @@ -476,6 +476,7 @@ define([
@@ -12,7 +12,7 @@ index c3be91bd4f..a2d7de656a 100644
                  toolbar.cmbNumberFormat.on('selected',                      _.bind(this.onNumberFormatSelect, this));
                  toolbar.cmbNumberFormat.on('show:before',                   _.bind(this.onNumberFormatOpenBefore, this, true));
                  if (toolbar.cmbNumberFormat.cmpEl)
-@@ -2257,6 +2258,106 @@ define([
+@@ -2257,6 +2258,107 @@ define([
              }
          },
  
@@ -77,7 +77,7 @@ index c3be91bd4f..a2d7de656a 100644
 +            if (item.value === 'modify') {
 +                this.openCellStyleDialog(true, name, this.api.asc_getCellStyleXfs(name));
 +            } else if (item.value === 'duplicate') {
-+                this.openCellStyleDialog(false, this.getFreeCellStyleName(menu.styleCaption), this.api.asc_getCellStyleXfs(name));
++                this.openCellStyleDialog(false, this.getFreeCellStyleName(menu.styleCaption), this.api.asc_getCellStyleXfs(name), name);
 +            } else if (item.value === 'selection') {
 +                this.openCellStyleDialog(false, this.getFreeCellStyleName(this.textNewStyleName), this.api.asc_getCellInfo().asc_getXfs());
 +            }
@@ -94,7 +94,8 @@ index c3be91bd4f..a2d7de656a 100644
 +            return name;
 +        },
 +
-+        openCellStyleDialog: function(isModify, name, xfs) {
++        // sourceName: the style a copy is made from, so the copy applies what it applies.
++        openCellStyleDialog: function(isModify, name, xfs, sourceName) {
 +            var me = this;
 +            var langId = me.api.asc_getLocale() || 0x0409;
 +            (new SSE.Views.CellStyleDialog({
@@ -106,7 +107,7 @@ index c3be91bd4f..a2d7de656a 100644
 +                xfs: xfs,
 +                handler: function(result, settings) {
 +                    if (result === 'ok' && settings) {
-+                        var error = isModify ? me.api.asc_modifyCellStyle(name, settings.xfs) : me.api.asc_addCellStyle(settings.name, settings.xfs);
++                        var error = isModify ? me.api.asc_modifyCellStyle(name, settings.xfs) : me.api.asc_addCellStyle(settings.name, settings.xfs, sourceName);
 +                        if (error !== Asc.c_oAscError.ID.No) {
 +                            Common.UI.warning({msg: me.textCellStyleError});
 +                        }
@@ -119,7 +120,7 @@ index c3be91bd4f..a2d7de656a 100644
          onShowBeforeCondFormat: function(cmp, id) {
              if (cmp.mnuDataBars.menu.items.length>0) // menu is inited
                  return;
-@@ -5304,7 +5405,8 @@ define([
+@@ -5304,7 +5406,8 @@ define([
              }
          },
  
@@ -129,7 +130,7 @@ index c3be91bd4f..a2d7de656a 100644
              var me = this;
              if (_.isUndefined(me.fontStore)) {
                  me.fontStore = new Common.Collections.Fonts();
-@@ -5317,10 +5419,14 @@ define([
+@@ -5317,10 +5420,14 @@ define([
                  });
                  me.fontStore.add(arr);
              }
@@ -145,7 +146,7 @@ index c3be91bd4f..a2d7de656a 100644
                  pageSetup: pageSetup,
                  handler: function(dlg, result) {
                      if (result === 'ok') {
-@@ -5750,6 +5856,12 @@ define([
+@@ -5750,6 +5857,12 @@ define([
              Common.UI.TooltipManager.closeTip('rtlDirection');
              Common.UI.TooltipManager.closeTip('cellFormat');
              Common.UI.TooltipManager.closeTip('solver');

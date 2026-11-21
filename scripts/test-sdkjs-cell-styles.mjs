@@ -657,6 +657,352 @@ same('new font, duplicate: the result comes at once and the font is loaded', run
 same('new font, duplicate: no gallery or sheet drawn before the font loads', run('timesWaiting'), [false, false]);
 same('new font, duplicate: both drawn once it loads', run('timesLoaded'), [true, true]);
 
+// --- A copy of a style applies what the original applies ---
+// Good applies no number format or border, so a copy of it leaves the cell's own.
+const DUPLICATE_HELPERS = `
+  function appliesOf(name) {
+    var s = api.wbModel.CellStyles.getStyleByName(name);
+    return [s.ApplyFont, s.ApplyFill, s.ApplyBorder, s.ApplyNumberFormat, s.ApplyAlignment];
+  }
+  function bottomOf(ref) { return (cellXfs(ref) || new AscCommonExcel.CellXfs()).getBorder().b.s; }
+  function percentCell(ref) {
+    ws().getRange2(ref).setValue('0.5');
+    ws().getRange2(ref).setNumFormat('0%');
+  }
+  function borderCell(ref) {
+    ws().getRange2(ref).setValue('1');
+    var borders = [];
+    borders[Asc.c_oAscBorderOptions.Bottom] = {style: Asc.c_oAscBorderStyles.Thin, color: new Asc.asc_CColor(0, 0, 0)};
+    var borderXfs = new AscCommonExcel.CellXfs();
+    borderXfs.asc_setBorder(borders);
+    ws().getRange2(ref).setBorder(borderXfs.border);
+  }
+`;
+run = openEditor(null);
+run(DUPLICATE_HELPERS);
+run(`
+  var goodApplies = appliesOf('Good');
+  percentCell('A1');
+  borderCell('A2');
+  percentCell('A3');
+  var copyResult = api.asc_addCellStyle('Good 2', api.asc_getCellStyleXfs('Good'), 'Good');
+  select('A1:A2'); api.asc_setCellStyle('Good 2');
+  var formatXfs = api.asc_getCellStyleXfs('Good');
+  formatXfs.asc_setNumFormatInfo('0.000');
+  var formatResult = api.asc_addCellStyle('Good 3', formatXfs, 'Good');
+  select('A3'); api.asc_setCellStyle('Good 3');
+`);
+const goodApplies = run('goodApplies');
+same('duplicate: Good applies no border or number format', goodApplies.slice(2, 4), [false, false]);
+same('duplicate: the copy applies what Good applies', run("[copyResult, appliesOf('Good 2')]"), [No, goodApplies]);
+same('duplicate: A1 keeps its 0%', run("[describe('A1').style, describe('A1').num]"), ['Good 2', '0%']);
+same('duplicate: A2 keeps its border set by hand', run("bottomOf('A2')"), thin);
+same('duplicate with a number format: the copy applies it', run("[formatResult, appliesOf('Good 3')[3], describe('A3').num]"), [No, true, '0.000']);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(DUPLICATE_HELPERS);
+run(`
+  percentCell('B1');
+  select('B1'); api.asc_setCellStyle('Good 2');
+`);
+same('duplicate, reopen: the copy still applies what Good applies', run("appliesOf('Good 2')"), goodApplies);
+same('duplicate, reopen: A1 keeps its 0% and A2 its border', run("[describe('A1').num, bottomOf('A2')]"), ['0%', thin]);
+same('duplicate, reopen: applying the copy to B1 keeps its 0%', run("[describe('B1').style, describe('B1').num]"), ['Good 2', '0%']);
+
+// --- Copies and edits of a predefined style applied once before ---
+// Applying it puts a copy in the document, whose parts are other objects than
+// the ones an edit builds, with the same values.
+const APPLIED_HELPERS = DUPLICATE_HELPERS + `
+  var NUMBER_FORMAT = 3;
+  function redCell(ref) {
+    ws().getRange2(ref).setValue('1');
+    ws().getRange2(ref).setFillColor(AscCommonExcel.createRgbColor(255, 0, 0));
+  }
+  function withNumberFormat(applies) {
+    var result = applies.slice();
+    result[NUMBER_FORMAT] = true;
+    return result;
+  }
+  function predefinedNames() {
+    return api.wbModel.CellStyles.DefaultStyles.filter(function (s) { return 0 !== s.BuiltinId; }).map(function (s) { return s.Name; });
+  }
+`;
+run = openEditor(null);
+run(APPLIED_HELPERS);
+run(`
+  var appliedOnce = {};
+  var mismatches = [];
+  predefinedNames().forEach(function (name, index) {
+    // A copy made before the style is in the document, for comparison.
+    api.asc_addCellStyle(name + ' early copy', api.asc_getCellStyleXfs(name), name);
+    if (JSON.stringify(appliesOf(name + ' early copy')) !== JSON.stringify(appliesOf(name))) {
+      mismatches.push('early copy of ' + name + ': ' + JSON.stringify(appliesOf(name + ' early copy')));
+    }
+    var ref = 'Z' + (index + 1);
+    ws().getRange2(ref).setValue('1');
+    select(ref); api.asc_setCellStyle(name);
+    appliedOnce[name] = appliesOf(name);
+    api.asc_addCellStyle(name + ' copy', api.asc_getCellStyleXfs(name), name);
+    if (JSON.stringify(appliesOf(name + ' copy')) !== JSON.stringify(appliedOnce[name])) {
+      mismatches.push('copy of ' + name + ': ' + JSON.stringify(appliesOf(name + ' copy')));
+    }
+    var formatXfs = api.asc_getCellStyleXfs(name);
+    formatXfs.asc_setNumFormatInfo('0.000');
+    api.asc_modifyCellStyle(name, formatXfs);
+    if (JSON.stringify(appliesOf(name)) !== JSON.stringify(withNumberFormat(appliedOnce[name]))) {
+      mismatches.push('number format of ' + name + ': ' + JSON.stringify(appliesOf(name)));
+    }
+  });
+  redCell('A1'); select('A1'); api.asc_setCellStyle('Percent copy');
+  redCell('A2'); select('A2'); api.asc_setCellStyle('Percent');
+  redCell('A3'); select('A3'); api.asc_setCellStyle('Title copy');
+  redCell('A4'); select('A4'); api.asc_setCellStyle('Title');
+`);
+same('applied once: Percent and Title apply no fill', run("[appliedOnce['Percent'][1], appliedOnce['Title'][1]]"), [false, false]);
+same('applied once: a copy without changes and a number format edit turn on only what changed', run('mismatches'), []);
+same('applied once: a red cell keeps its fill with each style', run("['A1', 'A2', 'A3', 'A4'].map(function (ref) { return describe(ref).fill; })"), ['255,0,0', '255,0,0', '255,0,0', '255,0,0']);
+const appliedOnce = run('appliedOnce');
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(APPLIED_HELPERS);
+run(`
+  redCell('B1'); select('B1'); api.asc_setCellStyle('Percent copy');
+  redCell('B2'); select('B2'); api.asc_setCellStyle('Percent');
+`);
+same('applied once, reopen: the copy and the edited Percent still apply no fill', run("[appliesOf('Percent copy'), appliesOf('Percent')]"), [appliedOnce['Percent'], run(`withNumberFormat(${JSON.stringify(appliedOnce['Percent'])})`)]);
+same('applied once, reopen: red cells keep their fill', run("['A1', 'A2', 'B1', 'B2'].map(function (ref) { return describe(ref).fill; })"), ['255,0,0', '255,0,0', '255,0,0', '255,0,0']);
+
+// Percent applies no font: changing only its font reaches its cells and keeps their format.
+run = openEditor(null);
+run(APPLIED_HELPERS);
+run(`
+  percentCell('A1');
+  ws().getRange2('A2').setValue('0.25');
+  select('A2'); api.asc_setCellStyle('Percent');
+  var percentFont = api.asc_getCellStyleXfs('Percent');
+  percentFont.asc_setFontName('Courier New');
+  var percentFontResult = api.asc_modifyCellStyle('Percent', percentFont);
+`);
+same('Percent, font only: the style applies the font now', run("[percentFontResult, appliesOf('Percent')[0]]"), [No, true]);
+same('Percent, font only: A2 takes the font and keeps 0%', run("[cellXfs('A2').getFont2().getName(), describe('A2').num]"), ['Courier New', '0%']);
+
+// --- A style of the document never stands in for a predefined style ---
+// The gallery and asc_setCellStyle find the document's copy of a predefined style
+// by its builtinId. The real gallery code runs here, with text measuring stubbed.
+const PREDEFINED_HELPERS = `
+  function galleryEntries() {
+    var drawn = [];
+    var lastStyle = null;
+    var getFont = AscCommonExcel.CCellStyle.prototype.getFont;
+    AscCommonExcel.CCellStyle.prototype.getFont = function () {
+      lastStyle = this;
+      return getFont.call(this);
+    };
+    var stringRender = {
+      measureString: function (fragments) {
+        drawn.push({text: fragments[0].getFragmentText(), style: lastStyle});
+        return {width: 0, height: 0};
+      },
+      getEffectiveAlign: function () { return 0; },
+      render: function () {}
+    };
+    var fontManager = document.stubFontManager;
+    var view = {model: api.wbModel, stringRender: stringRender, fmgrGraphics: [fontManager, fontManager, fontManager], m_oFont: new AscCommonExcel.Font()};
+    var images;
+    try {
+      images = AscCommonExcel.generateCellStyles(100, 20, view);
+    } finally {
+      AscCommonExcel.CCellStyle.prototype.getFont = getFont;
+    }
+    return images.map(function (image, i) {
+      return {name: image.asc_getName(), type: image.asc_getType(), text: drawn[i].text, style: drawn[i].style};
+    });
+  }
+  function rgbOf(color) { return color ? color.getRgb() : null; }
+  function bordersOf(border) {
+    return ['l', 't', 'r', 'b'].map(function (side) {
+      var prop = border[side];
+      return prop ? prop.s + ':' + prop.getRgbOrNull() : null;
+    });
+  }
+  function formatOf(font, fill, border, num, align) {
+    return JSON.stringify([font.getName(), font.getSize(), font.getBold(), font.getItalic(), font.getUnderline(),
+      rgbOf(font.getColor()), rgbOf(fill.bg()), bordersOf(border), num,
+      align.getAlignHorizontal(), align.getAlignVertical(), align.getWrap()]);
+  }
+  function styleFormat(style) {
+    var applies = [style.ApplyFont, style.ApplyFill, style.ApplyBorder, style.ApplyNumberFormat, style.ApplyAlignment];
+    return formatOf(style.getFont(), style.getFill(), style.getBorder(), style.getNumFormatStr(), style.getAlign()) + JSON.stringify(applies);
+  }
+  function cellFormat(ref) {
+    var xfs = cellXfs(ref) || new AscCommonExcel.CellXfs();
+    return formatOf(xfs.getFont2(), xfs.getFill2(), xfs.getBorder() || g_oDefaultFormat.Border, xfs.getNum2().getFormat(), xfs.getAlign2());
+  }
+  function visiblePredefinedNames() {
+    return api.wbModel.CellStyles.DefaultStyles.filter(function (s) { return !s.Hidden; }).map(function (s) { return s.Name; });
+  }
+  function galleryOf(type) {
+    return galleryEntries().filter(function (entry) { return type === entry.type; });
+  }
+  // What the gallery draws for each predefined style, what applying it gives a cell
+  // of its own, and the document's section of the gallery after that.
+  function predefinedSnapshot() {
+    var gallery = {};
+    galleryOf(AscCommon.c_oAscStyleImage.Default).forEach(function (entry) {
+      gallery[entry.name] = entry.text + ' ' + styleFormat(entry.style);
+    });
+    var applied = {};
+    visiblePredefinedNames().forEach(function (name, index) {
+      var ref = 'A' + (index + 1);
+      ws().getRange2(ref).setValue('1');
+      select(ref);
+      api.asc_setCellStyle(name);
+      applied[name] = describe(ref).style + ' ' + cellFormat(ref);
+    });
+    var documentNames = galleryOf(AscCommon.c_oAscStyleImage.Document).map(function (entry) { return entry.name; });
+    return {gallery: gallery, applied: applied, documentNames: documentNames};
+  }
+`;
+function predefinedChanges(snapshot, expected, copyName) {
+  const changes = [];
+  for (const part of ['gallery', 'applied']) {
+    for (const name of Object.keys(expected[part])) {
+      if (snapshot[part][name] !== expected[part][name]) changes.push(`${copyName} -> ${name} (${part}: ${snapshot[part][name]})`);
+    }
+  }
+  const documentNames = JSON.stringify(snapshot.documentNames);
+  if (documentNames !== JSON.stringify([copyName])) changes.push(`${copyName} -> document section ${documentNames}`);
+  return changes;
+}
+run = openEditor(null);
+run(PREDEFINED_HELPERS);
+const predefinedNames = run('visiblePredefinedNames()');
+const expectedPredefined = run('predefinedSnapshot()');
+same('predefined styles: applying each one leaves the document section of the gallery empty', expectedPredefined.documentNames, []);
+const duplicateChanges = [];
+for (const name of predefinedNames) {
+  const copyName = `${name} 2`;
+  run = openEditor(null);
+  run(PREDEFINED_HELPERS);
+  run(`api.asc_addCellStyle(${JSON.stringify(copyName)}, api.asc_getCellStyleXfs(${JSON.stringify(name)}), ${JSON.stringify(name)});`);
+  duplicateChanges.push(...predefinedChanges(run('predefinedSnapshot()'), expectedPredefined, copyName));
+}
+same(`duplicate each of the ${predefinedNames.length} predefined styles: the predefined styles draw and apply as before`, duplicateChanges, []);
+
+// A style from the selection, as a file from another application brings, and Accent3.
+run = openEditor(null);
+run(PREDEFINED_HELPERS);
+run(`
+  ws().getRange2('A1').setValue('1');
+  ws().getRange2('A1').setFillColor(AscCommonExcel.createRgbColor(255, 0, 0));
+  api.asc_addCellStyle('Mine', cellXfs('A1').clone());
+  var accent3Drawn = galleryOf(AscCommon.c_oAscStyleImage.Default).filter(function (entry) { return 'Accent3' === entry.name; })[0].style;
+  ws().getRange2('B1').setValue('1');
+  select('B1'); api.asc_setCellStyle('Accent3');
+  var mineXfs = api.asc_getCellStyleXfs('Mine');
+  var accent3Xfs = api.asc_getCellStyleXfs('Accent3');
+  accent3Xfs.asc_setFontBold(true);
+  var accent3Result = api.asc_modifyCellStyle('Accent3', accent3Xfs);
+`);
+same('Accent3 with a style of the document: the gallery draws Accent3', run('accent3Drawn.Name'), 'Accent3');
+same('Accent3 with a style of the document: applying it gives Accent3', run("[describe('B1').style, describe('B1').fill, describe('B1').bold]"), ['Accent3', '155,187,89', true]);
+same('Accent3 with a style of the document: modifying Accent3 leaves Mine as it was', run("[accent3Result, describe('A1').fill, api.asc_getCellStyleXfs('Mine').getFont2().getBold(), mineXfs.asc_getFillColor().asc_getR()]"), [No, '255,0,0', false, 255]);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(PREDEFINED_HELPERS);
+same('Accent3, reopen: B1 keeps Accent3 and the document keeps it as a predefined style', run("[describe('B1').style, describe('B1').fill, api.wbModel.CellStyles.getStyleByName('Accent3').BuiltinId]"), ['Accent3', '155,187,89', 37]);
+same('Accent3, reopen: the document section lists Mine only', run('galleryOf(AscCommon.c_oAscStyleImage.Document).map(function (entry) { return entry.name; })'), ['Mine']);
+
+// --- Files that carry Accent3 without builtinId ---
+// Editors whose preset Accent3 had no builtinId saved the copy a cell took that way.
+// The real writer gives the same record once the copy has no builtinId.
+const ACCENT3_FILE_HELPERS = PREDEFINED_HELPERS + `
+  function documentStyles() {
+    return api.wbModel.CellStyles.CustomStyles.map(function (s) { return [s.Name, s.BuiltinId]; });
+  }
+  function documentStyle(name) {
+    return api.wbModel.CellStyles.CustomStyles.filter(function (s) { return name === s.Name; })[0];
+  }
+  function dropBuiltinId(name) { documentStyle(name).BuiltinId = null; }
+  function renameStyle(from, to) { documentStyle(from).Name = to; }
+  function addPlainStyle(name, ref) {
+    ws().getRange2(ref).setValue('1');
+    ws().getRange2(ref).setFillColor(AscCommonExcel.createRgbColor(0, 0, 255));
+    api.asc_addCellStyle(name, cellXfs(ref).clone());
+  }
+  function accent3Names() {
+    return documentStyles().filter(function (s) { return 'Accent3' === s[0]; });
+  }
+`;
+run = openEditor(null);
+run(ACCENT3_FILE_HELPERS);
+run(`
+  ['A1', 'A2'].forEach(function (ref) {
+    ws().getRange2(ref).setValue('1');
+    select(ref); api.asc_setCellStyle('Accent3');
+  });
+  var redAccent3 = api.asc_getCellStyleXfs('Accent3');
+  redAccent3.asc_setFillColor(color(255, 0, 0));
+  api.asc_modifyCellStyle('Accent3', redAccent3);
+  dropBuiltinId('Accent3');
+`);
+same('old Accent3 file: written without builtinId and red', run("[documentStyles(), describe('A1').fill]"), [[['Normal', 0], ['Accent3', null]], '255,0,0']);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(ACCENT3_FILE_HELPERS);
+run(`
+  ws().getRange2('B1').setValue('1');
+  select('B1'); api.asc_setCellStyle('Accent3');
+  var boldAccent3 = api.asc_getCellStyleXfs('Accent3');
+  boldAccent3.asc_setFontBold(true);
+  var oldModifyResult = api.asc_modifyCellStyle('Accent3', boldAccent3);
+  var oldCopyResult = api.asc_addCellStyle('Accent3 2', api.asc_getCellStyleXfs('Accent3'), 'Accent3');
+  ws().getRange2('C1').setValue('1');
+  select('C1'); api.asc_setCellStyle('Accent3 2');
+`);
+same('old Accent3 file, reopen: the record is Accent3 again', run('accent3Names()'), [['Accent3', 37]]);
+same('old Accent3 file: applying Accent3 gives its red', run("[describe('B1').style, describe('B1').fill]"), ['Accent3', '255,0,0']);
+same('old Accent3 file: modifying Accent3 reaches the cells it had', run("[oldModifyResult, describe('A1').bold, describe('A2').bold, describe('B1').bold]"), [No, true, true, true]);
+same('old Accent3 file: a copy of Accent3 takes its red and bold', run("[oldCopyResult, describe('C1').style, describe('C1').fill, describe('C1').bold]"), [No, 'Accent3 2', '255,0,0', true]);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(ACCENT3_FILE_HELPERS);
+same('old Accent3 file, saved again: one Accent3 with builtinId 37', run('accent3Names()'), [['Accent3', 37]]);
+same('old Accent3 file, saved again: the cells keep Accent3 in red and bold', run("['A1', 'B1'].map(function (ref) { return [describe(ref).style, describe(ref).fill, describe(ref).bold]; })"), [['Accent3', '255,0,0', true], ['Accent3', '255,0,0', true]]);
+
+// A file with the predefined Accent3 and a loose record named Accent3: both stay.
+run = openEditor(null);
+run(ACCENT3_FILE_HELPERS);
+run(`
+  ws().getRange2('A1').setValue('1');
+  select('A1'); api.asc_setCellStyle('Accent3');
+  addPlainStyle('Loose', 'B1');
+  renameStyle('Loose', 'Accent3');
+`);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(ACCENT3_FILE_HELPERS);
+same('Accent3 and a loose Accent3: both stay as they were', run('accent3Names()'), [['Accent3', 37], ['Accent3', null]]);
+
+// Several records named Accent3 without builtinId: only the first becomes Accent3.
+run = openEditor(null);
+run(ACCENT3_FILE_HELPERS);
+run(`
+  addPlainStyle('First', 'A1');
+  addPlainStyle('Second', 'B1');
+  renameStyle('First', 'Accent3');
+  renameStyle('Second', 'Accent3');
+`);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(ACCENT3_FILE_HELPERS);
+same('two loose Accent3: only the first takes builtinId 37', run('accent3Names()'), [['Accent3', 37], ['Accent3', null]]);
+
+// Other names stay styles of the user.
+run = openEditor(null);
+run(ACCENT3_FILE_HELPERS);
+run(`
+  addPlainStyle('Lower', 'A1');
+  renameStyle('Lower', 'accent3');
+  addPlainStyle('Accent3 2', 'B1');
+`);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(ACCENT3_FILE_HELPERS);
+same('accent3 and Accent3 2 keep no builtinId', run('documentStyles()'), [['Normal', 0], ['accent3', null], ['Accent3 2', null]]);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {
