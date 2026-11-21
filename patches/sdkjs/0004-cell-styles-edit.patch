@@ -82,7 +82,7 @@ index 3475e4b21a..10e07006cd 100644
  	window['AscCH'].historyitem_Worksheet_RemoveCell = 1;
  	window['AscCH'].historyitem_Worksheet_RemoveRows = 2;
 diff --git a/cell/model/Serialize.js b/cell/model/Serialize.js
-index 7a1fe8512e..0a2fbfe4d5 100644
+index 7a1fe8512e..b2c647d4f0 100644
 --- a/cell/model/Serialize.js
 +++ b/cell/model/Serialize.js
 @@ -2985,6 +2985,8 @@
@@ -160,7 +160,34 @@ index 7a1fe8512e..0a2fbfe4d5 100644
                  oCellStyle.xfs = g_StyleCache.addXf(newXf);
  
                  oOutput.push(oCellStyle);
-@@ -15225,6 +15252,8 @@
+@@ -14629,6 +14656,10 @@
+         var res = bcr.Read1(length, function (t, l) {
+             return fReadStyles(t, l, oOutput);
+         });
++        // The list above gives Accent3 no builtinId. The gallery and asc_setCellStyle find the
++        // document's copy of a predefined style by builtinId: without one, Accent3 matches the
++        // first style of the document that has none, such as a style the user made.
++        setPresetCellStyleBuiltinId(oOutput, "Accent3", 37);
+ 
+         // Если нет стилей в документе, то добавим
+         if (0 === wb.CellStyles.CustomStyles.length && 0 < oOutput.length) {
+@@ -14640,6 +14671,15 @@
+             g_oDefaultFormat.XfId = 0;
+         }
+     }
++    // builtinId is the number ECMA-376 gives the predefined style (Accent3 is 37).
++    function setPresetCellStyleBuiltinId(styles, name, builtinId) {
++        for (var i = 0; i < styles.length; ++i) {
++            var style = styles[i];
++            if (name === style.Name && null === style.BuiltinId) {
++                style.BuiltinId = builtinId;
++            }
++        }
++    }
+     function RenameDefSlicerStyle(oStyleObject){
+         var tableStyles = oStyleObject.oCustomTableStyles;
+         var tableStylesRenamed = {}, i;
+@@ -15225,6 +15265,8 @@
              // ApplyNumberFormat (ToDo возможно это свойство должно быть в xfs)
              if (null !== oCellStyleXfs.ApplyNumberFormat)
                  oCellStyle.ApplyNumberFormat = oCellStyleXfs.ApplyNumberFormat;

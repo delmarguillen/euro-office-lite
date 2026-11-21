@@ -784,6 +784,132 @@ run(`
 same('Percent, font only: the style applies the font now', run("[percentFontResult, appliesOf('Percent')[0]]"), [No, true]);
 same('Percent, font only: A2 takes the font and keeps 0%', run("[cellXfs('A2').getFont2().getName(), describe('A2').num]"), ['Courier New', '0%']);
 
+// --- A style of the document never stands in for a predefined style ---
+// The gallery and asc_setCellStyle find the document's copy of a predefined style
+// by its builtinId. The real gallery code runs here, with text measuring stubbed.
+const PREDEFINED_HELPERS = `
+  function galleryEntries() {
+    var drawn = [];
+    var lastStyle = null;
+    var getFont = AscCommonExcel.CCellStyle.prototype.getFont;
+    AscCommonExcel.CCellStyle.prototype.getFont = function () {
+      lastStyle = this;
+      return getFont.call(this);
+    };
+    var stringRender = {
+      measureString: function (fragments) {
+        drawn.push({text: fragments[0].getFragmentText(), style: lastStyle});
+        return {width: 0, height: 0};
+      },
+      getEffectiveAlign: function () { return 0; },
+      render: function () {}
+    };
+    var fontManager = document.stubFontManager;
+    var view = {model: api.wbModel, stringRender: stringRender, fmgrGraphics: [fontManager, fontManager, fontManager], m_oFont: new AscCommonExcel.Font()};
+    var images;
+    try {
+      images = AscCommonExcel.generateCellStyles(100, 20, view);
+    } finally {
+      AscCommonExcel.CCellStyle.prototype.getFont = getFont;
+    }
+    return images.map(function (image, i) {
+      return {name: image.asc_getName(), type: image.asc_getType(), text: drawn[i].text, style: drawn[i].style};
+    });
+  }
+  function rgbOf(color) { return color ? color.getRgb() : null; }
+  function bordersOf(border) {
+    return ['l', 't', 'r', 'b'].map(function (side) {
+      var prop = border[side];
+      return prop ? prop.s + ':' + prop.getRgbOrNull() : null;
+    });
+  }
+  function formatOf(font, fill, border, num, align) {
+    return JSON.stringify([font.getName(), font.getSize(), font.getBold(), font.getItalic(), font.getUnderline(),
+      rgbOf(font.getColor()), rgbOf(fill.bg()), bordersOf(border), num,
+      align.getAlignHorizontal(), align.getAlignVertical(), align.getWrap()]);
+  }
+  function styleFormat(style) {
+    var applies = [style.ApplyFont, style.ApplyFill, style.ApplyBorder, style.ApplyNumberFormat, style.ApplyAlignment];
+    return formatOf(style.getFont(), style.getFill(), style.getBorder(), style.getNumFormatStr(), style.getAlign()) + JSON.stringify(applies);
+  }
+  function cellFormat(ref) {
+    var xfs = cellXfs(ref) || new AscCommonExcel.CellXfs();
+    return formatOf(xfs.getFont2(), xfs.getFill2(), xfs.getBorder() || g_oDefaultFormat.Border, xfs.getNum2().getFormat(), xfs.getAlign2());
+  }
+  function visiblePredefinedNames() {
+    return api.wbModel.CellStyles.DefaultStyles.filter(function (s) { return !s.Hidden; }).map(function (s) { return s.Name; });
+  }
+  function galleryOf(type) {
+    return galleryEntries().filter(function (entry) { return type === entry.type; });
+  }
+  // What the gallery draws for each predefined style, what applying it gives a cell
+  // of its own, and the document's section of the gallery after that.
+  function predefinedSnapshot() {
+    var gallery = {};
+    galleryOf(AscCommon.c_oAscStyleImage.Default).forEach(function (entry) {
+      gallery[entry.name] = entry.text + ' ' + styleFormat(entry.style);
+    });
+    var applied = {};
+    visiblePredefinedNames().forEach(function (name, index) {
+      var ref = 'A' + (index + 1);
+      ws().getRange2(ref).setValue('1');
+      select(ref);
+      api.asc_setCellStyle(name);
+      applied[name] = describe(ref).style + ' ' + cellFormat(ref);
+    });
+    var documentNames = galleryOf(AscCommon.c_oAscStyleImage.Document).map(function (entry) { return entry.name; });
+    return {gallery: gallery, applied: applied, documentNames: documentNames};
+  }
+`;
+function predefinedChanges(snapshot, expected, copyName) {
+  const changes = [];
+  for (const part of ['gallery', 'applied']) {
+    for (const name of Object.keys(expected[part])) {
+      if (snapshot[part][name] !== expected[part][name]) changes.push(`${copyName} -> ${name} (${part}: ${snapshot[part][name]})`);
+    }
+  }
+  const documentNames = JSON.stringify(snapshot.documentNames);
+  if (documentNames !== JSON.stringify([copyName])) changes.push(`${copyName} -> document section ${documentNames}`);
+  return changes;
+}
+run = openEditor(null);
+run(PREDEFINED_HELPERS);
+const predefinedNames = run('visiblePredefinedNames()');
+const expectedPredefined = run('predefinedSnapshot()');
+same('predefined styles: applying each one leaves the document section of the gallery empty', expectedPredefined.documentNames, []);
+const duplicateChanges = [];
+for (const name of predefinedNames) {
+  const copyName = `${name} 2`;
+  run = openEditor(null);
+  run(PREDEFINED_HELPERS);
+  run(`api.asc_addCellStyle(${JSON.stringify(copyName)}, api.asc_getCellStyleXfs(${JSON.stringify(name)}), ${JSON.stringify(name)});`);
+  duplicateChanges.push(...predefinedChanges(run('predefinedSnapshot()'), expectedPredefined, copyName));
+}
+same(`duplicate each of the ${predefinedNames.length} predefined styles: the predefined styles draw and apply as before`, duplicateChanges, []);
+
+// A style from the selection, as a file from another application brings, and Accent3.
+run = openEditor(null);
+run(PREDEFINED_HELPERS);
+run(`
+  ws().getRange2('A1').setValue('1');
+  ws().getRange2('A1').setFillColor(AscCommonExcel.createRgbColor(255, 0, 0));
+  api.asc_addCellStyle('Mine', cellXfs('A1').clone());
+  var accent3Drawn = galleryOf(AscCommon.c_oAscStyleImage.Default).filter(function (entry) { return 'Accent3' === entry.name; })[0].style;
+  ws().getRange2('B1').setValue('1');
+  select('B1'); api.asc_setCellStyle('Accent3');
+  var mineXfs = api.asc_getCellStyleXfs('Mine');
+  var accent3Xfs = api.asc_getCellStyleXfs('Accent3');
+  accent3Xfs.asc_setFontBold(true);
+  var accent3Result = api.asc_modifyCellStyle('Accent3', accent3Xfs);
+`);
+same('Accent3 with a style of the document: the gallery draws Accent3', run('accent3Drawn.Name'), 'Accent3');
+same('Accent3 with a style of the document: applying it gives Accent3', run("[describe('B1').style, describe('B1').fill, describe('B1').bold]"), ['Accent3', '155,187,89', true]);
+same('Accent3 with a style of the document: modifying Accent3 leaves Mine as it was', run("[accent3Result, describe('A1').fill, api.asc_getCellStyleXfs('Mine').getFont2().getBold(), mineXfs.asc_getFillColor().asc_getR()]"), [No, '255,0,0', false, 255]);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(PREDEFINED_HELPERS);
+same('Accent3, reopen: B1 keeps Accent3 and the document keeps it as a predefined style', run("[describe('B1').style, describe('B1').fill, api.wbModel.CellStyles.getStyleByName('Accent3').BuiltinId]"), ['Accent3', '155,187,89', 37]);
+same('Accent3, reopen: the document section lists Mine only', run('galleryOf(AscCommon.c_oAscStyleImage.Document).map(function (entry) { return entry.name; })'), ['Mine']);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {
