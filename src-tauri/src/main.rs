@@ -24,6 +24,8 @@ mod recent;
 mod recovery;
 mod save_target;
 mod temp_layout;
+#[cfg(test)]
+mod template_round_trip_tests;
 mod text_import;
 mod window_state;
 mod x2t_task;
@@ -483,7 +485,9 @@ fn main() {
             save_pending: Mutex::new(false),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
-            pending_open: pending_open::PendingOpens::with_launch_file(file_to_open),
+            pending_open: pending_open::PendingOpens::with_launch_file(
+                file_to_open.map(|path| pending_open::launch_file(path, &launch)),
+            ),
             grants: path_grants::PathGrants::default(),
             text_options: Mutex::new(None),
             last_print_pdf: Mutex::new(None),
@@ -502,15 +506,18 @@ fn main() {
             file_ops::write_editor_bin,
             file_ops::print_document,
             file_ops::create_new,
+            file_ops::create_from_template,
             file_ops::current_document,
             file_ops::close_document,
             file_dialogs::pick_document,
             file_dialogs::pick_pdf,
+            file_dialogs::pick_template,
             file_dialogs::pick_files,
             file_dialogs::pick_save_target,
             file_dialogs::locate_linked_file,
             file_ops::take_pending_open_file,
             new_window::open_in_new_window,
+            new_window::new_document_in_new_window,
             file_ops::open_pdf_viewer,
             file_ops::print_to_printer,
             file_ops::convert_for_insert,

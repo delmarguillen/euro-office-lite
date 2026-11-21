@@ -1415,8 +1415,13 @@ mod tests {
         text.chars().flat_map(|c| (c as u32).to_le_bytes()).collect()
     }
 
+    // A folder of its own per call: tests run in parallel and several pass the
+    // same file name, so a folder named after it alone was emptied under them.
     fn read_copy_dirs(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("eo-read-copy-{}-{}", name, std::process::id()));
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("eo-read-copy-{}-{}-{}", name, std::process::id(), n));
         let _ = std::fs::remove_dir_all(&dir);
         let temp = dir.join("temp");
         std::fs::create_dir_all(&temp).unwrap();

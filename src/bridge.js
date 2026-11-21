@@ -580,6 +580,7 @@ var _UI_STRINGS = {
     export: 'Export',
     openFile: 'Open file', editPdf: 'Edit PDF', newDocument: 'New document', newSpreadsheet: 'New spreadsheet',
     newPresentation: 'New presentation', unsavedChanges: 'Unsaved changes',
+    newFromTemplate: 'New from template…', templates: 'Templates',
     openNewWindowFailedMsg: 'The file could not be opened in a new window. The current document has not changed.',
     openElsewhereMsg: 'This file is already open in another window. Use that window to work on it.',
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
@@ -629,6 +630,7 @@ var _UI_STRINGS = {
     export: 'Exportar',
     openFile: 'Abrir archivo', editPdf: 'Editar PDF', newDocument: 'Nuevo documento', newSpreadsheet: 'Nueva hoja de cálculo',
     newPresentation: 'Nueva presentación', unsavedChanges: 'Cambios sin guardar',
+    newFromTemplate: 'Nuevo desde plantilla…', templates: 'Plantillas',
     openNewWindowFailedMsg: 'No se pudo abrir el archivo en una ventana nueva. El documento actual no ha cambiado.',
     openElsewhereMsg: 'Este archivo ya está abierto en otra ventana. Usa esa ventana para trabajar con él.',
     unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
@@ -668,6 +670,7 @@ var _UI_STRINGS = {
     export: 'Exporter',
     openFile: 'Ouvrir un fichier', editPdf: 'Modifier un PDF', newDocument: 'Nouveau document', newSpreadsheet: 'Nouvelle feuille de calcul',
     newPresentation: 'Nouvelle présentation', unsavedChanges: 'Modifications non enregistrées',
+    newFromTemplate: 'Nouveau à partir d\'un modèle…', templates: 'Modèles',
     openNewWindowFailedMsg: 'Impossible d\'ouvrir le fichier dans une nouvelle fenêtre. Le document actuel n\'a pas changé.',
     openElsewhereMsg: 'Ce fichier est déjà ouvert dans une autre fenêtre. Utilisez l\'autre fenêtre pour y travailler.',
     unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
@@ -702,6 +705,7 @@ var _UI_STRINGS = {
     export: 'Exportieren',
     openFile: 'Datei öffnen', editPdf: 'PDF bearbeiten', newDocument: 'Neues Dokument', newSpreadsheet: 'Neue Tabelle',
     newPresentation: 'Neue Präsentation', unsavedChanges: 'Ungespeicherte Änderungen',
+    newFromTemplate: 'Neu aus Vorlage…', templates: 'Vorlagen',
     openNewWindowFailedMsg: 'Die Datei konnte nicht in einem neuen Fenster geöffnet werden. Das aktuelle Dokument ist unverändert.',
     openElsewhereMsg: 'Diese Datei ist bereits in einem anderen Fenster geöffnet. Bearbeiten Sie sie im anderen Fenster.',
     unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
@@ -736,6 +740,7 @@ var _UI_STRINGS = {
     export: 'Esporta',
     openFile: 'Apri file', editPdf: 'Modifica PDF', newDocument: 'Nuovo documento', newSpreadsheet: 'Nuovo foglio di calcolo',
     newPresentation: 'Nuova presentazione', unsavedChanges: 'Modifiche non salvate',
+    newFromTemplate: 'Nuovo da modello…', templates: 'Modelli',
     openNewWindowFailedMsg: 'Impossibile aprire il file in una nuova finestra. Il documento attuale non è cambiato.',
     openElsewhereMsg: 'Questo file è già aperto in un\'altra finestra. Usa quella finestra per lavorarci.',
     unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
@@ -770,6 +775,7 @@ var _UI_STRINGS = {
     export: 'Exportar',
     openFile: 'Abrir arquivo', editPdf: 'Editar PDF', newDocument: 'Novo documento', newSpreadsheet: 'Nova planilha',
     newPresentation: 'Nova apresentação', unsavedChanges: 'Alterações não salvas',
+    newFromTemplate: 'Novo a partir de modelo…', templates: 'Modelos',
     openNewWindowFailedMsg: 'Não foi possível abrir o arquivo em uma nova janela. O documento atual não foi alterado.',
     openElsewhereMsg: 'Este arquivo já está aberto em outra janela. Use essa janela para trabalhar nele.',
     unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
@@ -804,6 +810,7 @@ var _UI_STRINGS = {
     export: 'Экспорт',
     openFile: 'Открыть файл', editPdf: 'Редактировать PDF', newDocument: 'Новый документ', newSpreadsheet: 'Новая таблица',
     newPresentation: 'Новая презентация', unsavedChanges: 'Несохранённые изменения',
+    newFromTemplate: 'Создать из шаблона…', templates: 'Шаблоны',
     openNewWindowFailedMsg: 'Не удалось открыть файл в новом окне. Текущий документ не изменён.',
     openElsewhereMsg: 'Этот файл уже открыт в другом окне. Работайте с ним в том окне.',
     unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
@@ -838,6 +845,7 @@ var _UI_STRINGS = {
     export: 'Експорт',
     openFile: 'Відкрити файл', editPdf: 'Редагувати PDF', newDocument: 'Новий документ', newSpreadsheet: 'Нова таблиця',
     newPresentation: 'Нова презентація', unsavedChanges: 'Незбережені зміни',
+    newFromTemplate: 'Створити з шаблону…', templates: 'Шаблони',
     openNewWindowFailedMsg: 'Не вдалося відкрити файл у новому вікні. Поточний документ не змінено.',
     openElsewhereMsg: 'Цей файл уже відкрито в іншому вікні. Працюйте з ним у тому вікні.',
     unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
@@ -872,6 +880,7 @@ var _UI_STRINGS = {
     export: '导出',
     openFile: '打开文件', editPdf: '编辑 PDF', newDocument: '新建文档', newSpreadsheet: '新建电子表格',
     newPresentation: '新建演示文稿', unsavedChanges: '未保存的更改',
+    newFromTemplate: '从模板新建…', templates: '模板',
     openNewWindowFailedMsg: '无法在新窗口中打开文件。当前文档未更改。',
     openElsewhereMsg: '此文件已在另一个窗口中打开。请在该窗口中编辑它。',
     unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
@@ -906,6 +915,7 @@ var _UI_STRINGS = {
     export: 'エクスポート',
     openFile: 'ファイルを開く', editPdf: 'PDF を編集', newDocument: '新規ドキュメント', newSpreadsheet: '新規スプレッドシート',
     newPresentation: '新規プレゼンテーション', unsavedChanges: '未保存の変更',
+    newFromTemplate: 'テンプレートから新規作成…', templates: 'テンプレート',
     openNewWindowFailedMsg: '新しいウィンドウでファイルを開けませんでした。現在のドキュメントは変更されていません。',
     openElsewhereMsg: 'このファイルは別のウィンドウで既に開かれています。そのウィンドウで作業してください。',
     unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
@@ -1215,11 +1225,26 @@ function _eoSavesInPlace(name) {
   return _EO_SAVE_IN_PLACE.indexOf(ext) !== -1;
 }
 
-// What Save As proposes for a document Ctrl+S cannot write back.
+// What save_file_as answers when the open document stays where it was (a PDF
+// export, a template): SAVED_COPY in src-tauri/src/file_ops.rs.
+var _EO_SAVED_COPY = 'copy';
+
+// The templates Save As writes: TEMPLATE_EXTENSIONS in
+// src-tauri/src/file_dialogs.rs.
+var _EO_TEMPLATES = ['dotx', 'xltx', 'potx'];
+
 function _eoFamilyFormat(docType) {
   if (docType === 'cell') return 'xlsx';
   if (docType === 'slide') return 'pptx';
   return 'docx';
+}
+
+// What Save As proposes for a document Ctrl+S cannot write back: a template
+// keeps its own format, anything else (a .doc, a .dotm) gets its family's.
+function _eoProposedFormat(docType, name) {
+  var ext = String(name || '').split('.').pop().toLowerCase();
+  if (_EO_TEMPLATES.indexOf(ext) !== -1) return ext;
+  return _eoFamilyFormat(docType);
 }
 
 // Files reach the backend only as the tokens it handed out (path_grants.rs).
@@ -1303,10 +1328,13 @@ function _eoSetPendingOpen(file) {
 // The backend answers 'already-open' for the open document itself and
 // 'open-elsewhere' for a file another window has open, as two windows saving
 // one file would overwrite each other.
+// A template the system handed over (file.newDocument) starts a new document
+// there instead (new_document_in_new_window).
 async function _eoOpenInNewWindow(file) {
+  var command = file.newDocument ? 'new_document_in_new_window' : 'open_in_new_window';
   var result;
   try {
-    result = await invoke('open_in_new_window', { token: file.token });
+    result = await invoke(command, { token: file.token });
   } catch (e) {
     window._eoLog('[EO] open in new window failed: ' + (e.message || e));
     await _eoShowNewWindowError();
@@ -1723,11 +1751,13 @@ function _eoSaveAsFilters(docType, requestedExt, currentName, isLinux) {
       { name: 'Excel', extensions: ['xlsx'] },
       { name: 'OpenDocument Spreadsheet', extensions: ['ods'] },
       { name: 'CSV', extensions: ['csv'] },
+      { name: 'Excel template', extensions: ['xltx'] },
       { name: 'PDF', extensions: ['pdf'] },
     ],
     slide: [
       { name: 'PowerPoint', extensions: ['pptx'] },
       { name: 'OpenDocument Presentation', extensions: ['odp'] },
+      { name: 'PowerPoint template', extensions: ['potx'] },
       { name: 'PDF', extensions: ['pdf'] },
     ],
     word: [
@@ -1735,6 +1765,7 @@ function _eoSaveAsFilters(docType, requestedExt, currentName, isLinux) {
       { name: 'OpenDocument Text', extensions: ['odt'] },
       { name: 'Rich Text', extensions: ['rtf'] },
       { name: _t('plainText'), extensions: ['txt'] },
+      { name: 'Word template', extensions: ['dotx'] },
       { name: 'PDF', extensions: ['pdf'] },
     ]
   };
@@ -3105,6 +3136,11 @@ window.AscDesktopEditor = {
       return;
     }
 
+    if (file.newDocument) {
+      await _eoCreateFromTemplate(file);
+      return;
+    }
+
     // No editor mounted yet: open it the way the start screen's Open file
     // button does. _loadEditorBin needs a mounted editor, so it cannot help here.
     if (window._eoOpenPath) {
@@ -3163,10 +3199,10 @@ window.AscDesktopEditor = {
       var current = await invoke('current_document');
       var currentName = current ? current.name : null;
       if (!isSaveAs && !current) isSaveAs = true;
-      var familyExt = null;
+      var proposedExt = null;
       if (!isSaveAs && !_eoSavesInPlace(currentName)) {
         isSaveAs = true;
-        familyExt = _eoFamilyFormat(docType);
+        proposedExt = _eoProposedFormat(docType, currentName);
       }
       var wasModified = _eoUnsavedChanges;
       // A cancelled Save As or a PDF export leaves the open document where it
@@ -3175,31 +3211,35 @@ window.AscDesktopEditor = {
 
       if (isSaveAs) {
         var formatExtensions = {
-          65: 'docx', 66: 'doc', 67: 'odt', 68: 'rtf', 69: 'txt',
-          129: 'pptx', 130: 'ppt', 131: 'odp',
-          257: 'xlsx', 258: 'xls', 259: 'ods', 260: 'csv',
+          65: 'docx', 66: 'doc', 67: 'odt', 68: 'rtf', 69: 'txt', 76: 'dotx',
+          129: 'pptx', 130: 'ppt', 131: 'odp', 135: 'potx',
+          257: 'xlsx', 258: 'xls', 259: 'ods', 260: 'csv', 262: 'xltx',
           513: 'pdf'
         };
         // Ctrl+S on a .doc arrives with the .doc format (66), which x2t 10
-        // does not write: the family's format wins over the document's own.
-        var requestedExt = familyExt || formatExtensions[fileType] || null;
+        // does not write: the proposed format wins over the document's own.
+        var requestedExt = proposedExt || formatExtensions[fileType] || null;
 
         // The backend opens the dialog: where it starts after a recovery and
         // the extension the chosen name gets are decided there.
         var filters = _eoSaveAsFilters(docType, requestedExt, currentName, _isLinux);
-        var target = await invoke('pick_save_target', { filters: filters, requestedExt: requestedExt });
+        var pickArgs = { filters: filters, requestedExt: requestedExt };
+        var suggestedName = current ? null : _eoSuggestedSaveName(filters);
+        if (suggestedName) pickArgs.suggestedName = suggestedName;
+        var target = await invoke('pick_save_target', pickArgs);
         keepsDocument = !target;
         if (target) {
           var pathExt = target.name.split('.').pop().toLowerCase();
           try {
             var saveArgs = { token: target.token };
             if (pathExt === 'pdf') saveArgs = _eoWithSheetLocale(ref, saveArgs);
-            await invoke('save_file_as', saveArgs);
-            keepsDocument = pathExt === 'pdf';
-            if (pathExt !== 'pdf') {
+            var answer = await invoke('save_file_as', saveArgs);
+            keepsDocument = pathExt === 'pdf' || answer === _EO_SAVED_COPY;
+            if (!keepsDocument) {
               // A Save As moves the document and the session follows it, so a
-              // later recovery writes where it lives now. A PDF export only
-              // writes a copy, so it is not a save for recovery purposes.
+              // later recovery writes where it lives now. A PDF export or a
+              // template only writes a copy, so it is not a save for recovery
+              // purposes.
               invoke('recovery_mark_saved', {}).catch(function(){});
               _eoShowSavedName(target.name);
             }
@@ -3809,6 +3849,65 @@ async function _eoOpenGranted(file) {
     await _eoShowOpenError(e);
   }
 }
+
+// The template a new document in this page started from, without its
+// extension: the first Save As offers that name in the format it saves.
+var _eoTemplateBaseName = null;
+
+function _eoWithoutExtension(name) {
+  var text = String(name || '');
+  var dot = text.lastIndexOf('.');
+  if (dot <= 0) return text;
+  return text.slice(0, dot);
+}
+
+// Only a name, never a folder: pick_save_target's suggestedName.
+function _eoSuggestedSaveName(filters) {
+  if (!_eoTemplateBaseName) return null;
+  var first = filters && filters[0];
+  var ext = first && first.extensions && first.extensions[0];
+  if (!ext) return null;
+  return _eoTemplateBaseName + '.' + ext;
+}
+
+function _eoNewDocumentName(docType) {
+  if (docType === 'cell') return _t('newSpreadsheet');
+  if (docType === 'slide') return _t('newPresentation');
+  return _t('newDocument');
+}
+
+// A new document from a template: the editor gets the template's content with
+// no file behind it (create_from_template), and the title of any new document.
+async function _eoCreateFromTemplate(file) {
+  var docType = _eoDocTypeForPath(file.name);
+  _eoShowOpening(_eoOpeningFileText(file.name));
+  try {
+    var b64data = await invoke('create_from_template', { token: file.token });
+    _eoTemplateBaseName = _eoWithoutExtension(file.name);
+    window._pendingFileData = { data: b64data, path: null, name: _eoNewDocumentName(docType) };
+    await _eoWaitForFonts();
+    if (!window._openEditor) {
+      window._eoLog('[OPEN] editor launcher unavailable: no new document from ' + file.name);
+      _eoHideOpening();
+      return;
+    }
+    window._openEditor(docType);
+  } catch(e) {
+    window._eoLog('[EO] new from template: conversion failed: ' + (e.message || e));
+    _eoHideOpening();
+    await _eoShowOpenError(e);
+  }
+}
+window._eoCreateFromTemplate = _eoCreateFromTemplate;
+
+// The start screen's New from template.
+async function _eoNewFromTemplate() {
+  if (_eoIsOpening()) return;
+  var file = await invoke('pick_template', { templates: _t('templates') });
+  if (!file) return;
+  await _eoCreateFromTemplate(file);
+}
+window._eoNewFromTemplate = _eoNewFromTemplate;
 
 // The files waiting in the backend: the launch argument, and on macOS the
 // files the Finder hands over (pending_open.rs). One drain at a time takes

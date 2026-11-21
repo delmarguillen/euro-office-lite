@@ -355,20 +355,54 @@ pub async fn open_file(
 ) -> Result<String, String> {
     let path = state.grants.resolve(&token, GrantKind::Open)?;
     let claim = crate::new_window::claim_for_open(&state, &path)?;
-    let opened = open_file_inner(app, state, path.to_string_lossy().to_string(), true).await;
+    let opened = open_file_inner(app, state, path.to_string_lossy().to_string(), OpenKind::Edit).await;
     // On success open_file_inner has published the file by now.
     drop(claim);
     opened
 }
 
+// What the window does with the file open_file_inner converts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum OpenKind {
+    // Edits it: the file becomes current_file and enters the recent list.
+    Edit,
+    // Starts a new document from it (the bundled blank, a template): the
+    // window has no file, so the first save asks where, and the source is
+    // never published as open nor recorded.
+    NewFrom,
+}
+
+#[derive(Debug, PartialEq)]
+enum RecentEntry {
+    Record,
+    // An empty file: recorded by the first save that gives it content (#33).
+    AfterFirstSave,
+    Skip,
+}
+
+// The file the window edits after the open, and what the recent list gets.
+#[derive(Debug, PartialEq)]
+struct OpenedState {
+    current_file: Option<PathBuf>,
+    recent: RecentEntry,
+}
+
+fn opened_state(kind: OpenKind, input: &Path, opened_blank: bool) -> OpenedState {
+    if kind == OpenKind::NewFrom {
+        return OpenedState { current_file: None, recent: RecentEntry::Skip };
+    }
+    let recent = if opened_blank { RecentEntry::AfterFirstSave } else { RecentEntry::Record };
+    OpenedState { current_file: Some(input.to_path_buf()), recent }
+}
+
 // Every frontend open path funnels through open_file, so the recent list is fed
-// here rather than in JS. create_new converts a bundled blank template through
-// the same code and must stay out of the list, hence the flag.
+// here rather than in JS. A new document converts its source through the same
+// code (OpenKind::NewFrom).
 async fn open_file_inner(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
-    record_recent: bool,
+    kind: OpenKind,
 ) -> Result<String, String> {
     let input = PathBuf::from(&path);
     let output = state.temp_dir.join("Editor.bin");
@@ -508,17 +542,18 @@ async fn open_file_inner(
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
     let b64 = STANDARD.encode(&bin_data);
 
-    set_current_file(&state, Some(input.clone()));
+    let opened = opened_state(kind, &input, opened_blank);
+    set_current_file(&state, opened.current_file);
     crate::app_quit::mark_document_clean(&state);
     // None for anything that is not CSV or TXT: the options of the previous
     // document must not leak into how this one is saved.
     *state.text_options.lock().unwrap() = text_options;
 
-    if opened_blank {
+    match opened.recent {
         // Nothing is on disk yet, so the entry waits for the first real save.
-        arm_pending_recent(&state.pending_recent, &input);
-    } else if record_recent {
-        super::recent::record(&app, &path);
+        RecentEntry::AfterFirstSave => arm_pending_recent(&state.pending_recent, &input),
+        RecentEntry::Record => super::recent::record(&app, &path),
+        RecentEntry::Skip => {}
     }
 
     Ok(b64)
@@ -531,10 +566,7 @@ pub async fn save_file(
     _data: String,
 ) -> Result<String, String> {
     let current = state.current_file.lock().unwrap().clone();
-    let dest = current.ok_or("No file is currently open")?;
-    if !crate::file_dialogs::saves_in_place(&dest) {
-        return Err(format!("{} can only be saved with Save As", dest.display()));
-    }
+    let dest = in_place_destination(current)?;
     // x2t only reports a failed write as a generic exit code.
     crate::save_target::check_writable_destination(&dest)?;
 
@@ -551,6 +583,18 @@ pub async fn save_file(
     Ok("ok".to_string())
 }
 
+// Ctrl+S writes only over the open file, and only in a format it can write
+// back. A document with no file, or a template, goes through Save As.
+fn in_place_destination(current: Option<PathBuf>) -> Result<PathBuf, String> {
+    let Some(dest) = current else {
+        return Err("No file is currently open".to_string());
+    };
+    if !crate::file_dialogs::saves_in_place(&dest) {
+        return Err(format!("{} can only be saved with Save As", dest.display()));
+    }
+    Ok(dest)
+}
+
 #[tauri::command]
 pub async fn save_file_as(
     app: tauri::AppHandle,
@@ -564,22 +608,55 @@ pub async fn save_file_as(
     let claim = crate::new_window::claim_for_save(&state, &dest)?;
     crate::save_target::check_writable_destination(&dest)?;
     let path = dest.to_string_lossy().to_string();
-    let format_to = detect_format(&dest);
-    save_editor_bin(&app, &state, &dest, format_to, lcid).await?;
+    let current = state.current_file.lock().unwrap().clone();
+    let plan = save_as_plan(current.as_deref(), &dest);
+    save_editor_bin(&app, &state, &dest, plan.format_to, lcid).await?;
 
-    // A PDF export leaves the document itself untouched (current_file keeps
-    // pointing at the editable file), so it does not belong in the list either.
-    if format_to != 513 {
-        // Same reason a PDF export does not end the pending 0-byte entry, while
-        // a real Save As does: record below files the path actually written,
-        // which when the entry is consumed is that same path (#33).
-        end_pending_recent(&state.pending_recent, &dest);
-        set_current_file(&state, Some(dest));
-        crate::app_quit::mark_document_saved(&state);
-        super::recent::record(&app, &path);
+    // A copy leaves the document itself untouched (current_file keeps pointing
+    // at the editable file), so it does not belong in the list either.
+    if plan.copy {
+        return Ok(SAVED_COPY.to_string());
     }
+    // Same reason a copy does not end the pending 0-byte entry, while a real
+    // Save As does: record below files the path actually written, which when
+    // the entry is consumed is that same path (#33).
+    end_pending_recent(&state.pending_recent, &dest);
+    set_current_file(&state, Some(dest));
+    crate::app_quit::mark_document_saved(&state);
+    super::recent::record(&app, &path);
     drop(claim);
     Ok("ok".to_string())
+}
+
+// What save_file_as answers when the open document stays where it was and as
+// modified as it was. _EO_SAVED_COPY in src/bridge.js must match.
+pub const SAVED_COPY: &str = "copy";
+
+// What a Save As to `dest` writes, and whether the window keeps its document.
+// The format comes from the destination's name and nothing else, so x2t never
+// writes a template under a document's name or a document under a template's.
+#[derive(Debug, PartialEq)]
+struct SaveAsPlan {
+    format_to: i32,
+    copy: bool,
+}
+
+fn save_as_plan(current: Option<&Path>, dest: &Path) -> SaveAsPlan {
+    let format_to = detect_format(dest);
+    let copy = writes_a_copy(format_to, current, dest);
+    SaveAsPlan { format_to, copy }
+}
+
+// A PDF export and a template are copies: the window keeps the document it had.
+// A template written over the open template itself is that document's save.
+fn writes_a_copy(format_to: i32, current: Option<&Path>, dest: &Path) -> bool {
+    if format_to == 513 {
+        return true;
+    }
+    if !crate::file_dialogs::is_template(dest) {
+        return false;
+    }
+    !current.is_some_and(|open| same_path(open, dest))
 }
 
 // Converts Editor.bin to `format_to` (513 is the PDF export) and puts the
@@ -1126,11 +1203,26 @@ pub fn fonts_status(state: State<'_, AppState>) -> crate::fonts_state::FontsStat
     state.fonts.status()
 }
 
+// A waiting file as the page gets it. newDocument: start a new document from
+// this template (create_from_template) instead of editing it.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingOpenFile {
+    token: String,
+    name: String,
+    new_document: bool,
+}
+
 // Hands over the next waiting file once: a page reload must not open it again.
 #[tauri::command]
-pub fn take_pending_open_file(state: State<'_, AppState>) -> Option<GrantedFile> {
-    let path = state.pending_open.take()?;
-    Some(state.grants.grant(path, GrantKind::Open))
+pub fn take_pending_open_file(state: State<'_, AppState>) -> Option<PendingOpenFile> {
+    let pending = state.pending_open.take()?;
+    let granted = state.grants.grant(pending.path, GrantKind::Open);
+    Some(PendingOpenFile {
+        token: granted.token,
+        name: granted.name,
+        new_document: pending.new_document,
+    })
 }
 
 #[tauri::command]
@@ -1152,19 +1244,42 @@ pub async fn create_new(
         .map_err(|e| e.to_string())?
         .join(template);
 
+    open_as_new_document(app, state, &template_path).await
+}
+
+// A new document that starts as a copy of a template of the user's. The
+// template is only read: it is not claimed, so other windows can start
+// documents from it too, and it never becomes the window's file.
+#[tauri::command]
+pub async fn create_from_template(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<String, String> {
+    let template = template_source(&state.grants, &token)?;
+    open_as_new_document(app, state, &template).await
+}
+
+fn template_source(grants: &crate::path_grants::PathGrants, token: &str) -> Result<PathBuf, String> {
+    let path = grants.resolve(token, GrantKind::Open)?;
+    if !crate::file_dialogs::is_template_source(&path) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        return Err(format!("{name} is not a template"));
+    }
+    Ok(path)
+}
+
+// The window drops its file before the conversion and has none after it.
+async fn open_as_new_document(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source: &Path,
+) -> Result<String, String> {
     set_current_file(&state, None);
     *state.save_suggestion.lock().unwrap() = None;
     crate::app_quit::mark_document_clean(&state);
-
-    let result = open_file_inner(
-        app,
-        state.clone(),
-        template_path.to_string_lossy().to_string(),
-        false,
-    )
-    .await;
-    set_current_file(&state, None);
-    result
+    let source = source.to_string_lossy().to_string();
+    open_file_inner(app, state, source, OpenKind::NewFrom).await
 }
 
 #[tauri::command]
@@ -1388,6 +1503,154 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    // A document started from a template has no file: Ctrl+S asks where
+    // (in_place_destination refuses None), and the template never becomes the
+    // file a save writes to, nor a recent entry. An empty one neither.
+    #[test]
+    fn a_new_document_from_a_template_has_no_file_and_no_recent_entry() {
+        let template = Path::new("/d/Letter.dotx");
+        for opened_blank in [false, true] {
+            let opened = opened_state(OpenKind::NewFrom, template, opened_blank);
+            assert_eq!(opened, OpenedState { current_file: None, recent: RecentEntry::Skip });
+            assert!(in_place_destination(opened.current_file).is_err());
+        }
+    }
+
+    #[test]
+    fn an_edited_file_is_the_window_s_file_and_a_recent_entry() {
+        let file = Path::new("/d/Letter.dotx");
+        let opened = opened_state(OpenKind::Edit, file, false);
+        assert_eq!(opened, OpenedState { current_file: Some(file.to_path_buf()), recent: RecentEntry::Record });
+        let empty = opened_state(OpenKind::Edit, file, true);
+        assert_eq!(empty.recent, RecentEntry::AfterFirstSave);
+    }
+
+    #[test]
+    fn a_new_document_starts_from_any_template_and_from_nothing_else() {
+        let grants = crate::path_grants::PathGrants::default();
+        for name in ["/d/a.dotx", "/d/a.DOTM", "/d/a.ott", "/d/a.xltx", "/d/a.xltm", "/d/a.ots", "/d/a.potx", "/d/a.potm", "/d/a.otp"] {
+            let file = grants.grant(PathBuf::from(name), GrantKind::Open);
+            assert_eq!(template_source(&grants, &file.token), Ok(PathBuf::from(name)));
+        }
+        for name in ["/d/a.docx", "/d/a.xlsx", "/d/a.pdf", "/d/a.md"] {
+            let file = grants.grant(PathBuf::from(name), GrantKind::Open);
+            assert!(template_source(&grants, &file.token).is_err(), "{name}");
+        }
+        let saved = grants.grant(PathBuf::from("/d/a.dotx"), GrantKind::Save);
+        assert!(template_source(&grants, &saved.token).is_err(), "a save grant");
+    }
+
+    // Open refuses a file another window has open; a new document from it does
+    // not ask, so two windows can start documents from one template.
+    #[test]
+    fn a_template_open_in_another_window_still_starts_a_new_document() {
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("eo-from-template-{}-{}", std::process::id(), unique));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let template = root.join("Letter.dotx");
+        std::fs::write(&template, b"x").unwrap();
+        let own = test_state_for(&root, crate::temp_layout::begin_instance(&root, 1000, 1).unwrap());
+        let other = crate::temp_layout::begin_instance(&root, 1000, 2).unwrap();
+        crate::temp_layout::publish_open_document(&other.dir, Some(&template)).unwrap();
+
+        assert!(crate::new_window::claim_for_open(&own, &template).is_err());
+        let file = own.grants.grant(template.clone(), GrantKind::Open);
+        assert_eq!(template_source(&own.grants, &file.token), Ok(template));
+
+        drop((own, other));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn plan_for(current: Option<&str>, dest: &str) -> SaveAsPlan {
+        save_as_plan(current.map(Path::new), Path::new(dest))
+    }
+
+    fn copy_when_saved_to(current: Option<&str>, dest: &str) -> bool {
+        plan_for(current, dest).copy
+    }
+
+    // The documents a Save As starts from: none yet, a document, the template
+    // the window is editing (Ctrl+S on it goes through Save As).
+    const OPEN_DOCUMENTS: [Option<&str>; 5] = [
+        None,
+        Some("/d/Letter.docx"),
+        Some("/d/Letter.dotx"),
+        Some("/d/Budget.xltx"),
+        Some("/d/Deck.potx"),
+    ];
+
+    #[test]
+    fn save_as_writes_the_format_its_destination_is_named_after() {
+        let names = [("docx", 65), ("dotx", 76), ("xlsx", 257), ("xltx", 262), ("pptx", 129), ("potx", 135)];
+        for (ext, format) in names {
+            for current in OPEN_DOCUMENTS {
+                let lower = format!("/d/Out.{ext}");
+                let upper = format!("/d/Out.{}", ext.to_uppercase());
+                assert_eq!(plan_for(current, &lower).format_to, format, "{lower} from {current:?}");
+                assert_eq!(plan_for(current, &upper).format_to, format, "{upper} from {current:?}");
+            }
+        }
+    }
+
+    // A template name typed in a document's Save As writes a template, beside
+    // the document; a document name typed in a template's Save As writes a
+    // document, which the window then edits.
+    #[test]
+    fn the_typed_name_decides_between_template_and_document() {
+        let families = [("docx", 65, "dotx", 76), ("xlsx", 257, "xltx", 262), ("pptx", 129, "potx", 135)];
+        for (document_ext, document_format, template_ext, template_format) in families {
+            let open = format!("/d/Open.{document_ext}");
+            let typed = format!("/d/Model.{template_ext}");
+            let dest = crate::file_dialogs::with_save_extension(PathBuf::from(&typed), document_ext);
+            assert_eq!(dest, PathBuf::from(&typed));
+            let plan = save_as_plan(Some(Path::new(&open)), &dest);
+            assert_eq!(plan, SaveAsPlan { format_to: template_format, copy: true }, "{typed}");
+
+            let typed = format!("/d/Model.{document_ext}");
+            let dest = crate::file_dialogs::with_save_extension(PathBuf::from(&typed), template_ext);
+            assert_eq!(dest, PathBuf::from(&typed));
+            let plan = save_as_plan(Some(Path::new(&open)), &dest);
+            assert_eq!(plan, SaveAsPlan { format_to: document_format, copy: false }, "{typed}");
+        }
+    }
+
+    #[test]
+    fn ctrl_s_never_writes_without_an_open_file_or_over_a_template() {
+        assert!(in_place_destination(None).is_err());
+        for name in ["/d/Letter.dotx", "/d/Budget.XLTX", "/d/Deck.potx", "/d/Macros.dotm", "/d/Odf.ott"] {
+            assert!(in_place_destination(Some(PathBuf::from(name))).is_err(), "{name}");
+        }
+        let open = PathBuf::from("/d/Letter.docx");
+        assert_eq!(in_place_destination(Some(open.clone())), Ok(open));
+    }
+
+    #[test]
+    fn a_template_saved_from_a_document_is_a_copy() {
+        for dest in ["/d/Letter.dotx", "/d/Budget.xltx", "/d/Deck.potx"] {
+            assert!(copy_when_saved_to(Some("/d/Letter.docx"), dest), "{dest}");
+            assert!(copy_when_saved_to(None, dest), "{dest} from an unsaved document");
+        }
+    }
+
+    #[test]
+    fn a_template_saved_from_another_template_is_a_copy() {
+        assert!(copy_when_saved_to(Some("/d/Letter.dotx"), "/d/Letter 2.dotx"));
+    }
+
+    #[test]
+    fn a_template_saved_over_the_open_template_is_a_save() {
+        assert!(!copy_when_saved_to(Some("/d/Letter.dotx"), "/d/Letter.dotx"));
+    }
+
+    #[test]
+    fn a_pdf_is_a_copy_and_a_document_is_a_save() {
+        assert!(copy_when_saved_to(Some("/d/Letter.docx"), "/d/Letter.pdf"));
+        assert!(!copy_when_saved_to(Some("/d/Letter.docx"), "/d/Copy.docx"));
+        assert!(!copy_when_saved_to(Some("/d/Letter.dotx"), "/d/Letter.docx"));
+        assert!(!copy_when_saved_to(None, "/d/Letter.odt"));
+    }
 
     // A throwaway temp dir laid out like the app's: media/ with one inserted
     // image, plus the changes/ an older version left behind.

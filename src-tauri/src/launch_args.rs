@@ -6,11 +6,14 @@ pub const NO_TITLE_BAR: &str = "--no-title-bar";
 // Added by open_in_new_window: this process is a second window, so it opens
 // offset from the restored position instead of on top of the first one.
 pub const NEW_WINDOW: &str = "--new-window";
+// Added with NEW_WINDOW when the file is a template to start a new document
+// from (new_document_in_new_window). Only a template honours it.
+pub const FROM_TEMPLATE: &str = "--from-template";
 
 // The same choice for a launcher that cannot add options: "system" or "none".
 pub const TITLE_BAR_ENV: &str = "EURO_OFFICE_LITE_TITLE_BAR";
 
-const KNOWN_OPTIONS: [&str; 3] = [SYSTEM_TITLE_BAR, NO_TITLE_BAR, NEW_WINDOW];
+const KNOWN_OPTIONS: [&str; 4] = [SYSTEM_TITLE_BAR, NO_TITLE_BAR, NEW_WINDOW, FROM_TEMPLATE];
 
 // Where the window's title bar comes from. Only Linux Wayland acts on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +35,7 @@ pub struct LaunchArgs {
     pub system_title_bar: bool,
     pub no_title_bar: bool,
     pub new_window: bool,
+    pub from_template: bool,
 }
 
 // `args` leaves out the program name. Known options are taken wherever they
@@ -46,6 +50,7 @@ where
             parsed.system_title_bar |= arg == SYSTEM_TITLE_BAR;
             parsed.no_title_bar |= arg == NO_TITLE_BAR;
             parsed.new_window |= arg == NEW_WINDOW;
+            parsed.from_template |= arg == FROM_TEMPLATE;
             continue;
         }
         if parsed.document.is_none() {
@@ -214,6 +219,15 @@ mod tests {
         assert_eq!(parsed.document, Some("a.docx".to_string()));
         assert_eq!(document(&[NEW_WINDOW]), None);
         assert!(!parse(&["a.docx"]).new_window);
+    }
+
+    #[test]
+    fn from_template_is_an_option_not_the_document() {
+        let parsed = parse(&[NEW_WINDOW, FROM_TEMPLATE, "a.dotx"]);
+        assert!(parsed.new_window && parsed.from_template);
+        assert_eq!(parsed.document, Some("a.dotx".to_string()));
+        assert!(title_bar_options(&parsed).is_empty());
+        assert!(!parse(&[NEW_WINDOW, "a.dotx"]).from_template);
     }
 
     #[test]
