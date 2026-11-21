@@ -203,10 +203,10 @@ index 97bfa31cfb..8691859850 100644
  			if (!bUndo && wb.bCollaborativeChanges) {
  				wb.calculate(Data.elem, nSheetId);
 diff --git a/cell/model/Workbook.js b/cell/model/Workbook.js
-index eed6dbdcdb..3d90127f82 100644
+index eed6dbdcdb..f6feb1e85d 100644
 --- a/cell/model/Workbook.js
 +++ b/cell/model/Workbook.js
-@@ -4339,6 +4339,238 @@
+@@ -4339,6 +4339,243 @@
  	Workbook.prototype.addDefName = function (name, ref, sheetId, hidden, isTable) {
  		return this.dependencyFormulas.addDefName(name, ref, sheetId, hidden, isTable);
  	};
@@ -294,6 +294,11 @@ index eed6dbdcdb..3d90127f82 100644
 +	function isSameCellStylePart(a, b) {
 +		return a === b || a.isEqual(b);
 +	}
++	// Fill.isEqual gives false for two fills without a pattern, though neither draws anything.
++	function isSameCellStyleFill(a, b) {
++		var bothEmpty = !a.notEmpty() && !b.notEmpty();
++		return bothEmpty || isSameCellStylePart(a, b);
++	}
 +	// A part the old style does not apply turns on once its value changes. Predefined
 +	// styles such as Good apply no border or number format, and a file can give a
 +	// style an alignment it does not apply.
@@ -301,7 +306,7 @@ index eed6dbdcdb..3d90127f82 100644
 +		if (!isSameCellStylePart(newStyle.getFont(), oldStyle.getFont())) {
 +			newStyle.ApplyFont = true;
 +		}
-+		if (!isSameCellStylePart(newStyle.getFill(), oldStyle.getFill())) {
++		if (!isSameCellStyleFill(newStyle.getFill(), oldStyle.getFill())) {
 +			newStyle.ApplyFill = true;
 +		}
 +		if (!isSameCellStylePart(newStyle.getBorder(), oldStyle.getBorder())) {
@@ -445,7 +450,7 @@ index eed6dbdcdb..3d90127f82 100644
  	Workbook.prototype.getDefinesNames = function ( name, sheetId, isDirectSearch ) {
  		return this.dependencyFormulas.getDefNameByName( name, sheetId, isDirectSearch );
  	};
-@@ -15862,6 +16094,8 @@
+@@ -15862,6 +16099,8 @@
  				this.setBorder(oStyle.getBorder());
  			if (oStyle.ApplyNumberFormat)
  				this.setNumFormat(oStyle.getNumFormatStr());

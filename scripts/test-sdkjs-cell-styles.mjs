@@ -708,6 +708,82 @@ same('duplicate, reopen: the copy still applies what Good applies', run("applies
 same('duplicate, reopen: A1 keeps its 0% and A2 its border', run("[describe('A1').num, bottomOf('A2')]"), ['0%', thin]);
 same('duplicate, reopen: applying the copy to B1 keeps its 0%', run("[describe('B1').style, describe('B1').num]"), ['Good 2', '0%']);
 
+// --- Copies and edits of a predefined style applied once before ---
+// Applying it puts a copy in the document, whose parts are other objects than
+// the ones an edit builds, with the same values.
+const APPLIED_HELPERS = DUPLICATE_HELPERS + `
+  var NUMBER_FORMAT = 3;
+  function redCell(ref) {
+    ws().getRange2(ref).setValue('1');
+    ws().getRange2(ref).setFillColor(AscCommonExcel.createRgbColor(255, 0, 0));
+  }
+  function withNumberFormat(applies) {
+    var result = applies.slice();
+    result[NUMBER_FORMAT] = true;
+    return result;
+  }
+  function predefinedNames() {
+    return api.wbModel.CellStyles.DefaultStyles.filter(function (s) { return 0 !== s.BuiltinId; }).map(function (s) { return s.Name; });
+  }
+`;
+run = openEditor(null);
+run(APPLIED_HELPERS);
+run(`
+  var appliedOnce = {};
+  var mismatches = [];
+  predefinedNames().forEach(function (name, index) {
+    // A copy made before the style is in the document, for comparison.
+    api.asc_addCellStyle(name + ' early copy', api.asc_getCellStyleXfs(name), name);
+    if (JSON.stringify(appliesOf(name + ' early copy')) !== JSON.stringify(appliesOf(name))) {
+      mismatches.push('early copy of ' + name + ': ' + JSON.stringify(appliesOf(name + ' early copy')));
+    }
+    var ref = 'Z' + (index + 1);
+    ws().getRange2(ref).setValue('1');
+    select(ref); api.asc_setCellStyle(name);
+    appliedOnce[name] = appliesOf(name);
+    api.asc_addCellStyle(name + ' copy', api.asc_getCellStyleXfs(name), name);
+    if (JSON.stringify(appliesOf(name + ' copy')) !== JSON.stringify(appliedOnce[name])) {
+      mismatches.push('copy of ' + name + ': ' + JSON.stringify(appliesOf(name + ' copy')));
+    }
+    var formatXfs = api.asc_getCellStyleXfs(name);
+    formatXfs.asc_setNumFormatInfo('0.000');
+    api.asc_modifyCellStyle(name, formatXfs);
+    if (JSON.stringify(appliesOf(name)) !== JSON.stringify(withNumberFormat(appliedOnce[name]))) {
+      mismatches.push('number format of ' + name + ': ' + JSON.stringify(appliesOf(name)));
+    }
+  });
+  redCell('A1'); select('A1'); api.asc_setCellStyle('Percent copy');
+  redCell('A2'); select('A2'); api.asc_setCellStyle('Percent');
+  redCell('A3'); select('A3'); api.asc_setCellStyle('Title copy');
+  redCell('A4'); select('A4'); api.asc_setCellStyle('Title');
+`);
+same('applied once: Percent and Title apply no fill', run("[appliedOnce['Percent'][1], appliedOnce['Title'][1]]"), [false, false]);
+same('applied once: a copy without changes and a number format edit turn on only what changed', run('mismatches'), []);
+same('applied once: a red cell keeps its fill with each style', run("['A1', 'A2', 'A3', 'A4'].map(function (ref) { return describe(ref).fill; })"), ['255,0,0', '255,0,0', '255,0,0', '255,0,0']);
+const appliedOnce = run('appliedOnce');
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(APPLIED_HELPERS);
+run(`
+  redCell('B1'); select('B1'); api.asc_setCellStyle('Percent copy');
+  redCell('B2'); select('B2'); api.asc_setCellStyle('Percent');
+`);
+same('applied once, reopen: the copy and the edited Percent still apply no fill', run("[appliesOf('Percent copy'), appliesOf('Percent')]"), [appliedOnce['Percent'], run(`withNumberFormat(${JSON.stringify(appliedOnce['Percent'])})`)]);
+same('applied once, reopen: red cells keep their fill', run("['A1', 'A2', 'B1', 'B2'].map(function (ref) { return describe(ref).fill; })"), ['255,0,0', '255,0,0', '255,0,0', '255,0,0']);
+
+// Percent applies no font: changing only its font reaches its cells and keeps their format.
+run = openEditor(null);
+run(APPLIED_HELPERS);
+run(`
+  percentCell('A1');
+  ws().getRange2('A2').setValue('0.25');
+  select('A2'); api.asc_setCellStyle('Percent');
+  var percentFont = api.asc_getCellStyleXfs('Percent');
+  percentFont.asc_setFontName('Courier New');
+  var percentFontResult = api.asc_modifyCellStyle('Percent', percentFont);
+`);
+same('Percent, font only: the style applies the font now', run("[percentFontResult, appliesOf('Percent')[0]]"), [No, true]);
+same('Percent, font only: A2 takes the font and keeps 0%', run("[cellXfs('A2').getFont2().getName(), describe('A2').num]"), ['Courier New', '0%']);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {
