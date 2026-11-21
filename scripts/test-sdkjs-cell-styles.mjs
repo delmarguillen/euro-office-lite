@@ -910,6 +910,99 @@ run(PREDEFINED_HELPERS);
 same('Accent3, reopen: B1 keeps Accent3 and the document keeps it as a predefined style', run("[describe('B1').style, describe('B1').fill, api.wbModel.CellStyles.getStyleByName('Accent3').BuiltinId]"), ['Accent3', '155,187,89', 37]);
 same('Accent3, reopen: the document section lists Mine only', run('galleryOf(AscCommon.c_oAscStyleImage.Document).map(function (entry) { return entry.name; })'), ['Mine']);
 
+// --- Files that carry Accent3 without builtinId ---
+// Editors whose preset Accent3 had no builtinId saved the copy a cell took that way.
+// The real writer gives the same record once the copy has no builtinId.
+const ACCENT3_FILE_HELPERS = PREDEFINED_HELPERS + `
+  function documentStyles() {
+    return api.wbModel.CellStyles.CustomStyles.map(function (s) { return [s.Name, s.BuiltinId]; });
+  }
+  function documentStyle(name) {
+    return api.wbModel.CellStyles.CustomStyles.filter(function (s) { return name === s.Name; })[0];
+  }
+  function dropBuiltinId(name) { documentStyle(name).BuiltinId = null; }
+  function renameStyle(from, to) { documentStyle(from).Name = to; }
+  function addPlainStyle(name, ref) {
+    ws().getRange2(ref).setValue('1');
+    ws().getRange2(ref).setFillColor(AscCommonExcel.createRgbColor(0, 0, 255));
+    api.asc_addCellStyle(name, cellXfs(ref).clone());
+  }
+  function accent3Names() {
+    return documentStyles().filter(function (s) { return 'Accent3' === s[0]; });
+  }
+`;
+run = openEditor(null);
+run(ACCENT3_FILE_HELPERS);
+run(`
+  ['A1', 'A2'].forEach(function (ref) {
+    ws().getRange2(ref).setValue('1');
+    select(ref); api.asc_setCellStyle('Accent3');
+  });
+  var redAccent3 = api.asc_getCellStyleXfs('Accent3');
+  redAccent3.asc_setFillColor(color(255, 0, 0));
+  api.asc_modifyCellStyle('Accent3', redAccent3);
+  dropBuiltinId('Accent3');
+`);
+same('old Accent3 file: written without builtinId and red', run("[documentStyles(), describe('A1').fill]"), [[['Normal', 0], ['Accent3', null]], '255,0,0']);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(ACCENT3_FILE_HELPERS);
+run(`
+  ws().getRange2('B1').setValue('1');
+  select('B1'); api.asc_setCellStyle('Accent3');
+  var boldAccent3 = api.asc_getCellStyleXfs('Accent3');
+  boldAccent3.asc_setFontBold(true);
+  var oldModifyResult = api.asc_modifyCellStyle('Accent3', boldAccent3);
+  var oldCopyResult = api.asc_addCellStyle('Accent3 2', api.asc_getCellStyleXfs('Accent3'), 'Accent3');
+  ws().getRange2('C1').setValue('1');
+  select('C1'); api.asc_setCellStyle('Accent3 2');
+`);
+same('old Accent3 file, reopen: the record is Accent3 again', run('accent3Names()'), [['Accent3', 37]]);
+same('old Accent3 file: applying Accent3 gives its red', run("[describe('B1').style, describe('B1').fill]"), ['Accent3', '255,0,0']);
+same('old Accent3 file: modifying Accent3 reaches the cells it had', run("[oldModifyResult, describe('A1').bold, describe('A2').bold, describe('B1').bold]"), [No, true, true, true]);
+same('old Accent3 file: a copy of Accent3 takes its red and bold', run("[oldCopyResult, describe('C1').style, describe('C1').fill, describe('C1').bold]"), [No, 'Accent3 2', '255,0,0', true]);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(ACCENT3_FILE_HELPERS);
+same('old Accent3 file, saved again: one Accent3 with builtinId 37', run('accent3Names()'), [['Accent3', 37]]);
+same('old Accent3 file, saved again: the cells keep Accent3 in red and bold', run("['A1', 'B1'].map(function (ref) { return [describe(ref).style, describe(ref).fill, describe(ref).bold]; })"), [['Accent3', '255,0,0', true], ['Accent3', '255,0,0', true]]);
+
+// A file with the predefined Accent3 and a loose record named Accent3: both stay.
+run = openEditor(null);
+run(ACCENT3_FILE_HELPERS);
+run(`
+  ws().getRange2('A1').setValue('1');
+  select('A1'); api.asc_setCellStyle('Accent3');
+  addPlainStyle('Loose', 'B1');
+  renameStyle('Loose', 'Accent3');
+`);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(ACCENT3_FILE_HELPERS);
+same('Accent3 and a loose Accent3: both stay as they were', run('accent3Names()'), [['Accent3', 37], ['Accent3', null]]);
+
+// Several records named Accent3 without builtinId: only the first becomes Accent3.
+run = openEditor(null);
+run(ACCENT3_FILE_HELPERS);
+run(`
+  addPlainStyle('First', 'A1');
+  addPlainStyle('Second', 'B1');
+  renameStyle('First', 'Accent3');
+  renameStyle('Second', 'Accent3');
+`);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(ACCENT3_FILE_HELPERS);
+same('two loose Accent3: only the first takes builtinId 37', run('accent3Names()'), [['Accent3', 37], ['Accent3', null]]);
+
+// Other names stay styles of the user.
+run = openEditor(null);
+run(ACCENT3_FILE_HELPERS);
+run(`
+  addPlainStyle('Lower', 'A1');
+  renameStyle('Lower', 'accent3');
+  addPlainStyle('Accent3 2', 'B1');
+`);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(ACCENT3_FILE_HELPERS);
+same('accent3 and Accent3 2 keep no builtinId', run('documentStyles()'), [['Normal', 0], ['accent3', null], ['Accent3 2', null]]);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {

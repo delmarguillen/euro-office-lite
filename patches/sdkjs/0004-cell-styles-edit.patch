@@ -82,7 +82,7 @@ index 3475e4b21a..10e07006cd 100644
  	window['AscCH'].historyitem_Worksheet_RemoveCell = 1;
  	window['AscCH'].historyitem_Worksheet_RemoveRows = 2;
 diff --git a/cell/model/Serialize.js b/cell/model/Serialize.js
-index 7a1fe8512e..b2c647d4f0 100644
+index 7a1fe8512e..3d96b0c019 100644
 --- a/cell/model/Serialize.js
 +++ b/cell/model/Serialize.js
 @@ -2985,6 +2985,8 @@
@@ -171,7 +171,7 @@ index 7a1fe8512e..b2c647d4f0 100644
  
          // Если нет стилей в документе, то добавим
          if (0 === wb.CellStyles.CustomStyles.length && 0 < oOutput.length) {
-@@ -14640,6 +14671,15 @@
+@@ -14640,6 +14671,41 @@
              g_oDefaultFormat.XfId = 0;
          }
      }
@@ -184,10 +184,36 @@ index 7a1fe8512e..b2c647d4f0 100644
 +            }
 +        }
 +    }
++    function findCellStyle(styles, isWanted) {
++        for (var i = 0; i < styles.length; ++i) {
++            if (isWanted(styles[i])) {
++                return styles[i];
++            }
++        }
++        return null;
++    }
++    /**
++     * Reads the first style of the document named exactly name and without builtinId as the
++     * predefined style. A document that already has the predefined style is left as it is.
++     */
++    function readAsPresetCellStyle(styles, name, builtinId) {
++        var hasPreset = findCellStyle(styles, function (style) {
++            return builtinId === style.BuiltinId;
++        });
++        if (hasPreset) {
++            return;
++        }
++        var style = findCellStyle(styles, function (style) {
++            return name === style.Name && null === style.BuiltinId;
++        });
++        if (style) {
++            style.BuiltinId = builtinId;
++        }
++    }
      function RenameDefSlicerStyle(oStyleObject){
          var tableStyles = oStyleObject.oCustomTableStyles;
          var tableStylesRenamed = {}, i;
-@@ -15225,6 +15265,8 @@
+@@ -15225,6 +15291,8 @@
              // ApplyNumberFormat (ToDo возможно это свойство должно быть в xfs)
              if (null !== oCellStyleXfs.ApplyNumberFormat)
                  oCellStyle.ApplyNumberFormat = oCellStyleXfs.ApplyNumberFormat;
@@ -196,6 +222,15 @@ index 7a1fe8512e..b2c647d4f0 100644
  
              oCellStyle.xfs = g_StyleCache.addXf(newXf);
              // ToDo при отсутствии имени все не очень хорошо будет!
+@@ -15244,6 +15312,8 @@
+                 this.wb.CellStyles.CustomStyles[i].Name = newStyleName;
+             }
+         }
++        // Files saved while the preset Accent3 had no builtinId carry the Accent3 a cell took without one.
++        readAsPresetCellStyle(this.wb.CellStyles.CustomStyles, "Accent3", 37);
+ 
+         // ToDo это нужно будет переделать (проходимся по всем стилям и меняем у них XfId по порядку)
+ 
 diff --git a/cell/model/UndoRedo.js b/cell/model/UndoRedo.js
 index 97bfa31cfb..8691859850 100644
 --- a/cell/model/UndoRedo.js
