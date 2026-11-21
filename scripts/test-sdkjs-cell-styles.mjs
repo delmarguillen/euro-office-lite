@@ -657,6 +657,57 @@ same('new font, duplicate: the result comes at once and the font is loaded', run
 same('new font, duplicate: no gallery or sheet drawn before the font loads', run('timesWaiting'), [false, false]);
 same('new font, duplicate: both drawn once it loads', run('timesLoaded'), [true, true]);
 
+// --- A copy of a style applies what the original applies ---
+// Good applies no number format or border, so a copy of it leaves the cell's own.
+const DUPLICATE_HELPERS = `
+  function appliesOf(name) {
+    var s = api.wbModel.CellStyles.getStyleByName(name);
+    return [s.ApplyFont, s.ApplyFill, s.ApplyBorder, s.ApplyNumberFormat, s.ApplyAlignment];
+  }
+  function bottomOf(ref) { return (cellXfs(ref) || new AscCommonExcel.CellXfs()).getBorder().b.s; }
+  function percentCell(ref) {
+    ws().getRange2(ref).setValue('0.5');
+    ws().getRange2(ref).setNumFormat('0%');
+  }
+  function borderCell(ref) {
+    ws().getRange2(ref).setValue('1');
+    var borders = [];
+    borders[Asc.c_oAscBorderOptions.Bottom] = {style: Asc.c_oAscBorderStyles.Thin, color: new Asc.asc_CColor(0, 0, 0)};
+    var borderXfs = new AscCommonExcel.CellXfs();
+    borderXfs.asc_setBorder(borders);
+    ws().getRange2(ref).setBorder(borderXfs.border);
+  }
+`;
+run = openEditor(null);
+run(DUPLICATE_HELPERS);
+run(`
+  var goodApplies = appliesOf('Good');
+  percentCell('A1');
+  borderCell('A2');
+  percentCell('A3');
+  var copyResult = api.asc_addCellStyle('Good 2', api.asc_getCellStyleXfs('Good'), 'Good');
+  select('A1:A2'); api.asc_setCellStyle('Good 2');
+  var formatXfs = api.asc_getCellStyleXfs('Good');
+  formatXfs.asc_setNumFormatInfo('0.000');
+  var formatResult = api.asc_addCellStyle('Good 3', formatXfs, 'Good');
+  select('A3'); api.asc_setCellStyle('Good 3');
+`);
+const goodApplies = run('goodApplies');
+same('duplicate: Good applies no border or number format', goodApplies.slice(2, 4), [false, false]);
+same('duplicate: the copy applies what Good applies', run("[copyResult, appliesOf('Good 2')]"), [No, goodApplies]);
+same('duplicate: A1 keeps its 0%', run("[describe('A1').style, describe('A1').num]"), ['Good 2', '0%']);
+same('duplicate: A2 keeps its border set by hand', run("bottomOf('A2')"), thin);
+same('duplicate with a number format: the copy applies it', run("[formatResult, appliesOf('Good 3')[3], describe('A3').num]"), [No, true, '0.000']);
+run = openEditor(run('api.asc_nativeGetFile()'));
+run(DUPLICATE_HELPERS);
+run(`
+  percentCell('B1');
+  select('B1'); api.asc_setCellStyle('Good 2');
+`);
+same('duplicate, reopen: the copy still applies what Good applies', run("appliesOf('Good 2')"), goodApplies);
+same('duplicate, reopen: A1 keeps its 0% and A2 its border', run("[describe('A1').num, bottomOf('A2')]"), ['0%', thin]);
+same('duplicate, reopen: applying the copy to B1 keeps its 0%', run("[describe('B1').style, describe('B1').num]"), ['Good 2', '0%']);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {
