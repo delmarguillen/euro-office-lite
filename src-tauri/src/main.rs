@@ -346,6 +346,7 @@ fn main() {
     std::fs::create_dir_all(&temp_root).ok();
     let font_choice = temp_layout::font_root(&context.config().identifier, &temp_root);
     let font_root = font_choice.path;
+    let read_copies_root = temp_layout::read_copies_root(&context.config().identifier);
     let instance = start_instance(&temp_root);
     let temp_dir = instance.dir.clone();
     let instance_id = instance.id.clone();
@@ -478,6 +479,7 @@ fn main() {
             temp_dir,
             temp_root: temp_root.clone(),
             font_root: font_root.clone(),
+            read_copies: read_copies_root.as_ref().map(|dir| dir.join(&instance_id)),
             fonts: fonts.clone(),
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
@@ -903,8 +905,12 @@ fn main() {
             let sweep_font_root = font_root.clone();
             let sweep_id = instance_id.clone();
             let sweep_handle = app.handle().clone();
+            let sweep_read_copies_root = read_copies_root.clone();
             std::thread::spawn(move || {
                 sweep_leftovers(&sweep_handle, &sweep_root);
+                if let Some(read_copies) = &sweep_read_copies_root {
+                    temp_layout::sweep_read_copies(read_copies, &sweep_root);
+                }
                 sweep_old_font_cache(&sweep_root, &sweep_font_root, &sweep_id);
             });
 

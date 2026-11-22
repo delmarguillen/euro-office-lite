@@ -1408,6 +1408,40 @@ fn windows_cache_dir(local_app_data: Option<std::ffi::OsString>) -> Option<PathB
 }
 
 // ---------------------------------------------------------------------------
+// Read copies in the user's cache
+// ---------------------------------------------------------------------------
+
+const READ_COPIES_DIR: &str = "read-copies";
+
+// Where an instance puts the copy x2t reads when the temp root has no room for
+// it (converter::choose_copy_dir): one folder per instance, named by its id.
+pub fn read_copies_root(identifier: &str) -> Option<PathBuf> {
+    Some(user_cache_dir()?.join(identifier).join(READ_COPIES_DIR))
+}
+
+// Removes the folders of instances whose folder under the temp root is gone:
+// sweep_dead_instances decides when an instance is dead.
+pub fn sweep_read_copies(read_copies: &Path, temp_root: &Path) -> Vec<String> {
+    let mut removed = Vec::new();
+    let Ok(entries) = std::fs::read_dir(read_copies) else {
+        return removed;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if parse_id(&name).is_none() {
+            continue;
+        }
+        if instance_dir(temp_root, &name).exists() {
+            continue;
+        }
+        if std::fs::remove_dir_all(entry.path()).is_ok() {
+            removed.push(name);
+        }
+    }
+    removed
+}
+
+// ---------------------------------------------------------------------------
 // Font cache root
 // ---------------------------------------------------------------------------
 

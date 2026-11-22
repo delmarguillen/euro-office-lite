@@ -2020,3 +2020,21 @@ fn a_documents_lock_nobody_releases_is_not_waited_on_forever() {
     assert!(claim_document(&root, &own.id, &announced).is_none());
     drop((held, theirs));
 }
+
+#[test]
+fn read_copies_of_instances_whose_folder_is_gone_are_removed() {
+    let root = scratch_root();
+    let read_copies = root.join("cache/read-copies");
+    let live = begin_instance(&root, 1000, 1).unwrap();
+    for id in [live.id.as_str(), "1000-2"] {
+        std::fs::create_dir_all(read_copies.join(id)).unwrap();
+        std::fs::write(read_copies.join(id).join("eo-read-copy.pptx"), b"copy").unwrap();
+    }
+    std::fs::create_dir_all(read_copies.join("not-an-instance")).unwrap();
+
+    let removed = sweep_read_copies(&read_copies, &root);
+
+    assert_eq!(removed, vec!["1000-2".to_string()]);
+    assert!(read_copies.join(&live.id).join("eo-read-copy.pptx").exists());
+    assert!(read_copies.join("not-an-instance").exists());
+}

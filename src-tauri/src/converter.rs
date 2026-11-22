@@ -237,10 +237,31 @@ impl Drop for EditorInput {
 }
 
 // The TXT and CSV copy (text_import::prepare_read_copy) is already one; every
-// other document gets a copy of its own.
+// other document gets a copy of its own. The copy goes in `work_dir`.
 pub fn prepare_editor_input(
     source: &std::path::Path,
     work_dir: &std::path::Path,
+    text_kind: Option<crate::text_import::TextKind>,
+    text_options: Option<crate::text_import::TextOptions>,
+) -> Result<EditorInput, String> {
+    let places = CopyPlaces { work_dir, spill_dir: None, free_space: &free_space };
+    prepare_editor_input_in(source, &places, text_kind, text_options)
+}
+
+// Where the copy of an EditorInput may go. x2t always works in `work_dir`;
+// the copy goes in `spill_dir` (a folder in the user's cache) when the file
+// system of `work_dir` has no room for both.
+pub struct CopyPlaces<'a> {
+    pub work_dir: &'a std::path::Path,
+    pub spill_dir: Option<&'a std::path::Path>,
+    // Bytes free for this user on the file system of a folder, None when that
+    // cannot be told.
+    pub free_space: &'a (dyn Fn(&std::path::Path) -> Option<u64> + Sync),
+}
+
+pub fn prepare_editor_input_in(
+    source: &std::path::Path,
+    places: &CopyPlaces,
     text_kind: Option<crate::text_import::TextKind>,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<EditorInput, String> {
@@ -248,16 +269,129 @@ pub fn prepare_editor_input(
     if !x2t_task::is_converted_extension(source) {
         return Err(not_valid_error(source));
     }
-    let mut input = read_copy(source, work_dir, text_kind, text_options)?;
+    let copy_dir = copy_dir_for(source, places, text_kind.is_some())?;
+    let mut input = read_copy(source, &copy_dir, text_kind, text_options)?;
     let copy = input.path().to_path_buf();
     let content = x2t_task::ContentSample::read(&copy).map_err(|e| e.to_string())?;
     if check_container_content(&copy, &content)? == PackageFilters::Skipped {
         return Ok(input);
     }
-    if let Some(package_copy) = package_images_copy(&copy, &content, work_dir)? {
+    if let Some(package_copy) = package_images_copy(&copy, &content, &copy_dir)? {
         input.copies.push(package_copy);
     }
     Ok(input)
+}
+
+// A TXT or CSV copy is UTF-32: up to four bytes for each byte of the file.
+const TEXT_COPY_FACTOR: u64 = 4;
+
+fn copy_dir_for(
+    source: &std::path::Path,
+    places: &CopyPlaces,
+    is_text: bool,
+) -> Result<std::path::PathBuf, String> {
+    let source_len = std::fs::metadata(source)
+        .map_err(|e| format!("read copy: {}", e))?
+        .len();
+    let copy_len = match is_text {
+        true => source_len.saturating_mul(TEXT_COPY_FACTOR),
+        false => source_len,
+    };
+    // What x2t unpacks and writes is taken to be about the size of the file.
+    let copy_dir = choose_copy_dir(copy_len, source_len, places)?;
+    if copy_dir != places.work_dir {
+        log_spilled_copy(copy_len, &copy_dir);
+    }
+    Ok(copy_dir)
+}
+
+fn log_spilled_copy(copy_len: u64, copy_dir: &std::path::Path) {
+    crate::temp_layout::append_log(&format!(
+        "[OPEN] read copy of {} bytes in {}: no room in the temp folder",
+        copy_len,
+        copy_dir.display()
+    ));
+}
+
+// The work folder when its file system holds the copy and x2t's work, or when
+// free space cannot be told; else the spill folder when it holds the copy;
+// else the work folder when it holds at least the copy. Err when neither
+// holds the copy: nothing is written.
+pub fn choose_copy_dir(
+    copy_len: u64,
+    x2t_work: u64,
+    places: &CopyPlaces,
+) -> Result<std::path::PathBuf, String> {
+    let work_dir = places.work_dir.to_path_buf();
+    let Some(work_free) = (places.free_space)(places.work_dir) else {
+        return Ok(work_dir);
+    };
+    if work_free >= copy_len.saturating_add(x2t_work) {
+        return Ok(work_dir);
+    }
+    if let Some(spill_dir) = usable_spill_dir(copy_len, places) {
+        return Ok(spill_dir);
+    }
+    if work_free >= copy_len {
+        return Ok(work_dir);
+    }
+    Err(no_space_error(copy_len, places.work_dir))
+}
+
+fn usable_spill_dir(copy_len: u64, places: &CopyPlaces) -> Option<std::path::PathBuf> {
+    let spill_dir = places.spill_dir?;
+    let spill_free = (places.free_space)(spill_dir)?;
+    if spill_free < copy_len {
+        return None;
+    }
+    ensure_spill_dir(spill_dir).ok()?;
+    Some(spill_dir.to_path_buf())
+}
+
+#[cfg(unix)]
+fn ensure_spill_dir(dir: &std::path::Path) -> Result<(), String> {
+    crate::temp_layout::ensure_private_dir(dir, unsafe { libc::getuid() })
+}
+
+#[cfg(not(unix))]
+fn ensure_spill_dir(_dir: &std::path::Path) -> Result<(), String> {
+    Err("no private spill folder on this platform".to_string())
+}
+
+pub const NO_SPACE_ERROR: &str = "Not enough free space to open this file";
+
+fn no_space_error(copy_len: u64, dir: &std::path::Path) -> String {
+    let megabytes = copy_len.div_ceil(1_000_000);
+    format!(
+        "{}: it needs about {} MB in {}",
+        NO_SPACE_ERROR,
+        megabytes,
+        dir.display()
+    )
+}
+
+// The space statvfs reports for this user on the file system of `dir`, or of
+// the nearest folder above it that exists.
+#[cfg(unix)]
+pub fn free_space(dir: &std::path::Path) -> Option<u64> {
+    let existing = dir.ancestors().find(|folder| folder.exists())?;
+    statvfs_free(existing)
+}
+
+#[cfg(unix)]
+fn statvfs_free(dir: &std::path::Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut stats) } != 0 {
+        return None;
+    }
+    Some((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
+}
+
+#[cfg(not(unix))]
+pub fn free_space(_dir: &std::path::Path) -> Option<u64> {
+    None
 }
 
 fn read_copy(
@@ -704,6 +838,129 @@ mod tests {
     }
 
     const DOCX: &[u8] = include_bytes!("../../tests/corpus/rich.docx");
+
+    const MB: u64 = 1_000_000;
+
+    // Free space as a test sets it: `work` for the work folder, `spill` for
+    // anything else.
+    fn space(work_dir: &std::path::Path, work: Option<u64>, spill: Option<u64>)
+        -> impl Fn(&std::path::Path) -> Option<u64> + Sync + '_ {
+        move |dir| if dir == work_dir { work } else { spill }
+    }
+
+    fn spill_dir_for(work_dir: &std::path::Path) -> std::path::PathBuf {
+        work_dir.parent().unwrap().join("cache/read-copies/1-1")
+    }
+
+    fn prepare_with(
+        original: &std::path::Path,
+        work_dir: &std::path::Path,
+        spill_dir: &std::path::Path,
+        free_space: &(dyn Fn(&std::path::Path) -> Option<u64> + Sync),
+    ) -> Result<EditorInput, String> {
+        let places = CopyPlaces { work_dir, spill_dir: Some(spill_dir), free_space };
+        let kind = crate::text_import::TextKind::for_path(original);
+        let options = kind.map(|kind| crate::text_import::detect_file(original, kind).unwrap());
+        prepare_editor_input_in(original, &places, kind, options)
+    }
+
+    #[test]
+    fn the_copy_stays_in_the_work_folder_when_it_holds_the_copy_and_the_x2t_work() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, Some(2 * DOCX.len() as u64), Some(100 * MB));
+
+        let input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        assert!(!spill_dir.exists());
+    }
+
+    #[test]
+    fn the_copy_goes_to_the_cache_when_the_work_folder_cannot_hold_it_and_the_x2t_work() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, Some(2 * DOCX.len() as u64 - 1), Some(100 * MB));
+
+        let input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        assert_eq!(input.path().parent(), Some(spill_dir.as_path()));
+        assert_eq!(std::fs::read(input.path()).unwrap(), DOCX);
+        assert_eq!(files_in(&work_dir), 0);
+        drop(input);
+        assert_eq!(files_in(&spill_dir), 0, "the copy in the cache is removed after x2t");
+    }
+
+    #[test]
+    fn the_copy_in_the_cache_is_in_a_private_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, Some(0), Some(100 * MB));
+
+        let _input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        let mode = std::fs::metadata(&spill_dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0);
+    }
+
+    #[test]
+    fn no_space_for_the_copy_anywhere_is_a_space_error_and_writes_nothing() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, Some(DOCX.len() as u64 - 1), Some(DOCX.len() as u64 - 1));
+
+        let refused = prepare_with(&original, &work_dir, &spill_dir, &free);
+
+        let error = refused.err().expect("no room for the copy");
+        assert!(error.starts_with(NO_SPACE_ERROR), "{}", error);
+        assert_eq!(files_in(&work_dir), 0);
+        assert!(!spill_dir.exists());
+        assert_eq!(std::fs::read(&original).unwrap(), DOCX);
+    }
+
+    #[test]
+    fn without_room_in_the_cache_the_copy_stays_in_the_work_folder_if_it_fits_there() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, Some(DOCX.len() as u64), Some(0));
+
+        let input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+    }
+
+    #[test]
+    fn free_space_that_cannot_be_told_keeps_the_copy_in_the_work_folder() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, None, Some(100 * MB));
+
+        let input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+    }
+
+    #[test]
+    fn a_csv_counts_its_utf32_copy_at_four_bytes_per_byte() {
+        let csv = b"a;b\n1;2\n".repeat(100);
+        let (original, work_dir) = original_and_work_dir("data.csv", &csv);
+        let spill_dir = spill_dir_for(&work_dir);
+        // Room for the file twice over, not for its UTF-32 copy and x2t's work.
+        let free = space(&work_dir, Some(4 * csv.len() as u64), Some(100 * MB));
+
+        let input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        assert_eq!(input.path().parent(), Some(spill_dir.as_path()));
+    }
+
+    #[test]
+    fn free_space_is_read_for_a_folder_that_does_not_exist_yet() {
+        let root = scratch_root();
+
+        assert!(free_space(&root.join("not/yet")).is_some());
+    }
+
 
     #[test]
     fn the_conversion_reads_a_copy_in_the_work_folder_not_the_original() {

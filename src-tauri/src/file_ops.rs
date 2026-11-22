@@ -15,6 +15,9 @@ pub struct AppState {
     pub temp_root: PathBuf,
     // Shared by every instance: the font cache.
     pub font_root: PathBuf,
+    // This instance's folder in the user's cache for a read copy the temp
+    // root has no room for (converter::CopyPlaces). None without a cache.
+    pub read_copies: Option<PathBuf>,
     // Whether that cache is built yet (fonts_state.rs).
     pub fonts: std::sync::Arc<crate::fonts_state::FontsState>,
     pub instance: crate::temp_layout::Instance,
@@ -482,9 +485,14 @@ async fn open_file_inner(
     // x2t reads a checked copy in the temp dir. current_file and the recent list
     // keep the original path, and saving keeps the original's options; only the
     // conversion sees the copy.
-    let input_copy = super::converter::prepare_editor_input(
+    let places = super::converter::CopyPlaces {
+        work_dir: &state.temp_dir,
+        spill_dir: state.read_copies.as_deref(),
+        free_space: &super::converter::free_space,
+    };
+    let input_copy = super::converter::prepare_editor_input_in(
         Path::new(&source),
-        &state.temp_dir,
+        &places,
         text_kind,
         text_options,
     )
@@ -1307,8 +1315,14 @@ pub async fn convert_for_insert(
         }
         None => None,
     };
+    let insert_spill = state.read_copies.as_ref().map(|dir| dir.join("insert"));
+    let places = super::converter::CopyPlaces {
+        work_dir: &insert_dir,
+        spill_dir: insert_spill.as_deref(),
+        free_space: &super::converter::free_space,
+    };
     let input_copy =
-        super::converter::prepare_editor_input(&input, &insert_dir, text_kind, text_options)?;
+        super::converter::prepare_editor_input_in(&input, &places, text_kind, text_options)?;
 
     let converted = super::converter::convert_file(
         &app,
@@ -1480,6 +1494,7 @@ pub(crate) fn test_state_for(root: &Path, instance: crate::temp_layout::Instance
         temp_dir: instance.dir.clone(),
         temp_root: root.to_path_buf(),
         font_root: root.join("fonts"),
+        read_copies: None,
         fonts: std::sync::Arc::new(crate::fonts_state::FontsState::pending()),
         instance,
         doc_seq: std::sync::atomic::AtomicU64::new(1),
