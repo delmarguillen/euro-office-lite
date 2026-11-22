@@ -39,7 +39,8 @@ installed_sha256() { sha256_of "$APP_BIN"; }
 # The sha256 of the app binary inside a .deb, without installing it.
 deb_binary_sha256() {
   local sum
-  read -r sum _ < <(dpkg-deb --fsys-tarfile "$1" | tar -xO usr/bin/euro-office-lite | sha256sum)
+  # Tauri names it usr/bin/...; dpkg-deb --build, which repacks the .deb with xz, names it ./usr/bin/...
+  read -r sum _ < <(dpkg-deb --fsys-tarfile "$1" | tar -xO --wildcards '*usr/bin/euro-office-lite' | sha256sum)
   echo "$sum"
 }
 
