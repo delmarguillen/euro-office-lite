@@ -62,7 +62,39 @@
         if (doc.__eoSdkLoadMarksInstalled) return;
         doc.__eoSdkLoadMarksInstalled = true;
         doc.addEventListener('load', _markSdkScriptLoaded, true);
+        if (doc.URL === 'about:blank' && _isEditorFrame(win)) _watchForEditorDocument(win);
       } catch(e) {}
+    }
+
+    // The docs API names the editor's iframe frameEditor. sdkjs's helper
+    // frames, such as asc_pasteFrame, reach the bridge too but never load the
+    // sdk scripts, so they are not watched.
+    function _isEditorFrame(win) {
+      try {
+        var frame = win.frameElement;
+        if (!frame) return false;
+        return frame.name === 'frameEditor';
+      } catch(e) {
+        return false;
+      }
+    }
+
+    // The editor frame is first reached on its initial about:blank. The editor's
+    // document replaces it in the same window, and the frame's load event,
+    // the next time the bridge is injected, comes only after the sdk scripts
+    // have loaded. So the window is polled for the new document, which then
+    // gets the listener while it is still loading.
+    function _watchForEditorDocument(win) {
+      var interval = setInterval(function() {
+        try {
+          if (win.document.URL === 'about:blank') return;
+          clearInterval(interval);
+          _installSdkLoadMarks(win);
+        } catch(e) {
+          clearInterval(interval);
+        }
+      }, 10);
+      setTimeout(function() { clearInterval(interval); }, 30000);
     }
 
     function _markSdkScriptLoaded(event) {
