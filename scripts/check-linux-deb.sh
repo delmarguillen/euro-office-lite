@@ -43,6 +43,18 @@ check_x2t_is_executable() {
     esac
 }
 
+# DoctRenderer loads editors/sdkjs/<editor>/sdk-all*.js. Nothing reads a copy
+# of those bundles in binaries/.
+check_no_sdk_bundles_in_binaries() {
+    local found
+    found=$(grep -E "^$APP_DIR/binaries/sdk-all[^/]*\.js$" <<< "$PATHS" || true)
+    if [ -n "$found" ]; then
+        fail "sdkjs bundles packaged in binaries/: $found"
+    fi
+    echo "binaries/: no sdk-all*.js"
+}
+
 PATHS=$(deb_paths)
 check_single_x2t
 check_x2t_is_executable
+check_no_sdk_bundles_in_binaries
