@@ -51,24 +51,24 @@
       }
     }
 
-    // sdk-all-min.js and sdk-all.js load inside the editor frame, and a script's
-    // load event fires once it has been evaluated. The event does not bubble
-    // and never reaches the window, so it is taken from the frame's document in
-    // the capture phase. Keyed on the document, as the diagnostics are.
-    function _installSdkLoadMarks(win) {
-      try {
-        if (!win || !win.document) return;
-        var doc = win.document;
-        if (doc.__eoSdkLoadMarksInstalled) return;
-        doc.__eoSdkLoadMarksInstalled = true;
-        doc.addEventListener('load', _markSdkScriptLoaded, true);
-        if (doc.URL === 'about:blank' && _isEditorFrame(win)) _watchForEditorDocument(win);
-      } catch(e) {}
-    }
+    // sdk_min and sdk_all are marked when the editor frame has evaluated each
+    // part of sdkjs, seen from a global that part defines: word/api.js,
+    // cell/api.js and slide/api.js export the editor's API in the min part, and
+    // common/openxml.js exports openXml in the rest. With the release frontend
+    // the parts are the bundles sdk-all-min.js and sdk-all.js; with the develop
+    // frontend of the Dev Builds, the same files of sdkjs loaded one by one.
+    // The PDF editor runs the word sdkjs. Keyed on the document type the
+    // editor was opened with.
+    var SDK_PHASE_GLOBALS = {
+      word:  { sdk_min: ['Asc', 'asc_docs_api'],    sdk_all: ['AscCommon', 'openXml'] },
+      pdf:   { sdk_min: ['Asc', 'asc_docs_api'],    sdk_all: ['AscCommon', 'openXml'] },
+      cell:  { sdk_min: ['Asc', 'spreadsheet_api'], sdk_all: ['AscCommon', 'openXml'] },
+      slide: { sdk_min: ['Asc', 'asc_docs_api'],    sdk_all: ['AscCommon', 'openXml'] },
+    };
+    var SDK_PHASES = ['sdk_min', 'sdk_all'];
 
     // The docs API names the editor's iframe frameEditor. sdkjs's helper
-    // frames, such as asc_pasteFrame, reach the bridge too but never load the
-    // sdk scripts, so they are not watched.
+    // frames, such as asc_pasteFrame, reach the bridge too and are not watched.
     function _isEditorFrame(win) {
       try {
         var frame = win.frameElement;
@@ -79,29 +79,44 @@
       }
     }
 
-    // The editor frame is first reached on its initial about:blank. The editor's
-    // document replaces it in the same window, and the frame's load event,
-    // the next time the bridge is injected, comes only after the sdk scripts
-    // have loaded. So the window is polled for the new document, which then
-    // gets the listener while it is still loading.
-    function _watchForEditorDocument(win) {
-      var interval = setInterval(function() {
-        try {
-          if (win.document.URL === 'about:blank') return;
-          clearInterval(interval);
-          _installSdkLoadMarks(win);
-        } catch(e) {
-          clearInterval(interval);
-        }
-      }, 10);
-      setTimeout(function() { clearInterval(interval); }, 30000);
+    function _sdkGlobalDefined(win, path) {
+      var owner = win[path[0]];
+      if (!owner) return false;
+      return owner[path[1]] !== undefined;
     }
 
-    function _markSdkScriptLoaded(event) {
-      var target = event.target;
-      if (!target || target.tagName !== 'SCRIPT') return;
-      var phase = window._eoSdkPhaseForScript(target.src);
-      if (phase) window._eoOpenPhases.mark(phase);
+    // One poll per editor frame element, which stays while its window goes
+    // from about:blank to the editor: either can be the first contact. It
+    // reads the frame's current window on every turn and stops once both
+    // phases are marked, when the open ends (document_ready ends it), or
+    // after 30 s. A failure here never stops the bridge from being injected.
+    function _installSdkPhaseMarks(win) {
+      try {
+        if (!_isEditorFrame(win)) return;
+        var frame = win.frameElement;
+        if (frame.__eoSdkPhaseWatch) return;
+        frame.__eoSdkPhaseWatch = true;
+        var globals = SDK_PHASE_GLOBALS[window.AscDesktopEditor._currentDocType];
+        if (!globals) return;
+        var next = 0;
+        var interval = setInterval(function() {
+          try {
+            if (!window._eoOpenPhases.inProgress()) {
+              clearInterval(interval);
+              return;
+            }
+            var current = frame.contentWindow;
+            while (next < SDK_PHASES.length && _sdkGlobalDefined(current, globals[SDK_PHASES[next]])) {
+              window._eoOpenPhases.mark(SDK_PHASES[next]);
+              next += 1;
+            }
+            if (next === SDK_PHASES.length) clearInterval(interval);
+          } catch(e) {
+            clearInterval(interval);
+          }
+        }, 10);
+        setTimeout(function() { clearInterval(interval); }, 30000);
+      } catch(e) {}
     }
 
     // sdkjs names the document canvases id_viewer and id_viewer_overlay in the
@@ -498,7 +513,6 @@
         try { hasADE = !!win.AscDesktopEditor; } catch(e) {}
 
         _installFrameDiagnostics(win);
-        _installSdkLoadMarks(win);
 
         if (win && !hasADE) {
           try {
@@ -1097,6 +1111,8 @@
           setTimeout(function() { clearInterval(tabsTemplateInterval); }, 30000);
           // ── END TABS FIX ──────────────────────────────────────────────
         }
+
+        _installSdkPhaseMarks(win);
       } catch(e) {
         _log('[INJECT] ERROR:', e.message);
       }

@@ -1,8 +1,8 @@
 // Checks the phase marks of a document open (bridge.js, _eoOpenPhases): the
 // line of each phase, the id the backend gets, that dt is the time since the
 // previous mark of the same open, and that a failed or finished open marks
-// nothing more. Also the marks editor-patches.js takes from the load events
-// of the editor frame's scripts.
+// nothing more. Also the sdk_min and sdk_all marks editor-patches.js takes
+// from the globals sdkjs defines in the editor frame.
 //
 // Run: node scripts/test-bridge-open-phases.mjs [path/to/bridge.js]
 import { readFile } from 'node:fs/promises';
@@ -109,35 +109,22 @@ async function loadWith(openFile) {
   check(results, 'without an open nothing is marked', phaseLines(bridge).length === 0, phaseNames(bridge));
 }
 
-// The scripts of the editor that end a phase.
-{
-  const { bridge } = await loadWith(() => 'Ymlu');
-  const phaseFor = bridge.sandbox._eoSdkPhaseForScript;
-  bridge.stopTimers();
-  check(results, 'sdk-all-min.js ends sdk_min',
-    phaseFor('tauri://localhost/sdkjs/word/sdk-all-min.js') === 'sdk_min');
-  check(results, 'sdk-all.js ends sdk_all, with a query or a fragment too',
-    phaseFor('tauri://localhost/sdkjs/cell/sdk-all.js?v=1#x') === 'sdk_all');
-  check(results, 'any other script ends no phase',
-    phaseFor('tauri://localhost/web-apps/vendor/requirejs/require.js') === null
-      && phaseFor('tauri://localhost/sdkjs/word/not-sdk-all.js') === null
-      && phaseFor('') === null);
-}
-
-// The marks taken from the editor frame (editor-patches.js), from
-// _installSdkLoadMarks to the end of _markSdkScriptLoaded.
+// The sdk_min and sdk_all marks editor-patches.js takes from the globals the
+// editor frame's sdkjs defines, from SDK_PHASE_GLOBALS to the end of
+// _installSdkPhaseMarks.
 const patches = (await readFile(path.join(projectRoot, 'src/editor-patches.js'), 'utf8')).replace(/\r\n/g, '\n');
 
-function loadSdkLoadMarks(bridge) {
-  const start = patches.indexOf('    function _installSdkLoadMarks(win) {');
-  const last = patches.indexOf('    function _markSdkScriptLoaded(event) {', start);
+function loadSdkPhaseMarks(bridge) {
+  const start = patches.indexOf('    var SDK_PHASE_GLOBALS = {');
+  const last = patches.indexOf('    function _installSdkPhaseMarks(win) {', start);
+  if (start < 0 || last < 0) throw new Error('editor-patches.js: cannot find the sdk phase marks');
   const end = patches.indexOf('\n    }\n', last);
-  bridge.run(patches.slice(start, end + 6) + '\nwindow._installSdkLoadMarks = _installSdkLoadMarks;');
-  return bridge.sandbox._installSdkLoadMarks;
+  bridge.run(patches.slice(start, end + 6) + '\nwindow._installSdkPhaseMarks = _installSdkPhaseMarks;');
+  return bridge.sandbox._installSdkPhaseMarks;
 }
 
-// The harness has no setInterval; these are tracked so a check can see them
-// stop, and cleared at the end.
+// The harness has no setInterval; these are tracked so a check can see the
+// poll stop, and cleared at the end.
 function withIntervals(bridge) {
   const intervals = new Set();
   bridge.sandbox.setInterval = (fn, ms) => {
@@ -154,99 +141,213 @@ function clearIntervals(intervals) {
   intervals.clear();
 }
 
-class FakeDocument {
-  constructor(url) { this.URL = url; this.listeners = []; }
-  addEventListener(type, fn, capture) { this.listeners.push({ type, fn, capture }); }
-  load(target) { this.listeners.filter((l) => l.type === 'load').forEach((l) => l.fn({ target })); }
-}
-const script = (src) => ({ tagName: 'SCRIPT', src });
-const EDITOR_URL = 'tauri://localhost/web-apps/apps/documenteditor/main/index.html';
-// The docs API sets only the name of the editor's iframe.
-const editorFrame = () => ({ frameElement: { id: '', name: 'frameEditor' }, document: new FakeDocument('about:blank') });
-
-{
-  const { bridge } = await loadWith(() => 'Ymlu');
-  const intervals = withIntervals(bridge);
-  const install = loadSdkLoadMarks(bridge);
-  const frame = editorFrame();
-
-  bridge.run(`_eoOpenGranted(${JSON.stringify(REPORT)})`);
-  await sleep(10);
-  install(frame);
-  install(frame);
-  const blank = frame.document;
-  check(results, 'one capturing load listener per document',
-    blank.listeners.length === 1 && blank.listeners[0].type === 'load' && blank.listeners[0].capture === true,
-    JSON.stringify(blank.listeners.length));
-
-  // The frame leaves its initial about:blank for the editor.
-  frame.document = new FakeDocument(EDITOR_URL);
-  install(frame);
-  check(results, 'the document the frame navigates to gets its own listener',
-    frame.document.listeners.length === 1);
-
-  frame.document.load({ tagName: 'IMG', src: 'tauri://localhost/sdkjs/word/sdk-all-min.js' });
-  frame.document.load(script('tauri://localhost/web-apps/vendor/requirejs/require.js'));
-  frame.document.load(script('tauri://localhost/sdkjs/word/sdk-all-min.js'));
-  frame.document.load(script('tauri://localhost/sdkjs/word/sdk-all.js'));
-  frame.document.load(script('tauri://localhost/sdkjs/word/sdk-all.js'));
-  bridge.stopTimers();
-  clearIntervals(intervals);
-  check(results, 'the two sdk scripts are marked once each when they load',
-    phaseNames(bridge) === 'request,result,sdk_min,sdk_all', phaseNames(bridge));
+// The docs API sets only the name of the editor's iframe. The frame element
+// stays while its window changes.
+function editorFrame(url) {
+  const frame = { id: '', name: 'frameEditor', contentWindow: null };
+  return { frame, win: frameWindow(frame, url) };
 }
 
-// As the app reaches the frame: once on about:blank, and next only at the
-// frame's load event, after the editor's document has loaded its scripts.
-{
+function frameWindow(frame, url) {
+  const win = { frameElement: frame, document: { URL: url } };
+  frame.contentWindow = win;
+  return win;
+}
+
+const EDITOR_URLS = {
+  word: 'tauri://localhost/web-apps/apps/documenteditor/main/index.html',
+  cell: 'tauri://localhost/web-apps/apps/spreadsheeteditor/main/index.html',
+  slide: 'tauri://localhost/web-apps/apps/presentationeditor/main/index.html',
+  pdf: 'tauri://localhost/web-apps/apps/pdfeditor/main/index.html',
+};
+
+// What each editor's sdkjs defines, as SDK_PHASE_GLOBALS reads it.
+const MIN_PART = {
+  word: (win) => { win.Asc = { asc_docs_api: function() {} }; },
+  cell: (win) => { win.Asc = { spreadsheet_api: function() {} }; },
+  slide: (win) => { win.Asc = { asc_docs_api: function() {} }; },
+  pdf: (win) => { win.Asc = { asc_docs_api: function() {} }; },
+};
+
+function restPart(win) {
+  win.AscCommon = Object.assign(win.AscCommon || {}, { openXml: {} });
+}
+
+async function startOpen(docType) {
   const { bridge } = await loadWith(() => 'Ymlu');
   const intervals = withIntervals(bridge);
-  const install = loadSdkLoadMarks(bridge);
-  const frame = editorFrame();
-
+  const install = loadSdkPhaseMarks(bridge);
+  bridge.run(`window.AscDesktopEditor._currentDocType = ${JSON.stringify(docType)}`);
   bridge.run(`_eoOpenGranted(${JSON.stringify(REPORT)})`);
   await sleep(10);
-  install(frame);
-  check(results, 'the frame on about:blank is polled for the editor document',
+  const done = () => { bridge.stopTimers(); clearIntervals(intervals); };
+  return { bridge, intervals, install, done };
+}
+
+// Each editor, first reached on about:blank and then on its own document.
+for (const docType of ['word', 'cell', 'slide', 'pdf']) {
+  const { bridge, intervals, install, done } = await startOpen(docType);
+  const { frame, win: blank } = editorFrame('about:blank');
+  install(blank);
+  check(results, `${docType}: the editor frame on about:blank is polled`,
     intervals.size === 1, String(intervals.size));
-  frame.document = new FakeDocument(EDITOR_URL);
-  await sleep(50);
-  check(results, 'the editor document gets the listener without another injection',
-    frame.document.listeners.length === 1, String(frame.document.listeners.length));
-  check(results, 'the frame is no longer polled once the editor document is there',
-    intervals.size === 0, String(intervals.size));
-
-  frame.document.load(script('tauri://localhost/sdkjs/word/sdk-all-min.js'));
-  frame.document.load(script('tauri://localhost/sdkjs/word/sdk-all.js'));
-  install(frame);
-  bridge.stopTimers();
-  clearIntervals(intervals);
-  check(results, 'its sdk scripts are marked before the frame load event',
+  const editor = frameWindow(frame, EDITOR_URLS[docType]);
+  install(editor);
+  check(results, `${docType}: its own document starts no second poll`,
+    intervals.size === 1, String(intervals.size));
+  await sleep(30);
+  check(results, `${docType}: nothing is marked before sdkjs defines its globals`,
+    phaseNames(bridge) === 'request,result', phaseNames(bridge));
+  MIN_PART[docType](editor);
+  await sleep(30);
+  check(results, `${docType}: sdk_min is marked once the min part is evaluated`,
+    phaseNames(bridge) === 'request,result,sdk_min', phaseNames(bridge));
+  restPart(editor);
+  await sleep(30);
+  check(results, `${docType}: sdk_all follows once the rest is evaluated`,
     phaseNames(bridge) === 'request,result,sdk_min,sdk_all', phaseNames(bridge));
+  check(results, `${docType}: the poll stops with both phases marked`,
+    intervals.size === 0, String(intervals.size));
+  done();
 }
 
-// sdkjs's helper frames, and a window whose frame cannot be read, reach the
-// same install but are never polled.
+// The first contact is already the editor's document, with sdkjs evaluated.
+{
+  const { bridge, intervals, install, done } = await startOpen('word');
+  const { win } = editorFrame(EDITOR_URLS.word);
+  MIN_PART.word(win);
+  restPart(win);
+  install(win);
+  install(win);
+  await sleep(30);
+  check(results, 'a first contact on the editor document marks both phases in order',
+    phaseNames(bridge) === 'request,result,sdk_min,sdk_all', phaseNames(bridge));
+  await sleep(30);
+  check(results, 'each phase is marked once',
+    phaseNames(bridge) === 'request,result,sdk_min,sdk_all', phaseNames(bridge));
+  check(results, 'and the poll has stopped', intervals.size === 0, String(intervals.size));
+  done();
+}
+
+// The rest of sdkjs, or another editor's API, does not end the min part.
+{
+  const { bridge, install, done } = await startOpen('cell');
+  const { win } = editorFrame(EDITOR_URLS.cell);
+  install(win);
+  restPart(win);
+  win.Asc = { asc_docs_api: function() {} };
+  await sleep(30);
+  check(results, 'sdk_all waits for sdk_min, which needs this editor\'s own API',
+    phaseNames(bridge) === 'request,result', phaseNames(bridge));
+  MIN_PART.cell(win);
+  await sleep(30);
+  check(results, 'then both are marked, min first',
+    phaseNames(bridge) === 'request,result,sdk_min,sdk_all', phaseNames(bridge));
+  done();
+}
+
+// The rest of sdkjs may arrive after app_ready; document_ready ends the poll.
+{
+  const { bridge, intervals, install, done } = await startOpen('slide');
+  const { win } = editorFrame(EDITOR_URLS.slide);
+  install(win);
+  MIN_PART.slide(win);
+  await sleep(30);
+  bridge.run("_eoOpenPhases.mark('app_ready')");
+  await sleep(30);
+  check(results, 'the poll goes on after app_ready', intervals.size === 1, String(intervals.size));
+  restPart(win);
+  await sleep(30);
+  check(results, 'and still marks an sdk_all that comes after it',
+    phaseNames(bridge) === 'request,result,sdk_min,app_ready,sdk_all', phaseNames(bridge));
+  done();
+}
+{
+  const { bridge, intervals, install, done } = await startOpen('cell');
+  const { win } = editorFrame(EDITOR_URLS.cell);
+  install(win);
+  MIN_PART.cell(win);
+  await sleep(30);
+  bridge.run("_eoOpenPhases.mark('document_ready'); _eoOpenPhases.end();");
+  await sleep(30);
+  check(results, 'the poll stops when document_ready ends the open',
+    intervals.size === 0, String(intervals.size));
+  restPart(win);
+  await sleep(30);
+  check(results, 'and marks nothing after it',
+    phaseNames(bridge) === 'request,result,sdk_min,document_ready', phaseNames(bridge));
+  done();
+}
+
+// A new document has no open to mark: the poll ends on its first turn.
 {
   const { bridge } = await loadWith(() => 'Ymlu');
   const intervals = withIntervals(bridge);
-  const install = loadSdkLoadMarks(bridge);
-  const helper = { frameElement: { id: 'asc_pasteFrame', name: '' }, document: new FakeDocument('about:blank') };
-  const unnamed = { frameElement: { id: '', name: '' }, document: new FakeDocument('about:blank') };
-  const topLevel = { frameElement: null, document: new FakeDocument('about:blank') };
+  const install = loadSdkPhaseMarks(bridge);
+  bridge.run("window.AscDesktopEditor._currentDocType = 'word'");
+  install(editorFrame(EDITOR_URLS.word).win);
+  await sleep(30);
+  check(results, 'without an open the poll stops at once', intervals.size === 0, String(intervals.size));
+  bridge.stopTimers();
+  clearIntervals(intervals);
+}
+
+// The marks can never stop the bridge being injected: they do not throw, and
+// injectBridgeDeep calls them after the bridge is in the frame.
+{
+  const { install, done } = await startOpen('word');
   const unreadable = {
     get frameElement() { throw new Error('blocked'); },
-    document: new FakeDocument('about:blank'),
+    document: { URL: 'about:blank' },
   };
-  const windows = [helper, unnamed, topLevel, unreadable];
+  let thrown = null;
+  try { install(unreadable); } catch (error) { thrown = error; }
+  check(results, 'a frame element that throws does not reach the caller', thrown === null, String(thrown));
+  done();
+}
+{
+  const { bridge, install, done } = await startOpen('word');
+  const editor = bridge.sandbox.AscDesktopEditor;
+  delete bridge.sandbox.AscDesktopEditor;
+  let thrown = null;
+  try { install(editorFrame(EDITOR_URLS.word).win); } catch (error) { thrown = error; }
+  bridge.sandbox.AscDesktopEditor = editor;
+  check(results, 'a missing window.AscDesktopEditor does not reach the caller', thrown === null, String(thrown));
+  done();
+}
+{
+  const start = patches.indexOf('    function injectBridgeDeep(win) {');
+  const end = patches.indexOf('\n    }\n', start);
+  const body = patches.slice(start, end);
+  const bridgeBlock = body.indexOf('        if (win && !hasADE) {');
+  const blockEnd = body.indexOf('\n        }\n', body.indexOf('END TABS FIX', bridgeBlock));
+  const call = body.indexOf('        _installSdkPhaseMarks(win);');
+  check(results, 'injectBridgeDeep sets up the marks after it injects the bridge',
+    bridgeBlock > 0 && blockEnd > bridgeBlock && call > blockEnd, `${bridgeBlock} ${blockEnd} ${call}`);
+}
 
-  for (const win of windows) install(win);
-  check(results, 'an about:blank that is not the editor frame starts no polling',
+// Other frames and a frame that cannot be read.
+{
+  const { intervals, install, done } = await startOpen('word');
+  const helper = { frameElement: { id: 'asc_pasteFrame', name: '' }, document: { URL: 'about:blank' } };
+  const unnamed = { frameElement: { id: '', name: '' }, document: { URL: 'about:blank' } };
+  const topLevel = { frameElement: null, document: { URL: 'about:blank' } };
+  const unreadable = {
+    get frameElement() { throw new Error('blocked'); },
+    document: { URL: 'about:blank' },
+  };
+  for (const win of [helper, unnamed, topLevel, unreadable]) install(win);
+  check(results, 'a frame that is not the editor frame starts no poll',
     intervals.size === 0, String(intervals.size));
-  check(results, 'those documents still get the load listener',
-    windows.every((win) => win.document.listeners.length === 1));
-  bridge.stopTimers();
-  clearIntervals(intervals);
+  done();
+}
+
+// No document type to read the globals for.
+{
+  const { intervals, install, done } = await startOpen(null);
+  install(editorFrame('about:blank').win);
+  check(results, 'without a document type no poll starts', intervals.size === 0, String(intervals.size));
+  done();
 }
 
 finish(results);

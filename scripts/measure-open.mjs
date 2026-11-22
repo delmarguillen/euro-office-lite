@@ -22,8 +22,8 @@
 //   result          page     the answer reached the page
 //   fonts           page     font cache settled, system font list fetched
 //   iframe          page     editor iframe created
-//   sdk_min         page     sdk-all-min.js loaded and evaluated
-//   sdk_all         page     sdk-all.js loaded and evaluated
+//   sdk_min         page     min part of sdkjs evaluated (sdk-all-min.js in a release)
+//   sdk_all         page     rest of sdkjs evaluated (sdk-all.js in a release)
 //   app_ready       page     onAppReady
 //   document_ready  page     onDocumentReady
 //   sum                      the phase columns of the row added up

@@ -535,8 +535,8 @@ window._eoLog = function() {
 //   result          the backend answered with the document
 //   fonts           the font cache is settled and the system font list fetched
 //   iframe          DocsAPI.DocEditor created the editor iframe
-//   sdk_min         sdk-all-min.js fired its load event in the editor
-//   sdk_all         sdk-all.js fired its load event in the editor
+//   sdk_min         the editor frame has evaluated the min part of sdkjs
+//   sdk_all         the editor frame has evaluated the rest of sdkjs
 //   app_ready       the editor's onAppReady
 //   document_ready  the editor's onDocumentReady
 var _eoOpenPhases = (function() {
@@ -567,7 +567,7 @@ var _eoOpenPhases = (function() {
     return current.id;
   }
 
-  // Once per open and phase: the editor's helper frames load scripts too.
+  // Once per open and phase.
   function mark(phase) {
     if (!current) return;
     if (current.marked[phase]) return;
@@ -584,19 +584,14 @@ var _eoOpenPhases = (function() {
     current = null;
   }
 
-  return { begin: begin, mark: mark, end: end };
+  // Whether an open is being marked: from begin() to end().
+  function inProgress() {
+    return current !== null;
+  }
+
+  return { begin: begin, mark: mark, end: end, inProgress: inProgress };
 })();
 window._eoOpenPhases = _eoOpenPhases;
-
-// The phase a script of the editor ends when it has loaded, if any.
-function _eoSdkPhaseForScript(src) {
-  var path = String(src || '').split('#')[0].split('?')[0];
-  var name = path.split('/').pop();
-  if (name === 'sdk-all-min.js') return 'sdk_min';
-  if (name === 'sdk-all.js') return 'sdk_all';
-  return null;
-}
-window._eoSdkPhaseForScript = _eoSdkPhaseForScript;
 
 var _isWindows = navigator.platform && navigator.platform.indexOf('Win') !== -1;
 var _isMac = navigator.platform && navigator.platform.indexOf('Mac') === 0;
