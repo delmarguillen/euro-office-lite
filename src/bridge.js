@@ -595,6 +595,8 @@ var _UI_STRINGS = {
     recentFiles: 'Recent files', rememberRecent: 'Remember recent files', clearRecent: 'Clear',
     settings: 'Settings', interfaceLanguage: 'Interface language', spellCheck: 'Spell check',
     appearance: 'Appearance', themeDark: 'Dark', themeLight: 'Light',
+    documentsFolder: 'Documents folder', templatesFolder: 'Templates folder',
+    chooseFolder: 'Choose…', resetFolder: 'Reset', folderNotSet: 'Not set',
     noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
     openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.',
     openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.',
@@ -644,6 +646,8 @@ var _UI_STRINGS = {
     recentFiles: 'Archivos recientes', rememberRecent: 'Recordar archivos recientes', clearRecent: 'Limpiar',
     settings: 'Configuración', interfaceLanguage: 'Idioma de la interfaz', spellCheck: 'Corrector ortográfico', addLanguage: 'Añadir idioma del corrector…',
     appearance: 'Apariencia', themeDark: 'Oscuro', themeLight: 'Claro',
+    documentsFolder: 'Carpeta de documentos', templatesFolder: 'Carpeta de plantillas',
+    chooseFolder: 'Elegir…', resetFolder: 'Restablecer', folderNotSet: 'Sin definir',
     noRecentFiles: 'Todavía no hay archivos recientes', openFailed: 'No se pudo abrir el archivo',
     openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.',
     openErrorMsg: 'No se pudo abrir el archivo. No es un documento válido o está dañado.',
@@ -684,6 +688,8 @@ var _UI_STRINGS = {
     recentFiles: 'Fichiers récents', rememberRecent: 'Mémoriser les fichiers récents', clearRecent: 'Effacer',
     settings: 'Paramètres', interfaceLanguage: 'Langue de l\'interface', spellCheck: 'Vérification orthographique', addLanguage: 'Ajouter une langue de vérification…',
     appearance: 'Apparence', themeDark: 'Sombre', themeLight: 'Clair',
+    documentsFolder: 'Dossier des documents', templatesFolder: 'Dossier des modèles',
+    chooseFolder: 'Choisir…', resetFolder: 'Réinitialiser', folderNotSet: 'Non défini',
     noRecentFiles: 'Aucun fichier récent pour le moment', openFailed: 'Impossible d\'ouvrir le fichier',
     openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.',
     openErrorMsg: 'Impossible d\'ouvrir le fichier. Ce n\'est pas un document valide ou il est endommagé.',
@@ -719,6 +725,8 @@ var _UI_STRINGS = {
     recentFiles: 'Zuletzt verwendete Dateien', rememberRecent: 'Zuletzt verwendete Dateien merken', clearRecent: 'Leeren',
     settings: 'Einstellungen', interfaceLanguage: 'Sprache der Benutzeroberfläche', spellCheck: 'Rechtschreibprüfung', addLanguage: 'Sprache für die Rechtschreibprüfung hinzufügen…',
     appearance: 'Darstellung', themeDark: 'Dunkel', themeLight: 'Hell',
+    documentsFolder: 'Ordner für Dokumente', templatesFolder: 'Ordner für Vorlagen',
+    chooseFolder: 'Auswählen…', resetFolder: 'Zurücksetzen', folderNotSet: 'Nicht festgelegt',
     noRecentFiles: 'Noch keine zuletzt verwendeten Dateien', openFailed: 'Datei konnte nicht geöffnet werden',
     openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.',
     openErrorMsg: 'Die Datei konnte nicht geöffnet werden. Sie ist kein gültiges Dokument oder sie ist beschädigt.',
@@ -754,6 +762,8 @@ var _UI_STRINGS = {
     recentFiles: 'File recenti', rememberRecent: 'Ricorda i file recenti', clearRecent: 'Cancella',
     settings: 'Impostazioni', interfaceLanguage: 'Lingua dell\'interfaccia', spellCheck: 'Controllo ortografico', addLanguage: 'Aggiungi lingua di controllo ortografico…',
     appearance: 'Aspetto', themeDark: 'Scuro', themeLight: 'Chiaro',
+    documentsFolder: 'Cartella dei documenti', templatesFolder: 'Cartella dei modelli',
+    chooseFolder: 'Scegli…', resetFolder: 'Ripristina', folderNotSet: 'Non impostata',
     noRecentFiles: 'Nessun file recente', openFailed: 'Impossibile aprire il file',
     openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.',
     openErrorMsg: 'Impossibile aprire il file. Non è un documento valido oppure è danneggiato.',
@@ -789,6 +799,8 @@ var _UI_STRINGS = {
     recentFiles: 'Arquivos recentes', rememberRecent: 'Lembrar arquivos recentes', clearRecent: 'Limpar',
     settings: 'Configurações', interfaceLanguage: 'Idioma da interface', spellCheck: 'Verificação ortográfica', addLanguage: 'Adicionar idioma de verificação ortográfica…',
     appearance: 'Aparência', themeDark: 'Escuro', themeLight: 'Claro',
+    documentsFolder: 'Pasta de documentos', templatesFolder: 'Pasta de modelos',
+    chooseFolder: 'Escolher…', resetFolder: 'Redefinir', folderNotSet: 'Não definida',
     noRecentFiles: 'Ainda não há arquivos recentes', openFailed: 'Não foi possível abrir o arquivo',
     openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.',
     openErrorMsg: 'Não foi possível abrir o arquivo. Não é um documento válido ou está danificado.',
@@ -824,6 +836,8 @@ var _UI_STRINGS = {
     recentFiles: 'Недавние файлы', rememberRecent: 'Запоминать недавние файлы', clearRecent: 'Очистить',
     settings: 'Настройки', interfaceLanguage: 'Язык интерфейса', spellCheck: 'Проверка орфографии', addLanguage: 'Добавить язык проверки орфографии…',
     appearance: 'Оформление', themeDark: 'Тёмная', themeLight: 'Светлая',
+    documentsFolder: 'Папка документов', templatesFolder: 'Папка шаблонов',
+    chooseFolder: 'Выбрать…', resetFolder: 'Сбросить', folderNotSet: 'Не задана',
     noRecentFiles: 'Недавних файлов пока нет', openFailed: 'Не удалось открыть файл',
     openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.',
     openErrorMsg: 'Не удалось открыть файл. Это не действительный документ или он повреждён.',
@@ -859,6 +873,8 @@ var _UI_STRINGS = {
     recentFiles: 'Нещодавні файли', rememberRecent: 'Запам\'ятовувати нещодавні файли', clearRecent: 'Очистити',
     settings: 'Налаштування', interfaceLanguage: 'Мова інтерфейсу', spellCheck: 'Перевірка правопису', addLanguage: 'Додати мову перевірки правопису…',
     appearance: 'Оформлення', themeDark: 'Темна', themeLight: 'Світла',
+    documentsFolder: 'Папка документів', templatesFolder: 'Папка шаблонів',
+    chooseFolder: 'Вибрати…', resetFolder: 'Скинути', folderNotSet: 'Не задано',
     noRecentFiles: 'Нещодавніх файлів поки немає', openFailed: 'Не вдалося відкрити файл',
     openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.',
     openErrorMsg: 'Не вдалося відкрити файл. Це не дійсний документ або його пошкоджено.',
@@ -894,6 +910,8 @@ var _UI_STRINGS = {
     recentFiles: '最近的文件', rememberRecent: '记住最近的文件', clearRecent: '清除',
     settings: '设置', interfaceLanguage: '界面语言', spellCheck: '拼写检查', addLanguage: '添加拼写检查语言…',
     appearance: '外观', themeDark: '深色', themeLight: '浅色',
+    documentsFolder: '文档文件夹', templatesFolder: '模板文件夹',
+    chooseFolder: '选择…', resetFolder: '重置', folderNotSet: '未设置',
     noRecentFiles: '暂无最近的文件', openFailed: '无法打开文件',
     openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。',
     openErrorMsg: '无法打开文件。它不是有效的文档，或者已损坏。',
@@ -929,6 +947,8 @@ var _UI_STRINGS = {
     recentFiles: '最近使用したファイル', rememberRecent: '最近使用したファイルを記憶する', clearRecent: 'クリア',
     settings: '設定', interfaceLanguage: '表示言語', spellCheck: 'スペルチェック', addLanguage: 'スペルチェックの言語を追加…',
     appearance: '外観', themeDark: 'ダーク', themeLight: 'ライト',
+    documentsFolder: 'ドキュメントのフォルダー', templatesFolder: 'テンプレートのフォルダー',
+    chooseFolder: '選択…', resetFolder: 'リセット', folderNotSet: '未設定',
     noRecentFiles: '最近使用したファイルはありません', openFailed: 'ファイルを開けませんでした',
     openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。',
     openErrorMsg: 'ファイルを開けませんでした。有効なドキュメントではないか、破損しています。',
@@ -1914,7 +1934,8 @@ window._eoAddLanguage = _eoAddLanguage;
 
 // ── Start screen settings panel ──
 // The gear in the top right corner opens a small panel with the interface
-// language, "Add spell check language…" and the recent files switch.
+// language, "Add spell check language…", the recent files switch and the
+// folders the file dialogs start in.
 
 function _eoSettingsParts() {
   var toggle = document.getElementById('settings-toggle');
@@ -2011,6 +2032,65 @@ function _eoInitThemeChoice() {
   if (shortcut && /Mac/.test(navigator.platform)) shortcut.textContent = '⌘ O';
 }
 
+// The folders the Open, Save As and New from template dialogs start in. The
+// backend opens the folder dialog and keeps the choice (default_folders.rs):
+// the webview only names which of the two folders, and shows the answer.
+var EO_FOLDER_LABELS = { documents: 'documentsFolder', templates: 'templatesFolder' };
+var _eoDefaultFolders = { documents: null, templates: null };
+
+function _eoFolderParts(kind) {
+  var path = document.getElementById(kind + '-folder-path');
+  var choose = document.getElementById(kind + '-folder-choose');
+  var reset = document.getElementById(kind + '-folder-reset');
+  if (!path || !choose || !reset) return null;
+  return { path: path, choose: choose, reset: reset };
+}
+
+// folders: what the backend answered, or nothing to repaint the last answer
+// in another language.
+function _eoRenderDefaultFolders(folders) {
+  if (folders) _eoDefaultFolders = folders;
+  Object.keys(EO_FOLDER_LABELS).forEach(function(kind) {
+    var parts = _eoFolderParts(kind);
+    if (!parts) return;
+    var folder = _eoDefaultFolders[kind] || '';
+    parts.path.textContent = folder || _t('folderNotSet');
+    parts.path.title = folder;
+    // Reset goes away with the folder: the focus it had moves to Choose.
+    if (!folder && document.activeElement === parts.reset) parts.choose.focus();
+    parts.reset.hidden = !folder;
+  });
+}
+
+function _eoLogFolderError(e) {
+  window._eoLog('[EO] Default folder not changed: ' + (e.message || e));
+}
+
+function _eoChooseDefaultFolder(kind) {
+  return invoke('pick_default_folder', { kind: kind, title: _t(EO_FOLDER_LABELS[kind]) })
+    .then(_eoRenderDefaultFolders)
+    .catch(_eoLogFolderError);
+}
+
+function _eoResetDefaultFolder(kind) {
+  return invoke('clear_default_folder', { kind: kind })
+    .then(_eoRenderDefaultFolders)
+    .catch(_eoLogFolderError);
+}
+
+function _eoInitDefaultFolders() {
+  Object.keys(EO_FOLDER_LABELS).forEach(function(kind) {
+    var parts = _eoFolderParts(kind);
+    if (!parts) return;
+    parts.choose.addEventListener('click', function() { _eoChooseDefaultFolder(kind); });
+    parts.reset.addEventListener('click', function() { _eoResetDefaultFolder(kind); });
+  });
+  _eoRenderDefaultFolders();
+  invoke('default_folders_state')
+    .then(_eoRenderDefaultFolders)
+    .catch(function(e) { window._eoLog('[EO] Default folders unavailable: ' + (e.message || e)); });
+}
+
 // options.onLanguageChange: runs after the UI language is stored.
 // options.onRecentChange: runs after the recent files switch is stored.
 function _eoInitStartSettings(options) {
@@ -2018,6 +2098,7 @@ function _eoInitStartSettings(options) {
   if (!parts) return;
   options = options || {};
   _eoInitThemeChoice();
+  _eoInitDefaultFolders();
 
   parts.toggle.addEventListener('click', _eoOnSettingsToggleClick);
   document.addEventListener('keydown', _eoOnSettingsKeydown);
@@ -2025,6 +2106,7 @@ function _eoInitStartSettings(options) {
 
   document.getElementById('lang-select').addEventListener('change', function() {
     window._eoSetLang(this.value);
+    _eoRenderDefaultFolders();
     if (options.onLanguageChange) options.onLanguageChange();
   });
 
