@@ -661,6 +661,9 @@ var _UI_STRINGS = {
     openFile: 'Open file', editPdf: 'Edit PDF', newDocument: 'New document', newSpreadsheet: 'New spreadsheet',
     newPresentation: 'New presentation', unsavedChanges: 'Unsaved changes',
     newFromTemplate: 'New from template…', templates: 'Templates',
+    dmabufSetting: 'Hardware acceleration', dmabufAuto: 'Automatic', dmabufOn: 'On', dmabufOff: 'Off',
+    dmabufRestart: 'Applies after restarting the app.',
+    dmabufEnvSet: 'This app was started with WEBKIT_DISABLE_DMABUF_RENDERER set. That value is used and this setting is ignored.',
     openNewWindowFailedMsg: 'The file could not be opened in a new window. The current document has not changed.',
     openElsewhereMsg: 'This file is already open in another window. Use that window to work on it.',
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
@@ -711,6 +714,9 @@ var _UI_STRINGS = {
     openFile: 'Abrir archivo', editPdf: 'Editar PDF', newDocument: 'Nuevo documento', newSpreadsheet: 'Nueva hoja de cálculo',
     newPresentation: 'Nueva presentación', unsavedChanges: 'Cambios sin guardar',
     newFromTemplate: 'Nuevo desde plantilla…', templates: 'Plantillas',
+    dmabufSetting: 'Aceleración por hardware', dmabufAuto: 'Automático', dmabufOn: 'Activado', dmabufOff: 'Desactivado',
+    dmabufRestart: 'Se aplica al reiniciar la aplicación.',
+    dmabufEnvSet: 'La aplicación se inició con WEBKIT_DISABLE_DMABUF_RENDERER definida. Se usa ese valor y este ajuste no tiene efecto.',
     openNewWindowFailedMsg: 'No se pudo abrir el archivo en una ventana nueva. El documento actual no ha cambiado.',
     openElsewhereMsg: 'Este archivo ya está abierto en otra ventana. Usa esa ventana para trabajar con él.',
     unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
@@ -751,6 +757,9 @@ var _UI_STRINGS = {
     openFile: 'Ouvrir un fichier', editPdf: 'Modifier un PDF', newDocument: 'Nouveau document', newSpreadsheet: 'Nouvelle feuille de calcul',
     newPresentation: 'Nouvelle présentation', unsavedChanges: 'Modifications non enregistrées',
     newFromTemplate: 'Nouveau à partir d\'un modèle…', templates: 'Modèles',
+    dmabufSetting: 'Accélération matérielle', dmabufAuto: 'Automatique', dmabufOn: 'Activée', dmabufOff: 'Désactivée',
+    dmabufRestart: 'Prend effet après le redémarrage de l\'application.',
+    dmabufEnvSet: 'L\'application a été lancée avec WEBKIT_DISABLE_DMABUF_RENDERER défini. Cette valeur est utilisée et ce réglage est ignoré.',
     openNewWindowFailedMsg: 'Impossible d\'ouvrir le fichier dans une nouvelle fenêtre. Le document actuel n\'a pas changé.',
     openElsewhereMsg: 'Ce fichier est déjà ouvert dans une autre fenêtre. Utilisez l\'autre fenêtre pour y travailler.',
     unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
@@ -786,6 +795,9 @@ var _UI_STRINGS = {
     openFile: 'Datei öffnen', editPdf: 'PDF bearbeiten', newDocument: 'Neues Dokument', newSpreadsheet: 'Neue Tabelle',
     newPresentation: 'Neue Präsentation', unsavedChanges: 'Ungespeicherte Änderungen',
     newFromTemplate: 'Neu aus Vorlage…', templates: 'Vorlagen',
+    dmabufSetting: 'Hardwarebeschleunigung', dmabufAuto: 'Automatisch', dmabufOn: 'Ein', dmabufOff: 'Aus',
+    dmabufRestart: 'Wird nach einem Neustart der App wirksam.',
+    dmabufEnvSet: 'Die App wurde mit gesetzter Variable WEBKIT_DISABLE_DMABUF_RENDERER gestartet. Dieser Wert gilt, diese Einstellung hat keine Wirkung.',
     openNewWindowFailedMsg: 'Die Datei konnte nicht in einem neuen Fenster geöffnet werden. Das aktuelle Dokument ist unverändert.',
     openElsewhereMsg: 'Diese Datei ist bereits in einem anderen Fenster geöffnet. Bearbeiten Sie sie im anderen Fenster.',
     unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
@@ -821,6 +833,9 @@ var _UI_STRINGS = {
     openFile: 'Apri file', editPdf: 'Modifica PDF', newDocument: 'Nuovo documento', newSpreadsheet: 'Nuovo foglio di calcolo',
     newPresentation: 'Nuova presentazione', unsavedChanges: 'Modifiche non salvate',
     newFromTemplate: 'Nuovo da modello…', templates: 'Modelli',
+    dmabufSetting: 'Accelerazione hardware', dmabufAuto: 'Automatica', dmabufOn: 'Attiva', dmabufOff: 'Disattiva',
+    dmabufRestart: 'Si applica dopo il riavvio dell\'app.',
+    dmabufEnvSet: 'L\'app è stata avviata con WEBKIT_DISABLE_DMABUF_RENDERER impostata. Si usa quel valore e questa impostazione non ha effetto.',
     openNewWindowFailedMsg: 'Impossibile aprire il file in una nuova finestra. Il documento attuale non è cambiato.',
     openElsewhereMsg: 'Questo file è già aperto in un\'altra finestra. Usa quella finestra per lavorarci.',
     unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
@@ -856,6 +871,9 @@ var _UI_STRINGS = {
     openFile: 'Abrir arquivo', editPdf: 'Editar PDF', newDocument: 'Novo documento', newSpreadsheet: 'Nova planilha',
     newPresentation: 'Nova apresentação', unsavedChanges: 'Alterações não salvas',
     newFromTemplate: 'Novo a partir de modelo…', templates: 'Modelos',
+    dmabufSetting: 'Aceleração por hardware', dmabufAuto: 'Automático', dmabufOn: 'Ativado', dmabufOff: 'Desativado',
+    dmabufRestart: 'Aplica-se depois de reiniciar a aplicação.',
+    dmabufEnvSet: 'A aplicação foi iniciada com WEBKIT_DISABLE_DMABUF_RENDERER definido. Esse valor é usado e esta definição não tem efeito.',
     openNewWindowFailedMsg: 'Não foi possível abrir o arquivo em uma nova janela. O documento atual não foi alterado.',
     openElsewhereMsg: 'Este arquivo já está aberto em outra janela. Use essa janela para trabalhar nele.',
     unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
@@ -891,6 +909,9 @@ var _UI_STRINGS = {
     openFile: 'Открыть файл', editPdf: 'Редактировать PDF', newDocument: 'Новый документ', newSpreadsheet: 'Новая таблица',
     newPresentation: 'Новая презентация', unsavedChanges: 'Несохранённые изменения',
     newFromTemplate: 'Создать из шаблона…', templates: 'Шаблоны',
+    dmabufSetting: 'Аппаратное ускорение', dmabufAuto: 'Автоматически', dmabufOn: 'Вкл.', dmabufOff: 'Выкл.',
+    dmabufRestart: 'Применяется после перезапуска приложения.',
+    dmabufEnvSet: 'Приложение запущено с заданной переменной WEBKIT_DISABLE_DMABUF_RENDERER. Используется её значение, эта настройка не действует.',
     openNewWindowFailedMsg: 'Не удалось открыть файл в новом окне. Текущий документ не изменён.',
     openElsewhereMsg: 'Этот файл уже открыт в другом окне. Работайте с ним в том окне.',
     unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
@@ -926,6 +947,9 @@ var _UI_STRINGS = {
     openFile: 'Відкрити файл', editPdf: 'Редагувати PDF', newDocument: 'Новий документ', newSpreadsheet: 'Нова таблиця',
     newPresentation: 'Нова презентація', unsavedChanges: 'Незбережені зміни',
     newFromTemplate: 'Створити з шаблону…', templates: 'Шаблони',
+    dmabufSetting: 'Апаратне прискорення', dmabufAuto: 'Автоматично', dmabufOn: 'Увімк.', dmabufOff: 'Вимк.',
+    dmabufRestart: 'Застосовується після перезапуску застосунку.',
+    dmabufEnvSet: 'Застосунок запущено із заданою змінною WEBKIT_DISABLE_DMABUF_RENDERER. Використовується її значення, цей параметр не діє.',
     openNewWindowFailedMsg: 'Не вдалося відкрити файл у новому вікні. Поточний документ не змінено.',
     openElsewhereMsg: 'Цей файл уже відкрито в іншому вікні. Працюйте з ним у тому вікні.',
     unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
@@ -961,6 +985,9 @@ var _UI_STRINGS = {
     openFile: '打开文件', editPdf: '编辑 PDF', newDocument: '新建文档', newSpreadsheet: '新建电子表格',
     newPresentation: '新建演示文稿', unsavedChanges: '未保存的更改',
     newFromTemplate: '从模板新建…', templates: '模板',
+    dmabufSetting: '硬件加速', dmabufAuto: '自动', dmabufOn: '开启', dmabufOff: '关闭',
+    dmabufRestart: '重启应用后生效。',
+    dmabufEnvSet: '启动应用时已设置 WEBKIT_DISABLE_DMABUF_RENDERER，将使用该值，此设置不生效。',
     openNewWindowFailedMsg: '无法在新窗口中打开文件。当前文档未更改。',
     openElsewhereMsg: '此文件已在另一个窗口中打开。请在该窗口中编辑它。',
     unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
@@ -996,6 +1023,9 @@ var _UI_STRINGS = {
     openFile: 'ファイルを開く', editPdf: 'PDF を編集', newDocument: '新規ドキュメント', newSpreadsheet: '新規スプレッドシート',
     newPresentation: '新規プレゼンテーション', unsavedChanges: '未保存の変更',
     newFromTemplate: 'テンプレートから新規作成…', templates: 'テンプレート',
+    dmabufSetting: 'ハードウェアアクセラレーション', dmabufAuto: '自動', dmabufOn: 'オン', dmabufOff: 'オフ',
+    dmabufRestart: 'アプリを再起動すると反映されます。',
+    dmabufEnvSet: 'アプリは WEBKIT_DISABLE_DMABUF_RENDERER を設定した状態で起動されました。その値が使われ、この設定は無効です。',
     openNewWindowFailedMsg: '新しいウィンドウでファイルを開けませんでした。現在のドキュメントは変更されていません。',
     openElsewhereMsg: 'このファイルは別のウィンドウで既に開かれています。そのウィンドウで作業してください。',
     unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
@@ -2118,9 +2148,42 @@ function _eoInitStartSettings(options) {
       .then(done)
       .catch(function(e) { window._eoLog('[EO] Recent files toggle failed: ' + (e.message || e)); });
   });
+
+  _eoInitDmabufSetting();
 }
 window._eoInitStartSettings = _eoInitStartSettings;
 window._eoCloseSettings = _eoCloseSettings;
+
+// Linux only: the hardware acceleration choice (automatic, on or off). The
+// backend says whether this system has it and what is saved. A change applies
+// after the app restarts; if the environment already sets the variable, that
+// value wins and the note says so.
+function _eoInitDmabufSetting() {
+  var section = document.getElementById('dmabuf-section');
+  var select = document.getElementById('dmabuf-select');
+  var envNote = document.getElementById('dmabuf-env');
+  if (!section || !select) return;
+
+  var saved = 'auto';
+  invoke('dmabuf_setting_state').then(function(state) {
+    if (!state || !state.supported) return;
+    saved = state.setting;
+    select.value = saved;
+    if (envNote) envNote.hidden = !state.envSet;
+    section.hidden = false;
+  }).catch(function(e) {
+    window._eoLog('[EO] Hardware acceleration setting not read: ' + (e.message || e));
+  });
+
+  select.addEventListener('change', function() {
+    invoke('set_dmabuf_setting', { setting: select.value })
+      .then(function() { saved = select.value; })
+      .catch(function(e) {
+        window._eoLog('[EO] Hardware acceleration setting not stored: ' + (e.message || e));
+        select.value = saved;
+      });
+  });
+}
 
 // The backend starts its error with this when it may not write the file: a
 // read-only file or a folder the user cannot write to.

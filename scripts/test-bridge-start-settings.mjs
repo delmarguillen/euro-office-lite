@@ -113,12 +113,17 @@ function buildStartScreen() {
   const addLanguage = new FakeElement(doc, 'button', 'add-language', spellSection);
   const recentSection = new FakeElement(doc, 'div', '', panel);
   const remember = new FakeElement(doc, 'input', 'recent-remember', recentSection);
+  const dmabufSection = new FakeElement(doc, 'div', 'dmabuf-section', panel);
+  dmabufSection.hidden = true;
+  const dmabufSelect = new FakeElement(doc, 'select', 'dmabuf-select', dmabufSection);
+  const dmabufEnv = new FakeElement(doc, 'p', 'dmabuf-env', dmabufSection);
+  dmabufEnv.hidden = true;
   const content = new FakeElement(doc, 'div', '', start);
   const newDocument = new FakeElement(doc, 'button', '', content);
   const heading = new FakeElement(doc, 'h1', '', content);
   const opening = new FakeElement(doc, 'div', 'opening', doc.body);
   new FakeElement(doc, 'p', 'opening-text', opening);
-  return { doc, toggle, panel, select, addLanguage, remember, newDocument, heading };
+  return { doc, toggle, panel, select, addLanguage, remember, newDocument, heading, dmabufSection, dmabufSelect, dmabufEnv };
 }
 
 async function setup({ recentFails = false } = {}) {
@@ -245,6 +250,62 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
     env.callbacks.recent === 0 && env.bridge.logs.some((line) => line.includes('Recent files toggle failed: disk full')));
 }
 
+// Linux only: the hardware acceleration choice.
+async function setupDmabuf({ state, setFails = false }) {
+  const calls = [];
+  const bridge = await loadBridge({
+    invoke: {
+      dmabuf_setting_state: () => state,
+      set_dmabuf_setting: (args) => {
+        calls.push(args);
+        if (setFails) throw new Error('read-only folder');
+        return null;
+      },
+    },
+  });
+  const screen = buildStartScreen();
+  bridge.sandbox.document = screen.doc;
+  bridge.sandbox.__options = { onLanguageChange: () => {}, onRecentChange: () => {} };
+  bridge.run('_eoInitStartSettings(window.__options)');
+  await settle();
+  await settle();
+  return { bridge, ...screen, calls };
+}
+{
+  const env = await setupDmabuf({ state: { supported: true, setting: 'on', envSet: false } });
+  check(results, 'on Linux the hardware acceleration section is shown', !env.dmabufSection.hidden);
+  check(results, '... and selects the saved choice', env.dmabufSelect.value === 'on');
+  check(results, '... and the environment note stays hidden without an environment value', env.dmabufEnv.hidden);
+}
+{
+  const env = await setupDmabuf({ state: { supported: true, setting: 'auto', envSet: true } });
+  check(results, 'an environment value shows the note that it wins', !env.dmabufEnv.hidden);
+}
+{
+  const env = await setupDmabuf({ state: { supported: false, setting: 'auto', envSet: false } });
+  check(results, 'where the setting is not supported the section stays hidden', env.dmabufSection.hidden);
+}
+{
+  const env = await setupDmabuf({ state: { supported: true, setting: 'auto', envSet: false } });
+  env.dmabufSelect.value = 'off';
+  dispatch(env.doc, env.dmabufSelect, 'change');
+  await settle();
+  await settle();
+  check(results, 'a change is stored with its value',
+    env.calls.length === 1 && env.calls[0].setting === 'off', JSON.stringify(env.calls));
+  check(results, '... and the new choice stays selected', env.dmabufSelect.value === 'off');
+}
+{
+  const env = await setupDmabuf({ state: { supported: true, setting: 'auto', envSet: false }, setFails: true });
+  env.dmabufSelect.value = 'on';
+  dispatch(env.doc, env.dmabufSelect, 'change');
+  await settle();
+  await settle();
+  check(results, 'a failed change goes back to the saved choice', env.dmabufSelect.value === 'auto');
+  check(results, '... and is logged',
+    env.bridge.logs.some((line) => line.includes('Hardware acceleration setting not stored: read-only folder')));
+}
+
 // The start screen's own light or dark look.
 function buildThemeScreen(bridge) {
   const makeButton = (choice) => {
@@ -323,7 +384,8 @@ function failingStorage(bridge, method) {
   const bridge = await loadBridge();
   const missing = bridge.run(`
     ['en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'uk', 'zh', 'ja'].reduce(function(out, lang) {
-      ['settings', 'interfaceLanguage', 'spellCheck', 'addLanguage', 'recentFiles', 'rememberRecent'].forEach(function(key) {
+      ['settings', 'interfaceLanguage', 'spellCheck', 'addLanguage', 'recentFiles', 'rememberRecent',
+       'dmabufSetting', 'dmabufAuto', 'dmabufOn', 'dmabufOff', 'dmabufRestart', 'dmabufEnvSet'].forEach(function(key) {
         if (!_UI_STRINGS[lang][key]) out.push(lang + '.' + key);
       });
       return out;
@@ -355,7 +417,7 @@ function failingStorage(bridge, method) {
   const outside = html.slice(0, panel.start) + html.slice(panel.end);
   const count = (text, needle) => text.split(needle).length - 1;
 
-  for (const id of ['lang-select', 'add-language', 'recent-remember']) {
+  for (const id of ['lang-select', 'add-language', 'recent-remember', 'dmabuf-select', 'dmabuf-env']) {
     check(results, `#${id} is inside the panel and nowhere else`,
       count(inside, `id="${id}"`) === 1 && count(outside, `id="${id}"`) === 0);
   }
@@ -366,6 +428,8 @@ function failingStorage(bridge, method) {
   check(results, 'the gear has a translated label',
     /id="settings-toggle"[^>]*data-i18n-label="settings"/.test(html)
     && /id="settings-toggle"[^>]*aria-label="Settings"/.test(html));
+  check(results, 'the hardware acceleration section starts hidden',
+    /id="dmabuf-section"[^>]*\bhidden\b/.test(html));
   check(results, 'the old top right language selector is gone', !html.includes('lang-selector'));
 }
 

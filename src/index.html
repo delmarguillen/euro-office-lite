@@ -201,6 +201,7 @@
     .settings-panel select:focus { outline: none; border-color: var(--focus); }
     .settings-panel .recent-clear { padding-left: 0; }
     .settings-panel .recent-toggle { margin-top: 0; }
+    .settings-panel .settings-note { margin: 0.45rem 0 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
     .btn:focus-visible,
     .recent-item:focus-visible,
     .recent-clear:focus-visible,
@@ -330,6 +331,16 @@
             <input type="checkbox" id="recent-remember">
             <span data-i18n="rememberRecent">Remember recent files</span>
           </label>
+        </div>
+        <div class="settings-section" id="dmabuf-section" hidden>
+          <label class="settings-label" for="dmabuf-select" data-i18n="dmabufSetting">Hardware acceleration</label>
+          <select id="dmabuf-select">
+            <option value="auto" data-i18n="dmabufAuto">Automatic</option>
+            <option value="on" data-i18n="dmabufOn">On</option>
+            <option value="off" data-i18n="dmabufOff">Off</option>
+          </select>
+          <p class="settings-note" data-i18n="dmabufRestart">Applies after restarting the app.</p>
+          <p class="settings-note" id="dmabuf-env" data-i18n="dmabufEnvSet" hidden>This app was started with WEBKIT_DISABLE_DMABUF_RENDERER set. That value is used and this setting is ignored.</p>
         </div>
       </div>
     </div>
