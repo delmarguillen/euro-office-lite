@@ -927,8 +927,9 @@ mod tests {
         assert_eq!(input.path().parent(), Some(spill_dir.as_path()));
         assert_eq!(std::fs::read(input.path()).unwrap(), DOCX);
         assert_eq!(files_in(&work_dir), 0);
+        let copy = input.path().to_path_buf();
         drop(input);
-        assert_eq!(files_in(&spill_dir), 0, "the copy in the cache is removed after x2t");
+        assert!(!copy.exists(), "the copy in the cache is removed after x2t");
     }
 
     #[test]

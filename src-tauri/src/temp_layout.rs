@@ -118,6 +118,36 @@ pub fn take_lock(path: &Path) -> std::io::Result<File> {
     open_locked(path, true)
 }
 
+// The lock on `path`, given only while the file locked is still the one at
+// `path`. For a lock file whose folder a sweep may remove: flock locks the
+// open file, and that file can leave the folder between the open and the
+// lock.
+fn take_lock_in_place(path: &Path, create: bool) -> std::io::Result<File> {
+    let lock = open_locked(path, create)?;
+    if !is_file_at(&lock, path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the lock file is no longer in its folder",
+        ));
+    }
+    Ok(lock)
+}
+
+#[cfg(unix)]
+fn is_file_at(file: &File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let (Ok(held), Ok(at_path)) = (file.metadata(), std::fs::symlink_metadata(path)) else {
+        return false;
+    };
+    held.dev() == at_path.dev() && held.ino() == at_path.ino()
+}
+
+// Windows does not remove or replace a file that open_locked holds.
+#[cfg(not(unix))]
+fn is_file_at(_file: &File, _path: &Path) -> bool {
+    true
+}
+
 // A missing lock file is not a live process, and this must not create one:
 // checking would then turn every folder it looked at into one holding a lock.
 pub fn is_locked(path: &Path) -> bool {
@@ -1412,6 +1442,8 @@ fn windows_cache_dir(local_app_data: Option<std::ffi::OsString>) -> Option<PathB
 // ---------------------------------------------------------------------------
 
 const READ_COPIES_DIR: &str = "read-copies";
+// Held by an instance in its folder for read copies while it runs.
+const READ_COPIES_LOCK: &str = "instance.lock";
 
 // Where an instance puts the copy x2t reads when the temp root has no room for
 // it (converter::choose_copy_dir): one folder per instance, named by its id.
@@ -1420,14 +1452,21 @@ pub fn read_copies_root(identifier: &str) -> Option<PathBuf> {
 }
 
 // An instance's folder for read copies: <root>/<instance id>, made on first
-// use.
+// use. From then on the instance holds the lock in it, and sweep_read_copies
+// leaves the folder alone.
 pub struct ReadCopies {
     dir: PathBuf,
+    // Only Unix makes the folder (make_private).
+    #[cfg_attr(not(unix), allow(dead_code))]
+    lock: Mutex<Option<File>>,
 }
 
 impl ReadCopies {
     pub fn new(root: &Path, instance_id: &str) -> ReadCopies {
-        ReadCopies { dir: root.join(instance_id) }
+        ReadCopies {
+            dir: root.join(instance_id),
+            lock: Mutex::new(None),
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -1435,8 +1474,9 @@ impl ReadCopies {
     }
 
     // Makes `dir` private to the user (0700): the instance's folder, or a
-    // folder directly inside it. The instance's folder is made first, so it
-    // never gets the permissions create_dir_all gives a parent.
+    // folder directly inside it. The instance's folder is made and locked
+    // first, so it never gets the permissions create_dir_all gives a parent
+    // and nothing is written in it without the lock.
     #[cfg(unix)]
     pub fn make_private(&self, dir: &Path) -> Result<(), String> {
         let is_instance_dir = dir == self.dir;
@@ -1444,7 +1484,7 @@ impl ReadCopies {
             return Err(format!("{} is not a folder of this instance", dir.display()));
         }
         let uid = unsafe { libc::getuid() };
-        ensure_private_dir(&self.dir, uid)?;
+        self.claim(uid)?;
         if is_instance_dir {
             return Ok(());
         }
@@ -1456,11 +1496,38 @@ impl ReadCopies {
     pub fn make_private(&self, _dir: &Path) -> Result<(), String> {
         Err("no private folder on this platform".to_string())
     }
+
+    // Err when the lock cannot be taken: the folder is then not used.
+    #[cfg(unix)]
+    fn claim(&self, uid: u32) -> Result<(), String> {
+        let mut held = self.lock.lock().map_err(|e| e.to_string())?;
+        ensure_private_dir(&self.dir, uid)?;
+        let lock_path = self.dir.join(READ_COPIES_LOCK);
+        if held.as_ref().is_some_and(|lock| is_file_at(lock, &lock_path)) {
+            return Ok(());
+        }
+        // No lock yet, or one on a file that left the folder when the folder
+        // was removed and made again.
+        held.take();
+        let lock = take_lock_in_place(&lock_path, true)
+            .map_err(|e| format!("{}: {}", lock_path.display(), e))?;
+        *held = Some(lock);
+        Ok(())
+    }
 }
 
-// Removes the folders of instances whose folder under the temp root is gone:
-// sweep_dead_instances decides when an instance is dead.
-pub fn sweep_read_copies(read_copies: &Path, temp_root: &Path) -> Vec<String> {
+// Removes the folders of instances that are gone. The cache is shared by
+// instances under any temp root, so an instance is gone only when the lock
+// in its folder can be taken. A folder stays when its lock is held, is
+// missing or cannot be opened.
+pub fn sweep_read_copies(read_copies: &Path) -> Vec<String> {
+    sweep_read_copies_with(read_copies, |lock| take_lock_in_place(lock, false))
+}
+
+pub fn sweep_read_copies_with(
+    read_copies: &Path,
+    take_lock: impl Fn(&Path) -> std::io::Result<File>,
+) -> Vec<String> {
     let mut removed = Vec::new();
     let Ok(entries) = std::fs::read_dir(read_copies) else {
         return removed;
@@ -1470,10 +1537,13 @@ pub fn sweep_read_copies(read_copies: &Path, temp_root: &Path) -> Vec<String> {
         if parse_id(&name).is_none() {
             continue;
         }
-        if instance_dir(temp_root, &name).exists() {
+        let dir = entry.path();
+        // Held until the folder is gone, so its instance cannot claim it
+        // halfway.
+        let Ok(_lock) = take_lock(&dir.join(READ_COPIES_LOCK)) else {
             continue;
-        }
-        if std::fs::remove_dir_all(entry.path()).is_ok() {
+        };
+        if std::fs::remove_dir_all(&dir).is_ok() {
             removed.push(name);
         }
     }

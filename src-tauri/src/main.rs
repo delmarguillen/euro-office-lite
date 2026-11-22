@@ -911,7 +911,7 @@ fn main() {
             std::thread::spawn(move || {
                 sweep_leftovers(&sweep_handle, &sweep_root);
                 if let Some(read_copies) = &sweep_read_copies_root {
-                    temp_layout::sweep_read_copies(read_copies, &sweep_root);
+                    temp_layout::sweep_read_copies(read_copies);
                 }
                 sweep_old_font_cache(&sweep_root, &sweep_font_root, &sweep_id);
             });
