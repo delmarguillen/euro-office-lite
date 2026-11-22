@@ -518,6 +518,86 @@ window._eoLog = function() {
   }
 };
 
+// ── Open phase marks ──
+//
+// One log line per phase of a document open, for scripts/measure-open.mjs:
+//
+//   [OPEN] phase=<name> open=<id> t=<ms> dt=<ms>
+//
+// t counts from the request and dt from the previous mark, both in whole
+// milliseconds of performance.now(). The backend logs its own phases under
+// the same id with its own clock (open_phases.rs). The first line of each side
+// also carries wall=<ms since the Unix epoch>, which is what places one clock
+// on the other.
+//
+// The phases of the page, in order:
+//   request         a file is about to be asked of the backend
+//   result          the backend answered with the document
+//   fonts           the font cache is settled and the system font list fetched
+//   iframe          DocsAPI.DocEditor created the editor iframe
+//   sdk_min         sdk-all-min.js fired its load event in the editor
+//   sdk_all         sdk-all.js fired its load event in the editor
+//   app_ready       the editor's onAppReady
+//   document_ready  the editor's onDocumentReady
+var _eoOpenPhases = (function() {
+  var sequence = 0;
+  var current = null;
+
+  function wholeMs(ms) {
+    return Math.round(ms);
+  }
+
+  // Unique among the opens of every window: the time of the request, and a
+  // count for two requests of one page within the same millisecond.
+  function nextId(wallMs) {
+    sequence += 1;
+    return wallMs.toString(36) + '-' + sequence;
+  }
+
+  function line(phase, t, dt) {
+    return '[OPEN] phase=' + phase + ' open=' + current.id + ' t=' + t + ' dt=' + dt;
+  }
+
+  // Starts the marks of an open and returns the id the backend logs under.
+  function begin() {
+    var wallMs = Date.now();
+    current = { id: nextId(wallMs), started: performance.now(), previous: 0, marked: {} };
+    current.marked.request = true;
+    window._eoLog(line('request', 0, 0) + ' wall=' + wallMs);
+    return current.id;
+  }
+
+  // Once per open and phase: the editor's helper frames load scripts too.
+  function mark(phase) {
+    if (!current) return;
+    if (current.marked[phase]) return;
+    current.marked[phase] = true;
+    var t = wholeMs(performance.now() - current.started);
+    var dt = t - current.previous;
+    current.previous = t;
+    window._eoLog(line(phase, t, dt));
+  }
+
+  // After the last mark, or when the open is given up: later marks belong to
+  // no open.
+  function end() {
+    current = null;
+  }
+
+  return { begin: begin, mark: mark, end: end };
+})();
+window._eoOpenPhases = _eoOpenPhases;
+
+// The phase a script of the editor ends when it has loaded, if any.
+function _eoSdkPhaseForScript(src) {
+  var path = String(src || '').split('#')[0].split('?')[0];
+  var name = path.split('/').pop();
+  if (name === 'sdk-all-min.js') return 'sdk_min';
+  if (name === 'sdk-all.js') return 'sdk_all';
+  return null;
+}
+window._eoSdkPhaseForScript = _eoSdkPhaseForScript;
+
 var _isWindows = navigator.platform && navigator.platform.indexOf('Win') !== -1;
 var _isMac = navigator.platform && navigator.platform.indexOf('Mac') === 0;
 var _isLinux = navigator.platform && navigator.platform.indexOf('Linux') !== -1;
@@ -3828,10 +3908,12 @@ async function _eoOpenGranted(file) {
     return;
   }
   var docType = _eoDocTypeForPath(file.name);
+  var openId = _eoOpenPhases.begin();
   _eoShowOpening(_eoOpeningFileText(file.name));
 
   try {
-    var b64data = await invoke(_eoOpenCommandForPath(file.name), { token: file.token });
+    var b64data = await invoke(_eoOpenCommandForPath(file.name), { token: file.token, openId: openId });
+    _eoOpenPhases.mark('result');
     window._pendingFileData = { data: b64data, path: file.name, name: file.name };
     // Converting did not need the font cache; the editor does.
     await _eoWaitForFonts();
@@ -3845,6 +3927,7 @@ async function _eoOpenGranted(file) {
     }
   } catch(e) {
     window._eoLog('[EO] open-file: conversion failed: ' + (e.message || e));
+    _eoOpenPhases.end();
     _eoHideOpening();
     await _eoShowOpenError(e);
   }
@@ -3880,20 +3963,24 @@ function _eoNewDocumentName(docType) {
 // no file behind it (create_from_template), and the title of any new document.
 async function _eoCreateFromTemplate(file) {
   var docType = _eoDocTypeForPath(file.name);
+  var openId = _eoOpenPhases.begin();
   _eoShowOpening(_eoOpeningFileText(file.name));
   try {
-    var b64data = await invoke('create_from_template', { token: file.token });
+    var b64data = await invoke('create_from_template', { token: file.token, openId: openId });
+    _eoOpenPhases.mark('result');
     _eoTemplateBaseName = _eoWithoutExtension(file.name);
     window._pendingFileData = { data: b64data, path: null, name: _eoNewDocumentName(docType) };
     await _eoWaitForFonts();
     if (!window._openEditor) {
       window._eoLog('[OPEN] editor launcher unavailable: no new document from ' + file.name);
+      _eoOpenPhases.end();
       _eoHideOpening();
       return;
     }
     window._openEditor(docType);
   } catch(e) {
     window._eoLog('[EO] new from template: conversion failed: ' + (e.message || e));
+    _eoOpenPhases.end();
     _eoHideOpening();
     await _eoShowOpenError(e);
   }

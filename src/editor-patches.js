@@ -51,6 +51,27 @@
       }
     }
 
+    // sdk-all-min.js and sdk-all.js load inside the editor frame, and a script's
+    // load event fires once it has been evaluated. The event does not bubble
+    // and never reaches the window, so it is taken from the frame's document in
+    // the capture phase. Keyed on the document, as the diagnostics are.
+    function _installSdkLoadMarks(win) {
+      try {
+        if (!win || !win.document) return;
+        var doc = win.document;
+        if (doc.__eoSdkLoadMarksInstalled) return;
+        doc.__eoSdkLoadMarksInstalled = true;
+        doc.addEventListener('load', _markSdkScriptLoaded, true);
+      } catch(e) {}
+    }
+
+    function _markSdkScriptLoaded(event) {
+      var target = event.target;
+      if (!target || target.tagName !== 'SCRIPT') return;
+      var phase = window._eoSdkPhaseForScript(target.src);
+      if (phase) window._eoOpenPhases.mark(phase);
+    }
+
     // sdkjs names the document canvases id_viewer and id_viewer_overlay in the
     // word and slide editors, and ws-canvas* in the spreadsheet. Two callers
     // need this test from different starting points: the GTK pinch hit test
@@ -445,6 +466,7 @@
         try { hasADE = !!win.AscDesktopEditor; } catch(e) {}
 
         _installFrameDiagnostics(win);
+        _installSdkLoadMarks(win);
 
         if (win && !hasADE) {
           try {
@@ -1114,6 +1136,7 @@
       // before the iframe is created so injection does not race LoadDocumentFonts.
       await window._eoWaitForFonts();
       await _prepareSystemFonts();
+      window._eoOpenPhases.mark('fonts');
       if (!window._pendingFileData) {
         try {
           var b64 = await window.__TAURI__.core.invoke('create_new', { docType: docType });
@@ -1164,6 +1187,7 @@
         },
         events: {
           onAppReady: function() {
+            window._eoOpenPhases.mark('app_ready');
             var allFrames = document.querySelectorAll('iframe');
             _log('[EO] App ready: docType=' + docType + ' frames=' + allFrames.length);
             for (var fi = 0; fi < allFrames.length; fi++) {
@@ -1178,6 +1202,8 @@
             _loadSystemFonts();
           },
           onDocumentReady: function() {
+            window._eoOpenPhases.mark('document_ready');
+            window._eoOpenPhases.end();
             _log('[EO] Document ready: docType=' + docType);
           },
           onError: function(event) {
@@ -1190,6 +1216,7 @@
           }
         }
       });
+      window._eoOpenPhases.mark('iframe');
     }
 
     document.addEventListener('keydown', function(e) {
@@ -1254,13 +1281,16 @@
         window._eoOpenMarkdown(file);
         return true;
       }
+      var openId = window._eoOpenPhases.begin();
       window._eoShowOpening(window._eoOpeningFileText(file.name));
       try {
-        var b64data = await window.__TAURI__.core.invoke(window._eoOpenCommandForPath(file.name), { token: file.token });
+        var b64data = await window.__TAURI__.core.invoke(window._eoOpenCommandForPath(file.name), { token: file.token, openId: openId });
+        window._eoOpenPhases.mark('result');
         window._pendingFileData = { data: b64data, path: file.name, name: file.name };
         openEditor(window._eoDocTypeForPath(file.name));
         return true;
       } catch(e) {
+        window._eoOpenPhases.end();
         // Without a dialog the app just drops back to the start screen and the
         // reason only reaches the log: the user cannot tell a damaged file from
         // a broken app (Issue #38).
@@ -1321,11 +1351,14 @@
       window._eoShowOpening(window._eoOpeningFileText(pending.name));
 
       var docType = window._eoDocTypeForPath(pending.name);
+      var openId = window._eoOpenPhases.begin();
 
-      window.__TAURI__.core.invoke(window._eoOpenCommandForPath(pending.name), { token: pending.token }).then(function(b64data) {
+      window.__TAURI__.core.invoke(window._eoOpenCommandForPath(pending.name), { token: pending.token, openId: openId }).then(function(b64data) {
+        window._eoOpenPhases.mark('result');
         window._pendingFileData = { data: b64data, path: pending.name, name: pending.name };
         openEditor(docType);
       }).catch(function(e) {
+        window._eoOpenPhases.end();
         window._eoLog('[EO] Error reopening file:', e);
         window._eoHideOpening();
         startScreen.classList.remove('hidden');

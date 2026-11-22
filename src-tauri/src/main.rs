@@ -15,6 +15,7 @@ mod markdown;
 mod new_window;
 mod note_separator;
 mod odf_links;
+mod open_phases;
 mod package_relationships;
 mod path_grants;
 mod pending_open;
