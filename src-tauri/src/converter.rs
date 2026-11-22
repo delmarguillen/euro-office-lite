@@ -244,7 +244,7 @@ pub fn prepare_editor_input(
     text_kind: Option<crate::text_import::TextKind>,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<EditorInput, String> {
-    let places = CopyPlaces { work_dir, spill_dir: None, free_space: &free_space };
+    let places = CopyPlaces { work_dir, spill_dir: None, volume: &volume_of };
     prepare_editor_input_in(source, &places, text_kind, text_options)
 }
 
@@ -254,9 +254,17 @@ pub fn prepare_editor_input(
 pub struct CopyPlaces<'a> {
     pub work_dir: &'a std::path::Path,
     pub spill_dir: Option<&'a std::path::Path>,
-    // Bytes free for this user on the file system of a folder, None when that
-    // cannot be told.
-    pub free_space: &'a (dyn Fn(&std::path::Path) -> Option<u64> + Sync),
+    // The file system of a folder, None when that cannot be told.
+    pub volume: &'a (dyn Fn(&std::path::Path) -> Option<Volume> + Sync),
+}
+
+// The file system a folder is on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Volume {
+    // st_dev: the same for two folders on one file system.
+    pub device: u64,
+    // Bytes free for this user.
+    pub free: u64,
 }
 
 pub fn prepare_editor_input_in(
@@ -314,34 +322,45 @@ fn log_spilled_copy(copy_len: u64, copy_dir: &std::path::Path) {
 }
 
 // The work folder when its file system holds the copy and x2t's work, or when
-// free space cannot be told; else the spill folder when it holds the copy;
-// else the work folder when it holds at least the copy. Err when neither
-// holds the copy: nothing is written.
+// that cannot be told; else the spill folder when it holds the copy and the
+// work folder still holds x2t's work. Err when neither does: nothing is
+// written.
 pub fn choose_copy_dir(
     copy_len: u64,
     x2t_work: u64,
     places: &CopyPlaces,
 ) -> Result<std::path::PathBuf, String> {
     let work_dir = places.work_dir.to_path_buf();
-    let Some(work_free) = (places.free_space)(places.work_dir) else {
+    let Some(work) = (places.volume)(places.work_dir) else {
         return Ok(work_dir);
     };
-    if work_free >= copy_len.saturating_add(x2t_work) {
+    let both = copy_len.saturating_add(x2t_work);
+    if work.free >= both {
         return Ok(work_dir);
     }
-    if let Some(spill_dir) = usable_spill_dir(copy_len, places) {
+    if let Some(spill_dir) = usable_spill_dir(copy_len, x2t_work, work, places) {
         return Ok(spill_dir);
     }
-    if work_free >= copy_len {
-        return Ok(work_dir);
-    }
-    Err(no_space_error(copy_len, places.work_dir))
+    Err(no_space_error(both, places.work_dir))
 }
 
-fn usable_spill_dir(copy_len: u64, places: &CopyPlaces) -> Option<std::path::PathBuf> {
+fn usable_spill_dir(
+    copy_len: u64,
+    x2t_work: u64,
+    work: Volume,
+    places: &CopyPlaces,
+) -> Option<std::path::PathBuf> {
     let spill_dir = places.spill_dir?;
-    let spill_free = (places.free_space)(spill_dir)?;
-    if spill_free < copy_len {
+    let spill = (places.volume)(spill_dir)?;
+    if work.free < x2t_work {
+        return None;
+    }
+    // On one file system the copy and x2t's work come out of the same space.
+    let needed = match spill.device == work.device {
+        true => copy_len.saturating_add(x2t_work),
+        false => copy_len,
+    };
+    if spill.free < needed {
         return None;
     }
     ensure_spill_dir(spill_dir).ok()?;
@@ -360,8 +379,8 @@ fn ensure_spill_dir(_dir: &std::path::Path) -> Result<(), String> {
 
 pub const NO_SPACE_ERROR: &str = "Not enough free space to open this file";
 
-fn no_space_error(copy_len: u64, dir: &std::path::Path) -> String {
-    let megabytes = copy_len.div_ceil(1_000_000);
+fn no_space_error(needed: u64, dir: &std::path::Path) -> String {
+    let megabytes = needed.div_ceil(1_000_000);
     format!(
         "{}: it needs about {} MB in {}",
         NO_SPACE_ERROR,
@@ -370,12 +389,15 @@ fn no_space_error(copy_len: u64, dir: &std::path::Path) -> String {
     )
 }
 
-// The space statvfs reports for this user on the file system of `dir`, or of
-// the nearest folder above it that exists.
+// The file system of `dir`, or of the nearest folder above it that exists,
+// with the space statvfs reports for this user.
 #[cfg(unix)]
-pub fn free_space(dir: &std::path::Path) -> Option<u64> {
+pub fn volume_of(dir: &std::path::Path) -> Option<Volume> {
+    use std::os::unix::fs::MetadataExt;
     let existing = dir.ancestors().find(|folder| folder.exists())?;
-    statvfs_free(existing)
+    let device = std::fs::metadata(existing).ok()?.dev();
+    let free = statvfs_free(existing)?;
+    Some(Volume { device, free })
 }
 
 #[cfg(unix)]
@@ -390,7 +412,7 @@ fn statvfs_free(dir: &std::path::Path) -> Option<u64> {
 }
 
 #[cfg(not(unix))]
-pub fn free_space(_dir: &std::path::Path) -> Option<u64> {
+pub fn volume_of(_dir: &std::path::Path) -> Option<Volume> {
     None
 }
 
@@ -841,11 +863,17 @@ mod tests {
 
     const MB: u64 = 1_000_000;
 
-    // Free space as a test sets it: `work` for the work folder, `spill` for
-    // anything else.
+    const WORK_DISK: u64 = 1;
+    const CACHE_DISK: u64 = 2;
+
+    // Two file systems with the free space a test sets: `work` for the work
+    // folder's, `spill` for the one anything else is on.
     fn space(work_dir: &std::path::Path, work: Option<u64>, spill: Option<u64>)
-        -> impl Fn(&std::path::Path) -> Option<u64> + Sync + '_ {
-        move |dir| if dir == work_dir { work } else { spill }
+        -> impl Fn(&std::path::Path) -> Option<Volume> + Sync + '_ {
+        move |dir| match dir == work_dir {
+            true => work.map(|free| Volume { device: WORK_DISK, free }),
+            false => spill.map(|free| Volume { device: CACHE_DISK, free }),
+        }
     }
 
     fn spill_dir_for(work_dir: &std::path::Path) -> std::path::PathBuf {
@@ -856,9 +884,9 @@ mod tests {
         original: &std::path::Path,
         work_dir: &std::path::Path,
         spill_dir: &std::path::Path,
-        free_space: &(dyn Fn(&std::path::Path) -> Option<u64> + Sync),
+        volume: &(dyn Fn(&std::path::Path) -> Option<Volume> + Sync),
     ) -> Result<EditorInput, String> {
-        let places = CopyPlaces { work_dir, spill_dir: Some(spill_dir), free_space };
+        let places = CopyPlaces { work_dir, spill_dir: Some(spill_dir), volume };
         let kind = crate::text_import::TextKind::for_path(original);
         let options = kind.map(|kind| crate::text_import::detect_file(original, kind).unwrap());
         prepare_editor_input_in(original, &places, kind, options)
@@ -896,7 +924,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
         let spill_dir = spill_dir_for(&work_dir);
-        let free = space(&work_dir, Some(0), Some(100 * MB));
+        let free = space(&work_dir, Some(DOCX.len() as u64), Some(100 * MB));
 
         let _input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
 
@@ -919,15 +947,57 @@ mod tests {
         assert_eq!(std::fs::read(&original).unwrap(), DOCX);
     }
 
+    fn refused_for_space(refused: Result<std::path::PathBuf, String>) {
+        let error = refused.err().expect("no room for the copy and x2t's work");
+        assert!(error.starts_with(NO_SPACE_ERROR), "{}", error);
+    }
+
     #[test]
-    fn without_room_in_the_cache_the_copy_stays_in_the_work_folder_if_it_fits_there() {
+    fn a_cache_on_the_work_folders_file_system_has_to_hold_the_copy_and_the_x2t_work() {
+        let root = scratch_root();
+        let (work_dir, spill_dir) = (root.join("work"), root.join("cache/read-copies/1-1"));
+        let one_disk = |_: &std::path::Path| Some(Volume { device: WORK_DISK, free: 150 });
+        let places = CopyPlaces { work_dir: &work_dir, spill_dir: Some(&spill_dir), volume: &one_disk };
+
+        refused_for_space(choose_copy_dir(100, 100, &places));
+
+        assert!(!spill_dir.exists());
+    }
+
+    #[test]
+    fn a_cache_with_room_for_the_copy_is_refused_when_the_work_folder_cannot_hold_the_x2t_work() {
+        let root = scratch_root();
+        let (work_dir, spill_dir) = (root.join("work"), root.join("cache/read-copies/1-1"));
+        let free = space(&work_dir, Some(99), Some(100 * MB));
+        let places = CopyPlaces { work_dir: &work_dir, spill_dir: Some(&spill_dir), volume: &free };
+
+        refused_for_space(choose_copy_dir(100, 100, &places));
+
+        assert!(!spill_dir.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cache_on_another_file_system_holds_the_copy_while_the_work_folder_holds_the_x2t_work() {
+        let root = scratch_root();
+        let (work_dir, spill_dir) = (root.join("work"), root.join("cache/read-copies/1-1"));
+        let free = space(&work_dir, Some(100), Some(100));
+        let places = CopyPlaces { work_dir: &work_dir, spill_dir: Some(&spill_dir), volume: &free };
+
+        assert_eq!(choose_copy_dir(100, 100, &places), Ok(spill_dir));
+    }
+
+    #[test]
+    fn without_room_in_the_cache_a_work_folder_that_only_holds_the_copy_is_a_space_error() {
         let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
         let spill_dir = spill_dir_for(&work_dir);
-        let free = space(&work_dir, Some(DOCX.len() as u64), Some(0));
+        let free = space(&work_dir, Some(2 * DOCX.len() as u64 - 1), Some(0));
 
-        let input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+        let refused = prepare_with(&original, &work_dir, &spill_dir, &free);
 
-        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        let error = refused.err().expect("no room for the copy and x2t's work");
+        assert!(error.starts_with(NO_SPACE_ERROR), "{}", error);
+        assert_eq!(files_in(&work_dir), 0);
     }
 
     #[test]
@@ -955,10 +1025,11 @@ mod tests {
     }
 
     #[test]
-    fn free_space_is_read_for_a_folder_that_does_not_exist_yet() {
+    fn the_file_system_is_read_for_a_folder_that_does_not_exist_yet() {
         let root = scratch_root();
 
-        assert!(free_space(&root.join("not/yet")).is_some());
+        assert_eq!(volume_of(&root.join("not/yet")), volume_of(&root));
+        assert!(volume_of(&root).is_some());
     }
 
 

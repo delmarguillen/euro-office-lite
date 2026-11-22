@@ -488,7 +488,7 @@ async fn open_file_inner(
     let places = super::converter::CopyPlaces {
         work_dir: &state.temp_dir,
         spill_dir: state.read_copies.as_deref(),
-        free_space: &super::converter::free_space,
+        volume: &super::converter::volume_of,
     };
     let input_copy = super::converter::prepare_editor_input_in(
         Path::new(&source),
@@ -1319,7 +1319,7 @@ pub async fn convert_for_insert(
     let places = super::converter::CopyPlaces {
         work_dir: &insert_dir,
         spill_dir: insert_spill.as_deref(),
-        free_space: &super::converter::free_space,
+        volume: &super::converter::volume_of,
     };
     let input_copy =
         super::converter::prepare_editor_input_in(&input, &places, text_kind, text_options)?;
