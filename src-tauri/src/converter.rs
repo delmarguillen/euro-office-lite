@@ -55,7 +55,7 @@ pub async fn convert_file(
     );
     write_file(&params_path, &xml)?;
 
-    // The std command keeps what the shell plugin set up: the sidecar path and,
+    // The std command keeps what the shell plugin set up: the path of x2t and,
     // on Windows, CREATE_NO_WINDOW.
     let mut command: std::process::Command = x2t_command(app, &binaries_dir)?
         .current_dir(&binaries_dir)
@@ -151,19 +151,20 @@ where
     .map_err(|e| format!("PDF conversion task failed: {}", e))?
 }
 
-// Windows runs the same x2t as the PDF export, the one in binaries\ (see
-// x2t_task::find_x2t); Linux and macOS keep the sidecar.
-#[cfg(target_os = "windows")]
+// Windows and Linux run the same x2t as the PDF export, the one in binaries/
+// (see x2t_task::find_x2t); macOS keeps the sidecar.
+#[cfg(not(target_os = "macos"))]
 fn x2t_command(
     app: &AppHandle,
     binaries_dir: &std::path::Path,
 ) -> Result<tauri_plugin_shell::process::Command, String> {
     let binaries_dir = x2t_task::strip_extended_prefix(binaries_dir);
-    let x2t = x2t_task::find_x2t(&binaries_dir, None)?;
+    let exe_dir = crate::app_exe_dir();
+    let x2t = x2t_task::find_x2t(&binaries_dir, exe_dir.as_deref())?;
     Ok(app.shell().command(x2t))
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn x2t_command(
     app: &AppHandle,
     _binaries_dir: &std::path::Path,

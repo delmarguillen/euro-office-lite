@@ -97,11 +97,12 @@ pub fn layout_from_exe(os: Os, exe: &Path) -> Result<Layout, String> {
     if !binaries_dir.is_dir() {
         return Err(format!("binaries folder not found: {}", binaries_dir.display()));
     }
-    // The x2t every conversion runs: the sidecar next to the executable,
-    // except on Windows, where the app runs the one in binaries\.
+    // The x2t every conversion runs: the one in binaries/ on Windows and
+    // Linux, the sidecar next to the executable on macOS.
     let sidecar = match os {
         Os::Windows => binaries_dir.join("x2t.exe"),
-        _ => exe_dir.join("x2t"),
+        Os::Linux => binaries_dir.join("x2t"),
+        Os::Macos => exe_dir.join("x2t"),
     };
     if !sidecar.is_file() {
         return Err(format!("x2t sidecar not found: {}", sidecar.display()));
@@ -163,7 +164,6 @@ mod tests {
 
     fn deb_tree(root: &Path) {
         touch(&root.join("usr/bin/euro-office-lite"));
-        touch(&root.join("usr/bin/x2t"));
         touch(&root.join("usr/lib/Euro-Office-Lite/binaries/x2t"));
     }
 
@@ -187,11 +187,44 @@ mod tests {
         let layout = layout_from_exe(Os::Linux, &exe).unwrap();
 
         let lib = std::fs::canonicalize(root.join("usr/lib/Euro-Office-Lite")).unwrap();
-        let bin = std::fs::canonicalize(root.join("usr/bin")).unwrap();
         assert_eq!(layout.exe_dir_plain, root.join("usr/bin"));
         assert_eq!(layout.resource_dir, lib);
         assert_eq!(layout.binaries_dir, lib.join("binaries"));
-        assert_eq!(layout.sidecar, bin.join("x2t"));
+        assert_eq!(layout.sidecar, lib.join("binaries/x2t"));
+        if cfg!(target_os = "linux") {
+            let pdf_x2t = crate::x2t_task::find_x2t(&layout.binaries_dir, Some(&layout.exe_dir_plain)).unwrap();
+            assert_eq!(pdf_x2t, layout.sidecar);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // A .deb from before x2t moved into binaries/ alone also has it in
+    // usr/bin; the app runs the one in binaries/ for every conversion.
+    #[test]
+    fn a_deb_with_x2t_in_usr_bin_too_resolves_to_the_one_in_binaries() {
+        let root = scratch("deb-sidecar");
+        deb_tree(&root);
+        touch(&root.join("usr/bin/x2t"));
+
+        let exe = expected_exe(Os::Linux, &root).unwrap();
+        let layout = layout_from_exe(Os::Linux, &exe).unwrap();
+
+        let lib = std::fs::canonicalize(root.join("usr/lib/Euro-Office-Lite")).unwrap();
+        assert_eq!(layout.sidecar, lib.join("binaries/x2t"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // x2t in usr/bin alone has no DoctRenderer.config next to it.
+    #[test]
+    fn a_deb_with_x2t_in_usr_bin_only_is_refused() {
+        let root = scratch("deb-usr-bin");
+        touch(&root.join("usr/bin/euro-office-lite"));
+        touch(&root.join("usr/bin/x2t"));
+        std::fs::create_dir_all(root.join("usr/lib/Euro-Office-Lite/binaries")).unwrap();
+
+        let exe = expected_exe(Os::Linux, &root).unwrap();
+        let error = layout_from_exe(Os::Linux, &exe).unwrap_err();
+        assert!(error.starts_with("x2t sidecar not found"), "{}", error);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -370,7 +403,7 @@ mod tests {
         let error = layout_from_exe(Os::Linux, &exe).unwrap_err();
         assert!(error.starts_with("x2t sidecar not found"), "{}", error);
 
-        touch(&root.join("usr/bin/x2t"));
+        touch(&root.join("usr/lib/Euro-Office-Lite/binaries/x2t"));
         assert!(layout_from_exe(Os::Linux, &exe).is_ok());
         let _ = std::fs::remove_dir_all(&root);
     }

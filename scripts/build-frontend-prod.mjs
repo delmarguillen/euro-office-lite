@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyPatches, revertPatches } from './apply-patches.mjs';
+import { removeUnusedFrontendFiles } from './frontend-unused-files.mjs';
 import { writeSpellLanguages } from './spell-languages.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -378,29 +379,9 @@ for (const editor of [
   );
 }
 
-// Keep the WebAssembly engines used by fonts and the PDF viewer, but drop their
-// asm.js fallbacks. All supported WebView2, WKWebView and WebKitGTK runtimes
-// provide WebAssembly; the two fallback files add about 25 MiB.
-await rm(
-  path.join(buildRoot, 'sdkjs', 'pdf', 'src', 'engine', 'drawingfile_ie.js'),
-  { force: true },
-);
-await rm(
-  path.join(buildRoot, 'sdkjs', 'common', 'libfont', 'engine', 'fonts_ie.js'),
-  { force: true },
-);
-// Same reasoning for the spellcheck engine, whose asm.js fallback adds about
-// 770 KiB: the worker instantiates spell.wasm on every runtime we support.
-// spell.js.mem is that fallback's startup memory image, referenced by nothing
-// else, so it goes with it.
-await rm(
-  path.join(buildRoot, 'sdkjs', 'common', 'spell', 'spell', 'spell_ie.js'),
-  { force: true },
-);
-await rm(
-  path.join(buildRoot, 'sdkjs', 'common', 'spell', 'spell', 'spell.js.mem'),
-  { force: true },
-);
+// Keep the WebAssembly engines and drop what the app never loads: their asm.js
+// fallbacks and the editors' source maps.
+await removeUnusedFrontendFiles(buildRoot);
 
 await mkdir(outputRoot, { recursive: true });
 await copyRequired(

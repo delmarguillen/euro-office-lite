@@ -31,7 +31,6 @@ modules:
       - cp -r deb-extract/usr/lib/Euro-Office-Lite/. /app/lib/Euro-Office-Lite/
 
       - install -Dm755 deb-extract/usr/bin/euro-office-lite /app/bin/euro-office-lite
-      - install -Dm755 deb-extract/usr/bin/x2t /app/bin/x2t
 
       - install -Dm644 org.eurooffice.Lite.desktop /app/share/applications/org.eurooffice.Lite.desktop
       - install -Dm644 icons/256x256.png /app/share/icons/hicolor/256x256/apps/org.eurooffice.Lite.png
