@@ -15,6 +15,9 @@ pub struct AppState {
     pub temp_root: PathBuf,
     // Shared by every instance: the font cache.
     pub font_root: PathBuf,
+    // This instance's folder in the user's cache for a read copy the temp
+    // root has no room for (converter::CopyPlaces). None without a cache.
+    pub read_copies: Option<crate::temp_layout::ReadCopies>,
     // Whether that cache is built yet (fonts_state.rs).
     pub fonts: std::sync::Arc<crate::fonts_state::FontsState>,
     pub instance: crate::temp_layout::Instance,
@@ -482,9 +485,14 @@ async fn open_file_inner(
     // x2t reads a checked copy in the temp dir. current_file and the recent list
     // keep the original path, and saving keeps the original's options; only the
     // conversion sees the copy.
-    let input_copy = super::converter::prepare_editor_input(
+    let places = super::converter::CopyPlaces {
+        work_dir: &state.temp_dir,
+        spill: state.read_copies.as_ref().map(super::converter::Spill::in_instance_dir),
+        volume: &super::converter::volume_of,
+    };
+    let input_copy = super::converter::prepare_editor_input_in(
         Path::new(&source),
-        &state.temp_dir,
+        &places,
         text_kind,
         text_options,
     )
@@ -1289,8 +1297,9 @@ pub async fn convert_for_insert(
     token: String,
 ) -> Result<serde_json::Value, String> {
     let input = state.grants.resolve(&token, GrantKind::Insert)?;
-    let insert = InsertDir::create(&state.temp_dir).map_err(|e| e.to_string())?;
-    let insert_dir = insert.0.clone();
+    let insert = InsertDir::create(&state.temp_dir, state.read_copies.as_ref())
+        .map_err(|e| e.to_string())?;
+    let insert_dir = insert.dir.clone();
 
     let output = insert_dir.join("Editor.bin");
 
@@ -1307,8 +1316,9 @@ pub async fn convert_for_insert(
         }
         None => None,
     };
+    let places = insert.copy_places(&super::converter::volume_of);
     let input_copy =
-        super::converter::prepare_editor_input(&input, &insert_dir, text_kind, text_options)?;
+        super::converter::prepare_editor_input_in(&input, &places, text_kind, text_options)?;
 
     let converted = super::converter::convert_file(
         &app,
@@ -1358,29 +1368,57 @@ pub async fn convert_for_insert(
 
 // Each insert converts in a folder of its own under insert_tmp/, so two inserts
 // at the same time never share the copy, Editor.bin or x2t's scratch files.
-// The folder is removed when this is dropped.
-struct InsertDir(PathBuf);
+// A copy the temp root has no room for goes in a folder of the same name in
+// the instance's read copies folder. Both are removed when this is dropped.
+struct InsertDir<'a> {
+    dir: PathBuf,
+    read_copies: Option<&'a crate::temp_layout::ReadCopies>,
+    // Made only when the copy goes there (converter::choose_copy_dir).
+    spill_dir: Option<PathBuf>,
+}
 
-impl InsertDir {
-    fn create(temp_dir: &Path) -> std::io::Result<InsertDir> {
+impl<'a> InsertDir<'a> {
+    fn create(
+        temp_dir: &Path,
+        read_copies: Option<&'a crate::temp_layout::ReadCopies>,
+    ) -> std::io::Result<InsertDir<'a>> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let parent = temp_dir.join("insert_tmp");
         std::fs::create_dir_all(&parent)?;
         loop {
-            let dir = parent.join(format!("convert-{}", NEXT.fetch_add(1, Ordering::Relaxed)));
+            let name = format!("convert-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+            let dir = parent.join(&name);
             match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(InsertDir(dir)),
+                Ok(()) => {
+                    let spill_dir = read_copies.map(|copies| copies.dir().join(&name));
+                    return Ok(InsertDir { dir, read_copies, spill_dir });
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e),
             }
         }
     }
+
+    // Where this insert's copy may go: x2t works in the insert's own folder.
+    fn copy_places<'b>(
+        &'b self,
+        volume: &'b (dyn Fn(&Path) -> Option<super::converter::Volume> + Sync),
+    ) -> super::converter::CopyPlaces<'b> {
+        let spill = self
+            .read_copies
+            .zip(self.spill_dir.as_deref())
+            .map(|(read_copies, dir)| super::converter::Spill { read_copies, dir });
+        super::converter::CopyPlaces { work_dir: &self.dir, spill, volume }
+    }
 }
 
-impl Drop for InsertDir {
+impl Drop for InsertDir<'_> {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_dir_all(&self.dir);
+        if let Some(spill_dir) = &self.spill_dir {
+            let _ = std::fs::remove_dir_all(spill_dir);
+        }
     }
 }
 
@@ -1480,6 +1518,7 @@ pub(crate) fn test_state_for(root: &Path, instance: crate::temp_layout::Instance
         temp_dir: instance.dir.clone(),
         temp_root: root.to_path_buf(),
         font_root: root.join("fonts"),
+        read_copies: None,
         fonts: std::sync::Arc::new(crate::fonts_state::FontsState::pending()),
         instance,
         doc_seq: std::sync::atomic::AtomicU64::new(1),
@@ -2035,30 +2074,72 @@ mod tests {
     fn two_inserts_at_the_same_time_convert_in_different_folders() {
         let dir = staging_dir();
 
-        let first = InsertDir::create(&dir).unwrap();
-        let second = InsertDir::create(&dir).unwrap();
+        let first = InsertDir::create(&dir, None).unwrap();
+        let second = InsertDir::create(&dir, None).unwrap();
 
-        assert_ne!(first.0, second.0);
-        assert!(first.0.is_dir() && second.0.is_dir());
-        assert_eq!(first.0.parent(), Some(dir.join("insert_tmp").as_path()));
-        let (first_dir, second_dir) = (first.0.clone(), second.0.clone());
+        assert_ne!(first.dir, second.dir);
+        assert!(first.dir.is_dir() && second.dir.is_dir());
+        assert_eq!(first.dir.parent(), Some(dir.join("insert_tmp").as_path()));
+        let (first_dir, second_dir) = (first.dir.clone(), second.dir.clone());
         drop(first);
         drop(second);
         assert!(!first_dir.exists() && !second_dir.exists(), "each folder goes with its insert");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn two_inserts_at_the_same_time_keep_their_own_copies_in_the_cache() {
+        use crate::converter::{prepare_editor_input_in, Volume};
+        let dir = staging_dir();
+        let read_copies = crate::temp_layout::ReadCopies::new(&dir.join("cache/read-copies"), "1-1");
+        let documents: [(&str, &[u8]); 2] =
+            [("first.rtf", b"{\\rtf1 first document}"), ("second.rtf", b"{\\rtf1 other document}")];
+        for (name, bytes) in documents {
+            std::fs::write(dir.join(name), bytes).unwrap();
+        }
+        // The temp root holds x2t's work and not the copy with it; the cache
+        // is on another file system, with room.
+        let work_free = documents[0].1.len() as u64;
+        let volume = |folder: &Path| match folder.starts_with(read_copies.dir()) {
+            true => Some(Volume { device: 2, free: 1_000_000 }),
+            false => Some(Volume { device: 1, free: work_free }),
+        };
+
+        let first = InsertDir::create(&dir, Some(&read_copies)).unwrap();
+        let second = InsertDir::create(&dir, Some(&read_copies)).unwrap();
+        let first_copy =
+            prepare_editor_input_in(&dir.join("first.rtf"), &first.copy_places(&volume), None, None).unwrap();
+        let second_copy =
+            prepare_editor_input_in(&dir.join("second.rtf"), &second.copy_places(&volume), None, None).unwrap();
+
+        assert!(first_copy.path().starts_with(read_copies.dir()));
+        assert!(second_copy.path().starts_with(read_copies.dir()));
+        assert_eq!(std::fs::read(first_copy.path()).unwrap(), documents[0].1);
+        assert_eq!(std::fs::read(second_copy.path()).unwrap(), documents[1].1);
+        let (first_spill, second_spill) = (first.spill_dir.clone().unwrap(), second.spill_dir.clone().unwrap());
+        drop(first_copy);
+        drop(first);
+        assert!(!first_spill.exists(), "each folder in the cache goes with its insert");
+        assert_eq!(std::fs::read(second_copy.path()).unwrap(), documents[1].1);
+        drop(second_copy);
+        drop(second);
+        assert!(!second_spill.exists());
+        assert!(read_copies.dir().is_dir());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_images_of_an_insert_stay_where_a_bare_name_is_resolved() {
         let dir = staging_dir();
-        let insert = InsertDir::create(&dir).unwrap();
-        std::fs::create_dir_all(insert.0.join("media")).unwrap();
-        std::fs::write(insert.0.join("media/image1.png"), b"inserted").unwrap();
+        let insert = InsertDir::create(&dir, None).unwrap();
+        std::fs::create_dir_all(insert.dir.join("media")).unwrap();
+        std::fs::write(insert.dir.join("media/image1.png"), b"inserted").unwrap();
         let kept = dir.join("insert_tmp/media");
         std::fs::create_dir_all(&kept).unwrap();
         std::fs::write(kept.join("image1.png"), b"earlier insert").unwrap();
 
-        keep_insert_media(&insert.0.join("media"), &kept);
+        keep_insert_media(&insert.dir.join("media"), &kept);
         drop(insert);
 
         assert_eq!(std::fs::read(kept.join("image1.png")).unwrap(), b"inserted");
