@@ -2,12 +2,14 @@
 // of a document has to match its format, and a package holds its own parts:
 // what it points to outside itself has to be a URL.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::Reader;
+use quick_xml::name::QName;
+use quick_xml::{Reader, Writer};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::x2t_task::{ContentSample, ZIP_END_SEARCH_LEN};
@@ -836,6 +838,115 @@ fn resolved_target(folder: &str, target: &str) -> Option<String> {
     Some(resolved.join("/"))
 }
 
+const ROOT_RELS: &str = "_rels/.rels";
+
+// A package can name one of its parts from _rels/.rels with a ".." first, as
+// in "../customXml/item1.xml" for the part customXml/item1.xml: the package
+// root has no folder above it, and RFC 3986 5.2.4 drops a ".." there. x2t
+// keeps it (resolved_target), so x2t reads a copy of the package where such a
+// target is the name of the part. The copy is written in `temp_dir` and the
+// original file is never touched. None when x2t reads the file it was given:
+// the checks (relationships_are_allowed) then judge it as it is.
+pub fn root_targets_copy(path: &Path, content: &ContentSample, temp_dir: &Path) -> Option<PathBuf> {
+    // The copy is a ZIP and nothing else, so only a file that starts like one
+    // gets a copy.
+    if !content.head.starts_with(LOCAL_SIGNATURE) {
+        return None;
+    }
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(path).ok()?).ok()?;
+    if archive.len() > LIMITS.entries {
+        return None;
+    }
+    let index = archive.index_for_name(ROOT_RELS)?;
+    let xml = read_rels(&mut archive, index, LIMITS.rels_bytes)?;
+    let new_xml = root_rels_naming_parts(&xml, &archive.file_names().collect())?;
+    // The copy holds the entries the zip library shows: they have to be the
+    // ones x2t would extract from the original.
+    let mut raw = std::fs::File::open(path).ok()?;
+    if !part_names_are_unique(&mut raw, archive.central_directory_start(), archive.len()) {
+        return None;
+    }
+    let copy = root_copy_path(path, temp_dir);
+    let rewritten = HashMap::from([(ROOT_RELS.to_string(), new_xml)]);
+    if crate::odf_links::write_copy(&mut archive, &rewritten, &copy).is_err() {
+        let _ = std::fs::remove_file(&copy);
+        return None;
+    }
+    Some(copy)
+}
+
+fn root_copy_path(source: &Path, temp_dir: &Path) -> PathBuf {
+    let extension = source.extension().and_then(|e| e.to_str()).unwrap_or("xlsx");
+    temp_dir.join(format!("eo-root-rels-copy.{}", extension))
+}
+
+// _rels/.rels with each target that names a part from above the package root
+// written as the name of that part, or None when it has none or cannot be
+// read. Everything else is written back as it was read.
+fn root_rels_naming_parts(xml: &[u8], entries: &HashSet<&str>) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(xml).ok()?;
+    let mut reader = Reader::from_str(text.strip_prefix('\u{FEFF}').unwrap_or(text));
+    let mut writer = Writer::new(Vec::with_capacity(xml.len()));
+    let mut changed = false;
+    loop {
+        let event = reader.read_event().ok()?;
+        let replaced = match &event {
+            Event::Eof => break,
+            Event::Start(element) => relationship_naming_parts(element, entries)?.map(Event::Start),
+            Event::Empty(element) => relationship_naming_parts(element, entries)?.map(Event::Empty),
+            _ => None,
+        };
+        changed |= replaced.is_some();
+        writer.write_event(replaced.unwrap_or(event)).ok()?;
+    }
+    changed.then(|| writer.into_inner())
+}
+
+// The Relationship element with those targets replaced, Some(None) when it
+// stays as it is, None when its attributes cannot be read. A relationship x2t
+// takes for external names no part, and stays as it is.
+fn relationship_naming_parts(
+    element: &BytesStart,
+    entries: &HashSet<&str>,
+) -> Option<Option<BytesStart<'static>>> {
+    let Some(relationship) = relationship(element)? else {
+        return Some(None);
+    };
+    if relationship.x2t_external {
+        return Some(None);
+    }
+    let mut attributes = Vec::new();
+    let mut changed = false;
+    for attribute in element.attributes() {
+        let attribute = attribute.ok()?;
+        let mut value = attribute.value.clone().into_owned();
+        if attribute.key.local_name().as_ref() == b"Target" {
+            let target = attribute.unescape_value().ok()?;
+            if let Some(part) = part_named_from_above_the_root(&target, entries) {
+                value = quick_xml::escape::escape(part).into_owned().into_bytes();
+                changed = true;
+            }
+        }
+        attributes.push((attribute.key.as_ref().to_vec(), value));
+    }
+    if !changed {
+        return Some(None);
+    }
+    let name = std::str::from_utf8(element.name().as_ref()).ok()?.to_string();
+    let mut fresh = BytesStart::new(name);
+    for (key, value) in &attributes {
+        fresh.push_attribute(Attribute { key: QName(key), value: std::borrow::Cow::Borrowed(value) });
+    }
+    Some(Some(fresh))
+}
+
+// The part a target names when it is "../" and then the exact name of an entry
+// of the package. Any other target with a ".." names none.
+fn part_named_from_above_the_root<'a>(target: &'a str, entries: &HashSet<&str>) -> Option<&'a str> {
+    let part = target.strip_prefix("../")?;
+    entries.contains(part).then_some(part)
+}
+
 fn is_alt_chunk(kind: &str) -> bool {
     ALT_CHUNK_TYPES.iter().any(|alt_chunk| kind.eq_ignore_ascii_case(alt_chunk))
 }
@@ -1100,6 +1211,70 @@ pub(crate) mod tests {
         let hyperlink = HYPERLINK_TYPES[0];
         assert!(rels_allowed(&external(hyperlink, "../../../Reports/other.docx")));
         assert!(rels_allowed(&external(IMAGE, "file:///../../../a.png")));
+    }
+
+    fn root_rels_rewritten(relationship: &str) -> Option<String> {
+        let entries = HashSet::from(["_rels/.rels", "customXml/item1.xml", "xl/a&b.xml"]);
+        let rewritten = root_rels_naming_parts(rels_xml(relationship).as_bytes(), &entries);
+        rewritten.map(|xml| String::from_utf8(xml).unwrap())
+    }
+
+    #[test]
+    fn a_root_target_one_folder_above_a_part_is_written_as_the_name_of_the_part() {
+        let relationship = |target: &str| format!("<Relationship Id=\"rId1\" Type=\"{CUSTOM_XML}\" Target=\"{target}\"/>");
+        let rewritten = root_rels_rewritten(&relationship("../customXml/item1.xml"));
+        assert_eq!(rewritten, Some(rels_xml(&relationship("customXml/item1.xml"))));
+        let escaped = root_rels_rewritten(&relationship("../xl/a&amp;b.xml"));
+        assert_eq!(escaped, Some(rels_xml(&relationship("xl/a&amp;b.xml"))));
+    }
+
+    #[test]
+    fn any_other_root_target_is_left_as_written() {
+        for target in [
+            "customXml/item1.xml",
+            "/customXml/item1.xml",
+            "../customXml/item2.xml",
+            "../../customXml/item1.xml",
+            "../CustomXml/item1.xml",
+            "..\\customXml\\item1.xml",
+            "/../customXml/item1.xml",
+            "./../customXml/item1.xml",
+        ] {
+            let relationship = format!("<Relationship Id=\"rId1\" Type=\"{CUSTOM_XML}\" Target=\"{target}\"/>");
+            assert_eq!(root_rels_rewritten(&relationship), None, "{target}");
+        }
+        let external = format!("<Relationship Type=\"{CUSTOM_XML}\" Target=\"../customXml/item1.xml\" TargetMode=\"External\"/>");
+        assert_eq!(root_rels_rewritten(&external), None);
+        let not_a_relationship = "<Other Target=\"../customXml/item1.xml\"/>";
+        assert_eq!(root_rels_rewritten(not_a_relationship), None);
+    }
+
+    fn root_copy_of(bytes: &[u8]) -> Option<Vec<u8>> {
+        let path = unique_scratch_file("package.xlsx", bytes);
+        let folder = path.parent().unwrap().to_path_buf();
+        let copy = root_targets_copy(&path, &ContentSample::of(bytes), &folder);
+        let copied = copy.map(|copy| std::fs::read(copy).unwrap());
+        let _ = std::fs::remove_dir_all(folder);
+        copied
+    }
+
+    #[test]
+    fn the_copy_with_its_root_targets_rewritten_passes_the_checks_the_original_does_not() {
+        let root = one_relationship(CUSTOM_XML, "../customXml/item1.xml", "");
+        let bytes = package_of(&[("_rels/.rels", root), ("customXml/item1.xml", "<a/>".to_string())]);
+        assert!(!package_accepted(&bytes));
+        let copy = root_copy_of(&bytes).unwrap();
+        assert!(package_accepted(&copy));
+    }
+
+    #[test]
+    fn a_package_that_does_not_start_the_file_or_repeats_a_name_gets_no_copy() {
+        let root = one_relationship(CUSTOM_XML, "../customXml/item1.xml", "");
+        let parts = [("_rels/.rels", root), ("customXml/item1.xml", "<a/>".to_string())];
+        let bytes = package_of(&parts);
+        assert_eq!(root_copy_of(&followed_by(WORD97_DOC, &bytes)), None);
+        let repeated = renamed(package_of(&[parts[0].clone(), parts[1].clone(), ("customXml/item2.xml", "<b/>".to_string())]), "customXml/item2.xml", "customXml/item1.xml");
+        assert_eq!(root_copy_of(&repeated), None);
     }
 
     fn one_relationship(kind: &str, target: &str, mode: &str) -> String {
@@ -2007,9 +2182,11 @@ pub(crate) mod tests {
         let mut documents = Vec::new();
         corpus_documents(&root, &mut documents);
         assert!(!documents.is_empty(), "no corpus found at {}", root.display());
+        // Each document is judged as x2t reads it: from its root copy when it gets one.
         for document in documents {
-            let content = ContentSample::read(&document).unwrap();
-            assert!(relationships_are_allowed(&document, &content), "{}", document.display());
+            let bytes = std::fs::read(&document).unwrap();
+            let read_by_x2t = root_copy_of(&bytes).unwrap_or(bytes);
+            assert!(package_accepted(&read_by_x2t), "{}", document.display());
         }
     }
 }
