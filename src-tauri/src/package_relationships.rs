@@ -2182,9 +2182,11 @@ pub(crate) mod tests {
         let mut documents = Vec::new();
         corpus_documents(&root, &mut documents);
         assert!(!documents.is_empty(), "no corpus found at {}", root.display());
+        // Each document is judged as x2t reads it: from its root copy when it gets one.
         for document in documents {
-            let content = ContentSample::read(&document).unwrap();
-            assert!(relationships_are_allowed(&document, &content), "{}", document.display());
+            let bytes = std::fs::read(&document).unwrap();
+            let read_by_x2t = root_copy_of(&bytes).unwrap_or(bytes);
+            assert!(package_accepted(&read_by_x2t), "{}", document.display());
         }
     }
 }

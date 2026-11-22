@@ -931,6 +931,29 @@ mod tests {
         assert_eq!(std::fs::read(input.path()).unwrap(), xlsx);
     }
 
+    // LibreOffice 24.2 names customXml/item1.xml from _rels/.rels as
+    // "../customXml/item1.xml".
+    #[test]
+    fn a_libreoffice_xlsx_with_custom_xml_is_read_from_a_copy_that_names_the_part() {
+        let xlsx = include_bytes!("../../tests/fixtures/libreoffice-custom-xml.xlsx");
+        let (original, work_dir) = original_and_work_dir("saved.xlsx", xlsx);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        let (written_root, written_others) = root_rels_and_others(parts_of(&original));
+        let (read_root, read_others) = root_rels_and_others(parts_of(input.path()));
+        let named = written_root.replace("\"../customXml/item1.xml\"", "\"customXml/item1.xml\"");
+        assert_ne!(named, written_root);
+        assert_eq!(read_root, named);
+        assert_eq!(read_others, written_others);
+    }
+
+    // The content of _rels/.rels, and every other part in the order stored.
+    fn root_rels_and_others(parts: Vec<(String, String)>) -> (String, Vec<(String, String)>) {
+        let (root, others): (Vec<_>, Vec<_>) = parts.into_iter().partition(|(name, _)| name == "_rels/.rels");
+        (root[0].1.clone(), others)
+    }
+
     #[test]
     fn a_word_97_doc_is_converted_from_a_copy_as_it_is() {
         let doc = include_bytes!("../../tests/fixtures/word97.doc");
