@@ -395,7 +395,7 @@ fn in_package(href: &str, paths: &HashSet<String>, folder: &str) -> bool {
 
 // Parts that do not change are copied as they are stored, in the same order: a
 // package starts with its mimetype entry, uncompressed, and stays that way.
-fn write_copy<R: Read + Seek>(
+pub(crate) fn write_copy<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     rewritten: &HashMap<String, Vec<u8>>,
     copy: &Path,

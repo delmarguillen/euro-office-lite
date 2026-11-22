@@ -221,8 +221,8 @@ pub struct EditorInput {
 }
 
 impl EditorInput {
-    // The last copy made: an ODF package's references are emptied in a copy of
-    // the first one.
+    // The last copy made: an OOXML package's root targets are rewritten, and an
+    // ODF package's references emptied, in a copy of the one before.
     pub fn path(&self) -> &std::path::Path {
         self.copies.last().expect("an EditorInput holds at least one copy")
     }
@@ -249,8 +249,13 @@ pub fn prepare_editor_input(
         return Err(not_valid_error(source));
     }
     let mut input = read_copy(source, work_dir, text_kind, text_options)?;
+    let mut content = x2t_task::ContentSample::read(input.path()).map_err(|e| e.to_string())?;
+    // The checks below read the copy x2t reads.
+    if let Some(root_copy) = crate::package_relationships::root_targets_copy(input.path(), &content, work_dir) {
+        input.copies.push(root_copy);
+        content = x2t_task::ContentSample::read(input.path()).map_err(|e| e.to_string())?;
+    }
     let copy = input.path().to_path_buf();
-    let content = x2t_task::ContentSample::read(&copy).map_err(|e| e.to_string())?;
     if check_container_content(&copy, &content)? == PackageFilters::Skipped {
         return Ok(input);
     }
@@ -799,6 +804,131 @@ mod tests {
         let (original, work_dir) = original_and_work_dir("data.xml", b"<?xml version=\"1.0\"?><a/>");
         let refused = prepare_editor_input(&original, &work_dir, None, None);
         assert_eq!(refused.err(), Some("This file is not a valid .xml".to_string()));
+    }
+
+    const CUSTOM_XML_ITEM: &str = "customXml/item1.xml";
+
+    fn relationship_xml(kind: &str, target: &str, mode: &str) -> String {
+        format!("<Relationship Id=\"r{kind}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}\" Target=\"{target}\"{mode}/>")
+    }
+
+    fn relationships_xml(body: &str) -> String {
+        format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{body}</Relationships>")
+    }
+
+    // A workbook with the part customXml/item1.xml and `custom_xml`, a
+    // relationship, in _rels/.rels; `from_workbook` is one of the workbook's.
+    fn workbook_with_custom_xml(custom_xml: &str, from_workbook: &str) -> Vec<u8> {
+        use std::io::Write;
+        let root_rels = relationships_xml(&format!("{}{custom_xml}", relationship_xml("officeDocument", "xl/workbook.xml", "")));
+        let workbook_rels = relationships_xml(&format!("{}{from_workbook}", relationship_xml("worksheet", "worksheets/sheet1.xml", "")));
+        let parts = [
+            ("_rels/.rels", root_rels.as_str()),
+            ("xl/workbook.xml", "<workbook/>"),
+            ("xl/_rels/workbook.xml.rels", workbook_rels.as_str()),
+            ("xl/worksheets/sheet1.xml", "<worksheet/>"),
+            (CUSTOM_XML_ITEM, "<item/>"),
+        ];
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, content) in parts {
+            writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            writer.write_all(content.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn parts_of(package: &std::path::Path) -> Vec<(String, String)> {
+        use std::io::Read;
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(package).unwrap()).unwrap();
+        let mut parts = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut content = String::new();
+            entry.read_to_string(&mut content).unwrap();
+            parts.push((entry.name().to_string(), content));
+        }
+        parts
+    }
+
+    #[test]
+    fn a_root_target_one_folder_above_a_part_is_read_from_a_copy_that_names_the_part() {
+        let custom_xml = relationship_xml("customXml", "../customXml/item1.xml", "");
+        let xlsx = workbook_with_custom_xml(&custom_xml, "");
+        let (original, work_dir) = original_and_work_dir("saved.xlsx", &xlsx);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        let written = parts_of(&original);
+        let read_by_x2t = parts_of(input.path());
+        let named = relationship_xml("customXml", CUSTOM_XML_ITEM, "");
+        assert_eq!(read_by_x2t.len(), written.len());
+        for ((name, content), (written_name, written_content)) in read_by_x2t.iter().zip(&written) {
+            assert_eq!(name, written_name);
+            assert!(!content.contains(".."), "{name}: {content}");
+            let expected = if name == "_rels/.rels" { written_content.replace(&custom_xml, &named) } else { written_content.clone() };
+            assert_eq!(content, &expected, "{name}");
+        }
+        assert_eq!(std::fs::read(&original).unwrap(), xlsx, "the original stays");
+        drop(input);
+        assert_eq!(files_in(&work_dir), 0);
+    }
+
+    #[test]
+    fn a_root_target_that_names_its_part_is_read_as_it_is() {
+        for target in [CUSTOM_XML_ITEM, "/customXml/item1.xml"] {
+            let xlsx = workbook_with_custom_xml(&relationship_xml("customXml", target, ""), "");
+            let (original, work_dir) = original_and_work_dir("saved.xlsx", &xlsx);
+
+            let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+            assert_eq!(std::fs::read(input.path()).unwrap(), xlsx, "{target}");
+            assert_eq!(files_in(&work_dir), 1, "{target}");
+        }
+    }
+
+    #[test]
+    fn a_relationship_that_names_no_part_of_the_package_is_still_refused() {
+        let external = " TargetMode=\"External\"";
+        let from_root = [
+            ("../outside.xml", ""),
+            ("../customXml/item2.xml", ""),
+            ("../../customXml/item1.xml", ""),
+            ("../xl/../../customXml/item1.xml", ""),
+            ("..\\customXml\\item1.xml", ""),
+            ("/../customXml/item1.xml", ""),
+            ("../customXml/item1.xml", external),
+        ];
+        for (target, mode) in from_root {
+            let xlsx = workbook_with_custom_xml(&relationship_xml("customXml", target, mode), "");
+            let (original, work_dir) = original_and_work_dir("saved.xlsx", &xlsx);
+
+            let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+            assert_eq!(refused.err(), Some("This file is not a valid .xlsx".to_string()), "{target}{mode}");
+            assert_eq!(files_in(&work_dir), 0, "{target}{mode}");
+        }
+        for target in ["../../customXml/item1.xml", "../../x", "../../../customXml/item1.xml"] {
+            let xlsx = workbook_with_custom_xml("", &relationship_xml("customXml", target, ""));
+            let (original, work_dir) = original_and_work_dir("saved.xlsx", &xlsx);
+
+            let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+            assert_eq!(refused.err(), Some("This file is not a valid .xlsx".to_string()), "{target}");
+            assert_eq!(files_in(&work_dir), 0, "{target}");
+        }
+    }
+
+    // The same target from xl/_rels/workbook.xml.rels names the part: xl has
+    // the package root above it.
+    #[test]
+    fn a_target_one_folder_above_a_part_in_a_folder_is_read_as_it_is() {
+        let xlsx = workbook_with_custom_xml("", &relationship_xml("customXml", "../customXml/item1.xml", ""));
+        let (original, work_dir) = original_and_work_dir("saved.xlsx", &xlsx);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_eq!(std::fs::read(input.path()).unwrap(), xlsx);
     }
 
     #[test]
