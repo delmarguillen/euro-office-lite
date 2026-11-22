@@ -124,23 +124,51 @@ async function loadWith(openFile) {
       && phaseFor('') === null);
 }
 
-// The marks taken from the editor frame (editor-patches.js).
+// The marks taken from the editor frame (editor-patches.js), from
+// _installSdkLoadMarks to the end of _markSdkScriptLoaded.
+const patches = (await readFile(path.join(projectRoot, 'src/editor-patches.js'), 'utf8')).replace(/\r\n/g, '\n');
+
+function loadSdkLoadMarks(bridge) {
+  const start = patches.indexOf('    function _installSdkLoadMarks(win) {');
+  const last = patches.indexOf('    function _markSdkScriptLoaded(event) {', start);
+  const end = patches.indexOf('\n    }\n', last);
+  bridge.run(patches.slice(start, end + 6) + '\nwindow._installSdkLoadMarks = _installSdkLoadMarks;');
+  return bridge.sandbox._installSdkLoadMarks;
+}
+
+// The harness has no setInterval; these are tracked so a check can see them
+// stop, and cleared at the end.
+function withIntervals(bridge) {
+  const intervals = new Set();
+  bridge.sandbox.setInterval = (fn, ms) => {
+    const timer = setInterval(fn, ms);
+    intervals.add(timer);
+    return timer;
+  };
+  bridge.sandbox.clearInterval = (timer) => { intervals.delete(timer); clearInterval(timer); };
+  return intervals;
+}
+
+function clearIntervals(intervals) {
+  for (const timer of intervals) clearInterval(timer);
+  intervals.clear();
+}
+
+class FakeDocument {
+  constructor(url) { this.URL = url; this.listeners = []; }
+  addEventListener(type, fn, capture) { this.listeners.push({ type, fn, capture }); }
+  load(target) { this.listeners.filter((l) => l.type === 'load').forEach((l) => l.fn({ target })); }
+}
+const script = (src) => ({ tagName: 'SCRIPT', src });
+const EDITOR_URL = 'tauri://localhost/web-apps/apps/documenteditor/main/index.html';
+// The docs API sets only the name of the editor's iframe.
+const editorFrame = () => ({ frameElement: { id: '', name: 'frameEditor' }, document: new FakeDocument('about:blank') });
+
 {
   const { bridge } = await loadWith(() => 'Ymlu');
-  const source = (await readFile(path.join(projectRoot, 'src/editor-patches.js'), 'utf8')).replace(/\r\n/g, '\n');
-  const start = source.indexOf('    function _installSdkLoadMarks(win) {');
-  const last = source.indexOf('    function _markSdkScriptLoaded(event) {', start);
-  const end = source.indexOf('\n    }\n', last);
-  bridge.run(source.slice(start, end + 6) + '\nwindow._installSdkLoadMarks = _installSdkLoadMarks;');
-  const install = bridge.sandbox._installSdkLoadMarks;
-
-  class FakeDocument {
-    constructor() { this.listeners = []; }
-    addEventListener(type, fn, capture) { this.listeners.push({ type, fn, capture }); }
-    load(target) { this.listeners.filter((l) => l.type === 'load').forEach((l) => l.fn({ target })); }
-  }
-  const script = (src) => ({ tagName: 'SCRIPT', src });
-  const frame = { document: new FakeDocument() };
+  const intervals = withIntervals(bridge);
+  const install = loadSdkLoadMarks(bridge);
+  const frame = editorFrame();
 
   bridge.run(`_eoOpenGranted(${JSON.stringify(REPORT)})`);
   await sleep(10);
@@ -152,7 +180,7 @@ async function loadWith(openFile) {
     JSON.stringify(blank.listeners.length));
 
   // The frame leaves its initial about:blank for the editor.
-  frame.document = new FakeDocument();
+  frame.document = new FakeDocument(EDITOR_URL);
   install(frame);
   check(results, 'the document the frame navigates to gets its own listener',
     frame.document.listeners.length === 1);
@@ -163,8 +191,62 @@ async function loadWith(openFile) {
   frame.document.load(script('tauri://localhost/sdkjs/word/sdk-all.js'));
   frame.document.load(script('tauri://localhost/sdkjs/word/sdk-all.js'));
   bridge.stopTimers();
+  clearIntervals(intervals);
   check(results, 'the two sdk scripts are marked once each when they load',
     phaseNames(bridge) === 'request,result,sdk_min,sdk_all', phaseNames(bridge));
+}
+
+// As the app reaches the frame: once on about:blank, and next only at the
+// frame's load event, after the editor's document has loaded its scripts.
+{
+  const { bridge } = await loadWith(() => 'Ymlu');
+  const intervals = withIntervals(bridge);
+  const install = loadSdkLoadMarks(bridge);
+  const frame = editorFrame();
+
+  bridge.run(`_eoOpenGranted(${JSON.stringify(REPORT)})`);
+  await sleep(10);
+  install(frame);
+  check(results, 'the frame on about:blank is polled for the editor document',
+    intervals.size === 1, String(intervals.size));
+  frame.document = new FakeDocument(EDITOR_URL);
+  await sleep(50);
+  check(results, 'the editor document gets the listener without another injection',
+    frame.document.listeners.length === 1, String(frame.document.listeners.length));
+  check(results, 'the frame is no longer polled once the editor document is there',
+    intervals.size === 0, String(intervals.size));
+
+  frame.document.load(script('tauri://localhost/sdkjs/word/sdk-all-min.js'));
+  frame.document.load(script('tauri://localhost/sdkjs/word/sdk-all.js'));
+  install(frame);
+  bridge.stopTimers();
+  clearIntervals(intervals);
+  check(results, 'its sdk scripts are marked before the frame load event',
+    phaseNames(bridge) === 'request,result,sdk_min,sdk_all', phaseNames(bridge));
+}
+
+// sdkjs's helper frames, and a window whose frame cannot be read, reach the
+// same install but are never polled.
+{
+  const { bridge } = await loadWith(() => 'Ymlu');
+  const intervals = withIntervals(bridge);
+  const install = loadSdkLoadMarks(bridge);
+  const helper = { frameElement: { id: 'asc_pasteFrame', name: '' }, document: new FakeDocument('about:blank') };
+  const unnamed = { frameElement: { id: '', name: '' }, document: new FakeDocument('about:blank') };
+  const topLevel = { frameElement: null, document: new FakeDocument('about:blank') };
+  const unreadable = {
+    get frameElement() { throw new Error('blocked'); },
+    document: new FakeDocument('about:blank'),
+  };
+  const windows = [helper, unnamed, topLevel, unreadable];
+
+  for (const win of windows) install(win);
+  check(results, 'an about:blank that is not the editor frame starts no polling',
+    intervals.size === 0, String(intervals.size));
+  check(results, 'those documents still get the load listener',
+    windows.every((win) => win.document.listeners.length === 1));
+  bridge.stopTimers();
+  clearIntervals(intervals);
 }
 
 finish(results);
