@@ -1,6 +1,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use crate::open_phases::OpenPhases;
 use crate::path_grants::{GrantKind, GrantedFile};
 use tauri::{Manager, State};
 
@@ -271,6 +272,19 @@ pub async fn open_pdf(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     token: String,
+    open_id: Option<String>,
+) -> Result<String, String> {
+    let mut phases = OpenPhases::begin(&state, open_id);
+    let opened = open_granted_pdf(app, state.clone(), token, &mut phases);
+    phases.finish(&state, &opened);
+    opened
+}
+
+fn open_granted_pdf(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+    phases: &mut OpenPhases,
 ) -> Result<String, String> {
     let input = pdf_to_open(&state.grants, &token)?;
     let claim = crate::new_window::claim_for_open(&state, &input)?;
@@ -292,6 +306,7 @@ pub async fn open_pdf(
     crate::recovery::end_session(&state, true);
     switch_document(&state)?;
     keep_opened_pdf(&state.temp_dir, &bytes)?;
+    phases.mark(&state, "copy");
 
     log_event(
         &state,
@@ -308,7 +323,9 @@ pub async fn open_pdf(
     *state.text_options.lock().unwrap() = None;
     super::recent::record(&app, &path);
 
-    Ok(STANDARD.encode(&bytes))
+    let b64 = STANDARD.encode(&bytes);
+    phases.mark(&state, "encode");
+    Ok(b64)
 }
 
 // The PDF the webview chose to open, by the token the open dialog, the launch
@@ -352,10 +369,24 @@ pub async fn open_file(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     token: String,
+    open_id: Option<String>,
+) -> Result<String, String> {
+    let mut phases = OpenPhases::begin(&state, open_id);
+    let opened = open_granted_file(app, state.clone(), token, &mut phases).await;
+    phases.finish(&state, &opened);
+    opened
+}
+
+async fn open_granted_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+    phases: &mut OpenPhases,
 ) -> Result<String, String> {
     let path = state.grants.resolve(&token, GrantKind::Open)?;
     let claim = crate::new_window::claim_for_open(&state, &path)?;
-    let opened = open_file_inner(app, state, path.to_string_lossy().to_string(), OpenKind::Edit).await;
+    let path_text = path.to_string_lossy().to_string();
+    let opened = open_file_inner(app, state, path_text, OpenKind::Edit, phases).await;
     // On success open_file_inner has published the file by now.
     drop(claim);
     opened
@@ -403,6 +434,7 @@ async fn open_file_inner(
     state: State<'_, AppState>,
     path: String,
     kind: OpenKind,
+    phases: &mut OpenPhases,
 ) -> Result<String, String> {
     let input = PathBuf::from(&path);
     let output = state.temp_dir.join("Editor.bin");
@@ -478,6 +510,7 @@ async fn open_file_inner(
                 .unwrap_or_default()
         ),
     );
+    phases.mark(&state, "start");
 
     // x2t reads a checked copy in the temp dir. current_file and the recent list
     // keep the original path, and saving keeps the original's options; only the
@@ -495,6 +528,7 @@ async fn open_file_inner(
         );
         error
     })?;
+    phases.mark(&state, "copy");
 
     let converted = super::converter::convert_file(
         &app,
@@ -515,6 +549,7 @@ async fn open_file_inner(
         );
         error
     })?;
+    phases.mark(&state, "convert");
 
     let bin_size = std::fs::metadata(&output)
         .map(|metadata| metadata.len())
@@ -541,6 +576,7 @@ async fn open_file_inner(
 
     let bin_data = std::fs::read(&output).map_err(|e| e.to_string())?;
     let b64 = STANDARD.encode(&bin_data);
+    phases.mark(&state, "encode");
 
     let opened = opened_state(kind, &input, opened_blank);
     set_current_file(&state, opened.current_file);
@@ -1244,7 +1280,8 @@ pub async fn create_new(
         .map_err(|e| e.to_string())?
         .join(template);
 
-    open_as_new_document(app, state, &template_path).await
+    let mut phases = OpenPhases::untracked();
+    open_as_new_document(app, state, &template_path, &mut phases).await
 }
 
 // A new document that starts as a copy of a template of the user's. The
@@ -1255,9 +1292,22 @@ pub async fn create_from_template(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     token: String,
+    open_id: Option<String>,
+) -> Result<String, String> {
+    let mut phases = OpenPhases::begin(&state, open_id);
+    let opened = new_from_granted_template(app, state.clone(), token, &mut phases).await;
+    phases.finish(&state, &opened);
+    opened
+}
+
+async fn new_from_granted_template(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    token: String,
+    phases: &mut OpenPhases,
 ) -> Result<String, String> {
     let template = template_source(&state.grants, &token)?;
-    open_as_new_document(app, state, &template).await
+    open_as_new_document(app, state, &template, phases).await
 }
 
 fn template_source(grants: &crate::path_grants::PathGrants, token: &str) -> Result<PathBuf, String> {
@@ -1274,12 +1324,13 @@ async fn open_as_new_document(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     source: &Path,
+    phases: &mut OpenPhases,
 ) -> Result<String, String> {
     set_current_file(&state, None);
     *state.save_suggestion.lock().unwrap() = None;
     crate::app_quit::mark_document_clean(&state);
     let source = source.to_string_lossy().to_string();
-    open_file_inner(app, state, source, OpenKind::NewFrom).await
+    open_file_inner(app, state, source, OpenKind::NewFrom, phases).await
 }
 
 #[tauri::command]
