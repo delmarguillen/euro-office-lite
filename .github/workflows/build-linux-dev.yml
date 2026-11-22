@@ -252,6 +252,13 @@ jobs:
           fi
           echo "::endgroup::"
 
+      # After this step the .deb in the bundle folder is the xz one: the steps
+      # below check and upload that file.
+      - name: Repack .deb with xz
+        run: |
+          DEB=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/deb" -maxdepth 1 -name '*.deb' -print -quit)
+          bash scripts/repack-deb-xz.sh "$DEB"
+
       - name: Check .deb layout
         run: |
           DEB=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/deb" -maxdepth 1 -name '*.deb' -print -quit)
