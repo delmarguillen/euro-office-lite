@@ -3,6 +3,14 @@
 // moves where a dialog starts. It gives the webview no access to the folder or
 // to anything in it: a file is still reached only with the token a dialog
 // hands out for it (path_grants.rs).
+//
+// Where each dialog starts:
+//   Save As, the document has a file       its file's folder
+//   Save As, the document has no file yet  the documents folder
+//   Open, Edit PDF                         the documents folder
+//   New from template                      the templates folder
+// A folder that is not set, is missing or cannot be read leaves the dialog
+// where the system puts it.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -62,8 +70,78 @@ impl DefaultFolders {
     }
 }
 
+// A dialog that can start in a folder from Settings.
+#[derive(Clone, Copy, Debug)]
+pub enum Dialog<'a> {
+    // Open and Edit PDF.
+    Open,
+    // New from template.
+    Template,
+    // Save As and Export. `own` is the file the document already has: the open
+    // document's, or the one a recovered document was saved to before.
+    SaveAs { own: Option<&'a Path> },
+}
+
+impl Dialog<'_> {
+    fn folder_kind(self) -> FolderKind {
+        match self {
+            Dialog::Open | Dialog::SaveAs { .. } => FolderKind::Documents,
+            Dialog::Template => FolderKind::Templates,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum StartFolder {
+    // Nothing decides: the dialog starts where the system puts it.
+    System,
+    Folder(PathBuf),
+    // The folder set in Settings is missing or cannot be read. The dialog
+    // starts where the system puts it and the setting stays: the folder may be
+    // on a drive that is not connected.
+    Unavailable(PathBuf),
+}
+
+// Where `dialog` starts. `is_readable` is asked only about a folder from
+// Settings: a document's own folder is used as it is.
+pub fn start_folder(
+    dialog: Dialog,
+    folders: &DefaultFolders,
+    is_readable: impl Fn(&Path) -> bool,
+) -> StartFolder {
+    if let Dialog::SaveAs { own: Some(file) } = dialog {
+        return match file.parent() {
+            Some(folder) => StartFolder::Folder(folder.to_path_buf()),
+            None => StartFolder::System,
+        };
+    }
+    let Some(folder) = folders.get(dialog.folder_kind()) else {
+        return StartFolder::System;
+    };
+    if !is_readable(folder) {
+        return StartFolder::Unavailable(folder.to_path_buf());
+    }
+    StartFolder::Folder(folder.to_path_buf())
+}
+
 fn is_readable_folder(folder: &Path) -> bool {
     std::fs::read_dir(folder).is_ok()
+}
+
+// The folder to give the dialog, if any.
+pub fn dialog_start(app: &AppHandle, dialog: Dialog) -> Option<PathBuf> {
+    match start_folder(dialog, &load(app), is_readable_folder) {
+        StartFolder::Folder(folder) => Some(folder),
+        StartFolder::System => None,
+        StartFolder::Unavailable(folder) => {
+            log(&format!(
+                "{} folder not available, the dialog starts without it: {}",
+                dialog.folder_kind().name(),
+                folder.display()
+            ));
+            None
+        }
+    }
 }
 
 fn log(line: &str) {
@@ -219,6 +297,26 @@ mod tests {
         }
     }
 
+    fn every_folder_is_readable(_: &Path) -> bool {
+        true
+    }
+
+    fn no_folder_is_readable(_: &Path) -> bool {
+        false
+    }
+
+    fn folder(path: &str) -> StartFolder {
+        StartFolder::Folder(PathBuf::from(path))
+    }
+
+    fn unavailable(path: &str) -> StartFolder {
+        StartFolder::Unavailable(PathBuf::from(path))
+    }
+
+    fn new_document() -> Dialog<'static> {
+        Dialog::SaveAs { own: None }
+    }
+
     fn temp_dir_for(test: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("eo-folders-{test}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -231,6 +329,102 @@ mod tests {
     }
 
     #[test]
+    fn save_as_of_a_document_with_a_file_starts_in_its_own_folder() {
+        let own = Path::new("/home/u/Work/Budget.pdf");
+        let dialog = Dialog::SaveAs { own: Some(own) };
+        let not_asked = |_: &Path| -> bool { panic!("a document's own folder is not checked") };
+        assert_eq!(start_folder(dialog, &both_set(), not_asked), folder("/home/u/Work"));
+        assert_eq!(
+            start_folder(dialog, &DefaultFolders::default(), not_asked),
+            folder("/home/u/Work")
+        );
+    }
+
+    #[test]
+    fn save_as_of_a_document_with_no_file_starts_in_the_documents_folder() {
+        assert_eq!(
+            start_folder(new_document(), &both_set(), every_folder_is_readable),
+            folder(DOCUMENTS)
+        );
+    }
+
+    #[test]
+    fn open_starts_in_the_documents_folder() {
+        assert_eq!(
+            start_folder(Dialog::Open, &both_set(), every_folder_is_readable),
+            folder(DOCUMENTS)
+        );
+    }
+
+    #[test]
+    fn new_from_template_starts_in_the_templates_folder() {
+        assert_eq!(
+            start_folder(Dialog::Template, &both_set(), every_folder_is_readable),
+            folder(TEMPLATES)
+        );
+    }
+
+    #[test]
+    fn each_folder_is_only_for_its_own_dialogs() {
+        let only_documents = DefaultFolders {
+            documents: Some(DOCUMENTS.to_string()),
+            templates: None,
+        };
+        assert_eq!(
+            start_folder(Dialog::Template, &only_documents, every_folder_is_readable),
+            StartFolder::System
+        );
+        let only_templates = DefaultFolders {
+            documents: None,
+            templates: Some(TEMPLATES.to_string()),
+        };
+        for dialog in [Dialog::Open, new_document()] {
+            assert_eq!(
+                start_folder(dialog, &only_templates, every_folder_is_readable),
+                StartFolder::System,
+                "{dialog:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn with_no_folder_set_the_system_decides() {
+        let not_asked = |_: &Path| -> bool { panic!("there is no folder to check") };
+        for dialog in [Dialog::Open, Dialog::Template, new_document()] {
+            assert_eq!(
+                start_folder(dialog, &DefaultFolders::default(), not_asked),
+                StartFolder::System,
+                "{dialog:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_read_leaves_the_dialog_to_the_system() {
+        let cases = [
+            (Dialog::Open, DOCUMENTS),
+            (new_document(), DOCUMENTS),
+            (Dialog::Template, TEMPLATES),
+        ];
+        for (dialog, set) in cases {
+            assert_eq!(
+                start_folder(dialog, &both_set(), no_folder_is_readable),
+                unavailable(set),
+                "{dialog:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_at_the_root_has_no_folder_of_its_own() {
+        let dialog = Dialog::SaveAs { own: Some(Path::new("/")) };
+        assert_eq!(
+            start_folder(dialog, &both_set(), every_folder_is_readable),
+            StartFolder::System
+        );
+    }
+
+    #[test]
     fn only_a_folder_that_is_there_is_readable() {
         let dir = temp_dir_for("readable");
         std::fs::write(dir.join("Letter.docx"), b"a file").unwrap();
@@ -240,6 +434,31 @@ mod tests {
         assert!(!is_readable_folder(&dir.join("Letter.docx")));
         assert!(!is_readable_folder(Path::new("")));
         assert!(!is_readable_folder(Path::new("/home/u/Doc\0uments")));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_folder_that_is_gone_is_not_used_and_stays_set() {
+        let dir = temp_dir_for("gone");
+        let store = dir.join(STORE_FILE);
+        let external = dir.join("External");
+        std::fs::create_dir_all(&external).unwrap();
+        set_folder(&store, FolderKind::Documents, Some(&external)).unwrap();
+        std::fs::remove_dir_all(&external).unwrap();
+
+        let folders = load_from(&store);
+        assert_eq!(
+            start_folder(Dialog::Open, &folders, is_readable_folder),
+            StartFolder::Unavailable(external.clone())
+        );
+        assert_eq!(load_from(&store).documents, Some(text(&external)));
+
+        std::fs::create_dir_all(&external).unwrap();
+        assert_eq!(
+            start_folder(Dialog::Open, &load_from(&store), is_readable_folder),
+            StartFolder::Folder(external)
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -405,9 +624,11 @@ mod tests {
         std::fs::write(&inside, b"kept").unwrap();
         let grants = PathGrants::default();
 
-        set_folder(&store, FolderKind::Documents, Some(&dir)).unwrap();
+        let folders = set_folder(&store, FolderKind::Documents, Some(&dir)).unwrap();
         set_folder(&store, FolderKind::Templates, Some(&dir)).unwrap();
+        let start = start_folder(Dialog::Open, &folders, is_readable_folder);
 
+        assert_eq!(start, StartFolder::Folder(dir.clone()));
         assert_eq!(grants.len(), 0);
         for kind in [GrantKind::Open, GrantKind::Save, GrantKind::Insert, GrantKind::Image] {
             assert!(grants.resolve(&text(&dir), kind).is_err());
