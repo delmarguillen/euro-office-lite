@@ -1419,6 +1419,45 @@ pub fn read_copies_root(identifier: &str) -> Option<PathBuf> {
     Some(user_cache_dir()?.join(identifier).join(READ_COPIES_DIR))
 }
 
+// An instance's folder for read copies: <root>/<instance id>, made on first
+// use.
+pub struct ReadCopies {
+    dir: PathBuf,
+}
+
+impl ReadCopies {
+    pub fn new(root: &Path, instance_id: &str) -> ReadCopies {
+        ReadCopies { dir: root.join(instance_id) }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    // Makes `dir` private to the user (0700): the instance's folder, or a
+    // folder directly inside it. The instance's folder is made first, so it
+    // never gets the permissions create_dir_all gives a parent.
+    #[cfg(unix)]
+    pub fn make_private(&self, dir: &Path) -> Result<(), String> {
+        let is_instance_dir = dir == self.dir;
+        if !is_instance_dir && dir.parent() != Some(self.dir.as_path()) {
+            return Err(format!("{} is not a folder of this instance", dir.display()));
+        }
+        let uid = unsafe { libc::getuid() };
+        ensure_private_dir(&self.dir, uid)?;
+        if is_instance_dir {
+            return Ok(());
+        }
+        ensure_private_dir(dir, uid)
+    }
+
+    // ensure_private_dir is Unix only.
+    #[cfg(not(unix))]
+    pub fn make_private(&self, _dir: &Path) -> Result<(), String> {
+        Err("no private folder on this platform".to_string())
+    }
+}
+
 // Removes the folders of instances whose folder under the temp root is gone:
 // sweep_dead_instances decides when an instance is dead.
 pub fn sweep_read_copies(read_copies: &Path, temp_root: &Path) -> Vec<String> {

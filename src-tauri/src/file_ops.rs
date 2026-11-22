@@ -17,7 +17,7 @@ pub struct AppState {
     pub font_root: PathBuf,
     // This instance's folder in the user's cache for a read copy the temp
     // root has no room for (converter::CopyPlaces). None without a cache.
-    pub read_copies: Option<PathBuf>,
+    pub read_copies: Option<crate::temp_layout::ReadCopies>,
     // Whether that cache is built yet (fonts_state.rs).
     pub fonts: std::sync::Arc<crate::fonts_state::FontsState>,
     pub instance: crate::temp_layout::Instance,
@@ -487,7 +487,7 @@ async fn open_file_inner(
     // conversion sees the copy.
     let places = super::converter::CopyPlaces {
         work_dir: &state.temp_dir,
-        spill_dir: state.read_copies.as_deref(),
+        spill: state.read_copies.as_ref().map(super::converter::Spill::in_instance_dir),
         volume: &super::converter::volume_of,
     };
     let input_copy = super::converter::prepare_editor_input_in(
@@ -1315,10 +1315,14 @@ pub async fn convert_for_insert(
         }
         None => None,
     };
-    let insert_spill = state.read_copies.as_ref().map(|dir| dir.join("insert"));
+    let insert_spill = state.read_copies.as_ref().map(|copies| copies.dir().join("insert"));
+    let spill = match (&state.read_copies, &insert_spill) {
+        (Some(read_copies), Some(dir)) => Some(super::converter::Spill { read_copies, dir }),
+        _ => None,
+    };
     let places = super::converter::CopyPlaces {
         work_dir: &insert_dir,
-        spill_dir: insert_spill.as_deref(),
+        spill,
         volume: &super::converter::volume_of,
     };
     let input_copy =

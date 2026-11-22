@@ -244,18 +244,31 @@ pub fn prepare_editor_input(
     text_kind: Option<crate::text_import::TextKind>,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<EditorInput, String> {
-    let places = CopyPlaces { work_dir, spill_dir: None, volume: &volume_of };
+    let places = CopyPlaces { work_dir, spill: None, volume: &volume_of };
     prepare_editor_input_in(source, &places, text_kind, text_options)
 }
 
 // Where the copy of an EditorInput may go. x2t always works in `work_dir`;
-// the copy goes in `spill_dir` (a folder in the user's cache) when the file
+// the copy goes in `spill` (a folder in the user's cache) when the file
 // system of `work_dir` has no room for both.
 pub struct CopyPlaces<'a> {
     pub work_dir: &'a std::path::Path,
-    pub spill_dir: Option<&'a std::path::Path>,
+    pub spill: Option<Spill<'a>>,
     // The file system of a folder, None when that cannot be told.
     pub volume: &'a (dyn Fn(&std::path::Path) -> Option<Volume> + Sync),
+}
+
+// A folder for one conversion's copy in the user's cache: the instance's
+// folder for read copies, or a folder directly inside it.
+pub struct Spill<'a> {
+    pub read_copies: &'a crate::temp_layout::ReadCopies,
+    pub dir: &'a std::path::Path,
+}
+
+impl<'a> Spill<'a> {
+    pub fn in_instance_dir(read_copies: &'a crate::temp_layout::ReadCopies) -> Spill<'a> {
+        Spill { read_copies, dir: read_copies.dir() }
+    }
 }
 
 // The file system a folder is on.
@@ -350,31 +363,21 @@ fn usable_spill_dir(
     work: Volume,
     places: &CopyPlaces,
 ) -> Option<std::path::PathBuf> {
-    let spill_dir = places.spill_dir?;
-    let spill = (places.volume)(spill_dir)?;
+    let spill = places.spill.as_ref()?;
+    let cache = (places.volume)(spill.dir)?;
     if work.free < x2t_work {
         return None;
     }
     // On one file system the copy and x2t's work come out of the same space.
-    let needed = match spill.device == work.device {
+    let needed = match cache.device == work.device {
         true => copy_len.saturating_add(x2t_work),
         false => copy_len,
     };
-    if spill.free < needed {
+    if cache.free < needed {
         return None;
     }
-    ensure_spill_dir(spill_dir).ok()?;
-    Some(spill_dir.to_path_buf())
-}
-
-#[cfg(unix)]
-fn ensure_spill_dir(dir: &std::path::Path) -> Result<(), String> {
-    crate::temp_layout::ensure_private_dir(dir, unsafe { libc::getuid() })
-}
-
-#[cfg(not(unix))]
-fn ensure_spill_dir(_dir: &std::path::Path) -> Result<(), String> {
-    Err("no private spill folder on this platform".to_string())
+    spill.read_copies.make_private(spill.dir).ok()?;
+    Some(spill.dir.to_path_buf())
 }
 
 pub const NO_SPACE_ERROR: &str = "Not enough free space to open this file";
@@ -876,8 +879,15 @@ mod tests {
         }
     }
 
+    fn read_copies_for(work_dir: &std::path::Path) -> crate::temp_layout::ReadCopies {
+        let root = work_dir.parent().unwrap().join("cache/read-copies");
+        crate::temp_layout::ReadCopies::new(&root, "1-1")
+    }
+
+    // The instance's own folder in the cache: where an opened document's copy
+    // goes.
     fn spill_dir_for(work_dir: &std::path::Path) -> std::path::PathBuf {
-        work_dir.parent().unwrap().join("cache/read-copies/1-1")
+        read_copies_for(work_dir).dir().to_path_buf()
     }
 
     fn prepare_with(
@@ -886,7 +896,9 @@ mod tests {
         spill_dir: &std::path::Path,
         volume: &(dyn Fn(&std::path::Path) -> Option<Volume> + Sync),
     ) -> Result<EditorInput, String> {
-        let places = CopyPlaces { work_dir, spill_dir: Some(spill_dir), volume };
+        let read_copies = read_copies_for(work_dir);
+        let spill = Spill { read_copies: &read_copies, dir: spill_dir };
+        let places = CopyPlaces { work_dir, spill: Some(spill), volume };
         let kind = crate::text_import::TextKind::for_path(original);
         let options = kind.map(|kind| crate::text_import::detect_file(original, kind).unwrap());
         prepare_editor_input_in(original, &places, kind, options)
@@ -932,6 +944,39 @@ mod tests {
         assert_eq!(mode & 0o077, 0);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn an_insert_before_an_open_leaves_the_instances_cache_folder_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let instance_dir = spill_dir_for(&work_dir);
+        let insert_dir = instance_dir.join("insert");
+        let free = space(&work_dir, Some(DOCX.len() as u64), Some(100 * MB));
+
+        let inserted = prepare_with(&original, &work_dir, &insert_dir, &free).unwrap();
+        let opened = prepare_with(&original, &work_dir, &instance_dir, &free).unwrap();
+
+        assert_eq!(inserted.path().parent(), Some(insert_dir.as_path()));
+        assert_eq!(opened.path().parent(), Some(instance_dir.as_path()));
+        for dir in [&instance_dir, &insert_dir] {
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", dir.display());
+        }
+    }
+
+    #[test]
+    fn a_spill_folder_outside_the_instances_is_not_used() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let elsewhere = work_dir.parent().unwrap().join("cache/elsewhere");
+        let free = space(&work_dir, Some(DOCX.len() as u64), Some(100 * MB));
+
+        let refused = prepare_with(&original, &work_dir, &elsewhere, &free);
+
+        let error = refused.err().expect("no folder for the copy");
+        assert!(error.starts_with(NO_SPACE_ERROR), "{}", error);
+        assert!(!elsewhere.exists());
+    }
+
     #[test]
     fn no_space_for_the_copy_anywhere_is_a_space_error_and_writes_nothing() {
         let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
@@ -957,7 +1002,9 @@ mod tests {
         let root = scratch_root();
         let (work_dir, spill_dir) = (root.join("work"), root.join("cache/read-copies/1-1"));
         let one_disk = |_: &std::path::Path| Some(Volume { device: WORK_DISK, free: 150 });
-        let places = CopyPlaces { work_dir: &work_dir, spill_dir: Some(&spill_dir), volume: &one_disk };
+        let read_copies = read_copies_for(&work_dir);
+        let spill = Spill { read_copies: &read_copies, dir: &spill_dir };
+        let places = CopyPlaces { work_dir: &work_dir, spill: Some(spill), volume: &one_disk };
 
         refused_for_space(choose_copy_dir(100, 100, &places));
 
@@ -969,7 +1016,9 @@ mod tests {
         let root = scratch_root();
         let (work_dir, spill_dir) = (root.join("work"), root.join("cache/read-copies/1-1"));
         let free = space(&work_dir, Some(99), Some(100 * MB));
-        let places = CopyPlaces { work_dir: &work_dir, spill_dir: Some(&spill_dir), volume: &free };
+        let read_copies = read_copies_for(&work_dir);
+        let spill = Spill { read_copies: &read_copies, dir: &spill_dir };
+        let places = CopyPlaces { work_dir: &work_dir, spill: Some(spill), volume: &free };
 
         refused_for_space(choose_copy_dir(100, 100, &places));
 
@@ -982,7 +1031,9 @@ mod tests {
         let root = scratch_root();
         let (work_dir, spill_dir) = (root.join("work"), root.join("cache/read-copies/1-1"));
         let free = space(&work_dir, Some(100), Some(100));
-        let places = CopyPlaces { work_dir: &work_dir, spill_dir: Some(&spill_dir), volume: &free };
+        let read_copies = read_copies_for(&work_dir);
+        let spill = Spill { read_copies: &read_copies, dir: &spill_dir };
+        let places = CopyPlaces { work_dir: &work_dir, spill: Some(spill), volume: &free };
 
         assert_eq!(choose_copy_dir(100, 100, &places), Ok(spill_dir));
     }

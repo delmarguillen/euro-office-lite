@@ -479,7 +479,9 @@ fn main() {
             temp_dir,
             temp_root: temp_root.clone(),
             font_root: font_root.clone(),
-            read_copies: read_copies_root.as_ref().map(|dir| dir.join(&instance_id)),
+            read_copies: read_copies_root
+                .as_ref()
+                .map(|root| temp_layout::ReadCopies::new(root, &instance_id)),
             fonts: fonts.clone(),
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
