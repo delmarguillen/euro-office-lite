@@ -1088,8 +1088,10 @@ mod tests {
     fn the_file_system_is_read_for_a_folder_that_does_not_exist_yet() {
         let root = scratch_root();
 
-        assert_eq!(volume_of(&root.join("not/yet")), volume_of(&root));
-        assert!(volume_of(&root).is_some());
+        // Other tests write while this one runs, so only the device is compared.
+        let device = |dir: &std::path::Path| volume_of(dir).map(|volume| volume.device);
+        assert_eq!(device(&root.join("not/yet")), device(&root));
+        assert!(device(&root).is_some());
     }
 
 
