@@ -33,6 +33,11 @@ const NVIDIA_SYS_MODULE: &str = "/sys/module/nvidia";
 // Created by the same module. Flatpak does not share /sys/module with the
 // sandbox, but it mounts its own /proc, where this file is still visible.
 const NVIDIA_PROC_VERSION: &str = "/proc/driver/nvidia/version";
+// The folder that holds the file above. Inside the Flatpak it stands in for
+// /sys/module: when it can be listed, a missing nvidia entry means no NVIDIA.
+const PROC_DRIVER_DIR: &str = "/proc/driver";
+// Flatpak creates this file at the root of every sandbox.
+const FLATPAK_INFO: &str = "/.flatpak-info";
 
 // Created in the app's config folder, next to recent-files.json.
 const SETTING_FILE: &str = "dmabuf-renderer.json";
@@ -59,6 +64,8 @@ pub struct Observed {
     pub setting: Setting,
     pub nvidia_proprietary_loaded: bool,
     pub module_list_readable: bool,
+    pub in_flatpak: bool,
+    pub proc_driver_readable: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,7 +76,7 @@ pub enum Reason {
     Setting,
     // NVIDIA's proprietary module is loaded: the flag is set.
     NvidiaProprietary,
-    // The loaded modules cannot be listed: the flag is set to be safe.
+    // The loaded drivers cannot be listed: the flag is set to be safe.
     UnknownDriver,
     // Another driver (Intel, AMD, nouveau...): the flag is not set.
     NotNeeded,
@@ -122,7 +129,7 @@ pub fn decide(observed: &Observed) -> Decision {
             reason: Reason::NvidiaProprietary,
         };
     }
-    if !observed.module_list_readable {
+    if !driver_list_readable(observed) {
         return Decision {
             value: Some("1"),
             reason: Reason::UnknownDriver,
@@ -132,6 +139,29 @@ pub fn decide(observed: &Observed) -> Decision {
         value: None,
         reason: Reason::NotNeeded,
     }
+}
+
+// Whether a missing NVIDIA entry can be trusted to mean "no NVIDIA". Outside
+// Flatpak that takes the module list; inside, /sys/module does not exist and
+// /proc/driver is what shows the proprietary module.
+fn driver_list_readable(observed: &Observed) -> bool {
+    if observed.in_flatpak {
+        return observed.proc_driver_readable;
+    }
+    observed.module_list_readable
+}
+
+// Which list the driver rule read, for the startup log: "sys" for
+// /sys/module, "proc" for /proc/driver inside the Flatpak. None when the user
+// or the setting decided.
+pub fn driver_source(observed: &Observed, reason: Reason) -> Option<&'static str> {
+    if matches!(reason, Reason::User | Reason::Setting) {
+        return None;
+    }
+    if observed.in_flatpak {
+        return Some("proc");
+    }
+    Some("sys")
 }
 
 // The setting read from the file, and the problem when the default was used
@@ -219,18 +249,24 @@ fn observe(setting: Setting) -> Observed {
     let nvidia_in_sys = Path::new(NVIDIA_SYS_MODULE).exists();
     let nvidia_in_proc = Path::new(NVIDIA_PROC_VERSION).exists();
     let module_list_readable = std::fs::read_dir(SYS_MODULE_DIR).is_ok();
+    let in_flatpak = Path::new(FLATPAK_INFO).exists();
+    let proc_driver_readable = std::fs::read_dir(PROC_DRIVER_DIR).is_ok();
     Observed {
         user_value,
         setting,
         nvidia_proprietary_loaded: nvidia_in_sys || nvidia_in_proc,
         module_list_readable,
+        in_flatpak,
+        proc_driver_readable,
     }
 }
 
-// What apply() decided, and the problem with the settings file if there was one.
+// What apply() decided, the list the driver rule read, and the problem with
+// the settings file if there was one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Applied {
     pub decision: Decision,
+    pub driver_source: Option<&'static str>,
     pub setting_problem: Option<&'static str>,
 }
 
@@ -248,6 +284,7 @@ pub fn apply(identifier: &str) -> Applied {
     }
     Applied {
         decision,
+        driver_source: driver_source(&observed, decision.reason),
         setting_problem: loaded.problem,
     }
 }
@@ -306,6 +343,17 @@ mod tests {
             setting: Setting::Auto,
             nvidia_proprietary_loaded: nvidia,
             module_list_readable: readable,
+            in_flatpak: false,
+            proc_driver_readable: true,
+        }
+    }
+
+    // Inside the Flatpak /sys/module does not exist, so it never reads.
+    fn in_flatpak(nvidia: bool, proc_driver_readable: bool) -> Observed {
+        Observed {
+            in_flatpak: true,
+            proc_driver_readable,
+            ..observed(None, nvidia, false)
         }
     }
 
@@ -374,7 +422,7 @@ mod tests {
 
     #[test]
     fn nvidia_seen_only_in_proc_sets_the_flag() {
-        // Flatpak: /sys/module is not shared, /proc/driver/nvidia is.
+        // /sys/module cannot be listed, /proc/driver/nvidia is there.
         let decision = decide(&observed(None, true, false));
         assert_eq!(
             decision,
@@ -408,6 +456,106 @@ mod tests {
                 reason: Reason::UnknownDriver
             }
         );
+    }
+
+    #[test]
+    fn flatpak_without_nvidia_leaves_the_flag_unset() {
+        let decision = decide(&in_flatpak(false, true));
+        assert_eq!(
+            decision,
+            Decision {
+                value: None,
+                reason: Reason::NotNeeded
+            }
+        );
+    }
+
+    #[test]
+    fn flatpak_with_nvidia_sets_the_flag() {
+        let decision = decide(&in_flatpak(true, true));
+        assert_eq!(
+            decision,
+            Decision {
+                value: Some("1"),
+                reason: Reason::NvidiaProprietary
+            }
+        );
+    }
+
+    #[test]
+    fn flatpak_without_proc_driver_sets_the_flag() {
+        let decision = decide(&in_flatpak(false, false));
+        assert_eq!(
+            decision,
+            Decision {
+                value: Some("1"),
+                reason: Reason::UnknownDriver
+            }
+        );
+    }
+
+    #[test]
+    fn flatpak_does_not_decide_by_the_module_list() {
+        let observed = Observed {
+            module_list_readable: true,
+            ..in_flatpak(false, false)
+        };
+        let decision = decide(&observed);
+        assert_eq!(
+            decision,
+            Decision {
+                value: Some("1"),
+                reason: Reason::UnknownDriver
+            }
+        );
+    }
+
+    #[test]
+    fn outside_flatpak_proc_driver_does_not_stand_in_for_the_module_list() {
+        let decision = decide(&observed(None, false, false));
+        assert_eq!(
+            decision,
+            Decision {
+                value: Some("1"),
+                reason: Reason::UnknownDriver
+            }
+        );
+    }
+
+    #[test]
+    fn outside_flatpak_an_unreadable_proc_driver_changes_nothing() {
+        let observed = Observed {
+            proc_driver_readable: false,
+            ..observed(None, false, true)
+        };
+        let decision = decide(&observed);
+        assert_eq!(
+            decision,
+            Decision {
+                value: None,
+                reason: Reason::NotNeeded
+            }
+        );
+    }
+
+    #[test]
+    fn driver_source_names_the_list_the_rule_read() {
+        let host = observed(None, false, true);
+        let sandbox = in_flatpak(false, true);
+        assert_eq!(driver_source(&host, Reason::NotNeeded), Some("sys"));
+        assert_eq!(driver_source(&host, Reason::UnknownDriver), Some("sys"));
+        assert_eq!(driver_source(&sandbox, Reason::NotNeeded), Some("proc"));
+        assert_eq!(
+            driver_source(&sandbox, Reason::NvidiaProprietary),
+            Some("proc")
+        );
+    }
+
+    #[test]
+    fn driver_source_is_left_out_when_the_user_or_the_setting_decided() {
+        let sandbox = in_flatpak(false, true);
+        assert_eq!(driver_source(&sandbox, Reason::User), None);
+        assert_eq!(driver_source(&sandbox, Reason::Setting), None);
     }
 
     #[test]

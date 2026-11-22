@@ -393,6 +393,9 @@ fn main() {
         let dmabuf_value = std::env::var(dmabuf_default::ENV_NAME).ok();
         let mut dmabuf_field =
             dmabuf_default::log_field(dmabuf_value.as_deref(), dmabuf.decision.reason);
+        if let Some(source) = dmabuf.driver_source {
+            dmabuf_field.push_str(&format!(" source={}", source));
+        }
         if let Some(problem) = dmabuf.setting_problem {
             dmabuf_field.push_str(&format!(" setting_file={}", problem));
         }
