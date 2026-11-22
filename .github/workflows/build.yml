@@ -820,11 +820,11 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.local/share/flatpak
-          key: flatpak-runtime-gnome-49-builder-${{ runner.os }}
+          key: flatpak-runtime-gnome-51-builder-${{ runner.os }}
 
       - name: Install GNOME runtime and SDK
         run: |
-          flatpak install -y --noninteractive --user flathub org.gnome.Platform//49 org.gnome.Sdk//49
+          flatpak install -y --noninteractive --user flathub org.gnome.Platform//51 org.gnome.Sdk//51
 
       - name: Import GPG key
         if: startsWith(github.ref, 'refs/tags/v')
