@@ -7,7 +7,6 @@ mod clipboard;
 mod converter;
 mod dictionaries;
 mod dictionary_import;
-#[cfg(target_os = "linux")]
 mod dmabuf_default;
 mod file_dialogs;
 mod file_ops;
@@ -318,14 +317,13 @@ fn copy_source(state: &AppState, src_path: &str) -> Result<std::path::PathBuf, S
 }
 
 fn main() {
-    // WEBKIT_DISABLE_DMABUF_RENDERER=1 only with NVIDIA's proprietary driver
-    // (dmabuf_default.rs). Decided before anything starts WebKitGTK; a value the
-    // user set is left as it is.
-    #[cfg(target_os = "linux")]
-    let dmabuf = dmabuf_default::apply();
-
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut context = tauri::generate_context!();
+
+    // WEBKIT_DISABLE_DMABUF_RENDERER is decided here, before anything starts
+    // WebKitGTK (dmabuf_default.rs). A value the user set is left as it is.
+    #[cfg(target_os = "linux")]
+    let dmabuf = dmabuf_default::apply(&context.config().identifier);
     // The user-facing version comes from tauri.conf.json; Cargo's crate version stays independent.
     let app_version = context.package_info().version.clone();
 
@@ -393,7 +391,11 @@ fn main() {
         let desktop = std::env::var("XDG_CURRENT_DESKTOP")
             .unwrap_or_else(|_| "unknown".to_string());
         let dmabuf_value = std::env::var(dmabuf_default::ENV_NAME).ok();
-        let dmabuf_field = dmabuf_default::log_field(dmabuf_value.as_deref(), dmabuf.reason);
+        let mut dmabuf_field =
+            dmabuf_default::log_field(dmabuf_value.as_deref(), dmabuf.decision.reason);
+        if let Some(problem) = dmabuf.setting_problem {
+            dmabuf_field.push_str(&format!(" setting_file={}", problem));
+        }
         log_startup(&format!(
             "Linux distro={} session={} desktop={} {}",
             distro, session, desktop, dmabuf_field
@@ -534,6 +536,8 @@ fn main() {
             recent::recent_files_state,
             recent::set_recent_files_enabled,
             recent::clear_recent_files,
+            dmabuf_default::dmabuf_setting_state,
+            dmabuf_default::set_dmabuf_setting,
             recovery::recovery_begin,
             recovery::save_changes,
             recovery::recovery_mark_saved,

@@ -39,6 +39,8 @@ const APP_COMMANDS: &[&str] = &[
     "recent_files_state",
     "set_recent_files_enabled",
     "clear_recent_files",
+    "dmabuf_setting_state",
+    "set_dmabuf_setting",
     "recovery_begin",
     "save_changes",
     "recovery_mark_saved",
