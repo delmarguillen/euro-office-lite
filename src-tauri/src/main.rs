@@ -5,6 +5,7 @@ mod bridge;
 mod cfb_directory;
 mod clipboard;
 mod converter;
+mod default_folders;
 mod dictionaries;
 mod dictionary_import;
 mod dmabuf_default;
@@ -543,6 +544,9 @@ fn main() {
             recent::clear_recent_files,
             dmabuf_default::dmabuf_setting_state,
             dmabuf_default::set_dmabuf_setting,
+            default_folders::default_folders_state,
+            default_folders::pick_default_folder,
+            default_folders::clear_default_folder,
             recovery::recovery_begin,
             recovery::save_changes,
             recovery::recovery_mark_saved,
