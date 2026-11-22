@@ -709,10 +709,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Copy x2t to binaries for DoctRenderer PDF path
+      # The .deb ships x2t once, as the resource binaries/x2t, next to its
+      # libraries and DoctRenderer.config. The build has no sidecar
+      # (externalBin is empty in its --config).
+      - name: Place x2t in binaries as a resource
         run: |
-          cp "src-tauri/binaries/x2t-${{ matrix.target }}" "src-tauri/binaries/x2t"
-          echo "x2t resource copy created ($(wc -c < src-tauri/binaries/x2t) bytes)"
+          mv "src-tauri/binaries/x2t-${{ matrix.target }}" "src-tauri/binaries/x2t"
+          echo "x2t resource in place ($(wc -c < src-tauri/binaries/x2t) bytes)"
 
       - name: Prepare DoctRenderer resources
         env:
@@ -744,8 +747,13 @@ jobs:
           set -o pipefail
           npx tauri build \
             --target ${{ matrix.target }} \
-            --config '{"bundle":{"targets":["deb"],"icon":["icons/icon.png","icons/128x128.png","icons/128x128@2x.png","icons/32x32.png","icons/256x256.png"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/cell/*","editors/sdkjs/slide/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
+            --config '{"bundle":{"targets":["deb"],"externalBin":[],"icon":["icons/icon.png","icons/128x128.png","icons/128x128@2x.png","icons/32x32.png","icons/256x256.png"],"resources":["binaries/*.so","binaries/*.so.*","binaries/*.config","binaries/*.dat","binaries/*.js","binaries/x2t","binaries/fonts/*","editors/sdkjs/word/*","editors/sdkjs/cell/*","editors/sdkjs/slide/*","editors/sdkjs/common/Native/*","editors/sdkjs/common/AllFonts.js","editors/sdkjs/common/libfont/engine/*","editors/web-apps/vendor/xregexp/*","templates/*"]}}' \
             2>&1 | tee /tmp/tauri-build.log
+
+      - name: Check .deb layout
+        run: |
+          DEB=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/deb" -maxdepth 1 -name '*.deb' -print -quit)
+          bash scripts/check-linux-deb.sh "$DEB"
 
       - name: Verify packaged Linux PDF conversion
         run: |
