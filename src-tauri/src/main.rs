@@ -5,6 +5,7 @@ mod bridge;
 mod cfb_directory;
 mod clipboard;
 mod converter;
+mod default_folders;
 mod dictionaries;
 mod dictionary_import;
 mod file_dialogs;
@@ -536,6 +537,9 @@ fn main() {
             recent::recent_files_state,
             recent::set_recent_files_enabled,
             recent::clear_recent_files,
+            default_folders::default_folders_state,
+            default_folders::pick_default_folder,
+            default_folders::clear_default_folder,
             recovery::recovery_begin,
             recovery::save_changes,
             recovery::recovery_mark_saved,
