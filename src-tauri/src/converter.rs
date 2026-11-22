@@ -932,6 +932,7 @@ mod tests {
         assert!(!copy.exists(), "the copy in the cache is removed after x2t");
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_copy_in_the_cache_is_in_a_private_folder() {
         use std::os::unix::fs::PermissionsExt;
@@ -1076,6 +1077,7 @@ mod tests {
         assert_eq!(input.path().parent(), Some(spill_dir.as_path()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_file_system_is_read_for_a_folder_that_does_not_exist_yet() {
         let root = scratch_root();
