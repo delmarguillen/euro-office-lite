@@ -20,11 +20,11 @@ Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. **No
 
 | Platform | Package | Installer size |
 |---|---|---|
-| [Windows](#windows) | x64, ARM64 | ~89 MB |
-| [macOS](#macos) | Apple Silicon and Intel, signed and notarized | ~123-129 MB |
-| [Linux x64](#linux) | .deb | ~137 MB |
-| [Linux ARM64](#linux) | .deb | ~133 MB |
-| [Linux x64](#linux) | Flatpak | ~92 MB |
+| [Windows](#windows) | x64, ARM64 | ~86 MB |
+| [macOS](#macos) | Apple Silicon and Intel, signed and notarized | ~119-126 MB |
+| [Linux x64](#linux) | .deb | ~89 MB |
+| [Linux ARM64](#linux) | .deb | ~84 MB |
+| [Linux x64](#linux) | Flatpak | ~89 MB |
 
 > **Alpha**: This project is in early development. Core features work (create, open, edit, save, PDF export), but expect rough edges. Printing sends the document to a printer on Windows and opens it in the system PDF viewer on macOS and Linux.
 
