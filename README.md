@@ -82,7 +82,7 @@ flatpak override --user --env=EURO_OFFICE_LITE_TITLE_BAR=system org.eurooffice.L
 
 With the `.deb`, copy the desktop file to `~/.local/share/applications/` and change its `Exec` line to `Exec=euro-office-lite --system-title-bar %F`.
 
-**Slow scrolling.** The DMABUF renderer is off by default on Linux because it made text look jagged with the proprietary NVIDIA driver ([#27](https://github.com/delmarguillen/euro-office-lite/issues/27)). On other GPUs, scrolling can be smoother with it on. To try it with the `.deb`, start the app from a terminal with `WEBKIT_DISABLE_DMABUF_RENDERER=0 euro-office-lite`.
+**Slow scrolling or jagged text.** Since 0.18.3, the app turns off WebKitGTK's DMABUF renderer on Linux only when the proprietary NVIDIA driver is loaded, because with it text could look jagged ([#27](https://github.com/delmarguillen/euro-office-lite/issues/27)). On other GPUs it stays on, which made scrolling smoother on an Intel GPU ([#65](https://github.com/delmarguillen/euro-office-lite/issues/65)). To change it, use the "Hardware acceleration" option in Settings (Automatic, On, Off); it applies after a restart. If you start the app with `WEBKIT_DISABLE_DMABUF_RENDERER` set, that value wins over the setting.
 
 ## Known issues
 
