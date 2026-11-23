@@ -161,6 +161,7 @@
     .settings-panel {
       position: absolute; top: calc(100% + 0.4rem); right: 0;
       width: min(272px, 88vw); padding: 0.4rem 0.9rem;
+      max-height: calc(100vh - 4.5rem); overflow-y: auto;
       background: var(--pop); border: 1px solid var(--line); border-radius: 16px;
       box-shadow: 0 24px 60px var(--shadow);
     }
@@ -201,6 +202,10 @@
     .settings-panel select:focus { outline: none; border-color: var(--focus); }
     .settings-panel .recent-clear { padding-left: 0; }
     .settings-panel .recent-toggle { margin-top: 0; }
+    .settings-panel .settings-note { margin: 0.45rem 0 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
+    /* The whole path shows, on as many lines as it needs. */
+    .folder-path { font-size: 12px; color: var(--fg); overflow-wrap: anywhere; margin-bottom: 0.25rem; }
+    .folder-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
     .btn:focus-visible,
     .recent-item:focus-visible,
     .recent-clear:focus-visible,
@@ -331,12 +336,42 @@
             <span data-i18n="rememberRecent">Remember recent files</span>
           </label>
         </div>
+        <div class="settings-section">
+          <span class="settings-label" data-i18n="documentsFolder">Documents folder</span>
+          <p class="folder-path" id="documents-folder-path"></p>
+          <div class="folder-actions" role="group" data-i18n-label="documentsFolder" aria-label="Documents folder">
+            <button type="button" class="recent-clear" id="documents-folder-choose"
+                    data-i18n="chooseFolder">Choose…</button>
+            <button type="button" class="recent-clear" id="documents-folder-reset"
+                    data-i18n="resetFolder" hidden>Reset</button>
+          </div>
+        </div>
+        <div class="settings-section">
+          <span class="settings-label" data-i18n="templatesFolder">Templates folder</span>
+          <p class="folder-path" id="templates-folder-path"></p>
+          <div class="folder-actions" role="group" data-i18n-label="templatesFolder" aria-label="Templates folder">
+            <button type="button" class="recent-clear" id="templates-folder-choose"
+                    data-i18n="chooseFolder">Choose…</button>
+            <button type="button" class="recent-clear" id="templates-folder-reset"
+                    data-i18n="resetFolder" hidden>Reset</button>
+          </div>
+        </div>
+        <div class="settings-section" id="dmabuf-section" hidden>
+          <label class="settings-label" for="dmabuf-select" data-i18n="dmabufSetting">Hardware acceleration</label>
+          <select id="dmabuf-select">
+            <option value="auto" data-i18n="dmabufAuto">Automatic</option>
+            <option value="on" data-i18n="dmabufOn">On</option>
+            <option value="off" data-i18n="dmabufOff">Off</option>
+          </select>
+          <p class="settings-note" data-i18n="dmabufRestart">Applies after restarting the app.</p>
+          <p class="settings-note" id="dmabuf-env" data-i18n="dmabufEnvSet" hidden>This app was started with WEBKIT_DISABLE_DMABUF_RENDERER set. That value is used and this setting is ignored.</p>
+        </div>
       </div>
     </div>
     <div class="start-inner">
       <div class="brand">
         <h1 aria-label="EOLite">EO<span class="wordmark-lite">Lite</span></h1>
-        <p class="version">v0.18.2-alpha</p>
+        <p class="version">v0.18.3-alpha</p>
         <div class="brand-rule" aria-hidden="true"></div>
       </div>
 

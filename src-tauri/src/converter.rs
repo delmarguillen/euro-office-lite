@@ -55,7 +55,7 @@ pub async fn convert_file(
     );
     write_file(&params_path, &xml)?;
 
-    // The std command keeps what the shell plugin set up: the sidecar path and,
+    // The std command keeps what the shell plugin set up: the path of x2t and,
     // on Windows, CREATE_NO_WINDOW.
     let mut command: std::process::Command = x2t_command(app, &binaries_dir)?
         .current_dir(&binaries_dir)
@@ -151,19 +151,20 @@ where
     .map_err(|e| format!("PDF conversion task failed: {}", e))?
 }
 
-// Windows runs the same x2t as the PDF export, the one in binaries\ (see
-// x2t_task::find_x2t); Linux and macOS keep the sidecar.
-#[cfg(target_os = "windows")]
+// Windows and Linux run the same x2t as the PDF export, the one in binaries/
+// (see x2t_task::find_x2t); macOS keeps the sidecar.
+#[cfg(not(target_os = "macos"))]
 fn x2t_command(
     app: &AppHandle,
     binaries_dir: &std::path::Path,
 ) -> Result<tauri_plugin_shell::process::Command, String> {
     let binaries_dir = x2t_task::strip_extended_prefix(binaries_dir);
-    let x2t = x2t_task::find_x2t(&binaries_dir, None)?;
+    let exe_dir = crate::app_exe_dir();
+    let x2t = x2t_task::find_x2t(&binaries_dir, exe_dir.as_deref())?;
     Ok(app.shell().command(x2t))
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 fn x2t_command(
     app: &AppHandle,
     _binaries_dir: &std::path::Path,
@@ -221,8 +222,8 @@ pub struct EditorInput {
 }
 
 impl EditorInput {
-    // The last copy made: an ODF package's references are emptied in a copy of
-    // the first one.
+    // The last copy made: an OOXML package's root targets are rewritten, and an
+    // ODF package's references emptied, in a copy of the one before.
     pub fn path(&self) -> &std::path::Path {
         self.copies.last().expect("an EditorInput holds at least one copy")
     }
@@ -237,10 +238,52 @@ impl Drop for EditorInput {
 }
 
 // The TXT and CSV copy (text_import::prepare_read_copy) is already one; every
-// other document gets a copy of its own.
+// other document gets a copy of its own. The copy goes in `work_dir`.
 pub fn prepare_editor_input(
     source: &std::path::Path,
     work_dir: &std::path::Path,
+    text_kind: Option<crate::text_import::TextKind>,
+    text_options: Option<crate::text_import::TextOptions>,
+) -> Result<EditorInput, String> {
+    let places = CopyPlaces { work_dir, spill: None, volume: &volume_of };
+    prepare_editor_input_in(source, &places, text_kind, text_options)
+}
+
+// Where the copy of an EditorInput may go. x2t always works in `work_dir`;
+// the copy goes in `spill` (a folder in the user's cache) when the file
+// system of `work_dir` has no room for both.
+pub struct CopyPlaces<'a> {
+    pub work_dir: &'a std::path::Path,
+    pub spill: Option<Spill<'a>>,
+    // The file system of a folder, None when that cannot be told.
+    pub volume: &'a (dyn Fn(&std::path::Path) -> Option<Volume> + Sync),
+}
+
+// A folder for one conversion's copy in the user's cache: the instance's
+// folder for read copies, or a folder directly inside it.
+pub struct Spill<'a> {
+    pub read_copies: &'a crate::temp_layout::ReadCopies,
+    pub dir: &'a std::path::Path,
+}
+
+impl<'a> Spill<'a> {
+    pub fn in_instance_dir(read_copies: &'a crate::temp_layout::ReadCopies) -> Spill<'a> {
+        Spill { read_copies, dir: read_copies.dir() }
+    }
+}
+
+// The file system a folder is on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Volume {
+    // st_dev: the same for two folders on one file system.
+    pub device: u64,
+    // Bytes free for this user.
+    pub free: u64,
+}
+
+pub fn prepare_editor_input_in(
+    source: &std::path::Path,
+    places: &CopyPlaces,
     text_kind: Option<crate::text_import::TextKind>,
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<EditorInput, String> {
@@ -248,16 +291,138 @@ pub fn prepare_editor_input(
     if !x2t_task::is_converted_extension(source) {
         return Err(not_valid_error(source));
     }
-    let mut input = read_copy(source, work_dir, text_kind, text_options)?;
+    let copy_dir = copy_dir_for(source, places, text_kind.is_some())?;
+    let mut input = read_copy(source, &copy_dir, text_kind, text_options)?;
+    let mut content = x2t_task::ContentSample::read(input.path()).map_err(|e| e.to_string())?;
+    // The checks below read the copy x2t reads.
+    if let Some(root_copy) = crate::package_relationships::root_targets_copy(input.path(), &content, &copy_dir) {
+        input.copies.push(root_copy);
+        content = x2t_task::ContentSample::read(input.path()).map_err(|e| e.to_string())?;
+    }
     let copy = input.path().to_path_buf();
-    let content = x2t_task::ContentSample::read(&copy).map_err(|e| e.to_string())?;
     if check_container_content(&copy, &content)? == PackageFilters::Skipped {
         return Ok(input);
     }
-    if let Some(package_copy) = package_images_copy(&copy, &content, work_dir)? {
+    if let Some(package_copy) = package_images_copy(&copy, &content, &copy_dir)? {
         input.copies.push(package_copy);
     }
     Ok(input)
+}
+
+// A TXT or CSV copy is UTF-32: up to four bytes for each byte of the file.
+const TEXT_COPY_FACTOR: u64 = 4;
+
+fn copy_dir_for(
+    source: &std::path::Path,
+    places: &CopyPlaces,
+    is_text: bool,
+) -> Result<std::path::PathBuf, String> {
+    let source_len = std::fs::metadata(source)
+        .map_err(|e| format!("read copy: {}", e))?
+        .len();
+    let copy_len = match is_text {
+        true => source_len.saturating_mul(TEXT_COPY_FACTOR),
+        false => source_len,
+    };
+    // What x2t unpacks and writes is taken to be about the size of the file.
+    let copy_dir = choose_copy_dir(copy_len, source_len, places)?;
+    if copy_dir != places.work_dir {
+        log_spilled_copy(copy_len, &copy_dir);
+    }
+    Ok(copy_dir)
+}
+
+fn log_spilled_copy(copy_len: u64, copy_dir: &std::path::Path) {
+    crate::temp_layout::append_log(&format!(
+        "[OPEN] read copy of {} bytes in {}: no room in the temp folder",
+        copy_len,
+        copy_dir.display()
+    ));
+}
+
+// The work folder when its file system holds the copy and x2t's work, or when
+// that cannot be told; else the spill folder when it holds the copy and the
+// work folder still holds x2t's work. Err when neither does: nothing is
+// written.
+pub fn choose_copy_dir(
+    copy_len: u64,
+    x2t_work: u64,
+    places: &CopyPlaces,
+) -> Result<std::path::PathBuf, String> {
+    let work_dir = places.work_dir.to_path_buf();
+    let Some(work) = (places.volume)(places.work_dir) else {
+        return Ok(work_dir);
+    };
+    let both = copy_len.saturating_add(x2t_work);
+    if work.free >= both {
+        return Ok(work_dir);
+    }
+    if let Some(spill_dir) = usable_spill_dir(copy_len, x2t_work, work, places) {
+        return Ok(spill_dir);
+    }
+    Err(no_space_error(both, places.work_dir))
+}
+
+fn usable_spill_dir(
+    copy_len: u64,
+    x2t_work: u64,
+    work: Volume,
+    places: &CopyPlaces,
+) -> Option<std::path::PathBuf> {
+    let spill = places.spill.as_ref()?;
+    let cache = (places.volume)(spill.dir)?;
+    if work.free < x2t_work {
+        return None;
+    }
+    // On one file system the copy and x2t's work come out of the same space.
+    let needed = match cache.device == work.device {
+        true => copy_len.saturating_add(x2t_work),
+        false => copy_len,
+    };
+    if cache.free < needed {
+        return None;
+    }
+    spill.read_copies.make_private(spill.dir).ok()?;
+    Some(spill.dir.to_path_buf())
+}
+
+pub const NO_SPACE_ERROR: &str = "Not enough free space to open this file";
+
+fn no_space_error(needed: u64, dir: &std::path::Path) -> String {
+    let megabytes = needed.div_ceil(1_000_000);
+    format!(
+        "{}: it needs about {} MB in {}",
+        NO_SPACE_ERROR,
+        megabytes,
+        dir.display()
+    )
+}
+
+// The file system of `dir`, or of the nearest folder above it that exists,
+// with the space statvfs reports for this user.
+#[cfg(unix)]
+pub fn volume_of(dir: &std::path::Path) -> Option<Volume> {
+    use std::os::unix::fs::MetadataExt;
+    let existing = dir.ancestors().find(|folder| folder.exists())?;
+    let device = std::fs::metadata(existing).ok()?.dev();
+    let free = statvfs_free(existing)?;
+    Some(Volume { device, free })
+}
+
+#[cfg(unix)]
+fn statvfs_free(dir: &std::path::Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut stats) } != 0 {
+        return None;
+    }
+    Some((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
+}
+
+#[cfg(not(unix))]
+pub fn volume_of(_dir: &std::path::Path) -> Option<Volume> {
+    None
 }
 
 fn read_copy(
@@ -705,6 +870,231 @@ mod tests {
 
     const DOCX: &[u8] = include_bytes!("../../tests/corpus/rich.docx");
 
+    const MB: u64 = 1_000_000;
+
+    const WORK_DISK: u64 = 1;
+    const CACHE_DISK: u64 = 2;
+
+    // Two file systems with the free space a test sets: `work` for the work
+    // folder's, `spill` for the one anything else is on.
+    fn space(work_dir: &std::path::Path, work: Option<u64>, spill: Option<u64>)
+        -> impl Fn(&std::path::Path) -> Option<Volume> + Sync + '_ {
+        move |dir| match dir == work_dir {
+            true => work.map(|free| Volume { device: WORK_DISK, free }),
+            false => spill.map(|free| Volume { device: CACHE_DISK, free }),
+        }
+    }
+
+    fn read_copies_for(work_dir: &std::path::Path) -> crate::temp_layout::ReadCopies {
+        let root = work_dir.parent().unwrap().join("cache/read-copies");
+        crate::temp_layout::ReadCopies::new(&root, "1-1")
+    }
+
+    // The instance's own folder in the cache: where an opened document's copy
+    // goes.
+    fn spill_dir_for(work_dir: &std::path::Path) -> std::path::PathBuf {
+        read_copies_for(work_dir).dir().to_path_buf()
+    }
+
+    fn prepare_with(
+        original: &std::path::Path,
+        work_dir: &std::path::Path,
+        spill_dir: &std::path::Path,
+        volume: &(dyn Fn(&std::path::Path) -> Option<Volume> + Sync),
+    ) -> Result<EditorInput, String> {
+        let read_copies = read_copies_for(work_dir);
+        let spill = Spill { read_copies: &read_copies, dir: spill_dir };
+        let places = CopyPlaces { work_dir, spill: Some(spill), volume };
+        let kind = crate::text_import::TextKind::for_path(original);
+        let options = kind.map(|kind| crate::text_import::detect_file(original, kind).unwrap());
+        prepare_editor_input_in(original, &places, kind, options)
+    }
+
+    #[test]
+    fn the_copy_stays_in_the_work_folder_when_it_holds_the_copy_and_the_x2t_work() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, Some(2 * DOCX.len() as u64), Some(100 * MB));
+
+        let input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        assert!(!spill_dir.exists());
+    }
+
+    #[test]
+    fn the_copy_goes_to_the_cache_when_the_work_folder_cannot_hold_it_and_the_x2t_work() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, Some(2 * DOCX.len() as u64 - 1), Some(100 * MB));
+
+        let input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        assert_eq!(input.path().parent(), Some(spill_dir.as_path()));
+        assert_eq!(std::fs::read(input.path()).unwrap(), DOCX);
+        assert_eq!(files_in(&work_dir), 0);
+        let copy = input.path().to_path_buf();
+        drop(input);
+        assert!(!copy.exists(), "the copy in the cache is removed after x2t");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_copy_in_the_cache_is_in_a_private_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, Some(DOCX.len() as u64), Some(100 * MB));
+
+        let _input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        let mode = std::fs::metadata(&spill_dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_insert_before_an_open_leaves_the_instances_cache_folder_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let instance_dir = spill_dir_for(&work_dir);
+        let insert_dir = instance_dir.join("insert");
+        let free = space(&work_dir, Some(DOCX.len() as u64), Some(100 * MB));
+
+        let inserted = prepare_with(&original, &work_dir, &insert_dir, &free).unwrap();
+        let opened = prepare_with(&original, &work_dir, &instance_dir, &free).unwrap();
+
+        assert_eq!(inserted.path().parent(), Some(insert_dir.as_path()));
+        assert_eq!(opened.path().parent(), Some(instance_dir.as_path()));
+        for dir in [&instance_dir, &insert_dir] {
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", dir.display());
+        }
+    }
+
+    #[test]
+    fn a_spill_folder_outside_the_instances_is_not_used() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let elsewhere = work_dir.parent().unwrap().join("cache/elsewhere");
+        let free = space(&work_dir, Some(DOCX.len() as u64), Some(100 * MB));
+
+        let refused = prepare_with(&original, &work_dir, &elsewhere, &free);
+
+        let error = refused.err().expect("no folder for the copy");
+        assert!(error.starts_with(NO_SPACE_ERROR), "{}", error);
+        assert!(!elsewhere.exists());
+    }
+
+    #[test]
+    fn no_space_for_the_copy_anywhere_is_a_space_error_and_writes_nothing() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, Some(DOCX.len() as u64 - 1), Some(DOCX.len() as u64 - 1));
+
+        let refused = prepare_with(&original, &work_dir, &spill_dir, &free);
+
+        let error = refused.err().expect("no room for the copy");
+        assert!(error.starts_with(NO_SPACE_ERROR), "{}", error);
+        assert_eq!(files_in(&work_dir), 0);
+        assert!(!spill_dir.exists());
+        assert_eq!(std::fs::read(&original).unwrap(), DOCX);
+    }
+
+    fn refused_for_space(refused: Result<std::path::PathBuf, String>) {
+        let error = refused.err().expect("no room for the copy and x2t's work");
+        assert!(error.starts_with(NO_SPACE_ERROR), "{}", error);
+    }
+
+    #[test]
+    fn a_cache_on_the_work_folders_file_system_has_to_hold_the_copy_and_the_x2t_work() {
+        let root = scratch_root();
+        let (work_dir, spill_dir) = (root.join("work"), root.join("cache/read-copies/1-1"));
+        let one_disk = |_: &std::path::Path| Some(Volume { device: WORK_DISK, free: 150 });
+        let read_copies = read_copies_for(&work_dir);
+        let spill = Spill { read_copies: &read_copies, dir: &spill_dir };
+        let places = CopyPlaces { work_dir: &work_dir, spill: Some(spill), volume: &one_disk };
+
+        refused_for_space(choose_copy_dir(100, 100, &places));
+
+        assert!(!spill_dir.exists());
+    }
+
+    #[test]
+    fn a_cache_with_room_for_the_copy_is_refused_when_the_work_folder_cannot_hold_the_x2t_work() {
+        let root = scratch_root();
+        let (work_dir, spill_dir) = (root.join("work"), root.join("cache/read-copies/1-1"));
+        let free = space(&work_dir, Some(99), Some(100 * MB));
+        let read_copies = read_copies_for(&work_dir);
+        let spill = Spill { read_copies: &read_copies, dir: &spill_dir };
+        let places = CopyPlaces { work_dir: &work_dir, spill: Some(spill), volume: &free };
+
+        refused_for_space(choose_copy_dir(100, 100, &places));
+
+        assert!(!spill_dir.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cache_on_another_file_system_holds_the_copy_while_the_work_folder_holds_the_x2t_work() {
+        let root = scratch_root();
+        let (work_dir, spill_dir) = (root.join("work"), root.join("cache/read-copies/1-1"));
+        let free = space(&work_dir, Some(100), Some(100));
+        let read_copies = read_copies_for(&work_dir);
+        let spill = Spill { read_copies: &read_copies, dir: &spill_dir };
+        let places = CopyPlaces { work_dir: &work_dir, spill: Some(spill), volume: &free };
+
+        assert_eq!(choose_copy_dir(100, 100, &places), Ok(spill_dir));
+    }
+
+    #[test]
+    fn without_room_in_the_cache_a_work_folder_that_only_holds_the_copy_is_a_space_error() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, Some(2 * DOCX.len() as u64 - 1), Some(0));
+
+        let refused = prepare_with(&original, &work_dir, &spill_dir, &free);
+
+        let error = refused.err().expect("no room for the copy and x2t's work");
+        assert!(error.starts_with(NO_SPACE_ERROR), "{}", error);
+        assert_eq!(files_in(&work_dir), 0);
+    }
+
+    #[test]
+    fn free_space_that_cannot_be_told_keeps_the_copy_in_the_work_folder() {
+        let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
+        let spill_dir = spill_dir_for(&work_dir);
+        let free = space(&work_dir, None, Some(100 * MB));
+
+        let input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+    }
+
+    #[test]
+    fn a_csv_counts_its_utf32_copy_at_four_bytes_per_byte() {
+        let csv = b"a;b\n1;2\n".repeat(100);
+        let (original, work_dir) = original_and_work_dir("data.csv", &csv);
+        let spill_dir = spill_dir_for(&work_dir);
+        // Room for the file twice over, not for its UTF-32 copy and x2t's work.
+        let free = space(&work_dir, Some(4 * csv.len() as u64), Some(100 * MB));
+
+        let input = prepare_with(&original, &work_dir, &spill_dir, &free).unwrap();
+
+        assert_eq!(input.path().parent(), Some(spill_dir.as_path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_system_is_read_for_a_folder_that_does_not_exist_yet() {
+        let root = scratch_root();
+
+        // Other tests write while this one runs, so only the device is compared.
+        let device = |dir: &std::path::Path| volume_of(dir).map(|volume| volume.device);
+        assert_eq!(device(&root.join("not/yet")), device(&root));
+        assert!(device(&root).is_some());
+    }
+
+
     #[test]
     fn the_conversion_reads_a_copy_in_the_work_folder_not_the_original() {
         let (original, work_dir) = original_and_work_dir("Report.docx", DOCX);
@@ -799,6 +1189,154 @@ mod tests {
         let (original, work_dir) = original_and_work_dir("data.xml", b"<?xml version=\"1.0\"?><a/>");
         let refused = prepare_editor_input(&original, &work_dir, None, None);
         assert_eq!(refused.err(), Some("This file is not a valid .xml".to_string()));
+    }
+
+    const CUSTOM_XML_ITEM: &str = "customXml/item1.xml";
+
+    fn relationship_xml(kind: &str, target: &str, mode: &str) -> String {
+        format!("<Relationship Id=\"r{kind}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}\" Target=\"{target}\"{mode}/>")
+    }
+
+    fn relationships_xml(body: &str) -> String {
+        format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{body}</Relationships>")
+    }
+
+    // A workbook with the part customXml/item1.xml and `custom_xml`, a
+    // relationship, in _rels/.rels; `from_workbook` is one of the workbook's.
+    fn workbook_with_custom_xml(custom_xml: &str, from_workbook: &str) -> Vec<u8> {
+        use std::io::Write;
+        let root_rels = relationships_xml(&format!("{}{custom_xml}", relationship_xml("officeDocument", "xl/workbook.xml", "")));
+        let workbook_rels = relationships_xml(&format!("{}{from_workbook}", relationship_xml("worksheet", "worksheets/sheet1.xml", "")));
+        let parts = [
+            ("_rels/.rels", root_rels.as_str()),
+            ("xl/workbook.xml", "<workbook/>"),
+            ("xl/_rels/workbook.xml.rels", workbook_rels.as_str()),
+            ("xl/worksheets/sheet1.xml", "<worksheet/>"),
+            (CUSTOM_XML_ITEM, "<item/>"),
+        ];
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, content) in parts {
+            writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            writer.write_all(content.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn parts_of(package: &std::path::Path) -> Vec<(String, String)> {
+        use std::io::Read;
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(package).unwrap()).unwrap();
+        let mut parts = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut content = String::new();
+            entry.read_to_string(&mut content).unwrap();
+            parts.push((entry.name().to_string(), content));
+        }
+        parts
+    }
+
+    #[test]
+    fn a_root_target_one_folder_above_a_part_is_read_from_a_copy_that_names_the_part() {
+        let custom_xml = relationship_xml("customXml", "../customXml/item1.xml", "");
+        let xlsx = workbook_with_custom_xml(&custom_xml, "");
+        let (original, work_dir) = original_and_work_dir("saved.xlsx", &xlsx);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_eq!(input.path().parent(), Some(work_dir.as_path()));
+        let written = parts_of(&original);
+        let read_by_x2t = parts_of(input.path());
+        let named = relationship_xml("customXml", CUSTOM_XML_ITEM, "");
+        assert_eq!(read_by_x2t.len(), written.len());
+        for ((name, content), (written_name, written_content)) in read_by_x2t.iter().zip(&written) {
+            assert_eq!(name, written_name);
+            assert!(!content.contains(".."), "{name}: {content}");
+            let expected = if name == "_rels/.rels" { written_content.replace(&custom_xml, &named) } else { written_content.clone() };
+            assert_eq!(content, &expected, "{name}");
+        }
+        assert_eq!(std::fs::read(&original).unwrap(), xlsx, "the original stays");
+        drop(input);
+        assert_eq!(files_in(&work_dir), 0);
+    }
+
+    #[test]
+    fn a_root_target_that_names_its_part_is_read_as_it_is() {
+        for target in [CUSTOM_XML_ITEM, "/customXml/item1.xml"] {
+            let xlsx = workbook_with_custom_xml(&relationship_xml("customXml", target, ""), "");
+            let (original, work_dir) = original_and_work_dir("saved.xlsx", &xlsx);
+
+            let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+            assert_eq!(std::fs::read(input.path()).unwrap(), xlsx, "{target}");
+            assert_eq!(files_in(&work_dir), 1, "{target}");
+        }
+    }
+
+    #[test]
+    fn a_relationship_that_names_no_part_of_the_package_is_still_refused() {
+        let external = " TargetMode=\"External\"";
+        let from_root = [
+            ("../outside.xml", ""),
+            ("../customXml/item2.xml", ""),
+            ("../../customXml/item1.xml", ""),
+            ("../xl/../../customXml/item1.xml", ""),
+            ("..\\customXml\\item1.xml", ""),
+            ("/../customXml/item1.xml", ""),
+            ("../customXml/item1.xml", external),
+        ];
+        for (target, mode) in from_root {
+            let xlsx = workbook_with_custom_xml(&relationship_xml("customXml", target, mode), "");
+            let (original, work_dir) = original_and_work_dir("saved.xlsx", &xlsx);
+
+            let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+            assert_eq!(refused.err(), Some("This file is not a valid .xlsx".to_string()), "{target}{mode}");
+            assert_eq!(files_in(&work_dir), 0, "{target}{mode}");
+        }
+        for target in ["../../customXml/item1.xml", "../../x", "../../../customXml/item1.xml"] {
+            let xlsx = workbook_with_custom_xml("", &relationship_xml("customXml", target, ""));
+            let (original, work_dir) = original_and_work_dir("saved.xlsx", &xlsx);
+
+            let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+            assert_eq!(refused.err(), Some("This file is not a valid .xlsx".to_string()), "{target}");
+            assert_eq!(files_in(&work_dir), 0, "{target}");
+        }
+    }
+
+    // The same target from xl/_rels/workbook.xml.rels names the part: xl has
+    // the package root above it.
+    #[test]
+    fn a_target_one_folder_above_a_part_in_a_folder_is_read_as_it_is() {
+        let xlsx = workbook_with_custom_xml("", &relationship_xml("customXml", "../customXml/item1.xml", ""));
+        let (original, work_dir) = original_and_work_dir("saved.xlsx", &xlsx);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        assert_eq!(std::fs::read(input.path()).unwrap(), xlsx);
+    }
+
+    // LibreOffice 24.2 names customXml/item1.xml from _rels/.rels as
+    // "../customXml/item1.xml".
+    #[test]
+    fn a_libreoffice_xlsx_with_custom_xml_is_read_from_a_copy_that_names_the_part() {
+        let xlsx = include_bytes!("../../tests/fixtures/libreoffice-custom-xml.xlsx");
+        let (original, work_dir) = original_and_work_dir("saved.xlsx", xlsx);
+
+        let input = prepare_editor_input(&original, &work_dir, None, None).unwrap();
+
+        let (written_root, written_others) = root_rels_and_others(parts_of(&original));
+        let (read_root, read_others) = root_rels_and_others(parts_of(input.path()));
+        let named = written_root.replace("\"../customXml/item1.xml\"", "\"customXml/item1.xml\"");
+        assert_ne!(named, written_root);
+        assert_eq!(read_root, named);
+        assert_eq!(read_others, written_others);
+    }
+
+    // The content of _rels/.rels, and every other part in the order stored.
+    fn root_rels_and_others(parts: Vec<(String, String)>) -> (String, Vec<(String, String)>) {
+        let (root, others): (Vec<_>, Vec<_>) = parts.into_iter().partition(|(name, _)| name == "_rels/.rels");
+        (root[0].1.clone(), others)
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sourceMapsIn, unusedFrontendFiles } from './frontend-unused-files.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, '..');
@@ -432,10 +433,7 @@ for (const moduleName of ['word', 'cell', 'slide']) {
 
 for (const forbidden of [
   'sdkjs/develop',
-  'sdkjs/pdf/src/engine/drawingfile_ie.js',
-  'sdkjs/common/libfont/engine/fonts_ie.js',
-  'sdkjs/common/spell/spell/spell_ie.js',
-  'sdkjs/common/spell/spell/spell.js.mem',
+  ...unusedFrontendFiles,
   'web-apps/vendor/less',
   'web-apps/apps/documenteditor/main/resources/help',
   'web-apps/apps/spreadsheeteditor/main/resources/help',
@@ -444,6 +442,16 @@ for (const forbidden of [
 ]) {
   if (existsSync(path.join(distRoot, forbidden))) {
     fail(`excluded asset was staged: ${forbidden}`);
+  }
+}
+
+// A source map outside that list means a build step started writing one.
+if (existsSync(distRoot)) {
+  const staged = (await readdir(distRoot, { recursive: true }))
+    .map((relativePath) => relativePath.split(path.sep).join('/'));
+  for (const sourceMap of sourceMapsIn(staged)) {
+    if (unusedFrontendFiles.includes(sourceMap)) continue;
+    fail(`source map was staged: ${sourceMap}`);
   }
 }
 

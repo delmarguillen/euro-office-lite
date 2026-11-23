@@ -1,10 +1,11 @@
 // The native file dialogs. What the user chooses stays in PathGrants
 // (path_grants.rs); the webview gets a token and the file name.
 
+use crate::default_folders::{self, Dialog};
 use crate::file_ops::AppState;
 use crate::path_grants::{file_name, GrantKind, GrantedFile, PathGrants};
 use std::path::{Path, PathBuf};
-use tauri::State;
+use tauri::{Manager, State};
 use tauri_plugin_dialog::{
     DialogExt, FileDialogBuilder, MessageDialogBuilder, MessageDialogButtons, MessageDialogKind,
 };
@@ -135,6 +136,16 @@ fn file_dialog(window: &tauri::WebviewWindow) -> FileDialogBuilder<tauri::Wry> {
     window.dialog().file().set_parent(window)
 }
 
+// A dialog that starts where default_folders.rs says. Only a starting point:
+// the grant still comes from the path the user picks.
+fn file_dialog_for(window: &tauri::WebviewWindow, which: Dialog) -> FileDialogBuilder<tauri::Wry> {
+    let dialog = file_dialog(window);
+    match default_folders::dialog_start(window.app_handle(), which) {
+        Some(folder) => dialog.set_directory(folder),
+        None => dialog,
+    }
+}
+
 async fn pick_one(dialog: FileDialogBuilder<tauri::Wry>) -> Result<Option<PathBuf>, String> {
     let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_file())
         .await
@@ -171,7 +182,7 @@ pub async fn pick_document(
 ) -> Result<Option<GrantedFile>, String> {
     let extensions = open_filter_extensions(&open_dialog_extensions());
     let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
-    let dialog = file_dialog(&window)
+    let dialog = file_dialog_for(&window, Dialog::Open)
         .add_filter(documents, &extensions)
         .add_filter(all, &ALL_FILES);
     let Some(path) = pick_one(dialog).await? else {
@@ -191,7 +202,7 @@ pub async fn pick_pdf(
 ) -> Result<Option<GrantedFile>, String> {
     let extensions = open_filter_extensions(&PDF_EXTENSIONS);
     let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
-    let dialog = file_dialog(&window)
+    let dialog = file_dialog_for(&window, Dialog::Open)
         .add_filter(pdf_label, &extensions)
         .add_filter(all, &ALL_FILES);
     let Some(path) = pick_one(dialog).await? else {
@@ -210,7 +221,7 @@ pub async fn pick_template(
 ) -> Result<Option<GrantedFile>, String> {
     let extensions = open_filter_extensions(&TEMPLATE_SOURCE_EXTENSIONS);
     let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
-    let dialog = file_dialog(&window).add_filter(templates, &extensions);
+    let dialog = file_dialog_for(&window, Dialog::Template).add_filter(templates, &extensions);
     let Some(path) = pick_one(dialog).await? else {
         return Ok(None);
     };
@@ -286,17 +297,13 @@ pub async fn pick_save_target(
         .clone()
         .or_else(|| first_extension(&filters))
         .unwrap_or_else(|| "docx".to_string());
-    let mut dialog = file_dialog(&window);
+    let own = save_start(&state, requested_ext.as_deref());
+    let mut dialog = file_dialog_for(&window, Dialog::SaveAs { own: own.as_deref() });
     for filter in &filters {
         let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
         dialog = dialog.add_filter(&filter.name, &extensions);
     }
-    if let Some(start) = save_start(&state, requested_ext.as_deref()) {
-        if let Some(dir) = start.parent() {
-            dialog = dialog.set_directory(dir);
-        }
-        dialog = dialog.set_file_name(file_name(&start));
-    } else if let Some(name) = suggested_name.as_deref().and_then(plain_file_name) {
+    if let Some(name) = offered_name(own.as_deref(), suggested_name.as_deref()) {
         dialog = dialog.set_file_name(name);
     }
     let Some(chosen) = pick_save(dialog).await? else {
@@ -307,6 +314,15 @@ pub async fn pick_save_target(
         return Ok(None);
     }
     Ok(Some(state.grants.grant(path, GrantKind::Save)))
+}
+
+// The name Save As offers: the document's own file in the format asked for,
+// else the one suggested for a document with no file yet.
+fn offered_name(own: Option<&Path>, suggested: Option<&str>) -> Option<String> {
+    if let Some(file) = own {
+        return Some(file_name(file));
+    }
+    suggested.and_then(plain_file_name).map(str::to_string)
 }
 
 // A name the dialog may show for a document with no file yet (Untitled.md):
@@ -356,9 +372,10 @@ fn save_start(state: &AppState, requested_ext: Option<&str>) -> Option<PathBuf> 
     save_start_path(current.as_deref(), suggestion.as_deref(), requested_ext)
 }
 
-// Where the dialog starts and the name it offers, in the format asked for: the
-// open document, else where a recovered document was saved before. Only a
-// starting point: the grant still comes from the path the user picks.
+// The file the document already has, in the format asked for: the open
+// document, else where a recovered document was saved before. Save As starts in
+// its folder and offers its name. Only a starting point: the grant still comes
+// from the path the user picks.
 fn save_start_path(
     current: Option<&Path>,
     suggestion: Option<&Path>,
@@ -468,6 +485,23 @@ mod tests {
         for name in ["", ".", "..", "../x.md", "/tmp/x.md", "a\\b.md", "C:x.md", "a\0.md"] {
             assert_eq!(plain_file_name(name), None, "{name:?}");
         }
+    }
+
+    #[test]
+    fn save_as_offers_the_name_of_the_file_the_document_has() {
+        let own = Path::new("/home/u/Docs/Budget.pdf");
+        assert_eq!(offered_name(Some(own), None), Some("Budget.pdf".to_string()));
+        assert_eq!(
+            offered_name(Some(own), Some("Untitled.md")),
+            Some("Budget.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn save_as_of_a_document_with_no_file_offers_the_suggested_name_only() {
+        assert_eq!(offered_name(None, Some("Letter.docx")), Some("Letter.docx".to_string()));
+        assert_eq!(offered_name(None, Some("../Letter.docx")), None);
+        assert_eq!(offered_name(None, None), None);
     }
 
     #[test]

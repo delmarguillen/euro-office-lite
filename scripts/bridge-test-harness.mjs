@@ -55,6 +55,7 @@ export async function loadBridge({ platform = 'Linux x86_64', invoke = {} } = {}
     clearTimeout(timer) { timers.delete(timer); clearTimeout(timer); },
     // The spellcheck setup asks for its manifest at load; nothing here needs it.
     fetch: () => new Promise(() => {}),
+    performance: { now: () => performance.now() },
     atob: (text) => Buffer.from(text, 'base64').toString('binary'),
     btoa: (text) => Buffer.from(text, 'binary').toString('base64'),
     XMLHttpRequest: class {

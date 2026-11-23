@@ -5,8 +5,10 @@ mod bridge;
 mod cfb_directory;
 mod clipboard;
 mod converter;
+mod default_folders;
 mod dictionaries;
 mod dictionary_import;
+mod dmabuf_default;
 mod file_dialogs;
 mod file_ops;
 mod fonts_state;
@@ -15,6 +17,7 @@ mod markdown;
 mod new_window;
 mod note_separator;
 mod odf_links;
+mod open_phases;
 mod package_relationships;
 mod path_grants;
 mod pending_open;
@@ -316,18 +319,13 @@ fn copy_source(state: &AppState, src_path: &str) -> Result<std::path::PathBuf, S
 }
 
 fn main() {
-    // WebKitGTK's DMABUF renderer produces jagged/rough canvas rendering on some
-    // drivers (Nvidia proprietary especially, issue #27). The Flatpak already sets
-    // this for everyone; mirror it here so the .deb matches. Set before any WebKit
-    // initialization, and only if the user has not set their own value (so
-    // WEBKIT_DISABLE_DMABUF_RENDERER=0 re-enables the DMABUF path).
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    }
-
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut context = tauri::generate_context!();
+
+    // WEBKIT_DISABLE_DMABUF_RENDERER is decided here, before anything starts
+    // WebKitGTK (dmabuf_default.rs). A value the user set is left as it is.
+    #[cfg(target_os = "linux")]
+    let dmabuf = dmabuf_default::apply(&context.config().identifier);
     // The user-facing version comes from tauri.conf.json; Cargo's crate version stays independent.
     let app_version = context.package_info().version.clone();
 
@@ -346,6 +344,7 @@ fn main() {
     std::fs::create_dir_all(&temp_root).ok();
     let font_choice = temp_layout::font_root(&context.config().identifier, &temp_root);
     let font_root = font_choice.path;
+    let read_copies_root = temp_layout::read_copies_root(&context.config().identifier);
     let instance = start_instance(&temp_root);
     let temp_dir = instance.dir.clone();
     let instance_id = instance.id.clone();
@@ -394,11 +393,18 @@ fn main() {
         let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".to_string());
         let desktop = std::env::var("XDG_CURRENT_DESKTOP")
             .unwrap_or_else(|_| "unknown".to_string());
-        let dmabuf = std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER")
-            .unwrap_or_else(|_| "unset".to_string());
+        let dmabuf_value = std::env::var(dmabuf_default::ENV_NAME).ok();
+        let mut dmabuf_field =
+            dmabuf_default::log_field(dmabuf_value.as_deref(), dmabuf.decision.reason);
+        if let Some(source) = dmabuf.driver_source {
+            dmabuf_field.push_str(&format!(" source={}", source));
+        }
+        if let Some(problem) = dmabuf.setting_problem {
+            dmabuf_field.push_str(&format!(" setting_file={}", problem));
+        }
         log_startup(&format!(
-            "Linux distro={} session={} desktop={} WEBKIT_DISABLE_DMABUF_RENDERER={}",
-            distro, session, desktop, dmabuf
+            "Linux distro={} session={} desktop={} {}",
+            distro, session, desktop, dmabuf_field
         ));
     }
 
@@ -478,6 +484,9 @@ fn main() {
             temp_dir,
             temp_root: temp_root.clone(),
             font_root: font_root.clone(),
+            read_copies: read_copies_root
+                .as_ref()
+                .map(|root| temp_layout::ReadCopies::new(root, &instance_id)),
             fonts: fonts.clone(),
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
@@ -536,6 +545,11 @@ fn main() {
             recent::recent_files_state,
             recent::set_recent_files_enabled,
             recent::clear_recent_files,
+            dmabuf_default::dmabuf_setting_state,
+            dmabuf_default::set_dmabuf_setting,
+            default_folders::default_folders_state,
+            default_folders::pick_default_folder,
+            default_folders::clear_default_folder,
             recovery::recovery_begin,
             recovery::save_changes,
             recovery::recovery_mark_saved,
@@ -903,8 +917,12 @@ fn main() {
             let sweep_font_root = font_root.clone();
             let sweep_id = instance_id.clone();
             let sweep_handle = app.handle().clone();
+            let sweep_read_copies_root = read_copies_root.clone();
             std::thread::spawn(move || {
                 sweep_leftovers(&sweep_handle, &sweep_root);
+                if let Some(read_copies) = &sweep_read_copies_root {
+                    temp_layout::sweep_read_copies(read_copies);
+                }
                 sweep_old_font_cache(&sweep_root, &sweep_font_root, &sweep_id);
             });
 

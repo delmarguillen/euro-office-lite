@@ -2020,3 +2020,103 @@ fn a_documents_lock_nobody_releases_is_not_waited_on_forever() {
     assert!(claim_document(&root, &own.id, &announced).is_none());
     drop((held, theirs));
 }
+
+// --- read copies in the user's cache --------------------------------------------
+
+// What an instance leaves in the cache while a conversion reads its copy.
+#[cfg(unix)]
+fn read_copies_with_a_copy(read_copies: &Path, instance_id: &str) -> (ReadCopies, PathBuf) {
+    let copies = ReadCopies::new(read_copies, instance_id);
+    copies.make_private(copies.dir()).unwrap();
+    let copy = copies.dir().join("eo-read-copy.pptx");
+    std::fs::write(&copy, b"copy").unwrap();
+    (copies, copy)
+}
+
+#[cfg(unix)]
+#[test]
+fn read_copies_of_instances_that_are_gone_are_removed() {
+    let read_copies = scratch_root().join("cache/read-copies");
+    let (_live, live_copy) = read_copies_with_a_copy(&read_copies, "1000-1");
+    let (gone, gone_copy) = read_copies_with_a_copy(&read_copies, "1000-2");
+    drop(gone);
+    std::fs::create_dir_all(read_copies.join("not-an-instance")).unwrap();
+
+    let removed = sweep_read_copies(&read_copies);
+
+    assert_eq!(removed, vec!["1000-2".to_string()]);
+    assert!(!gone_copy.exists());
+    assert!(live_copy.exists());
+    assert!(read_copies.join("not-an-instance").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn read_copies_of_an_instance_alive_under_another_temp_root_are_kept() {
+    let read_copies = scratch_root().join("cache/read-copies");
+    let (first_root, second_root) = (scratch_root(), scratch_root());
+    let first = begin_instance(&first_root, 1000, 1).unwrap();
+    let _second = begin_instance(&second_root, 2000, 2).unwrap();
+    let (_copies, copy) = read_copies_with_a_copy(&read_copies, &first.id);
+    assert!(!instance_dir(&second_root, &first.id).exists());
+
+    let removed = sweep_read_copies(&read_copies);
+
+    assert!(removed.is_empty(), "{:?}", removed);
+    assert_eq!(std::fs::read(&copy).unwrap(), b"copy");
+}
+
+#[cfg(unix)]
+#[test]
+fn read_copies_whose_lock_cannot_be_checked_are_kept() {
+    let read_copies = scratch_root().join("cache/read-copies");
+    let (gone, copy) = read_copies_with_a_copy(&read_copies, "1000-2");
+    drop(gone);
+    let unreadable = |_: &Path| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+
+    let removed = sweep_read_copies_with(&read_copies, unreadable);
+
+    assert!(removed.is_empty(), "{:?}", removed);
+    assert!(copy.exists());
+}
+
+#[test]
+fn read_copies_without_a_lock_file_are_kept() {
+    let read_copies = scratch_root().join("cache/read-copies");
+    let copy = read_copies.join("1000-2/eo-read-copy.pptx");
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    std::fs::write(&copy, b"copy").unwrap();
+
+    let removed = sweep_read_copies(&read_copies);
+
+    assert!(removed.is_empty(), "{:?}", removed);
+    assert!(copy.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_read_copies_folder_removed_while_the_instance_runs_is_made_and_locked_again() {
+    let read_copies = scratch_root().join("cache/read-copies");
+    let (copies, _) = read_copies_with_a_copy(&read_copies, "1000-1");
+    std::fs::remove_dir_all(&read_copies).unwrap();
+
+    copies.make_private(copies.dir()).unwrap();
+
+    assert!(is_locked(&copies.dir().join(READ_COPIES_LOCK)));
+    assert!(sweep_read_copies(&read_copies).is_empty());
+    assert!(copies.dir().is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_lock_file_that_left_its_folder_is_not_a_lock_on_the_folder() {
+    let dir = scratch_root();
+    let lock_path = dir.join("instance.lock");
+    let first = take_lock_in_place(&lock_path, true).unwrap();
+    std::fs::remove_file(&lock_path).unwrap();
+    std::fs::write(&lock_path, b"").unwrap();
+
+    assert!(!is_file_at(&first, &lock_path));
+    drop(first);
+    assert!(take_lock_in_place(&lock_path, false).is_ok());
+}

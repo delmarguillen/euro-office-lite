@@ -518,6 +518,81 @@ window._eoLog = function() {
   }
 };
 
+// ── Open phase marks ──
+//
+// One log line per phase of a document open, for scripts/measure-open.mjs:
+//
+//   [OPEN] phase=<name> open=<id> t=<ms> dt=<ms>
+//
+// t counts from the request and dt from the previous mark, both in whole
+// milliseconds of performance.now(). The backend logs its own phases under
+// the same id with its own clock (open_phases.rs). The first line of each side
+// also carries wall=<ms since the Unix epoch>, which is what places one clock
+// on the other.
+//
+// The phases of the page, in order:
+//   request         a file is about to be asked of the backend
+//   result          the backend answered with the document
+//   fonts           the font cache is settled and the system font list fetched
+//   iframe          DocsAPI.DocEditor created the editor iframe
+//   sdk_min         the editor frame has evaluated the min part of sdkjs
+//   sdk_all         the editor frame has evaluated the rest of sdkjs
+//   app_ready       the editor's onAppReady
+//   document_ready  the editor's onDocumentReady
+var _eoOpenPhases = (function() {
+  var sequence = 0;
+  var current = null;
+
+  function wholeMs(ms) {
+    return Math.round(ms);
+  }
+
+  // Unique among the opens of every window: the time of the request, and a
+  // count for two requests of one page within the same millisecond.
+  function nextId(wallMs) {
+    sequence += 1;
+    return wallMs.toString(36) + '-' + sequence;
+  }
+
+  function line(phase, t, dt) {
+    return '[OPEN] phase=' + phase + ' open=' + current.id + ' t=' + t + ' dt=' + dt;
+  }
+
+  // Starts the marks of an open and returns the id the backend logs under.
+  function begin() {
+    var wallMs = Date.now();
+    current = { id: nextId(wallMs), started: performance.now(), previous: 0, marked: {} };
+    current.marked.request = true;
+    window._eoLog(line('request', 0, 0) + ' wall=' + wallMs);
+    return current.id;
+  }
+
+  // Once per open and phase.
+  function mark(phase) {
+    if (!current) return;
+    if (current.marked[phase]) return;
+    current.marked[phase] = true;
+    var t = wholeMs(performance.now() - current.started);
+    var dt = t - current.previous;
+    current.previous = t;
+    window._eoLog(line(phase, t, dt));
+  }
+
+  // After the last mark, or when the open is given up: later marks belong to
+  // no open.
+  function end() {
+    current = null;
+  }
+
+  // Whether an open is being marked: from begin() to end().
+  function inProgress() {
+    return current !== null;
+  }
+
+  return { begin: begin, mark: mark, end: end, inProgress: inProgress };
+})();
+window._eoOpenPhases = _eoOpenPhases;
+
 var _isWindows = navigator.platform && navigator.platform.indexOf('Win') !== -1;
 var _isMac = navigator.platform && navigator.platform.indexOf('Mac') === 0;
 var _isLinux = navigator.platform && navigator.platform.indexOf('Linux') !== -1;
@@ -581,6 +656,9 @@ var _UI_STRINGS = {
     openFile: 'Open file', editPdf: 'Edit PDF', newDocument: 'New document', newSpreadsheet: 'New spreadsheet',
     newPresentation: 'New presentation', unsavedChanges: 'Unsaved changes',
     newFromTemplate: 'New from template…', templates: 'Templates',
+    dmabufSetting: 'Hardware acceleration', dmabufAuto: 'Automatic', dmabufOn: 'On', dmabufOff: 'Off',
+    dmabufRestart: 'Applies after restarting the app.',
+    dmabufEnvSet: 'This app was started with WEBKIT_DISABLE_DMABUF_RENDERER set. That value is used and this setting is ignored.',
     openNewWindowFailedMsg: 'The file could not be opened in a new window. The current document has not changed.',
     openElsewhereMsg: 'This file is already open in another window. Use that window to work on it.',
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
@@ -595,6 +673,8 @@ var _UI_STRINGS = {
     recentFiles: 'Recent files', rememberRecent: 'Remember recent files', clearRecent: 'Clear',
     settings: 'Settings', interfaceLanguage: 'Interface language', spellCheck: 'Spell check',
     appearance: 'Appearance', themeDark: 'Dark', themeLight: 'Light',
+    documentsFolder: 'Documents folder', templatesFolder: 'Templates folder',
+    chooseFolder: 'Choose…', resetFolder: 'Reset', folderNotSet: 'Not set',
     noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
     openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.',
     openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.',
@@ -631,6 +711,9 @@ var _UI_STRINGS = {
     openFile: 'Abrir archivo', editPdf: 'Editar PDF', newDocument: 'Nuevo documento', newSpreadsheet: 'Nueva hoja de cálculo',
     newPresentation: 'Nueva presentación', unsavedChanges: 'Cambios sin guardar',
     newFromTemplate: 'Nuevo desde plantilla…', templates: 'Plantillas',
+    dmabufSetting: 'Aceleración por hardware', dmabufAuto: 'Automático', dmabufOn: 'Activado', dmabufOff: 'Desactivado',
+    dmabufRestart: 'Se aplica al reiniciar la aplicación.',
+    dmabufEnvSet: 'La aplicación se inició con WEBKIT_DISABLE_DMABUF_RENDERER definida. Se usa ese valor y este ajuste no tiene efecto.',
     openNewWindowFailedMsg: 'No se pudo abrir el archivo en una ventana nueva. El documento actual no ha cambiado.',
     openElsewhereMsg: 'Este archivo ya está abierto en otra ventana. Usa esa ventana para trabajar con él.',
     unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
@@ -644,6 +727,8 @@ var _UI_STRINGS = {
     recentFiles: 'Archivos recientes', rememberRecent: 'Recordar archivos recientes', clearRecent: 'Limpiar',
     settings: 'Configuración', interfaceLanguage: 'Idioma de la interfaz', spellCheck: 'Corrector ortográfico', addLanguage: 'Añadir idioma del corrector…',
     appearance: 'Apariencia', themeDark: 'Oscuro', themeLight: 'Claro',
+    documentsFolder: 'Carpeta de documentos', templatesFolder: 'Carpeta de plantillas',
+    chooseFolder: 'Elegir…', resetFolder: 'Restablecer', folderNotSet: 'Sin definir',
     noRecentFiles: 'Todavía no hay archivos recientes', openFailed: 'No se pudo abrir el archivo',
     openFailedMsg: 'No se pudo abrir el archivo. Puede que se haya movido, renombrado o eliminado.',
     openErrorMsg: 'No se pudo abrir el archivo. No es un documento válido o está dañado.',
@@ -671,6 +756,9 @@ var _UI_STRINGS = {
     openFile: 'Ouvrir un fichier', editPdf: 'Modifier un PDF', newDocument: 'Nouveau document', newSpreadsheet: 'Nouvelle feuille de calcul',
     newPresentation: 'Nouvelle présentation', unsavedChanges: 'Modifications non enregistrées',
     newFromTemplate: 'Nouveau à partir d\'un modèle…', templates: 'Modèles',
+    dmabufSetting: 'Accélération matérielle', dmabufAuto: 'Automatique', dmabufOn: 'Activée', dmabufOff: 'Désactivée',
+    dmabufRestart: 'Prend effet après le redémarrage de l\'application.',
+    dmabufEnvSet: 'L\'application a été lancée avec WEBKIT_DISABLE_DMABUF_RENDERER défini. Cette valeur est utilisée et ce réglage est ignoré.',
     openNewWindowFailedMsg: 'Impossible d\'ouvrir le fichier dans une nouvelle fenêtre. Le document actuel n\'a pas changé.',
     openElsewhereMsg: 'Ce fichier est déjà ouvert dans une autre fenêtre. Utilisez l\'autre fenêtre pour y travailler.',
     unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
@@ -684,6 +772,8 @@ var _UI_STRINGS = {
     recentFiles: 'Fichiers récents', rememberRecent: 'Mémoriser les fichiers récents', clearRecent: 'Effacer',
     settings: 'Paramètres', interfaceLanguage: 'Langue de l\'interface', spellCheck: 'Vérification orthographique', addLanguage: 'Ajouter une langue de vérification…',
     appearance: 'Apparence', themeDark: 'Sombre', themeLight: 'Clair',
+    documentsFolder: 'Dossier des documents', templatesFolder: 'Dossier des modèles',
+    chooseFolder: 'Choisir…', resetFolder: 'Réinitialiser', folderNotSet: 'Non défini',
     noRecentFiles: 'Aucun fichier récent pour le moment', openFailed: 'Impossible d\'ouvrir le fichier',
     openFailedMsg: 'Impossible d\'ouvrir le fichier. Il a peut-être été déplacé, renommé ou supprimé.',
     openErrorMsg: 'Impossible d\'ouvrir le fichier. Ce n\'est pas un document valide ou il est endommagé.',
@@ -706,6 +796,9 @@ var _UI_STRINGS = {
     openFile: 'Datei öffnen', editPdf: 'PDF bearbeiten', newDocument: 'Neues Dokument', newSpreadsheet: 'Neue Tabelle',
     newPresentation: 'Neue Präsentation', unsavedChanges: 'Ungespeicherte Änderungen',
     newFromTemplate: 'Neu aus Vorlage…', templates: 'Vorlagen',
+    dmabufSetting: 'Hardwarebeschleunigung', dmabufAuto: 'Automatisch', dmabufOn: 'Ein', dmabufOff: 'Aus',
+    dmabufRestart: 'Wird nach einem Neustart der App wirksam.',
+    dmabufEnvSet: 'Die App wurde mit gesetzter Variable WEBKIT_DISABLE_DMABUF_RENDERER gestartet. Dieser Wert gilt, diese Einstellung hat keine Wirkung.',
     openNewWindowFailedMsg: 'Die Datei konnte nicht in einem neuen Fenster geöffnet werden. Das aktuelle Dokument ist unverändert.',
     openElsewhereMsg: 'Diese Datei ist bereits in einem anderen Fenster geöffnet. Bearbeiten Sie sie im anderen Fenster.',
     unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
@@ -719,6 +812,8 @@ var _UI_STRINGS = {
     recentFiles: 'Zuletzt verwendete Dateien', rememberRecent: 'Zuletzt verwendete Dateien merken', clearRecent: 'Leeren',
     settings: 'Einstellungen', interfaceLanguage: 'Sprache der Benutzeroberfläche', spellCheck: 'Rechtschreibprüfung', addLanguage: 'Sprache für die Rechtschreibprüfung hinzufügen…',
     appearance: 'Darstellung', themeDark: 'Dunkel', themeLight: 'Hell',
+    documentsFolder: 'Ordner für Dokumente', templatesFolder: 'Ordner für Vorlagen',
+    chooseFolder: 'Auswählen…', resetFolder: 'Zurücksetzen', folderNotSet: 'Nicht festgelegt',
     noRecentFiles: 'Noch keine zuletzt verwendeten Dateien', openFailed: 'Datei konnte nicht geöffnet werden',
     openFailedMsg: 'Die Datei konnte nicht geöffnet werden. Möglicherweise wurde sie verschoben, umbenannt oder gelöscht.',
     openErrorMsg: 'Die Datei konnte nicht geöffnet werden. Sie ist kein gültiges Dokument oder sie ist beschädigt.',
@@ -741,6 +836,9 @@ var _UI_STRINGS = {
     openFile: 'Apri file', editPdf: 'Modifica PDF', newDocument: 'Nuovo documento', newSpreadsheet: 'Nuovo foglio di calcolo',
     newPresentation: 'Nuova presentazione', unsavedChanges: 'Modifiche non salvate',
     newFromTemplate: 'Nuovo da modello…', templates: 'Modelli',
+    dmabufSetting: 'Accelerazione hardware', dmabufAuto: 'Automatica', dmabufOn: 'Attiva', dmabufOff: 'Disattiva',
+    dmabufRestart: 'Si applica dopo il riavvio dell\'app.',
+    dmabufEnvSet: 'L\'app è stata avviata con WEBKIT_DISABLE_DMABUF_RENDERER impostata. Si usa quel valore e questa impostazione non ha effetto.',
     openNewWindowFailedMsg: 'Impossibile aprire il file in una nuova finestra. Il documento attuale non è cambiato.',
     openElsewhereMsg: 'Questo file è già aperto in un\'altra finestra. Usa quella finestra per lavorarci.',
     unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
@@ -754,6 +852,8 @@ var _UI_STRINGS = {
     recentFiles: 'File recenti', rememberRecent: 'Ricorda i file recenti', clearRecent: 'Cancella',
     settings: 'Impostazioni', interfaceLanguage: 'Lingua dell\'interfaccia', spellCheck: 'Controllo ortografico', addLanguage: 'Aggiungi lingua di controllo ortografico…',
     appearance: 'Aspetto', themeDark: 'Scuro', themeLight: 'Chiaro',
+    documentsFolder: 'Cartella dei documenti', templatesFolder: 'Cartella dei modelli',
+    chooseFolder: 'Scegli…', resetFolder: 'Ripristina', folderNotSet: 'Non impostata',
     noRecentFiles: 'Nessun file recente', openFailed: 'Impossibile aprire il file',
     openFailedMsg: 'Impossibile aprire il file. Potrebbe essere stato spostato, rinominato o eliminato.',
     openErrorMsg: 'Impossibile aprire il file. Non è un documento valido oppure è danneggiato.',
@@ -776,6 +876,9 @@ var _UI_STRINGS = {
     openFile: 'Abrir arquivo', editPdf: 'Editar PDF', newDocument: 'Novo documento', newSpreadsheet: 'Nova planilha',
     newPresentation: 'Nova apresentação', unsavedChanges: 'Alterações não salvas',
     newFromTemplate: 'Novo a partir de modelo…', templates: 'Modelos',
+    dmabufSetting: 'Aceleração por hardware', dmabufAuto: 'Automático', dmabufOn: 'Ativado', dmabufOff: 'Desativado',
+    dmabufRestart: 'Aplica-se depois de reiniciar a aplicação.',
+    dmabufEnvSet: 'A aplicação foi iniciada com WEBKIT_DISABLE_DMABUF_RENDERER definido. Esse valor é usado e esta definição não tem efeito.',
     openNewWindowFailedMsg: 'Não foi possível abrir o arquivo em uma nova janela. O documento atual não foi alterado.',
     openElsewhereMsg: 'Este arquivo já está aberto em outra janela. Use essa janela para trabalhar nele.',
     unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
@@ -789,6 +892,8 @@ var _UI_STRINGS = {
     recentFiles: 'Arquivos recentes', rememberRecent: 'Lembrar arquivos recentes', clearRecent: 'Limpar',
     settings: 'Configurações', interfaceLanguage: 'Idioma da interface', spellCheck: 'Verificação ortográfica', addLanguage: 'Adicionar idioma de verificação ortográfica…',
     appearance: 'Aparência', themeDark: 'Escuro', themeLight: 'Claro',
+    documentsFolder: 'Pasta de documentos', templatesFolder: 'Pasta de modelos',
+    chooseFolder: 'Escolher…', resetFolder: 'Redefinir', folderNotSet: 'Não definida',
     noRecentFiles: 'Ainda não há arquivos recentes', openFailed: 'Não foi possível abrir o arquivo',
     openFailedMsg: 'Não foi possível abrir o arquivo. Ele pode ter sido movido, renomeado ou excluído.',
     openErrorMsg: 'Não foi possível abrir o arquivo. Não é um documento válido ou está danificado.',
@@ -811,6 +916,9 @@ var _UI_STRINGS = {
     openFile: 'Открыть файл', editPdf: 'Редактировать PDF', newDocument: 'Новый документ', newSpreadsheet: 'Новая таблица',
     newPresentation: 'Новая презентация', unsavedChanges: 'Несохранённые изменения',
     newFromTemplate: 'Создать из шаблона…', templates: 'Шаблоны',
+    dmabufSetting: 'Аппаратное ускорение', dmabufAuto: 'Автоматически', dmabufOn: 'Вкл.', dmabufOff: 'Выкл.',
+    dmabufRestart: 'Применяется после перезапуска приложения.',
+    dmabufEnvSet: 'Приложение запущено с заданной переменной WEBKIT_DISABLE_DMABUF_RENDERER. Используется её значение, эта настройка не действует.',
     openNewWindowFailedMsg: 'Не удалось открыть файл в новом окне. Текущий документ не изменён.',
     openElsewhereMsg: 'Этот файл уже открыт в другом окне. Работайте с ним в том окне.',
     unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
@@ -824,6 +932,8 @@ var _UI_STRINGS = {
     recentFiles: 'Недавние файлы', rememberRecent: 'Запоминать недавние файлы', clearRecent: 'Очистить',
     settings: 'Настройки', interfaceLanguage: 'Язык интерфейса', spellCheck: 'Проверка орфографии', addLanguage: 'Добавить язык проверки орфографии…',
     appearance: 'Оформление', themeDark: 'Тёмная', themeLight: 'Светлая',
+    documentsFolder: 'Папка документов', templatesFolder: 'Папка шаблонов',
+    chooseFolder: 'Выбрать…', resetFolder: 'Сбросить', folderNotSet: 'Не задана',
     noRecentFiles: 'Недавних файлов пока нет', openFailed: 'Не удалось открыть файл',
     openFailedMsg: 'Не удалось открыть файл. Возможно, он был перемещён, переименован или удалён.',
     openErrorMsg: 'Не удалось открыть файл. Это не действительный документ или он повреждён.',
@@ -846,6 +956,9 @@ var _UI_STRINGS = {
     openFile: 'Відкрити файл', editPdf: 'Редагувати PDF', newDocument: 'Новий документ', newSpreadsheet: 'Нова таблиця',
     newPresentation: 'Нова презентація', unsavedChanges: 'Незбережені зміни',
     newFromTemplate: 'Створити з шаблону…', templates: 'Шаблони',
+    dmabufSetting: 'Апаратне прискорення', dmabufAuto: 'Автоматично', dmabufOn: 'Увімк.', dmabufOff: 'Вимк.',
+    dmabufRestart: 'Застосовується після перезапуску застосунку.',
+    dmabufEnvSet: 'Застосунок запущено із заданою змінною WEBKIT_DISABLE_DMABUF_RENDERER. Використовується її значення, цей параметр не діє.',
     openNewWindowFailedMsg: 'Не вдалося відкрити файл у новому вікні. Поточний документ не змінено.',
     openElsewhereMsg: 'Цей файл уже відкрито в іншому вікні. Працюйте з ним у тому вікні.',
     unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
@@ -859,6 +972,8 @@ var _UI_STRINGS = {
     recentFiles: 'Нещодавні файли', rememberRecent: 'Запам\'ятовувати нещодавні файли', clearRecent: 'Очистити',
     settings: 'Налаштування', interfaceLanguage: 'Мова інтерфейсу', spellCheck: 'Перевірка правопису', addLanguage: 'Додати мову перевірки правопису…',
     appearance: 'Оформлення', themeDark: 'Темна', themeLight: 'Світла',
+    documentsFolder: 'Папка документів', templatesFolder: 'Папка шаблонів',
+    chooseFolder: 'Вибрати…', resetFolder: 'Скинути', folderNotSet: 'Не задано',
     noRecentFiles: 'Нещодавніх файлів поки немає', openFailed: 'Не вдалося відкрити файл',
     openFailedMsg: 'Не вдалося відкрити файл. Можливо, його переміщено, перейменовано або видалено.',
     openErrorMsg: 'Не вдалося відкрити файл. Це не дійсний документ або його пошкоджено.',
@@ -881,6 +996,9 @@ var _UI_STRINGS = {
     openFile: '打开文件', editPdf: '编辑 PDF', newDocument: '新建文档', newSpreadsheet: '新建电子表格',
     newPresentation: '新建演示文稿', unsavedChanges: '未保存的更改',
     newFromTemplate: '从模板新建…', templates: '模板',
+    dmabufSetting: '硬件加速', dmabufAuto: '自动', dmabufOn: '开启', dmabufOff: '关闭',
+    dmabufRestart: '重启应用后生效。',
+    dmabufEnvSet: '启动应用时已设置 WEBKIT_DISABLE_DMABUF_RENDERER，将使用该值，此设置不生效。',
     openNewWindowFailedMsg: '无法在新窗口中打开文件。当前文档未更改。',
     openElsewhereMsg: '此文件已在另一个窗口中打开。请在该窗口中编辑它。',
     unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
@@ -894,6 +1012,8 @@ var _UI_STRINGS = {
     recentFiles: '最近的文件', rememberRecent: '记住最近的文件', clearRecent: '清除',
     settings: '设置', interfaceLanguage: '界面语言', spellCheck: '拼写检查', addLanguage: '添加拼写检查语言…',
     appearance: '外观', themeDark: '深色', themeLight: '浅色',
+    documentsFolder: '文档文件夹', templatesFolder: '模板文件夹',
+    chooseFolder: '选择…', resetFolder: '重置', folderNotSet: '未设置',
     noRecentFiles: '暂无最近的文件', openFailed: '无法打开文件',
     openFailedMsg: '无法打开文件。它可能已被移动、重命名或删除。',
     openErrorMsg: '无法打开文件。它不是有效的文档，或者已损坏。',
@@ -916,6 +1036,9 @@ var _UI_STRINGS = {
     openFile: 'ファイルを開く', editPdf: 'PDF を編集', newDocument: '新規ドキュメント', newSpreadsheet: '新規スプレッドシート',
     newPresentation: '新規プレゼンテーション', unsavedChanges: '未保存の変更',
     newFromTemplate: 'テンプレートから新規作成…', templates: 'テンプレート',
+    dmabufSetting: 'ハードウェアアクセラレーション', dmabufAuto: '自動', dmabufOn: 'オン', dmabufOff: 'オフ',
+    dmabufRestart: 'アプリを再起動すると反映されます。',
+    dmabufEnvSet: 'アプリは WEBKIT_DISABLE_DMABUF_RENDERER を設定した状態で起動されました。その値が使われ、この設定は無効です。',
     openNewWindowFailedMsg: '新しいウィンドウでファイルを開けませんでした。現在のドキュメントは変更されていません。',
     openElsewhereMsg: 'このファイルは別のウィンドウで既に開かれています。そのウィンドウで作業してください。',
     unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
@@ -929,6 +1052,8 @@ var _UI_STRINGS = {
     recentFiles: '最近使用したファイル', rememberRecent: '最近使用したファイルを記憶する', clearRecent: 'クリア',
     settings: '設定', interfaceLanguage: '表示言語', spellCheck: 'スペルチェック', addLanguage: 'スペルチェックの言語を追加…',
     appearance: '外観', themeDark: 'ダーク', themeLight: 'ライト',
+    documentsFolder: 'ドキュメントのフォルダー', templatesFolder: 'テンプレートのフォルダー',
+    chooseFolder: '選択…', resetFolder: 'リセット', folderNotSet: '未設定',
     noRecentFiles: '最近使用したファイルはありません', openFailed: 'ファイルを開けませんでした',
     openFailedMsg: 'ファイルを開けませんでした。移動、名前の変更、または削除された可能性があります。',
     openErrorMsg: 'ファイルを開けませんでした。有効なドキュメントではないか、破損しています。',
@@ -1914,7 +2039,8 @@ window._eoAddLanguage = _eoAddLanguage;
 
 // ── Start screen settings panel ──
 // The gear in the top right corner opens a small panel with the interface
-// language, "Add spell check language…" and the recent files switch.
+// language, "Add spell check language…", the recent files switch and the
+// folders the file dialogs start in.
 
 function _eoSettingsParts() {
   var toggle = document.getElementById('settings-toggle');
@@ -2011,6 +2137,65 @@ function _eoInitThemeChoice() {
   if (shortcut && /Mac/.test(navigator.platform)) shortcut.textContent = '⌘ O';
 }
 
+// The folders the Open, Save As and New from template dialogs start in. The
+// backend opens the folder dialog and keeps the choice (default_folders.rs):
+// the webview only names which of the two folders, and shows the answer.
+var EO_FOLDER_LABELS = { documents: 'documentsFolder', templates: 'templatesFolder' };
+var _eoDefaultFolders = { documents: null, templates: null };
+
+function _eoFolderParts(kind) {
+  var path = document.getElementById(kind + '-folder-path');
+  var choose = document.getElementById(kind + '-folder-choose');
+  var reset = document.getElementById(kind + '-folder-reset');
+  if (!path || !choose || !reset) return null;
+  return { path: path, choose: choose, reset: reset };
+}
+
+// folders: what the backend answered, or nothing to repaint the last answer
+// in another language.
+function _eoRenderDefaultFolders(folders) {
+  if (folders) _eoDefaultFolders = folders;
+  Object.keys(EO_FOLDER_LABELS).forEach(function(kind) {
+    var parts = _eoFolderParts(kind);
+    if (!parts) return;
+    var folder = _eoDefaultFolders[kind] || '';
+    parts.path.textContent = folder || _t('folderNotSet');
+    parts.path.title = folder;
+    // Reset goes away with the folder: the focus it had moves to Choose.
+    if (!folder && document.activeElement === parts.reset) parts.choose.focus();
+    parts.reset.hidden = !folder;
+  });
+}
+
+function _eoLogFolderError(e) {
+  window._eoLog('[EO] Default folder not changed: ' + (e.message || e));
+}
+
+function _eoChooseDefaultFolder(kind) {
+  return invoke('pick_default_folder', { kind: kind, title: _t(EO_FOLDER_LABELS[kind]) })
+    .then(_eoRenderDefaultFolders)
+    .catch(_eoLogFolderError);
+}
+
+function _eoResetDefaultFolder(kind) {
+  return invoke('clear_default_folder', { kind: kind })
+    .then(_eoRenderDefaultFolders)
+    .catch(_eoLogFolderError);
+}
+
+function _eoInitDefaultFolders() {
+  Object.keys(EO_FOLDER_LABELS).forEach(function(kind) {
+    var parts = _eoFolderParts(kind);
+    if (!parts) return;
+    parts.choose.addEventListener('click', function() { _eoChooseDefaultFolder(kind); });
+    parts.reset.addEventListener('click', function() { _eoResetDefaultFolder(kind); });
+  });
+  _eoRenderDefaultFolders();
+  invoke('default_folders_state')
+    .then(_eoRenderDefaultFolders)
+    .catch(function(e) { window._eoLog('[EO] Default folders unavailable: ' + (e.message || e)); });
+}
+
 // options.onLanguageChange: runs after the UI language is stored.
 // options.onRecentChange: runs after the recent files switch is stored.
 function _eoInitStartSettings(options) {
@@ -2018,6 +2203,7 @@ function _eoInitStartSettings(options) {
   if (!parts) return;
   options = options || {};
   _eoInitThemeChoice();
+  _eoInitDefaultFolders();
 
   parts.toggle.addEventListener('click', _eoOnSettingsToggleClick);
   document.addEventListener('keydown', _eoOnSettingsKeydown);
@@ -2025,6 +2211,7 @@ function _eoInitStartSettings(options) {
 
   document.getElementById('lang-select').addEventListener('change', function() {
     window._eoSetLang(this.value);
+    _eoRenderDefaultFolders();
     if (options.onLanguageChange) options.onLanguageChange();
   });
 
@@ -2038,9 +2225,42 @@ function _eoInitStartSettings(options) {
       .then(done)
       .catch(function(e) { window._eoLog('[EO] Recent files toggle failed: ' + (e.message || e)); });
   });
+
+  _eoInitDmabufSetting();
 }
 window._eoInitStartSettings = _eoInitStartSettings;
 window._eoCloseSettings = _eoCloseSettings;
+
+// Linux only: the hardware acceleration choice (automatic, on or off). The
+// backend says whether this system has it and what is saved. A change applies
+// after the app restarts; if the environment already sets the variable, that
+// value wins and the note says so.
+function _eoInitDmabufSetting() {
+  var section = document.getElementById('dmabuf-section');
+  var select = document.getElementById('dmabuf-select');
+  var envNote = document.getElementById('dmabuf-env');
+  if (!section || !select) return;
+
+  var saved = 'auto';
+  invoke('dmabuf_setting_state').then(function(state) {
+    if (!state || !state.supported) return;
+    saved = state.setting;
+    select.value = saved;
+    if (envNote) envNote.hidden = !state.envSet;
+    section.hidden = false;
+  }).catch(function(e) {
+    window._eoLog('[EO] Hardware acceleration setting not read: ' + (e.message || e));
+  });
+
+  select.addEventListener('change', function() {
+    invoke('set_dmabuf_setting', { setting: select.value })
+      .then(function() { saved = select.value; })
+      .catch(function(e) {
+        window._eoLog('[EO] Hardware acceleration setting not stored: ' + (e.message || e));
+        select.value = saved;
+      });
+  });
+}
 
 // The backend starts its error with this when it may not write the file: a
 // read-only file or a folder the user cannot write to.
@@ -3828,10 +4048,12 @@ async function _eoOpenGranted(file) {
     return;
   }
   var docType = _eoDocTypeForPath(file.name);
+  var openId = _eoOpenPhases.begin();
   _eoShowOpening(_eoOpeningFileText(file.name));
 
   try {
-    var b64data = await invoke(_eoOpenCommandForPath(file.name), { token: file.token });
+    var b64data = await invoke(_eoOpenCommandForPath(file.name), { token: file.token, openId: openId });
+    _eoOpenPhases.mark('result');
     window._pendingFileData = { data: b64data, path: file.name, name: file.name };
     // Converting did not need the font cache; the editor does.
     await _eoWaitForFonts();
@@ -3845,6 +4067,7 @@ async function _eoOpenGranted(file) {
     }
   } catch(e) {
     window._eoLog('[EO] open-file: conversion failed: ' + (e.message || e));
+    _eoOpenPhases.end();
     _eoHideOpening();
     await _eoShowOpenError(e);
   }
@@ -3880,20 +4103,24 @@ function _eoNewDocumentName(docType) {
 // no file behind it (create_from_template), and the title of any new document.
 async function _eoCreateFromTemplate(file) {
   var docType = _eoDocTypeForPath(file.name);
+  var openId = _eoOpenPhases.begin();
   _eoShowOpening(_eoOpeningFileText(file.name));
   try {
-    var b64data = await invoke('create_from_template', { token: file.token });
+    var b64data = await invoke('create_from_template', { token: file.token, openId: openId });
+    _eoOpenPhases.mark('result');
     _eoTemplateBaseName = _eoWithoutExtension(file.name);
     window._pendingFileData = { data: b64data, path: null, name: _eoNewDocumentName(docType) };
     await _eoWaitForFonts();
     if (!window._openEditor) {
       window._eoLog('[OPEN] editor launcher unavailable: no new document from ' + file.name);
+      _eoOpenPhases.end();
       _eoHideOpening();
       return;
     }
     window._openEditor(docType);
   } catch(e) {
     window._eoLog('[EO] new from template: conversion failed: ' + (e.message || e));
+    _eoOpenPhases.end();
     _eoHideOpening();
     await _eoShowOpenError(e);
   }

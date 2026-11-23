@@ -51,6 +51,74 @@
       }
     }
 
+    // sdk_min and sdk_all are marked when the editor frame has evaluated each
+    // part of sdkjs, seen from a global that part defines: word/api.js,
+    // cell/api.js and slide/api.js export the editor's API in the min part, and
+    // common/openxml.js exports openXml in the rest. With the release frontend
+    // the parts are the bundles sdk-all-min.js and sdk-all.js; with the develop
+    // frontend of the Dev Builds, the same files of sdkjs loaded one by one.
+    // The PDF editor runs the word sdkjs. Keyed on the document type the
+    // editor was opened with.
+    var SDK_PHASE_GLOBALS = {
+      word:  { sdk_min: ['Asc', 'asc_docs_api'],    sdk_all: ['AscCommon', 'openXml'] },
+      pdf:   { sdk_min: ['Asc', 'asc_docs_api'],    sdk_all: ['AscCommon', 'openXml'] },
+      cell:  { sdk_min: ['Asc', 'spreadsheet_api'], sdk_all: ['AscCommon', 'openXml'] },
+      slide: { sdk_min: ['Asc', 'asc_docs_api'],    sdk_all: ['AscCommon', 'openXml'] },
+    };
+    var SDK_PHASES = ['sdk_min', 'sdk_all'];
+
+    // The docs API names the editor's iframe frameEditor. sdkjs's helper
+    // frames, such as asc_pasteFrame, reach the bridge too and are not watched.
+    function _isEditorFrame(win) {
+      try {
+        var frame = win.frameElement;
+        if (!frame) return false;
+        return frame.name === 'frameEditor';
+      } catch(e) {
+        return false;
+      }
+    }
+
+    function _sdkGlobalDefined(win, path) {
+      var owner = win[path[0]];
+      if (!owner) return false;
+      return owner[path[1]] !== undefined;
+    }
+
+    // One poll per editor frame element, which stays while its window goes
+    // from about:blank to the editor: either can be the first contact. It
+    // reads the frame's current window on every turn and stops once both
+    // phases are marked, when the open ends (document_ready ends it), or
+    // after 30 s. A failure here never stops the bridge from being injected.
+    function _installSdkPhaseMarks(win) {
+      try {
+        if (!_isEditorFrame(win)) return;
+        var frame = win.frameElement;
+        if (frame.__eoSdkPhaseWatch) return;
+        frame.__eoSdkPhaseWatch = true;
+        var globals = SDK_PHASE_GLOBALS[window.AscDesktopEditor._currentDocType];
+        if (!globals) return;
+        var next = 0;
+        var interval = setInterval(function() {
+          try {
+            if (!window._eoOpenPhases.inProgress()) {
+              clearInterval(interval);
+              return;
+            }
+            var current = frame.contentWindow;
+            while (next < SDK_PHASES.length && _sdkGlobalDefined(current, globals[SDK_PHASES[next]])) {
+              window._eoOpenPhases.mark(SDK_PHASES[next]);
+              next += 1;
+            }
+            if (next === SDK_PHASES.length) clearInterval(interval);
+          } catch(e) {
+            clearInterval(interval);
+          }
+        }, 10);
+        setTimeout(function() { clearInterval(interval); }, 30000);
+      } catch(e) {}
+    }
+
     // sdkjs names the document canvases id_viewer and id_viewer_overlay in the
     // word and slide editors, and ws-canvas* in the spreadsheet. Two callers
     // need this test from different starting points: the GTK pinch hit test
@@ -1043,6 +1111,8 @@
           setTimeout(function() { clearInterval(tabsTemplateInterval); }, 30000);
           // ── END TABS FIX ──────────────────────────────────────────────
         }
+
+        _installSdkPhaseMarks(win);
       } catch(e) {
         _log('[INJECT] ERROR:', e.message);
       }
@@ -1114,6 +1184,7 @@
       // before the iframe is created so injection does not race LoadDocumentFonts.
       await window._eoWaitForFonts();
       await _prepareSystemFonts();
+      window._eoOpenPhases.mark('fonts');
       if (!window._pendingFileData) {
         try {
           var b64 = await window.__TAURI__.core.invoke('create_new', { docType: docType });
@@ -1164,6 +1235,7 @@
         },
         events: {
           onAppReady: function() {
+            window._eoOpenPhases.mark('app_ready');
             var allFrames = document.querySelectorAll('iframe');
             _log('[EO] App ready: docType=' + docType + ' frames=' + allFrames.length);
             for (var fi = 0; fi < allFrames.length; fi++) {
@@ -1178,6 +1250,8 @@
             _loadSystemFonts();
           },
           onDocumentReady: function() {
+            window._eoOpenPhases.mark('document_ready');
+            window._eoOpenPhases.end();
             _log('[EO] Document ready: docType=' + docType);
           },
           onError: function(event) {
@@ -1190,6 +1264,7 @@
           }
         }
       });
+      window._eoOpenPhases.mark('iframe');
     }
 
     document.addEventListener('keydown', function(e) {
@@ -1254,13 +1329,16 @@
         window._eoOpenMarkdown(file);
         return true;
       }
+      var openId = window._eoOpenPhases.begin();
       window._eoShowOpening(window._eoOpeningFileText(file.name));
       try {
-        var b64data = await window.__TAURI__.core.invoke(window._eoOpenCommandForPath(file.name), { token: file.token });
+        var b64data = await window.__TAURI__.core.invoke(window._eoOpenCommandForPath(file.name), { token: file.token, openId: openId });
+        window._eoOpenPhases.mark('result');
         window._pendingFileData = { data: b64data, path: file.name, name: file.name };
         openEditor(window._eoDocTypeForPath(file.name));
         return true;
       } catch(e) {
+        window._eoOpenPhases.end();
         // Without a dialog the app just drops back to the start screen and the
         // reason only reaches the log: the user cannot tell a damaged file from
         // a broken app (Issue #38).
@@ -1321,11 +1399,14 @@
       window._eoShowOpening(window._eoOpeningFileText(pending.name));
 
       var docType = window._eoDocTypeForPath(pending.name);
+      var openId = window._eoOpenPhases.begin();
 
-      window.__TAURI__.core.invoke(window._eoOpenCommandForPath(pending.name), { token: pending.token }).then(function(b64data) {
+      window.__TAURI__.core.invoke(window._eoOpenCommandForPath(pending.name), { token: pending.token, openId: openId }).then(function(b64data) {
+        window._eoOpenPhases.mark('result');
         window._pendingFileData = { data: b64data, path: pending.name, name: pending.name };
         openEditor(docType);
       }).catch(function(e) {
+        window._eoOpenPhases.end();
         window._eoLog('[EO] Error reopening file:', e);
         window._eoHideOpening();
         startScreen.classList.remove('hidden');

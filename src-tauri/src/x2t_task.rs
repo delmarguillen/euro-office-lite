@@ -39,8 +39,8 @@ pub fn is_x2t_binary(name: &str) -> bool {
     }
 }
 
-// The x2t the PDF export and the font scan run, and on Windows every other
-// conversion too: the first match in x2t_search_dirs.
+// The x2t the PDF export and the font scan run, and on Windows and Linux every
+// other conversion too: the first match in x2t_search_dirs.
 pub fn find_x2t(
     binaries_dir: &std::path::Path,
     exe_dir: Option<&std::path::Path>,
@@ -62,9 +62,12 @@ pub fn find_x2t(
 // C++ runtime, and the loader looks in the executable's own folder before
 // System32, so an older runtime installed system-wide never wins.
 // Elsewhere: binaries/, then its parent, then Contents/MacOS, then `exe_dir`
-// (the folder of the app's executable). On Linux and macOS binaries/ holds its
-// own copy of x2t, so the PDF export and the font scan never run the sidecar
-// that the other conversions use.
+// (the folder of the app's executable). The .deb ships x2t in binaries/ only:
+// x2t reads DoctRenderer.config from the folder its own file is in, links
+// resolved, and that file ships in binaries/. A .app also has x2t in
+// binaries/, so its PDF export and font scan never run the sidecar in
+// Contents/MacOS that its other conversions use. A build run from the target
+// folder has no binaries/ and finds the sidecar Tauri copies next to the app.
 fn x2t_search_dirs(
     binaries_dir: &std::path::Path,
     exe_dir: Option<&std::path::Path>,
@@ -1963,11 +1966,46 @@ mod tests {
         }
     }
 
-    // .deb: the PDF export and the font scan run binaries/x2t, never the
-    // sidecar in usr/bin next to the app.
+    // .deb: the only x2t is in binaries/, next to DoctRenderer.config and its
+    // libraries; usr/bin holds the app alone.
     #[test]
-    fn linux_layout_finds_the_copy_in_binaries() {
+    fn the_deb_layout_finds_its_only_x2t_in_binaries() {
         let root = scratch_dir("deb");
+        let binaries = root.join("usr/lib/Euro-Office-Lite/binaries");
+        let exe_dir = root.join("usr/bin");
+        touch(&binaries.join(x2t_name()));
+        touch(&binaries.join("DoctRenderer.config"));
+        touch(&binaries.join("libkernel.so"));
+        touch(&exe_dir.join("euro-office-lite"));
+
+        assert_eq!(
+            find_x2t(&binaries, Some(&exe_dir)),
+            Ok(binaries.join(x2t_name()))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // Flatpak: the same layout under /app.
+    #[test]
+    fn the_flatpak_layout_finds_its_only_x2t_in_binaries() {
+        let root = scratch_dir("flatpak");
+        let binaries = root.join("app/lib/Euro-Office-Lite/binaries");
+        let exe_dir = root.join("app/bin");
+        touch(&binaries.join(x2t_name()));
+        touch(&exe_dir.join("euro-office-lite"));
+
+        assert_eq!(
+            find_x2t(&binaries, Some(&exe_dir)),
+            Ok(binaries.join(x2t_name()))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // An x2t in usr/bin, where earlier packages installed the sidecar, is
+    // not the one run while binaries/ has its own.
+    #[test]
+    fn an_x2t_in_usr_bin_does_not_win_over_the_one_in_binaries() {
+        let root = scratch_dir("deb-sidecar");
         let binaries = root.join("usr/lib/Euro-Office-Lite/binaries");
         let exe_dir = root.join("usr/bin");
         touch(&binaries.join(x2t_name()));
@@ -1978,6 +2016,24 @@ mod tests {
         assert_eq!(
             find_x2t(&binaries, Some(&exe_dir)),
             Ok(binaries.join(x2t_name()))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // A build run from the target folder has no binaries/: x2t is the
+    // sidecar tauri-build copies next to the app.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_build_run_from_the_target_folder_finds_the_sidecar_next_to_the_app() {
+        let root = scratch_dir("target");
+        let exe_dir = root.join("target/debug");
+        let binaries = exe_dir.join("binaries");
+        touch(&exe_dir.join(x2t_name()));
+        touch(&exe_dir.join("euro-office-lite"));
+
+        assert_eq!(
+            find_x2t(&binaries, Some(&exe_dir)),
+            Ok(exe_dir.join(x2t_name()))
         );
         let _ = std::fs::remove_dir_all(&root);
     }

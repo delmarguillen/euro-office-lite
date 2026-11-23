@@ -64,6 +64,11 @@ impl PathGrants {
         GrantedFile { token, name }
     }
 
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.grants.lock().unwrap().len()
+    }
+
     fn resolve_at(&self, token: &str, kind: GrantKind, now: Instant) -> Result<PathBuf, String> {
         let mut grants = self.grants.lock().unwrap();
         grants.retain(|_, grant| grant.expires > now);

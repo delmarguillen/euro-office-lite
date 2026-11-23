@@ -149,8 +149,8 @@ report	amp-name.docx	special-temp	save	text.sha256	732da78e7ced6a769751f0177b9f3
 report	arabic-rtl.docx	plain	open	status	ok
 report	arabic-rtl.docx	plain	pdf	status	ok
 report	arabic-rtl.docx	plain	save	status	ok
-report	basic.odp	plain	open	editor.sha256	16ca7c2fb6fe74d3307cf3f6923c319ba79dbedaf44c876ddb6b154b5a493c91
-report	basic.odp	plain	open	editor.size	8709
+report	basic.odp	plain	open	editor.sha256	ad5c5f58599847305710aec89a1bfd7cd7f7e6862a7710491973c7393c990657
+report	basic.odp	plain	open	editor.size	8721
 report	basic.odp	plain	open	status	ok
 report	basic.odp	plain	pdf	class	comparable
 report	basic.odp	plain	pdf	expected	ok
@@ -169,7 +169,7 @@ report	basic.odp	plain	save	part:styles.xml	79043eeeacc60ff81340a0e1360acf2a22bc
 report	basic.odp	plain	save	roundtrip.text	equal
 report	basic.odp	plain	save	status	ok
 report	basic.odp	plain	save	text.sha256	2e99f8cd8131c3cd802ad5877616bb0c204ccb1c881078fe9bfc1254e7e32b61
-report	basic.ods	plain	open	editor.size	1584
+report	basic.ods	plain	open	editor.size	1596
 report	basic.ods	plain	open	status	ok
 report	basic.ods	plain	pdf	class	comparable
 report	basic.ods	plain	pdf	expected	ok
@@ -188,8 +188,8 @@ report	basic.ods	plain	save	part:styles.xml	008d5aa2a615db5ff6a8bed588282a00489a
 report	basic.ods	plain	save	roundtrip.text	equal
 report	basic.ods	plain	save	status	ok
 report	basic.ods	plain	save	text.sha256	83b496ec04221a99c5f89d031a4ba443a5ca15f4884d869141279611bafecb80
-report	basic.odt	plain	open	editor.sha256	accc5447d7036e519bb3a5a2d2ef28f1e90e4c12137e8db7b274cdda7bb730e0
-report	basic.odt	plain	open	editor.size	3593
+report	basic.odt	plain	open	editor.sha256	cd1253cb6d045b35fad3e2bd2a1f98626160598ace7b557fe14ed2e521dda08a
+report	basic.odt	plain	open	editor.size	3605
 report	basic.odt	plain	open	status	ok
 report	basic.odt	plain	pdf	class	comparable
 report	basic.odt	plain	pdf	expected	ok
@@ -342,7 +342,7 @@ report	rich.docx	plain	save	part:word/webSettings.xml	a04f5c27ac024c4601ef7b1427
 report	rich.docx	plain	save	roundtrip.text	equal
 report	rich.docx	plain	save	status	ok
 report	rich.docx	plain	save	text.sha256	147704956b2a24489de8f9e7dc9533c833f390673d5fb9c35d0a2daa4142ef13
-report	sheet.ods	plain	open	editor.size	3621
+report	sheet.ods	plain	open	editor.size	3633
 report	sheet.ods	plain	open	status	ok
 report	sheet.ods	plain	pdf	class	comparable
 report	sheet.ods	plain	pdf	expected	ok
@@ -369,8 +369,8 @@ report	sheet.xlsx	plain	open	status	ok
 report	sheet.xlsx	plain	pdf	status	ok
 report	sheet.xlsx	plain	save	status	ok
 report	sheet.xlsx	plain	save_as.csv	status	ok
-report	slides.odp	plain	open	editor.sha256	a67b5f703f649b9f4c84fcd8a80e49c2832dad4fa99444af50c070d5da38ee42
-report	slides.odp	plain	open	editor.size	11802
+report	slides.odp	plain	open	editor.sha256	ac644508f6b31ecb55c4f77a4bc13c488a8a9cd837e396736e7b550986cce281
+report	slides.odp	plain	open	editor.size	11814
 report	slides.odp	plain	open	status	ok
 report	slides.odp	plain	pdf	class	comparable
 report	slides.odp	plain	pdf	expected	ok
@@ -431,13 +431,13 @@ report	slides.odp	plain	save_as.pptx	text.sha256	335cf64c636edbbfc2b1b6d085c9a4d
 report	slides.pptx	plain	open	status	ok
 report	slides.pptx	plain	pdf	status	ok
 report	slides.pptx	plain	save	status	ok
-report	utf16be.txt	plain	open	editor.size	1677
+report	utf16be.txt	plain	open	editor.size	1693
 report	utf16be.txt	plain	open	status	ok
 report	utf16be.txt	plain	save	bytes.sha256	83b5ba272356cdcc0530b1166b54b5408d9813c2ad86c69ba5bc77fc5edf72f6
 report	utf16be.txt	plain	save	class	comparable
 report	utf16be.txt	plain	save	roundtrip.bytes	equal
 report	utf16be.txt	plain	save	status	ok
-report	utf16le-crlf.txt	plain	open	editor.size	1693
+report	utf16le-crlf.txt	plain	open	editor.size	1709
 report	utf16le-crlf.txt	plain	open	status	ok
 report	utf16le-crlf.txt	plain	save	bytes.sha256	463717ceefb69aaaca09500623f1ad2487cab4f1f8f940f0bf4d068923383044
 report	utf16le-crlf.txt	plain	save	class	comparable
@@ -449,11 +449,11 @@ report	utf16le-tab.csv	plain	save	bytes.sha256	f2f0186361a3f24f460404743aafe24bb
 report	utf16le-tab.csv	plain	save	class	comparable
 report	utf16le-tab.csv	plain	save	roundtrip.bytes	equal
 report	utf16le-tab.csv	plain	save	status	ok
-report	utf8-bom-semicolon-crlf.csv	plain	open	editor.size	1794
+report	utf8-bom-semicolon-crlf.csv	plain	open	editor.size	1777
 report	utf8-bom-semicolon-crlf.csv	plain	open	status	ok
-report	utf8-bom-semicolon-crlf.csv	plain	save	bytes.sha256	75e16b457e365a33a39455fa82cbb0377dcf0167754e0ec3c7df68076a917a19
+report	utf8-bom-semicolon-crlf.csv	plain	save	bytes.sha256	fa9c9beae7e4c9fd53fe30c41f514b2881a2833be3e7ecf9d9ce01425b286130
 report	utf8-bom-semicolon-crlf.csv	plain	save	class	comparable
-report	utf8-bom-semicolon-crlf.csv	plain	save	roundtrip.bytes	diff:57
+report	utf8-bom-semicolon-crlf.csv	plain	save	roundtrip.bytes	equal
 report	utf8-bom-semicolon-crlf.csv	plain	save	status	ok
 report	utf8-comma-lf-final.csv	plain	open	editor.size	1775
 report	utf8-comma-lf-final.csv	plain	open	status	ok
@@ -467,13 +467,13 @@ report	utf8-comma-nofinal.csv	plain	save	bytes.sha256	fe85cb03ed3ba2bc4edd539731
 report	utf8-comma-nofinal.csv	plain	save	class	comparable
 report	utf8-comma-nofinal.csv	plain	save	roundtrip.bytes	equal
 report	utf8-comma-nofinal.csv	plain	save	status	ok
-report	utf8.txt	plain	open	editor.size	1713
+report	utf8.txt	plain	open	editor.size	1729
 report	utf8.txt	plain	open	status	ok
 report	utf8.txt	plain	save	bytes.sha256	c6e78489049a71c662a99fb4231c3bf73e95a1241365ec702c9dc617e57ec37f
 report	utf8.txt	plain	save	class	comparable
 report	utf8.txt	plain	save	roundtrip.bytes	equal
 report	utf8.txt	plain	save	status	ok
-report	win1252-crlf.txt	plain	open	editor.size	1681
+report	win1252-crlf.txt	plain	open	editor.size	1697
 report	win1252-crlf.txt	plain	open	status	ok
 report	win1252-crlf.txt	plain	save	bytes.sha256	e0954f52f5befc3a6a47a187e87f1c720f554ccebbc5d1c53b6a44682502e8ec
 report	win1252-crlf.txt	plain	save	class	comparable
@@ -580,9 +580,9 @@ run	arabic-rtl.docx	plain	save	signal
 run	arabic-rtl.docx	plain	save	status	ok
 run	basic.odp	plain	open	exit	0
 run	basic.odp	plain	open	output	
-run	basic.odp	plain	open	sha256	16ca7c2fb6fe74d3307cf3f6923c319ba79dbedaf44c876ddb6b154b5a493c91
+run	basic.odp	plain	open	sha256	ad5c5f58599847305710aec89a1bfd7cd7f7e6862a7710491973c7393c990657
 run	basic.odp	plain	open	signal	
-run	basic.odp	plain	open	size	8709
+run	basic.odp	plain	open	size	8721
 run	basic.odp	plain	open	status	ok
 run	basic.odp	plain	pdf	exit	0
 run	basic.odp	plain	pdf	output	files/basic.odp/plain/export.pdf
@@ -595,7 +595,7 @@ run	basic.odp	plain	save	status	ok
 run	basic.ods	plain	open	exit	0
 run	basic.ods	plain	open	output	
 run	basic.ods	plain	open	signal	
-run	basic.ods	plain	open	size	1584
+run	basic.ods	plain	open	size	1596
 run	basic.ods	plain	open	status	ok
 run	basic.ods	plain	pdf	exit	0
 run	basic.ods	plain	pdf	output	files/basic.ods/plain/export.pdf
@@ -607,9 +607,9 @@ run	basic.ods	plain	save	signal
 run	basic.ods	plain	save	status	ok
 run	basic.odt	plain	open	exit	0
 run	basic.odt	plain	open	output	
-run	basic.odt	plain	open	sha256	accc5447d7036e519bb3a5a2d2ef28f1e90e4c12137e8db7b274cdda7bb730e0
+run	basic.odt	plain	open	sha256	cd1253cb6d045b35fad3e2bd2a1f98626160598ace7b557fe14ed2e521dda08a
 run	basic.odt	plain	open	signal	
-run	basic.odt	plain	open	size	3593
+run	basic.odt	plain	open	size	3605
 run	basic.odt	plain	open	status	ok
 run	basic.odt	plain	pdf	exit	0
 run	basic.odt	plain	pdf	output	files/basic.odt/plain/export.pdf
@@ -724,7 +724,7 @@ run	rich.docx	plain	save	status	ok
 run	sheet.ods	plain	open	exit	0
 run	sheet.ods	plain	open	output	
 run	sheet.ods	plain	open	signal	
-run	sheet.ods	plain	open	size	3621
+run	sheet.ods	plain	open	size	3633
 run	sheet.ods	plain	open	status	ok
 run	sheet.ods	plain	pdf	exit	0
 run	sheet.ods	plain	pdf	output	files/sheet.ods/plain/export.pdf
@@ -757,9 +757,9 @@ run	sheet.xlsx	plain	save_as.csv	signal
 run	sheet.xlsx	plain	save_as.csv	status	ok
 run	slides.odp	plain	open	exit	0
 run	slides.odp	plain	open	output	
-run	slides.odp	plain	open	sha256	a67b5f703f649b9f4c84fcd8a80e49c2832dad4fa99444af50c070d5da38ee42
+run	slides.odp	plain	open	sha256	ac644508f6b31ecb55c4f77a4bc13c488a8a9cd837e396736e7b550986cce281
 run	slides.odp	plain	open	signal	
-run	slides.odp	plain	open	size	11802
+run	slides.odp	plain	open	size	11814
 run	slides.odp	plain	open	status	ok
 run	slides.odp	plain	pdf	exit	0
 run	slides.odp	plain	pdf	output	files/slides.odp/plain/export.pdf
@@ -785,7 +785,7 @@ run	slides.pptx	plain	save	status	ok
 run	utf16be.txt	plain	open	exit	0
 run	utf16be.txt	plain	open	output	
 run	utf16be.txt	plain	open	signal	
-run	utf16be.txt	plain	open	size	1677
+run	utf16be.txt	plain	open	size	1693
 run	utf16be.txt	plain	open	status	ok
 run	utf16be.txt	plain	save	exit	0
 run	utf16be.txt	plain	save	output	files/utf16be.txt/plain/save.txt
@@ -796,7 +796,7 @@ run	utf16be.txt	plain	save	status	ok
 run	utf16le-crlf.txt	plain	open	exit	0
 run	utf16le-crlf.txt	plain	open	output	
 run	utf16le-crlf.txt	plain	open	signal	
-run	utf16le-crlf.txt	plain	open	size	1693
+run	utf16le-crlf.txt	plain	open	size	1709
 run	utf16le-crlf.txt	plain	open	status	ok
 run	utf16le-crlf.txt	plain	save	exit	0
 run	utf16le-crlf.txt	plain	save	output	files/utf16le-crlf.txt/plain/save.txt
@@ -818,13 +818,13 @@ run	utf16le-tab.csv	plain	save	status	ok
 run	utf8-bom-semicolon-crlf.csv	plain	open	exit	0
 run	utf8-bom-semicolon-crlf.csv	plain	open	output	
 run	utf8-bom-semicolon-crlf.csv	plain	open	signal	
-run	utf8-bom-semicolon-crlf.csv	plain	open	size	1794
+run	utf8-bom-semicolon-crlf.csv	plain	open	size	1777
 run	utf8-bom-semicolon-crlf.csv	plain	open	status	ok
 run	utf8-bom-semicolon-crlf.csv	plain	save	exit	0
 run	utf8-bom-semicolon-crlf.csv	plain	save	output	files/utf8-bom-semicolon-crlf.csv/plain/save.csv
-run	utf8-bom-semicolon-crlf.csv	plain	save	sha256	75e16b457e365a33a39455fa82cbb0377dcf0167754e0ec3c7df68076a917a19
+run	utf8-bom-semicolon-crlf.csv	plain	save	sha256	fa9c9beae7e4c9fd53fe30c41f514b2881a2833be3e7ecf9d9ce01425b286130
 run	utf8-bom-semicolon-crlf.csv	plain	save	signal	
-run	utf8-bom-semicolon-crlf.csv	plain	save	size	61
+run	utf8-bom-semicolon-crlf.csv	plain	save	size	57
 run	utf8-bom-semicolon-crlf.csv	plain	save	status	ok
 run	utf8-comma-lf-final.csv	plain	open	exit	0
 run	utf8-comma-lf-final.csv	plain	open	output	
@@ -851,7 +851,7 @@ run	utf8-comma-nofinal.csv	plain	save	status	ok
 run	utf8.txt	plain	open	exit	0
 run	utf8.txt	plain	open	output	
 run	utf8.txt	plain	open	signal	
-run	utf8.txt	plain	open	size	1713
+run	utf8.txt	plain	open	size	1729
 run	utf8.txt	plain	open	status	ok
 run	utf8.txt	plain	save	exit	0
 run	utf8.txt	plain	save	output	files/utf8.txt/plain/save.txt
@@ -862,7 +862,7 @@ run	utf8.txt	plain	save	status	ok
 run	win1252-crlf.txt	plain	open	exit	0
 run	win1252-crlf.txt	plain	open	output	
 run	win1252-crlf.txt	plain	open	signal	
-run	win1252-crlf.txt	plain	open	size	1681
+run	win1252-crlf.txt	plain	open	size	1697
 run	win1252-crlf.txt	plain	open	status	ok
 run	win1252-crlf.txt	plain	save	exit	0
 run	win1252-crlf.txt	plain	save	output	files/win1252-crlf.txt/plain/save.txt

@@ -14,6 +14,10 @@ on:
       - 'scripts/apply-patches.mjs'
       - 'scripts/test-sdkjs-*.mjs'
       - 'scripts/test-bridge-*.mjs'
+      - 'scripts/test-frontend-*.mjs'
+      - 'scripts/frontend-unused-files.mjs'
+      - 'scripts/build-frontend-prod.mjs'
+      - 'scripts/validate-frontend-prod.mjs'
       - 'scripts/bridge-test-harness.mjs'
       - 'scripts/spell-languages.mjs'
       - 'src/bridge.js'
@@ -26,6 +30,10 @@ on:
       - 'scripts/apply-patches.mjs'
       - 'scripts/test-sdkjs-*.mjs'
       - 'scripts/test-bridge-*.mjs'
+      - 'scripts/test-frontend-*.mjs'
+      - 'scripts/frontend-unused-files.mjs'
+      - 'scripts/build-frontend-prod.mjs'
+      - 'scripts/validate-frontend-prod.mjs'
       - 'scripts/bridge-test-harness.mjs'
       - 'scripts/spell-languages.mjs'
       - 'src/bridge.js'
@@ -132,3 +140,6 @@ jobs:
           for test in scripts/test-bridge-*.mjs; do
             node "$test"
           done
+
+      - name: Production frontend tests
+        run: node scripts/test-frontend-unused-files.mjs
