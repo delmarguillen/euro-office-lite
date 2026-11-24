@@ -538,7 +538,21 @@ window._eoLog = function() {
 //   sdk_min         the editor frame has evaluated the min part of sdkjs
 //   sdk_all         the editor frame has evaluated the rest of sdkjs
 //   app_ready       the editor's onAppReady
+//   doc_request     sdkjs asked for the document (LocalStartOpen)
+//   doc_decoded     the base64 of the document is decoded into bytes
+//   doc_parsed      sdkjs's openDocument returned: the document is read
+//   doc_fonts       sdkjs finished loading the fonts of the document
+//   doc_images      sdkjs finished loading its images; not marked without images
+//   content_ready   sdkjs is about to send asc_onDocumentContentReady
+//   ui_ready        every handler of asc_onDocumentContentReady has returned
+//   layout          the task that sent it has ended
+//   spell_init      the editor UI took the list of spellcheck languages
 //   document_ready  the editor's onDocumentReady
+//
+// sdkjs loads the rest of itself while the editor UI starts, so app_ready and
+// sdk_all come in either order. From doc_request to spell_init the marks are
+// taken inside the editor frame's own tasks (_eoWatchOpenPhases); the last one
+// waits for the message of the editor frame to reach this page.
 var _eoOpenPhases = (function() {
   var sequence = 0;
   var current = null;
@@ -589,9 +603,53 @@ var _eoOpenPhases = (function() {
     return current !== null;
   }
 
-  return { begin: begin, mark: mark, end: end, inProgress: inProgress };
+  // Whether the open in progress has marked this phase.
+  function has(phase) {
+    return current !== null && current.marked[phase] === true;
+  }
+
+  return { begin: begin, mark: mark, end: end, inProgress: inProgress, has: has };
 })();
 window._eoOpenPhases = _eoOpenPhases;
+
+// The marks of an open that sdkjs's own events give, on the API of the editor
+// frame. Only listeners are added.
+//
+// sdkjs ends its Open action right before it sends asc_onDocumentContentReady,
+// so that is where content_ready is taken, ahead of every handler of the
+// event. The listener added at that moment is the last of the event's list:
+// ui_ready. The microtask queued there runs when the task that sent the event
+// ends, before the one that sends the spellcheck languages: layout.
+// The font and image actions also run for a paste or a font change, and before
+// the document: they count once its bytes are decoded.
+function _eoWatchOpenPhases(api) {
+  if (!api || api.__eoOpenPhasesWatched) return;
+  if (typeof api.asc_registerCallback !== 'function') return;
+  api.__eoOpenPhasesWatched = true;
+  var uiWatched = false;
+  api.asc_registerCallback('asc_onEndAction', function(type, id) {
+    try {
+      if (!_eoOpenPhases.has('doc_decoded')) return;
+      var editorWindow = window.AscDesktopEditor._editorWindow;
+      var actions = editorWindow && editorWindow.Asc && editorWindow.Asc.c_oAscAsyncAction;
+      if (!actions) return;
+      if (id === actions['LoadDocumentFonts']) {
+        _eoOpenPhases.mark('doc_fonts');
+      } else if (id === actions['LoadDocumentImages']) {
+        _eoOpenPhases.mark('doc_images');
+      } else if (id === actions['Open'] && !_eoOpenPhases.has('content_ready')) {
+        _eoOpenPhases.mark('content_ready');
+        Promise.resolve().then(function() { _eoOpenPhases.mark('layout'); });
+        if (!uiWatched) {
+          uiWatched = true;
+          api.asc_registerCallback('asc_onDocumentContentReady', function() {
+            _eoOpenPhases.mark('ui_ready');
+          });
+        }
+      }
+    } catch(e) {}
+  });
+}
 
 var _isWindows = navigator.platform && navigator.platform.indexOf('Win') !== -1;
 var _isMac = navigator.platform && navigator.platform.indexOf('Mac') === 0;
@@ -2341,6 +2399,7 @@ function _loadEditorBin(b64data, fileName, options) {
     for (var i = 0; i < binaryStr.length; i++) {
       bytes[i] = binaryStr.charCodeAt(i);
     }
+    _eoOpenPhases.mark('doc_decoded');
 
     _eoSetDocumentUrls(ref);
 
@@ -2569,6 +2628,7 @@ function _loadEditorBin(b64data, fileName, options) {
     file.data = bytes;
     file.bSerFormat = !isPdf;
     ref.editor.openDocument(file);
+    _eoOpenPhases.mark('doc_parsed');
     ref.ew.AscCommon.History.UserSaveMode = true;
     if (!isPdf) _ensureCoreProps(ref);
 
@@ -3140,6 +3200,7 @@ var SpellCheckBridge = (function() {
       }
       _watchSpellcheckPanel(api, editorWindow, lcids);
       _sendInit(api, lcids);
+      _eoOpenPhases.mark('spell_init');
     });
   }
 
@@ -3289,10 +3350,12 @@ window.AscDesktopEditor = {
       window.AscDesktopEditor._editorWindow = _findEditorWindow(window);
     }
 
+    _eoWatchOpenPhases(api);
     SpellCheckBridge.attach(api);
   },
 
   LocalStartOpen: function() {
+    _eoOpenPhases.mark('doc_request');
     var ref = _getEditor();
     if (!ref.editor) return;
 
