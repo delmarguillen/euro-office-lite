@@ -9,6 +9,7 @@ mod default_folders;
 mod dictionaries;
 mod dictionary_import;
 mod dmabuf_default;
+mod external_links;
 mod file_dialogs;
 mod file_ops;
 mod fonts_state;
