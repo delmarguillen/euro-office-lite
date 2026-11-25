@@ -35,6 +35,9 @@ pub struct AppState {
     // The writes of the open Markdown file under way, counted by the backend
     // (markdown.rs, RunningWrites).
     pub markdown_writes: crate::markdown::RunningWrites,
+    // Held by a write of the Markdown file from its start to its end
+    // (markdown.rs, store_markdown), so two never overlap.
+    pub markdown_write: Mutex<()>,
     // The path a 0-byte file was opened from (#33). It is not in the recent
     // list yet: the file still has no content, and an entry that opens to
     // nothing is worse than no entry. The first save that actually writes it
@@ -1578,6 +1581,7 @@ pub(crate) fn test_state_for(root: &Path, instance: crate::temp_layout::Instance
         modified: Mutex::new(false),
         saves_pending: Mutex::new(0),
         markdown_writes: crate::markdown::RunningWrites::default(),
+        markdown_write: Mutex::new(()),
         pending_recent: Mutex::new(None),
         recovery: Mutex::new(None),
         pending_open: crate::pending_open::PendingOpens::default(),

@@ -493,6 +493,7 @@ fn main() {
             modified: Mutex::new(false),
             saves_pending: Mutex::new(0),
             markdown_writes: markdown::RunningWrites::default(),
+            markdown_write: Mutex::new(()),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
             pending_open: pending_open::PendingOpens::with_launch_file(

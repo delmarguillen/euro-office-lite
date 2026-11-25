@@ -339,14 +339,25 @@ struct SavedMarkdown {
     new_file: bool,
 }
 
+// The lock guards no data: a write that panicked does not stop the next one.
+fn wait_for_the_write_before(state: &AppState) -> std::sync::MutexGuard<'_, ()> {
+    state
+        .markdown_write
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 // Writes `data` (base64) as it is: over the open Markdown file, or to the file
-// a Save token names. Counted as a running write until it returns.
+// a Save token names. Counted as a running write until it returns, the wait
+// for a write that began before it included: the file ends with what the
+// last one to begin wrote.
 fn store_markdown(
     state: &AppState,
     data: &str,
     token: Option<&str>,
 ) -> Result<SavedMarkdown, String> {
     let _running = state.markdown_writes.begin();
+    let _one_at_a_time = wait_for_the_write_before(state);
     let current = state.current_file.lock().unwrap().clone();
     let dest = markdown_save_destination(&state.grants, token, current.clone())?;
     // As the editors' Save As (save_file_as): the other window would write
@@ -883,6 +894,36 @@ mod tests {
 
         // A write that fails ends too.
         assert!(store_markdown(&state, "not base64", None).is_err());
+        assert!(!state.markdown_writes.any());
+    }
+
+    // A write under way holds the lock: the next one is counted as running
+    // at once and writes only when the first has ended.
+    #[test]
+    fn a_write_waits_for_the_one_that_began_before_it() {
+        let dir = test_dir("writes-in-turn");
+        let file = file_with(&dir, "notes.md", b"old\n");
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        open_markdown(&state, &token).unwrap();
+        let first = state.markdown_write.lock().unwrap();
+
+        std::thread::scope(|scope| {
+            let second = scope.spawn(|| store_markdown(&state, TEXT_B64, None).map(|_| ()));
+            let asked = Instant::now();
+            while !state.markdown_writes.any() {
+                assert!(asked.elapsed() < Duration::from_secs(10), "the second write never began");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            assert_eq!(std::fs::read(&file).unwrap(), b"old\n", "written during the first write");
+            assert!(state.markdown_writes.any());
+
+            drop(first);
+
+            second.join().unwrap().unwrap();
+        });
+        assert_eq!(std::fs::read(&file).unwrap(), b"text\n");
         assert!(!state.markdown_writes.any());
     }
 
