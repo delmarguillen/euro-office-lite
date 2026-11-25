@@ -1,7 +1,9 @@
 // Markdown: the text on screen changes while a save is being written, and the
 // page is reloaded as the write ends, before any timer runs again. The reload
 // must show the text that was on screen: the file holds the saved text, so
-// the other one has to be in the recovery copy.
+// the other one has to be in the recovery copy. The same when the write
+// fails: the file holds the text from before, and the screen the one that
+// was being saved.
 //
 // The page's own scripts (src/markdown) run against stand-ins for the
 // webview. The fake backend keeps the file and the recovery copy, which
@@ -38,8 +40,8 @@ function makeBackend(fileText) {
       return { data: toBase64(backend.file), name: NAME };
     },
     // The write waits until the check ends it.
-    save_markdown: ({ data }) => new Promise((resolve) => {
-      backend.write = { data, answer: () => resolve(NAME) };
+    save_markdown: ({ data }) => new Promise((resolve, reject) => {
+      backend.write = { data, answer: () => resolve(NAME), fail: () => reject(new Error('save-denied')) };
     }),
     markdown_recovery_write: ({ data }) => { backend.copy = fromBase64(data); },
     recovery_end: ({ discard }) => { if (discard) backend.copy = null; },
@@ -53,6 +55,8 @@ function makeBackend(fileText) {
   backend.endWrite = () => { backend.file = fromBase64(backend.write.data); };
   // The page hears that the save ended.
   backend.answerSave = () => backend.write.answer();
+  // Nothing is written, and the page hears that the save failed.
+  backend.failSave = () => backend.write.fail();
   return backend;
 }
 
@@ -195,8 +199,43 @@ async function checkSaveThenReload() {
     reloaded.text() === 'B' && !backend.modified, String(reloaded.text()) + ' ' + told(backend));
 }
 
+// The user changes A to B and saves before the copy's timer comes due. The
+// timer comes due while B is written, when B needs no copy, and the write
+// fails: B is in no file.
+async function checkFailedSaveThenReload() {
+  const backend = makeBackend('A');
+  const page = await openPage(backend);
+  await page.type('B');
+  await page.clickSave();
+  await page.runTimers();
+  backend.failSave();
+  await settle();
+  check(results, 'save failed: the file holds A and the recovery copy B',
+    backend.file === 'A' && backend.copy === 'B', told(backend));
+  check(results, 'save failed: the backend counts the document as modified, no save pending',
+    backend.modified && backend.savesPending === 0, told(backend));
+
+  const reloaded = await reloadPage(backend);
+  check(results, 'save failed, reload: the page shows B', reloaded.text() === 'B', String(reloaded.text()));
+  check(results, 'save failed, reload: B is marked modified', backend.modified, told(backend));
+}
+
+// The user undoes back to A while a write that fails runs: the screen shows
+// the file again, and the copy of B stays.
+async function checkFailedSaveAfterUndo() {
+  const { backend, page } = await saveBOverA();
+  await page.type('A');
+  backend.failSave();
+  await settle();
+  check(results, 'undo, save failed: the copy on disk is not dropped', backend.copy === 'B', told(backend));
+  check(results, 'undo, save failed: the backend counts nothing as unsaved',
+    !backend.modified && backend.savesPending === 0, told(backend));
+}
+
 await checkUndoThenReloadAfterTheSave();
 await checkUndoThenReloadAsTheWriteEnds();
 await checkTypingOnThenReload();
 await checkSaveThenReload();
+await checkFailedSaveThenReload();
+await checkFailedSaveAfterUndo();
 finish(results);

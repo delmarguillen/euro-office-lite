@@ -358,22 +358,26 @@
     });
   }
 
-  // For the end of a save that wrote the file. The copy on disk is of text
-  // from before the save or typed during it, and the backend has kept it.
-  // Decided when its turn comes, with the text then on screen:
-  // - the saved text: the file holds it, and the copy is dropped;
-  // - any other text: its copy replaces the one on disk in one step
+  // For the end of a save's write; `written` when it wrote the file. The copy
+  // on disk is of text from before the save or typed during it, and the
+  // backend has kept it. Decided when its turn comes, with the text then on
+  // screen:
+  // - text that is in no file, which after a failed write can be the one it
+  //   was writing: its copy replaces the one on disk in one step
   //   (recovery.rs, write_markdown_copy), without waiting for the timer.
   //   Nothing is dropped: the older copy stays until the new one is written.
-  function settleRecoveryCopy() {
+  // - the text just written: the file holds it, and the copy is dropped.
+  // - the text the file had, after a failed write: the copy stays.
+  function settleRecoveryCopy(written) {
     return queueRecoveryStep(function() {
       if (recoveryStopped) return null;
       var text = currentText();
-      if (!Text.needsRecoveryCopy(saveState, text)) {
-        return invoke('recovery_end', { discard: true });
+      if (Text.needsRecoveryCopy(saveState, text)) {
+        var data = bytesToBase64(Text.encode(text, format));
+        return invoke('markdown_recovery_write', { data: data });
       }
-      var data = bytesToBase64(Text.encode(text, format));
-      return invoke('markdown_recovery_write', { data: data });
+      if (!written) return null;
+      return invoke('recovery_end', { discard: true });
     });
   }
 
@@ -486,7 +490,7 @@
       return name;
     } finally {
       saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: written });
-      if (written) await settleRecoveryCopy();
+      await settleRecoveryCopy(written);
       // The backend ends no save on its own. The modified flag goes first, so
       // it never sees both off while the text on screen is not the saved one.
       await reportModified(true);
