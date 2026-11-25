@@ -68,13 +68,14 @@ function installFakeTauri(fake) {
       return args.token ? 'copy.md' : fake.name;
     },
     markdown_recovery_write: (args) => { sessionStorage.setItem('copy', args.data); },
-    // A copy with the bytes of the file is dropped (reload_markdown).
-    markdown_recovery_reload: () => {
-      if (stored('copy') === stored('disk')) sessionStorage.removeItem('copy');
-      return stored('copy')
-        ? { data: stored('copy'), name: fake.name, hasFile: !fake.isNew && !fake.recoverId }
-        : null;
-    },
+    // A copy with the bytes of the file comes back as not modified
+    // (reload_markdown).
+    markdown_recovery_reload: () => (stored('copy')
+      ? {
+        data: stored('copy'), name: fake.name, hasFile: !fake.isNew && !fake.recoverId,
+        modified: stored('copy') !== stored('disk'),
+      }
+      : null),
     // discard:false lets go of the session and keeps its copy.
     recovery_end: (args) => { if (args.discard) sessionStorage.removeItem('copy'); },
     pick_save_target: (args) => (args.requestedExt === 'html'

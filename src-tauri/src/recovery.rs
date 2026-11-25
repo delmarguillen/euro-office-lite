@@ -329,6 +329,8 @@ pub fn scan_candidates(
 
         if is_markdown_folder(&dir) {
             // The file already holds the copy's bytes: nothing to recover.
+            // Only here is such a copy deleted without the page asking: the
+            // folder is not locked, so no live process writes copies into it.
             if markdown_copy_is_in_its_file(&dir) {
                 let _ = std::fs::remove_dir_all(&dir);
                 continue;
@@ -548,7 +550,7 @@ fn markdown_candidate(dir: &Path) -> Option<Candidate> {
 }
 
 // Whether both files can be read and hold the same bytes.
-pub fn same_bytes(one: &Path, other: &Path) -> bool {
+fn same_bytes(one: &Path, other: &Path) -> bool {
     let (Ok(one_meta), Ok(other_meta)) = (std::fs::metadata(one), std::fs::metadata(other)) else {
         return false;
     };
@@ -559,6 +561,17 @@ pub fn same_bytes(one: &Path, other: &Path) -> bool {
         return false;
     };
     one_bytes == other_bytes
+}
+
+// Whether `file` can be read and holds exactly `bytes`.
+pub fn file_holds(file: &Path, bytes: &[u8]) -> bool {
+    let Ok(meta) = std::fs::metadata(file) else {
+        return false;
+    };
+    if meta.len() != bytes.len() as u64 {
+        return false;
+    }
+    std::fs::read(file).is_ok_and(|held| held == bytes)
 }
 
 // Whether the folder's copy holds the bytes of the file doc.info names: a

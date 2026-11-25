@@ -892,12 +892,14 @@
   }
 
   // A reload (F5, devtools) while the document had a recovery copy: the
-  // copy comes back marked modified and stays offered until saved or
-  // discarded (markdown_recovery_reload). False when there is no copy, or the
-  // file already holds its bytes: the page then opens the file, which ends
-  // the session. The backend answers once a write the page before the reload
-  // left running has ended, and counts that page's saves as unsaved until
-  // this one has reported its modified flag.
+  // copy comes back and stays until saved or discarded
+  // (markdown_recovery_reload). Marked modified, unless the file already
+  // holds its bytes: the text is then the file's, and the copy is dropped as
+  // after any save (settleRecoveryCopy) or when the document closes. False
+  // when there is no copy: the page then opens the file. The backend answers
+  // once a write the page before the reload left running has ended, and
+  // counts that page's saves as unsaved until this one has reported its
+  // modified flag.
   async function startReloaded(framed) {
     var reloaded;
     try {
@@ -917,7 +919,7 @@
     format = decoded;
     hasFile = reloaded.hasFile;
     source.value = decoded.text;
-    saveState = Text.savedState(null);
+    saveState = Text.savedState(reloaded.modified ? null : decoded.text);
     showName(reloaded.name);
     // set_document_modified marks the title it finds: the name goes first.
     await invoke('set_window_title', { name: reloaded.name }).catch(function() {});

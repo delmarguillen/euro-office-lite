@@ -17,8 +17,8 @@
 // - recovery_end: the page asks (recovery::end_session). Without discard the
 //   session ends and its folder stays for the next start;
 // - save_markdown writes the file and keeps the session (store_markdown);
-// - markdown_recovery_reload: a copy with the bytes of the file is dropped
-//   and the page opens the file (reload_markdown).
+// - markdown_recovery_reload: the copy comes back and stays, not modified
+//   when it holds the bytes of the file (reload_markdown).
 // A start after the process ended offers the copies left that do not hold
 // the bytes of the file (recovery::scan_candidates).
 //
@@ -63,6 +63,8 @@ function makeBackend(fileText) {
     holdCopies: false, heldCopies: [],
     // With failCopies, no copy can be written.
     failCopies: false,
+    // Written once a reload has read the copy, before it answers.
+    copyOnItsWay: null,
     // With holdTitles, set_window_title answers when the check lets it.
     holdTitles: false, heldTitles: [],
     // The process exited without asking; the times the page asked before
@@ -104,9 +106,11 @@ function makeBackend(fileText) {
     },
     markdown_recovery_reload: async () => {
       await noWriteRunning();
-      if (backend.copy === backend.file) backend.copy = null;
       if (backend.copy === null) return null;
-      return { data: toBase64(backend.copy), name: NAME, hasFile: true };
+      const read = backend.copy;
+      // A copy the page before the reload asked for is written here.
+      if (backend.copyOnItsWay !== null) backend.copy = backend.copyOnItsWay;
+      return { data: toBase64(read), name: NAME, hasFile: true, modified: read !== backend.file };
     },
     markdown_reload_reported: () => { backend.savesPending = 0; },
     set_window_title: () => {
@@ -506,6 +510,36 @@ async function checkCloseWhileAReloadedPageStarts() {
     backend.asked === 1 && !backend.closed && backend.copy === 'A', told(backend));
 }
 
+// The file and the copy hold B: B was written and the page has not heard.
+// The user types C, the timer asks for its copy and the page is reloaded:
+// the copy of C is written once the reload has read B.
+async function checkCopyWrittenWhileThePageReloads() {
+  const { backend } = await saveBOverA();
+  backend.endWrite();
+  backend.copyOnItsWay = 'C';
+  const reloaded = await reloadPage(backend);
+  check(results, 'copy of C written during the reload: the page shows the file, unmodified',
+    reloaded.text() === 'B' && !backend.unsaved(), String(reloaded.text()) + ' ' + told(backend));
+  check(results, 'copy of C written during the reload: C stays on disk', backend.copy === 'C', told(backend));
+  check(results, 'copy of C written during the reload, process ends: the next start offers C',
+    backend.offeredAtStart().join('|') === 'C', told(backend));
+}
+
+// A reload that finds the bytes of the file in the copy leaves the copy for
+// the page to drop: after its next save, or when the document closes.
+async function checkCopyOfTheFileAfterAReload() {
+  const { backend } = await saveBOverA();
+  backend.endWrite();
+  const reloaded = await reloadPage(backend);
+  check(results, 'copy with the bytes of the file, reload: the page shows B, unmodified, and the copy stays',
+    reloaded.text() === 'B' && !backend.unsaved() && backend.copy === 'B', String(reloaded.text()) + ' ' + told(backend));
+  check(results, 'copy with the bytes of the file, reload, process ends: the next start offers nothing',
+    backend.offeredAtStart().length === 0, told(backend));
+  await reloaded.clickClose();
+  check(results, 'copy with the bytes of the file, reload, Close: the document closes without asking and the copy is dropped',
+    backend.closed && backend.asked === 0 && backend.copy === null, told(backend));
+}
+
 await checkUndoThenReloadAfterTheSave();
 await checkUndoThenReloadAsTheWriteEnds();
 await checkTypingOnThenReload();
@@ -521,4 +555,6 @@ await checkSaveAfterAReloadDuringTheWrite();
 await checkFailedWriteAfterAReload();
 await checkWindowClosedWhileAReloadedPageStarts();
 await checkCloseWhileAReloadedPageStarts();
+await checkCopyWrittenWhileThePageReloads();
+await checkCopyOfTheFileAfterAReload();
 finish(results);

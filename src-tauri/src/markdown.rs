@@ -525,6 +525,8 @@ pub struct ReloadedMarkdown {
     data: String,
     name: String,
     has_file: bool,
+    // The copy's text is not the open file's.
+    modified: bool,
 }
 
 // The text file of the live Markdown session, when it holds a copy.
@@ -542,10 +544,16 @@ fn live_markdown_copy(session: Option<&crate::recovery::RecoverySession>) -> Opt
 
 // A reload of the page (F5, devtools) while the document has a recovery
 // copy: the copy comes back and the session stays, so the open file, its
-// save suggestion and the copy are as they were. None when there is no copy,
-// or when the open file holds the copy's bytes (a save wrote them and the
-// page was reloaded before it dropped the copy), which ends the session. The
-// page then opens the file as before (read_markdown).
+// save suggestion and the copy are as they were. None when there is no copy:
+// the page then opens the file as before (read_markdown).
+//
+// `modified` is false when the open file holds the bytes read from the copy
+// (a save wrote them and the page was reloaded before it dropped the copy):
+// the page shows them as the file's text. Nothing is deleted here. The page
+// before the reload may have asked for a copy that is written after this
+// read, and it stays on disk; the page drops the copy as after any save, and
+// a start drops one that holds the bytes of its file (recovery.rs,
+// scan_candidates).
 //
 // The page before the reload may have left a write running. This waits for
 // it: the file and the copy are compared once the file is written, and the
@@ -553,18 +561,25 @@ fn live_markdown_copy(session: Option<&crate::recovery::RecoverySession>) -> Opt
 // that page counted stay counted until the new page has reported its own
 // modified flag (markdown_reload_reported): an exit asks meanwhile.
 fn reload_markdown(state: &AppState) -> Result<Option<ReloadedMarkdown>, String> {
+    reload_markdown_after(state, || {})
+}
+
+// `copy_read` runs once the copy's bytes are read, before the file is.
+fn reload_markdown_after(
+    state: &AppState,
+    copy_read: impl FnOnce(),
+) -> Result<Option<ReloadedMarkdown>, String> {
     state.markdown_writes.wait_until_none();
     let copy = live_markdown_copy(state.recovery.lock().unwrap().as_ref());
     let Some(copy) = copy else {
         return Ok(None);
     };
-    let current = state.current_file.lock().unwrap().clone();
-    if current.as_deref().is_some_and(|file| crate::recovery::same_bytes(&copy, file)) {
-        crate::recovery::end_session(state, true);
-        log_event(state, "[RECOVER] markdown reload: the file holds the copy");
-        return Ok(None);
-    }
     let bytes = read_limited(&copy, MARKDOWN_MAX_BYTES)?;
+    copy_read();
+    let current = state.current_file.lock().unwrap().clone();
+    let in_the_file = current
+        .as_deref()
+        .is_some_and(|file| crate::recovery::file_holds(file, &bytes));
     let name = match &current {
         Some(path) => file_name(path),
         None => crate::recovery::recovered_name(copy.parent().unwrap_or(&copy))
@@ -572,12 +587,13 @@ fn reload_markdown(state: &AppState) -> Result<Option<ReloadedMarkdown>, String>
     };
     log_event(
         state,
-        &format!("[RECOVER] markdown reload bytes={}", bytes.len()),
+        &format!("[RECOVER] markdown reload bytes={} modified={}", bytes.len(), !in_the_file),
     );
     Ok(Some(ReloadedMarkdown {
         data: STANDARD.encode(&bytes),
         name,
         has_file: current.is_some(),
+        modified: !in_the_file,
     }))
 }
 
@@ -850,21 +866,71 @@ mod tests {
         assert!(copy.is_file());
     }
 
-    // A save wrote the copy's text and the page was reloaded before it
-    // dropped the copy.
     #[test]
-    fn a_reload_drops_a_copy_with_the_bytes_of_the_file() {
+    fn a_reload_reports_a_copy_that_differs_from_the_file_as_modified() {
+        let dir = test_dir("reload-differs-modified");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let (state, _copy) = window_with_copy(&dir, &file, b"typed\n");
+
+        let reloaded = reload_markdown(&state).unwrap().unwrap();
+
+        assert!(reloaded.modified);
+    }
+
+    // A save wrote the copy's text and the page was reloaded before it
+    // dropped the copy: the text comes back as the file's, and the copy and
+    // its session stay for the page to drop.
+    #[test]
+    fn a_reload_brings_back_a_copy_with_the_bytes_of_the_file_as_not_modified() {
         let dir = test_dir("reload-same");
         let file = file_with(&dir, "notes.md", b"old\n");
         let (state, copy) = window_with_copy(&dir, &file, b"text\n");
         store_markdown(&state, TEXT_B64, None).unwrap();
 
-        let reloaded = reload_markdown(&state).unwrap();
+        let reloaded = reload_markdown(&state).unwrap().unwrap();
 
-        assert!(reloaded.is_none());
-        assert!(!copy.exists());
-        assert!(state.recovery.lock().unwrap().is_none());
+        assert!(!reloaded.modified);
+        assert_eq!(STANDARD.decode(&reloaded.data).unwrap(), b"text\n");
+        assert_eq!(std::fs::read(&copy).unwrap(), b"text\n");
+        assert_eq!(live_markdown_copy(state.recovery.lock().unwrap().as_ref()), Some(copy));
         assert_eq!(std::fs::read(&file).unwrap(), b"text\n");
+    }
+
+    // The file and the copy hold B. The page before the reload asked for a
+    // copy of C, typed after the save, and it is written once the reload has
+    // read B from the copy and before it reads the file.
+    #[test]
+    fn a_copy_written_while_the_page_reloads_stays_on_disk() {
+        let dir = test_dir("reload-copy-on-its-way");
+        let file = file_with(&dir, "notes.md", b"B\n");
+        let (state, copy) = window_with_copy(&dir, &file, b"B\n");
+        let (copy_was_read, read) = std::sync::mpsc::channel();
+        let (written, copy_was_written) = std::sync::mpsc::channel();
+
+        let reloaded = std::thread::scope(|scope| {
+            let state = &state;
+            let reload = scope.spawn(move || {
+                reload_markdown_after(state, || {
+                    copy_was_read.send(()).unwrap();
+                    copy_was_written.recv_timeout(Duration::from_secs(10)).unwrap();
+                })
+            });
+            read.recv_timeout(Duration::from_secs(10)).unwrap();
+            {
+                let live = state.recovery.lock().unwrap();
+                crate::recovery::write_markdown_copy(live.as_ref().unwrap(), b"C\n").unwrap();
+            }
+            written.send(()).unwrap();
+            reload.join().unwrap().unwrap()
+        });
+
+        assert!(copy.is_file(), "the copy of C was deleted");
+        assert_eq!(std::fs::read(&copy).unwrap(), b"C\n");
+        assert_eq!(live_markdown_copy(state.recovery.lock().unwrap().as_ref()), Some(copy));
+        // The page shows what was read: the file's text.
+        let reloaded = reloaded.unwrap();
+        assert_eq!(STANDARD.decode(&reloaded.data).unwrap(), b"B\n");
+        assert!(!reloaded.modified);
     }
 
     // The page counted its save and was reloaded while the file was written,
@@ -979,8 +1045,8 @@ mod tests {
 
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                let reloaded = reload_markdown(&state).unwrap();
-                answered.send(reloaded.is_none()).unwrap();
+                let reloaded = reload_markdown(&state).unwrap().unwrap();
+                answered.send(!reloaded.modified).unwrap();
             });
             let early = reload_answer.recv_timeout(Duration::from_millis(200));
             assert!(early.is_err(), "the reload answered while the write was running");
@@ -989,10 +1055,10 @@ mod tests {
             std::fs::write(&file, b"text\n").unwrap();
             drop(write);
 
-            let opens_the_file = reload_answer.recv_timeout(Duration::from_secs(10)).unwrap();
-            assert!(opens_the_file, "the file holds the copy once the write has ended");
+            let holds_the_file = reload_answer.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(holds_the_file, "the file holds the copy once the write has ended");
         });
-        assert!(!copy.exists());
+        assert!(copy.is_file());
         assert!(!state.markdown_writes.any());
     }
 
