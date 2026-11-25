@@ -1,7 +1,7 @@
 // Markdown: the user saves and, while the file is being written, undoes back
 // to the text the file had. Once the save ends the file holds the saved text
 // and the screen another one: the document is modified and needs a recovery
-// copy again (the backend drops the copy when a save is written).
+// copy of the text on screen.
 //
 // First the page's pure helpers (src/markdown/markdown-text.js), then the
 // page's own script (src/markdown/markdown.js) against stand-ins for the
@@ -148,8 +148,9 @@ async function checkUndoDuringTheWrite() {
   await page.runTimers();
   check(results, 'page, undo, write ended: the backend counts the document as modified, no save pending',
     page.backend.modified && page.backend.savesPending === 0, JSON.stringify(page.backend));
+  // Copied when its timer came due during the write, and again as the write ended.
   check(results, 'page, undo, write ended: the text on screen got a recovery copy',
-    page.copies.join('|') === 'AB|A', page.copies.join('|'));
+    page.copies.join('|') === 'AB|A|A', page.copies.join('|'));
 }
 
 async function checkSaveWithoutUndo() {

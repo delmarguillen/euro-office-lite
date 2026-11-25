@@ -81,9 +81,12 @@ await settle();
 held.recovery();
 await settle();
 const closedEarly = commands.includes('close_document');
-check(results, 'Close waits for the save that is waiting on the recovery copy', !closedEarly, commands.join(' '));
+check(results, 'Close waits for the save that is being written', !closedEarly, commands.join(' '));
 check(results, 'the save went on to be written', 'save' in held, commands.join(' '));
 if (held.save) held.save('a.md');
+await settle();
+// The copy of the text on screen, written as the save ends.
+held.recovery();
 await settle();
 check(results, 'once the save is written, Close closes the document', commands.includes('close_document'), commands.join(' '));
 finish(results);

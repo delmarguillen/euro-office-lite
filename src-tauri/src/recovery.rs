@@ -590,6 +590,26 @@ fn markdown_session(dir: PathBuf, lock: std::fs::File) -> RecoverySession {
     }
 }
 
+// Makes doc.info name `current`, the file the session's copy is of. A save
+// keeps the session (markdown.rs, store_markdown), and a Save As changes the
+// file. A document with no file keeps its doc.info: for a recovered one it
+// names the file it was last saved to.
+pub fn name_markdown_session(session: &RecoverySession, current: Option<&Path>) -> Result<(), String> {
+    let Some(current) = current else {
+        return Ok(());
+    };
+    let path = current.to_string_lossy().to_string();
+    let mut info = read_doc_info(&session.dir).ok_or("doc.info cannot be read")?;
+    if info.path.as_deref() == Some(path.as_str()) {
+        return Ok(());
+    }
+    if let Some(name) = current.file_name() {
+        info.name = name.to_string_lossy().to_string();
+    }
+    info.path = Some(path);
+    write_doc_info(&session.dir, &info)
+}
+
 // Replaced in one step: a crash mid-write leaves the previous copy.
 pub fn write_markdown_copy(session: &RecoverySession, bytes: &[u8]) -> Result<(), String> {
     crate::save_target::write_bytes_beside_and_rename(bytes, &markdown_text_path(&session.dir))
@@ -1434,6 +1454,32 @@ mod tests {
         let names: Vec<_> = std::fs::read_dir(&session.dir).unwrap().flatten()
             .map(|entry| entry.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(names.len(), 3, "rec.lock, doc.info and the copy, no temporary file: {names:?}");
+    }
+
+    #[test]
+    fn a_markdown_session_kept_through_a_save_as_names_the_new_file() {
+        let root = scratch();
+        let session = markdown_session_in(&root, Some(Path::new("/home/u/notes.md")));
+        write_markdown_copy(&session, b"text").unwrap();
+
+        name_markdown_session(&session, Some(Path::new("/home/u/copy.md"))).unwrap();
+
+        let info = read_doc_info(&session.dir).unwrap();
+        assert_eq!(info.path.as_deref(), Some("/home/u/copy.md"));
+        assert_eq!(info.name, "copy.md");
+        assert_eq!(info.doc_type, MARKDOWN_DOC_TYPE);
+        assert_eq!(std::fs::read(markdown_text_path(&session.dir)).unwrap(), b"text");
+    }
+
+    #[test]
+    fn a_markdown_session_of_a_document_with_no_file_keeps_its_doc_info() {
+        let root = scratch();
+        let session = markdown_session_in(&root, Some(Path::new("/home/u/notes.md")));
+        let before = read_doc_info(&session.dir).unwrap();
+
+        name_markdown_session(&session, None).unwrap();
+
+        assert_eq!(read_doc_info(&session.dir).unwrap(), before);
     }
 
     #[test]

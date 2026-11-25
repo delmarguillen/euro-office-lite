@@ -326,8 +326,9 @@ fn store_markdown(
         crate::file_ops::set_current_file(state, Some(dest.clone()));
     }
     drop(claim);
-    // The text is in the file now: its recovery copy goes.
-    crate::recovery::end_session(state, true);
+    // The recovery copy stays. The text on screen may have changed while this
+    // was written, and only the page knows: it drops the copy or replaces it
+    // once the write has ended (markdown.js, settleRecoveryCopy).
     Ok(SavedMarkdown { path: dest, new_file })
 }
 
@@ -373,10 +374,11 @@ pub async fn export_markdown_html(
     }
 }
 
-// The recovery copy of the page's text while it is modified: `data` is
+// The recovery copy of the page's text while it is in no file: `data` is
 // base64 of the bytes Save would write. The first call starts the session
 // (recovery.rs, "Markdown sessions"); later ones replace the copy. Ended by
-// save_markdown, by recovery_end when the page discards, and at exit.
+// recovery_end, which the page sends once a save has written the text on
+// screen and when it discards the changes, and at exit.
 #[tauri::command]
 pub async fn markdown_recovery_write(
     app: tauri::AppHandle,
@@ -387,7 +389,7 @@ pub async fn markdown_recovery_write(
     let root = crate::recovery::recover_root(&app)?;
     let current = state.current_file.lock().unwrap().clone();
     let version = app.package_info().version.to_string();
-    let written = {
+    let (named, written) = {
         let mut live = state.recovery.lock().unwrap();
         if live.as_ref().is_some_and(|session| !session.markdown) {
             return Err("an editor's recovery session is live".to_string());
@@ -402,8 +404,15 @@ pub async fn markdown_recovery_write(
             *live = Some(session);
         }
         let session = live.as_ref().expect("a session was just started");
-        crate::recovery::write_markdown_copy(session, &bytes)
+        // A session that outlived a Save As still names the file before it.
+        // The copy is written even if doc.info cannot be.
+        let named = crate::recovery::name_markdown_session(session, current.as_deref());
+        let written = crate::recovery::write_markdown_copy(session, &bytes);
+        (named, written)
     };
+    if let Err(error) = &named {
+        log_event(&state, &format!("[RECOVER] markdown doc.info failed: {}", error));
+    }
     if let Err(error) = &written {
         log_event(&state, &format!("[RECOVER] markdown copy failed: {}", error));
     }
@@ -687,6 +696,29 @@ mod tests {
         *state.modified.lock().unwrap() = false;
         crate::app_quit::end_save(&state);
         assert!(!crate::app_quit::has_unsaved_changes(&state));
+    }
+
+    // The copy may be of text typed while the file was written: the page
+    // drops or replaces it once the write has ended (markdown.js,
+    // settleRecoveryCopy).
+    #[test]
+    fn writing_the_file_leaves_the_recovery_copy_to_the_page() {
+        let dir = test_dir("save-keeps-copy");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        open_markdown(&state, &token).unwrap();
+        let session =
+            crate::recovery::begin_markdown_session(&dir.join("recover"), Some(&file), "0.0.0", "1-1")
+                .unwrap();
+        crate::recovery::write_markdown_copy(&session, b"typed meanwhile\n").unwrap();
+        let copy = crate::recovery::markdown_text_path(&session.dir);
+        *state.recovery.lock().unwrap() = Some(session);
+
+        store_markdown(&state, TEXT_B64, None).unwrap();
+
+        assert_eq!(std::fs::read(&copy).unwrap(), b"typed meanwhile\n");
+        assert_eq!(live_markdown_copy(state.recovery.lock().unwrap().as_ref()), Some(copy));
     }
 
     #[test]

@@ -324,12 +324,13 @@
   }
 
   // ── Crash recovery ──
-  // While the document is modified, markdown_recovery_write keeps a copy of
-  // the bytes Save would write in the app's recovery folder (recovery.rs).
-  // Writes go one after another, and Save waits for the last one: a copy
-  // written after a save would be offered for text that is already saved.
-  // The backend drops the copy after a successful save and at exit; this page
-  // drops it with recovery_end when the user discards the changes.
+  // While the text on screen is in no file, markdown_recovery_write keeps a
+  // copy of the bytes Save would write in the app's recovery folder
+  // (recovery.rs). Only this page drops the copy while the document is open,
+  // with recovery_end: once a save has written the text on screen
+  // (settleRecoveryCopy) and when the user discards the changes. The backend
+  // drops it at exit. Writes and drops go one after another, in the order
+  // they were asked for.
   var recoveryTimer = null;
   var recoveryWrite = Promise.resolve();
   var recoveryStopped = false;
@@ -339,20 +340,40 @@
     recoveryTimer = setTimeout(writeRecoveryCopy, RECOVERY_DELAY_MS);
   }
 
+  // `step` runs after the copies and drops already asked for.
+  function queueRecoveryStep(step) {
+    recoveryWrite = recoveryWrite.then(step).catch(function(error) {
+      log('recovery copy failed: ' + errorText(error));
+    });
+    return recoveryWrite;
+  }
+
+  // Also while a save is being written: the backend leaves the copy alone.
   function writeRecoveryCopy() {
     recoveryTimer = null;
     if (recoveryStopped || !Text.needsRecoveryCopy(saveState, currentText())) return;
-    // Text that differs from the one being written gets its copy after the
-    // save: the backend drops the copy when the write ends.
-    if (saving) {
-      scheduleRecoveryCopy();
-      return;
-    }
     var data = bytesToBase64(Text.encode(currentText(), format));
-    recoveryWrite = recoveryWrite.then(function() {
+    queueRecoveryStep(function() {
       return invoke('markdown_recovery_write', { data: data });
-    }).catch(function(error) {
-      log('recovery copy failed: ' + errorText(error));
+    });
+  }
+
+  // For the end of a save that wrote the file. The copy on disk is of text
+  // from before the save or typed during it, and the backend has kept it.
+  // Decided when its turn comes, with the text then on screen:
+  // - the saved text: the file holds it, and the copy is dropped;
+  // - any other text: its copy replaces the one on disk in one step
+  //   (recovery.rs, write_markdown_copy), without waiting for the timer.
+  //   Nothing is dropped: the older copy stays until the new one is written.
+  function settleRecoveryCopy() {
+    return queueRecoveryStep(function() {
+      if (recoveryStopped) return null;
+      var text = currentText();
+      if (!Text.needsRecoveryCopy(saveState, text)) {
+        return invoke('recovery_end', { discard: true });
+      }
+      var data = bytesToBase64(Text.encode(text, format));
+      return invoke('markdown_recovery_write', { data: data });
     });
   }
 
@@ -452,21 +473,20 @@
   }
 
   // The backend counts the document as unsaved from here until the write ends
-  // (app_quit::has_unsaved_changes), also while the last recovery copy is
-  // still being written and when the text goes back to the saved one
-  // meanwhile: the file is about to change.
+  // and the recovery copy is settled (app_quit::has_unsaved_changes), also
+  // when the text goes back to the saved one meanwhile: the file is about to
+  // change.
   async function writeSave(text, data, target) {
     saveState = Text.afterSaveEvent(saveState, { type: 'write-start', text: text });
     await invoke('set_save_pending', { pending: true }).catch(function() {});
     var written = false;
     try {
-      // A copy written after the save would be offered for saved text.
-      await recoveryWrite;
       var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
       written = true;
       return name;
     } finally {
       saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: written });
+      if (written) await settleRecoveryCopy();
       // The backend ends no save on its own. The modified flag goes first, so
       // it never sees both off while the text on screen is not the saved one.
       await reportModified(true);

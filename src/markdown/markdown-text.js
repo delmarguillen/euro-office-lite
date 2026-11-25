@@ -152,8 +152,7 @@
   }
 
   // Whether the text on screen is in no file and needs a recovery copy. While
-  // a write runs the file is about to hold the text being written, and the
-  // backend drops the copy when that write ends well.
+  // a write runs the file is about to hold the text being written.
   function needsRecoveryCopy(state, text) {
     if (state.writing !== null) return text !== state.writing;
     return text !== state.saved;
