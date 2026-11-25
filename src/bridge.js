@@ -1678,14 +1678,15 @@ function _eoMarkSavedChanges() {
 
 // The backend decides from set_document_modified whether an exit asks and
 // keeps the recovery folder, and the false sdkjs sends as a save begins reaches
-// it too. While a save of unsaved changes runs, set_save_pending keeps the
-// backend counting them as unsaved; a backend save that writes the document
-// clears it there as well.
-var _eoSavePending = false;
+// it too. Saves, exports and prints can run at once, so the saves of unsaved
+// changes still running are counted, here and in the backend: each one that
+// begins adds one (set_save_pending true) and takes it away when it ends
+// (set_save_pending false). Nothing else ends one, in either place.
+var _eoSavesPending = 0;
 
 function _eoBeginSave() {
   if (!_eoUnsavedChanges) return false;
-  _eoSavePending = true;
+  _eoSavesPending += 1;
   invoke('set_save_pending', { pending: true }).catch(function(){});
   return true;
 }
@@ -1694,15 +1695,15 @@ function _eoBeginSave() {
 // modified flag back (_eoRestoreModified), so the backend never sees both off.
 function _eoEndSave(begun) {
   if (!begun) return;
-  _eoSavePending = false;
+  _eoSavesPending -= 1;
   invoke('set_save_pending', { pending: false }).catch(function(){});
 }
 
-// The rule app_quit::has_unsaved_changes applies: modified, or a save of
+// The rule app_quit::has_unsaved_changes applies: modified, or any save of
 // unsaved changes still running. Anything that would drop the document asks
 // with this, not with _isModified, which sdkjs clears as a save begins.
 function _eoHasUnsavedChanges() {
-  return window.AscDesktopEditor._isModified || _eoSavePending;
+  return window.AscDesktopEditor._isModified || _eoSavesPending > 0;
 }
 
 // Puts the modified mark back, in the JS and in Rust, when something that
@@ -3382,6 +3383,8 @@ window.AscDesktopEditor = {
 
   _saveDocument: async function(param, password, docinfo, fileType, jsonOptions) {
     var isSaveAs = param && param.indexOf('saveas=true') !== -1;
+    // Read before the first await: another save that ends meanwhile clears it.
+    var wasModified = _eoUnsavedChanges;
 
     var docType = window.AscDesktopEditor._currentDocType || 'word';
     window._eoLog('[SAVE] docType=' + docType + ' saveAs=' + !!isSaveAs + ' fileType=' + fileType);
@@ -3424,7 +3427,6 @@ window.AscDesktopEditor = {
         isSaveAs = true;
         proposedExt = _eoProposedFormat(docType, currentName);
       }
-      var wasModified = _eoUnsavedChanges;
       // A cancelled Save As or a PDF export leaves the open document where it
       // was, so it must not end as a save.
       var keepsDocument = false;

@@ -326,7 +326,6 @@ fn store_markdown(
         crate::file_ops::set_current_file(state, Some(dest.clone()));
     }
     drop(claim);
-    crate::app_quit::mark_document_saved(state);
     // The text is in the file now: its recovery copy goes.
     crate::recovery::end_session(state, true);
     Ok(SavedMarkdown { path: dest, new_file })
@@ -660,18 +659,33 @@ mod tests {
     }
 
     #[test]
-    fn opening_and_saving_end_a_save_that_never_finished() {
+    fn opening_ends_a_save_that_never_finished() {
         let dir = test_dir("save-pending");
         let file = file_with(&dir, "notes.md", b"text\n");
         let state = window_state(&dir, 1);
-        *state.save_pending.lock().unwrap() = true;
+        crate::app_quit::begin_save(&state);
         let token = state.grants.grant(file.clone(), GrantKind::Open).token;
         open_markdown(&state, &token).unwrap();
         assert!(!crate::app_quit::has_unsaved_changes(&state));
+    }
 
+    // The page ends the save, after reporting whether the text on screen is
+    // still the one written (markdown.js, writeSave).
+    #[test]
+    fn writing_the_file_leaves_the_end_of_the_save_to_the_page() {
+        let dir = test_dir("save-written");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        open_markdown(&state, &token).unwrap();
         *state.modified.lock().unwrap() = true;
-        *state.save_pending.lock().unwrap() = true;
+        crate::app_quit::begin_save(&state);
+
         store_markdown(&state, TEXT_B64, None).unwrap();
+        assert!(crate::app_quit::has_unsaved_changes(&state));
+
+        *state.modified.lock().unwrap() = false;
+        crate::app_quit::end_save(&state);
         assert!(!crate::app_quit::has_unsaved_changes(&state));
     }
 

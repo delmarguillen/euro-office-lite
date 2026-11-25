@@ -456,18 +456,19 @@
   async function writeSave(text, data, target) {
     saveState = Text.afterSaveEvent(saveState, { type: 'write-start', text: text });
     await invoke('set_save_pending', { pending: true }).catch(function() {});
+    var written = false;
     try {
       // A copy written after the save would be offered for saved text.
       await recoveryWrite;
       var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
-      saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: true });
+      written = true;
       return name;
-    } catch (error) {
-      saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: false });
-      // The modified flag first, so the backend never sees both off.
+    } finally {
+      saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: written });
+      // The backend ends no save on its own. The modified flag goes first, so
+      // it never sees both off while the text on screen is not the saved one.
       await reportModified(true);
       await invoke('set_save_pending', { pending: false }).catch(function() {});
-      throw error;
     }
   }
 

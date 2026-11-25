@@ -491,7 +491,7 @@ fn main() {
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
             modified: Mutex::new(false),
-            save_pending: Mutex::new(false),
+            saves_pending: Mutex::new(0),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
             pending_open: pending_open::PendingOpens::with_launch_file(

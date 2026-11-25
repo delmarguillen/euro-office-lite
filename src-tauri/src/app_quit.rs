@@ -43,33 +43,43 @@ pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
 }
 
 // What every exit asks: closing the window, Quit, the slideshow's Quit and
-// on_exit. sdkjs reports the document as saved when a save begins, so a save
+// on_exit. sdkjs reports the document as saved when a save begins, so any save
 // still running counts as unsaved; undoing back to the saved state, with no
-// save running, does not.
+// save running, does not. The page applies the same rule (bridge.js,
+// _eoHasUnsavedChanges).
 pub fn has_unsaved_changes(state: &AppState) -> bool {
     let modified = *state.modified.lock().unwrap();
-    let save_pending = *state.save_pending.lock().unwrap();
-    modified || save_pending
+    let saves_pending = *state.saves_pending.lock().unwrap();
+    modified || saves_pending > 0
 }
 
-// A save command wrote the document: nothing is unsaved any more.
-pub fn mark_document_saved(state: &AppState) {
-    *state.modified.lock().unwrap() = false;
-    *state.save_pending.lock().unwrap() = false;
+// The page begins and ends each save of unsaved changes (set_save_pending) and
+// reports the modified flag (set_document_modified). No save command changes
+// either: with two saves running the end of one says nothing about the other,
+// and a change made while a save was being written is not in the file.
+pub fn begin_save(state: &AppState) {
+    *state.saves_pending.lock().unwrap() += 1;
+}
+
+// A save that began before the document was replaced may end after
+// mark_document_clean: it must not go below zero.
+pub fn end_save(state: &AppState) {
+    let mut saves_pending = state.saves_pending.lock().unwrap();
+    *saves_pending = saves_pending.saturating_sub(1);
 }
 
 // A document was just opened or created. A save of the previous one that
 // never ended (its page reloaded mid-save) must not keep it counted as unsaved.
 pub fn mark_document_clean(state: &AppState) {
     *state.modified.lock().unwrap() = false;
-    *state.save_pending.lock().unwrap() = false;
+    *state.saves_pending.lock().unwrap() = 0;
 }
 
 // An exit the user confirmed: there were no changes, or they chose to discard
 // them. Clearing the flags is what tells on_exit to delete the recovery folder.
 pub fn mark_exit_confirmed(state: &AppState) {
     *state.modified.lock().unwrap() = false;
-    *state.save_pending.lock().unwrap() = false;
+    *state.saves_pending.lock().unwrap() = 0;
 }
 
 // The only exit(0) of the app: every confirmed exit goes through here.
@@ -320,7 +330,7 @@ mod tests {
     // begins, while the save is still running (set_save_pending).
     fn begin_save_after_a_change(state: &AppState) {
         *state.modified.lock().unwrap() = true;
-        *state.save_pending.lock().unwrap() = true;
+        begin_save(state);
         *state.modified.lock().unwrap() = false;
     }
 
@@ -348,6 +358,71 @@ mod tests {
         );
     }
 
+    // Save A begins, the user edits and begins save B, and A ends: the edit
+    // is in no file while B runs.
+    #[test]
+    fn a_save_ending_while_another_runs_asks_before_quitting() {
+        let state = test_state(&scratch("overlapping-saves-quit"));
+        begin_save_after_a_change(&state);
+        begin_save_after_a_change(&state);
+
+        end_save(&state);
+
+        assert_eq!(
+            quit_action(has_unsaved_changes(&state)),
+            QuitAction::Confirm
+        );
+    }
+
+    #[test]
+    fn an_exit_with_one_save_ended_and_another_running_keeps_the_recovery_folder() {
+        let root = scratch("overlapping-saves-exit");
+        let state = test_state(&root);
+        let dir = live_session(&state, &root.join("recover"));
+        begin_save_after_a_change(&state);
+        begin_save_after_a_change(&state);
+
+        end_save(&state);
+        on_exit(&state);
+
+        assert!(dir.exists());
+    }
+
+    #[test]
+    fn two_saves_that_both_ended_leave_nothing_unsaved() {
+        let state = test_state(&scratch("overlapping-saves-ended"));
+        begin_save_after_a_change(&state);
+        begin_save_after_a_change(&state);
+
+        end_save(&state);
+        end_save(&state);
+
+        assert!(!has_unsaved_changes(&state));
+    }
+
+    #[test]
+    fn a_change_made_while_a_save_ran_is_unsaved_once_it_ends() {
+        let state = test_state(&scratch("change-during-save"));
+        begin_save_after_a_change(&state);
+        *state.modified.lock().unwrap() = true;
+
+        end_save(&state);
+
+        assert!(has_unsaved_changes(&state));
+    }
+
+    #[test]
+    fn a_save_ending_after_its_document_was_replaced_counts_nothing() {
+        let state = test_state(&scratch("save-ended-late"));
+        begin_save_after_a_change(&state);
+        mark_document_clean(&state);
+
+        end_save(&state);
+        begin_save_after_a_change(&state);
+
+        assert!(has_unsaved_changes(&state));
+    }
+
     #[test]
     fn an_exit_after_a_finished_save_deletes_the_recovery_and_instance_folders() {
         let root = scratch("after-save");
@@ -356,7 +431,7 @@ mod tests {
         insert_image(&state);
         begin_save_after_a_change(&state);
 
-        mark_document_saved(&state);
+        end_save(&state);
         on_exit(&state);
 
         assert!(!dir.exists());

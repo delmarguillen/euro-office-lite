@@ -26,10 +26,11 @@ pub struct AppState {
     // addresses (temp_layout.rs, "Document images").
     pub doc_seq: std::sync::atomic::AtomicU64,
     pub modified: Mutex<bool>,
-    // A save of unsaved changes is under way (set_save_pending). sdkjs reports
-    // the document as saved when a save begins, so until the save ends
+    // Saves of unsaved changes under way: the page adds one as each begins and
+    // takes one away as each ends (set_save_pending). sdkjs reports the
+    // document as saved when a save begins, so until the last one ends
     // `modified` can be false with nothing written (app_quit::has_unsaved_changes).
-    pub save_pending: Mutex<bool>,
+    pub saves_pending: Mutex<u32>,
     // The path a 0-byte file was opened from (#33). It is not in the recent
     // list yet: the file still has no content, and an entry that opens to
     // nothing is worse than no entry. The first save that actually writes it
@@ -623,7 +624,6 @@ pub async fn save_file(
         super::recent::record(&app, &recorded.to_string_lossy());
     }
 
-    crate::app_quit::mark_document_saved(&state);
     Ok("ok".to_string())
 }
 
@@ -666,7 +666,6 @@ pub async fn save_file_as(
     // the entry is consumed is that same path (#33).
     end_pending_recent(&state.pending_recent, &dest);
     set_current_file(&state, Some(dest));
-    crate::app_quit::mark_document_saved(&state);
     super::recent::record(&app, &path);
     drop(claim);
     Ok("ok".to_string())
@@ -796,7 +795,6 @@ async fn save_pdf_inner(
         super::recent::record(app, &dest.to_string_lossy());
     }
     drop(claim);
-    crate::app_quit::mark_document_saved(state);
     Ok("ok".to_string())
 }
 
@@ -1574,7 +1572,7 @@ pub(crate) fn test_state_for(root: &Path, instance: crate::temp_layout::Instance
         instance,
         doc_seq: std::sync::atomic::AtomicU64::new(1),
         modified: Mutex::new(false),
-        save_pending: Mutex::new(false),
+        saves_pending: Mutex::new(0),
         pending_recent: Mutex::new(None),
         recovery: Mutex::new(None),
         pending_open: crate::pending_open::PendingOpens::default(),

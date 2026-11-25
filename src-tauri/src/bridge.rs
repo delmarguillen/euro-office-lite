@@ -30,7 +30,11 @@ pub fn set_document_modified(
 
 #[tauri::command]
 pub fn set_save_pending(state: State<'_, AppState>, pending: bool) {
-    *state.save_pending.lock().unwrap() = pending;
+    if pending {
+        crate::app_quit::begin_save(&state);
+        return;
+    }
+    crate::app_quit::end_save(&state);
 }
 
 #[tauri::command]
