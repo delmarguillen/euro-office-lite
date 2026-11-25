@@ -1677,11 +1677,12 @@ function _eoMarkSavedChanges() {
 }
 
 // The backend decides from set_document_modified whether an exit asks and
-// keeps the recovery folder, and the false sdkjs sends as a save begins reaches
-// it too. Saves, exports and prints can run at once, so the saves of unsaved
-// changes still running are counted, here and in the backend: each one that
-// begins adds one (set_save_pending true) and takes it away when it ends
-// (set_save_pending false). Nothing else ends one, in either place.
+// keeps the recovery folder, and the false sdkjs sends as a save, a save as or
+// an export begins reaches it too. sdkjs sends none for a print, which is
+// counted with them all the same (Print). They can run at once, so the ones
+// of unsaved changes still running are counted, here and in the backend: each
+// one that begins adds one (set_save_pending true) and takes it away when it
+// ends (set_save_pending false). Nothing else ends one, in either place.
 var _eoSavesPending = 0;
 
 function _eoBeginSave() {
@@ -3774,7 +3775,8 @@ window.AscDesktopEditor = {
     var ref = _getEditor();
     if (!ref.editor) return;
 
-    // sdkjs reports a print as a save (EndSave), so it is one for the backend.
+    // Counted with the saves while it runs. sdkjs reports nothing as saved
+    // for a print: asc_Print calls this without going through asc_Save.
     var begun = _eoBeginSave();
     try {
       window.AscDesktopEditor._isPrinting = true;

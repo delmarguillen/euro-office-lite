@@ -43,10 +43,11 @@ pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
 }
 
 // What every exit asks: closing the window, Quit, the slideshow's Quit and
-// on_exit. sdkjs reports the document as saved when a save begins, so any save
-// still running counts as unsaved; undoing back to the saved state, with no
-// save running, does not. The page applies the same rule (bridge.js,
-// _eoHasUnsavedChanges).
+// on_exit. sdkjs reports the document as saved when a save, a save as or an
+// export begins, so any of them still running counts as unsaved; undoing back
+// to the saved state, with none running, does not. sdkjs sends no such report
+// for a print, which the page counts with them all the same (bridge.js,
+// Print). The page applies the same rule (bridge.js, _eoHasUnsavedChanges).
 pub fn has_unsaved_changes(state: &AppState) -> bool {
     let modified = *state.modified.lock().unwrap();
     let saves_pending = *state.saves_pending.lock().unwrap();
