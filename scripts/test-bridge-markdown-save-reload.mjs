@@ -26,7 +26,9 @@
 // itself (RunningWrites) and answers markdown_recovery_reload once it has
 // ended. It forgets the saves the page before the reload counted when the
 // new page says it has reported its modified flag
-// (markdown_reload_reported). The fake reads all three as
+// (markdown_reload_reported), once, and only for the page of the last
+// reload: each reload gives its page a number (PageReloads). The fake reads
+// all three as
 // app_quit::has_unsaved_changes does, and closes its window as main.rs does:
 // with nothing unsaved the process exits and the copy goes with it
 // (app_quit::on_exit); otherwise the page is asked (confirm-close).
@@ -67,6 +69,12 @@ function makeBackend(fileText) {
     copyOnItsWay: null,
     // With holdTitles, set_window_title answers when the check lets it.
     holdTitles: false, heldTitles: [],
+    // The number of the last reload's page, while no document has opened or
+    // closed since, and whether that page has reported.
+    lastPage: 0, page: null, reported: false,
+    // With holdReports, markdown_reload_reported is handled when the check
+    // lets it. The page that sent it is gone by then: it hears nothing.
+    holdReports: false, heldReports: [],
     // The process exited without asking; the times the page asked before
     // discarding changes, and what the user answers.
     exited: false, asked: 0, discardWhenAsked: true,
@@ -79,12 +87,18 @@ function makeBackend(fileText) {
     backend.writesRunning -= 1;
     backend.reloadsWaiting.splice(0).forEach((resume) => resume());
   };
+  const endSavesBeforeReload = (page) => {
+    if (page !== backend.page || backend.reported) return;
+    backend.reported = true;
+    backend.savesPending = 0;
+  };
   const noWriteRunning = async () => {
     while (backend.writesRunning > 0) await new Promise((resolve) => backend.reloadsWaiting.push(resolve));
   };
   backend.answers = {
     current_document: () => ({ token: 't', name: NAME }),
     read_markdown: () => {
+      backend.page = null;
       backend.copy = null;
       backend.modified = false;
       backend.savesPending = 0;
@@ -105,21 +119,29 @@ function makeBackend(fileText) {
       backend.copy = null;
     },
     markdown_recovery_reload: async () => {
+      backend.lastPage += 1;
+      backend.page = backend.lastPage;
+      backend.reported = false;
+      const page = backend.page;
       await noWriteRunning();
       if (backend.copy === null) return null;
       const read = backend.copy;
       // A copy the page before the reload asked for is written here.
       if (backend.copyOnItsWay !== null) backend.copy = backend.copyOnItsWay;
-      return { data: toBase64(read), name: NAME, hasFile: true, modified: read !== backend.file };
+      return { data: toBase64(read), name: NAME, hasFile: true, modified: read !== backend.file, page };
     },
-    markdown_reload_reported: () => { backend.savesPending = 0; },
+    markdown_reload_reported: ({ page } = {}) => {
+      if (!backend.holdReports) return endSavesBeforeReload(page);
+      backend.heldReports.push(() => endSavesBeforeReload(page));
+      return new Promise(() => {});
+    },
     set_window_title: () => {
       if (!backend.holdTitles) return null;
       return new Promise((resolve) => { backend.heldTitles.push(resolve); });
     },
     set_document_modified: ({ modified }) => { backend.modified = modified; },
     set_save_pending: ({ pending }) => { backend.savesPending += pending ? 1 : -1; },
-    close_document: () => { backend.closed = true; },
+    close_document: () => { backend.closed = true; backend.page = null; },
   };
   // The file is written: the backend's part of a save.
   backend.endWrite = () => {
@@ -140,6 +162,11 @@ function makeBackend(fileText) {
   backend.answerTitles = async () => {
     backend.holdTitles = false;
     backend.heldTitles.splice(0).forEach((answer) => answer());
+    await settle();
+  };
+  backend.handleHeldReports = async () => {
+    backend.holdReports = false;
+    backend.heldReports.splice(0).forEach((handle) => handle());
     await settle();
   };
   // The held copies reach the disk, and those the page asks for meanwhile.
@@ -540,6 +567,40 @@ async function checkCopyOfTheFileAfterAReload() {
     backend.closed && backend.asked === 0 && backend.copy === null, told(backend));
 }
 
+// B is saved over A and written, and the page is reloaded before it hears:
+// the file and the copy hold B. The reloaded page's report that it has its
+// document is handled late: the page is reloaded again first. The second
+// page saves C, goes back to B while C is written, and the timer copies B.
+// The write of C ends and the page has not heard: it reported no change, and
+// only its save counts. The first page's report is handled then.
+async function checkLateReportFromAnEarlierReload() {
+  const { backend } = await saveBOverA();
+  backend.endWrite();
+  backend.holdReports = true;
+  await reloadPage(backend);
+  backend.holdReports = false;
+  const second = await reloadPage(backend);
+  await second.type('C');
+  await second.clickSave();
+  await second.type('B');
+  await second.runTimers();
+  backend.endWrite();
+  await settle();
+  check(results, 'two reloads, C written, back to B: B is in the copy alone, reported unchanged, one save counted',
+    backend.file === 'C' && backend.copy === 'B' && !backend.modified && backend.savesPending === 1, told(backend));
+  await backend.handleHeldReports();
+  check(results, 'two reloads, the first page reports late: the save of the second page still counts',
+    backend.savesPending === 1 && backend.unsaved(), told(backend));
+  backend.discardWhenAsked = false;
+  await second.closeWindow();
+  check(results, 'two reloads, the first page reports late, window closed: the process does not exit and B stays in the copy',
+    !backend.exited && backend.copy === 'B', told(backend));
+  backend.answerSave();
+  await settle();
+  check(results, 'two reloads, the first page reports late, window closed: the page asks once it hears of the save',
+    backend.asked === 1 && !backend.exited && backend.copy === 'B', told(backend));
+}
+
 await checkUndoThenReloadAfterTheSave();
 await checkUndoThenReloadAsTheWriteEnds();
 await checkTypingOnThenReload();
@@ -557,4 +618,5 @@ await checkWindowClosedWhileAReloadedPageStarts();
 await checkCloseWhileAReloadedPageStarts();
 await checkCopyWrittenWhileThePageReloads();
 await checkCopyOfTheFileAfterAReload();
+await checkLateReportFromAnEarlierReload();
 finish(results);

@@ -788,6 +788,9 @@
   }
 
   var currentName = '';
+  // The number the backend gave this page when it was reloaded with a
+  // recovery copy (markdown_recovery_reload); null otherwise.
+  var reloadedPage = null;
 
   function showName(name) {
     currentName = name;
@@ -820,7 +823,8 @@
 
   // The same for a reloaded page, which also ends the saves the page before
   // it counted (endSavesOfThePageBefore): the copy is no longer this
-  // process's to delete.
+  // process's to delete. A page whose reload failed has no number, and
+  // those saves stay counted until a document opens.
   async function releaseReloadedCopy(error) {
     await letGoOfRecoveryCopy(error);
     await endSavesOfThePageBefore();
@@ -830,9 +834,11 @@
   // The backend keeps counting the saves the page before the reload began
   // and never ended, so an exit asks while the text that page showed may be
   // in the recovery copy alone. It forgets them here, once this page has
-  // reported its own modified flag.
+  // reported its own modified flag, and only for the page of the last
+  // reload: this one's number (reloadedPage).
   function endSavesOfThePageBefore() {
-    return invoke('markdown_reload_reported').catch(function() {});
+    if (reloadedPage === null) return Promise.resolve();
+    return invoke('markdown_reload_reported', { page: reloadedPage }).catch(function() {});
   }
 
   function showRecoverFailed() {
@@ -909,6 +915,7 @@
       return true;
     }
     if (!reloaded) return false;
+    reloadedPage = reloaded.page;
     var decoded;
     try {
       decoded = Text.decode(base64ToBytes(reloaded.data));

@@ -527,6 +527,50 @@ pub struct ReloadedMarkdown {
     has_file: bool,
     // The copy's text is not the open file's.
     modified: bool,
+    // The number of this reload's page (PageReloads).
+    page: u64,
+}
+
+// Each reload of the Markdown page gives the new page a number. Only the
+// page of the last reload may end the saves the pages before it counted, and
+// only once (end_saves_before_reload): a report sent by an earlier page and
+// handled late would end the saves of a later one.
+#[derive(Default)]
+pub struct PageReloads {
+    // The last number given out. Numbers are never given out twice.
+    last: u64,
+    // The page of the last reload, until a document opens or closes.
+    page: Option<u64>,
+    // That page has ended the saves of the pages before it.
+    reported: bool,
+}
+
+impl PageReloads {
+    // A new page: the pages before it can no longer report.
+    fn begin(&mut self) -> u64 {
+        self.last += 1;
+        self.page = Some(self.last);
+        self.reported = false;
+        self.last
+    }
+
+    // True the first time the page of the last reload reports; false for
+    // any other page, and for that one after its first report.
+    fn take_report(&mut self, page: u64) -> bool {
+        if self.page != Some(page) {
+            return false;
+        }
+        if self.reported {
+            return false;
+        }
+        self.reported = true;
+        true
+    }
+
+    // A document was opened or closed: no reloaded page is in the window.
+    pub fn end(&mut self) {
+        self.page = None;
+    }
 }
 
 // The text file of the live Markdown session, when it holds a copy.
@@ -559,7 +603,10 @@ fn live_markdown_copy(session: Option<&crate::recovery::RecoverySession>) -> Opt
 // it: the file and the copy are compared once the file is written, and the
 // new page cannot close the document or save over it meanwhile. The saves
 // that page counted stay counted until the new page has reported its own
-// modified flag (markdown_reload_reported): an exit asks meanwhile.
+// modified flag (end_saves_before_reload): an exit asks meanwhile.
+//
+// The new page gets its number first, before the wait: from then on no page
+// before it can end the saves counted.
 fn reload_markdown(state: &AppState) -> Result<Option<ReloadedMarkdown>, String> {
     reload_markdown_after(state, || {})
 }
@@ -569,6 +616,7 @@ fn reload_markdown_after(
     state: &AppState,
     copy_read: impl FnOnce(),
 ) -> Result<Option<ReloadedMarkdown>, String> {
+    let page = state.markdown_reloads.lock().unwrap().begin();
     state.markdown_writes.wait_until_none();
     let copy = live_markdown_copy(state.recovery.lock().unwrap().as_ref());
     let Some(copy) = copy else {
@@ -594,6 +642,7 @@ fn reload_markdown_after(
         name,
         has_file: current.is_some(),
         modified: !in_the_file,
+        page,
     }))
 }
 
@@ -604,12 +653,27 @@ pub async fn markdown_recovery_reload(
     reload_markdown(&state)
 }
 
-// The reloaded page shows the copy and has reported its modified flag
-// (markdown.js, startReloaded): the saves the page before it counted and
-// never ended are forgotten only now.
+// The reloaded page `page` shows the copy and has reported its modified flag
+// (markdown.js, startReloaded): the saves the pages before it counted and
+// never ended are forgotten only now. Done once, and only for the page of the
+// last reload: a later page may have begun saves of its own. False when the
+// report is dropped.
+fn end_saves_before_reload(state: &AppState, page: u64) -> bool {
+    let taken = state.markdown_reloads.lock().unwrap().take_report(page);
+    if !taken {
+        log_event(state, &format!("[RECOVER] markdown reload report dropped page={}", page));
+        return false;
+    }
+    crate::app_quit::forget_page_saves(state);
+    true
+}
+
 #[tauri::command]
-pub async fn markdown_reload_reported(state: State<'_, AppState>) -> Result<(), String> {
-    crate::app_quit::forget_page_saves(&state);
+pub async fn markdown_reload_reported(
+    state: State<'_, AppState>,
+    page: u64,
+) -> Result<(), String> {
+    end_saves_before_reload(&state, page);
     Ok(())
 }
 
@@ -945,9 +1009,9 @@ mod tests {
         crate::app_quit::begin_save(&state);
         store_markdown(&state, TEXT_B64, None).unwrap();
 
-        let reloaded = reload_markdown(&state).unwrap();
-        assert_eq!(reloaded_text(reloaded), Some(b"typed meanwhile\n".to_vec()));
-        crate::app_quit::forget_page_saves(&state);
+        let reloaded = reload_markdown(&state).unwrap().unwrap();
+        assert_eq!(STANDARD.decode(&reloaded.data).unwrap(), b"typed meanwhile\n");
+        assert!(end_saves_before_reload(&state, reloaded.page));
 
         crate::app_quit::begin_save(&state);
         store_markdown(&state, TEXT_B64, None).unwrap();
@@ -968,9 +1032,9 @@ mod tests {
         crate::app_quit::begin_save(&state);
         store_markdown(&state, TEXT_B64, None).unwrap();
 
-        let reloaded = reload_markdown(&state).unwrap();
+        let reloaded = reload_markdown(&state).unwrap().unwrap();
 
-        assert_eq!(reloaded_text(reloaded), Some(b"A\n".to_vec()));
+        assert_eq!(STANDARD.decode(&reloaded.data).unwrap(), b"A\n");
         assert!(crate::app_quit::has_unsaved_changes(&state), "after the reload");
         assert!(!crate::app_quit::discard_recovery_on_exit(
             crate::app_quit::has_unsaved_changes(&state)
@@ -978,11 +1042,78 @@ mod tests {
 
         // The new page: set_document_modified, then markdown_reload_reported.
         *state.modified.lock().unwrap() = true;
-        crate::app_quit::forget_page_saves(&state);
+        assert!(end_saves_before_reload(&state, reloaded.page));
 
         assert_eq!(*state.saves_pending.lock().unwrap(), 0);
         assert!(crate::app_quit::has_unsaved_changes(&state), "once reported");
         assert_eq!(std::fs::read(&copy).unwrap(), b"A\n");
+    }
+
+    // The page of the first reload is slow to report, and the page is
+    // reloaded again. The second page reports, saves C over the file B, goes
+    // back to B and copies it; the write of C ends and the page has not
+    // heard: it reported no change, and only its save counts as unsaved.
+    // The first page's report is handled only then.
+    #[test]
+    fn a_report_from_the_page_of_an_earlier_reload_changes_nothing() {
+        let dir = test_dir("reload-late-report");
+        let file = file_with(&dir, "notes.md", b"B\n");
+        let (state, copy) = window_with_copy(&dir, &file, b"typed\n");
+        let first = reload_markdown(&state).unwrap().unwrap();
+        let second = reload_markdown(&state).unwrap().unwrap();
+        assert!(end_saves_before_reload(&state, second.page));
+        crate::app_quit::begin_save(&state);
+        store_markdown(&state, "Qwo=", None).unwrap(); // "C\n"
+        crate::recovery::write_markdown_copy(state.recovery.lock().unwrap().as_ref().unwrap(), b"B\n")
+            .unwrap();
+        *state.modified.lock().unwrap() = false;
+
+        let taken = end_saves_before_reload(&state, first.page);
+
+        assert_eq!(*state.saves_pending.lock().unwrap(), 1, "the second page's save");
+        assert!(crate::app_quit::has_unsaved_changes(&state));
+        assert!(!crate::app_quit::discard_recovery_on_exit(
+            crate::app_quit::has_unsaved_changes(&state)
+        ));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"B\n");
+        assert!(!taken);
+    }
+
+    // The page of the last reload ends the saves of the pages before it once.
+    // A second report from it does not end the saves it began itself.
+    #[test]
+    fn the_page_of_the_last_reload_ends_the_saves_before_it_once() {
+        let dir = test_dir("reload-report-once");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let (state, _copy) = window_with_copy(&dir, &file, b"typed\n");
+        crate::app_quit::begin_save(&state);
+        let reloaded = reload_markdown(&state).unwrap().unwrap();
+
+        assert!(end_saves_before_reload(&state, reloaded.page));
+        assert_eq!(*state.saves_pending.lock().unwrap(), 0);
+
+        crate::app_quit::begin_save(&state);
+        let taken_again = end_saves_before_reload(&state, reloaded.page);
+        assert_eq!(*state.saves_pending.lock().unwrap(), 1, "the reloaded page's own save");
+        assert!(crate::app_quit::has_unsaved_changes(&state));
+        assert!(!taken_again);
+    }
+
+    // Once another document is open, no page of a reload before it ends its
+    // saves.
+    #[test]
+    fn no_reloaded_page_reports_once_a_document_opens() {
+        let dir = test_dir("reload-report-after-open");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let (state, _copy) = window_with_copy(&dir, &file, b"typed\n");
+        let reloaded = reload_markdown(&state).unwrap().unwrap();
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        open_markdown(&state, &token).unwrap();
+        crate::app_quit::begin_save(&state);
+
+        let taken = end_saves_before_reload(&state, reloaded.page);
+        assert_eq!(*state.saves_pending.lock().unwrap(), 1, "the open document's save");
+        assert!(!taken);
     }
 
     #[test]

@@ -29,7 +29,7 @@ pub struct AppState {
     // Saves of unsaved changes under way: the page adds one as each begins and
     // takes one away as each ends (set_save_pending), and a reloaded Markdown
     // page starts from none once it has reported its modified flag
-    // (app_quit::forget_page_saves). sdkjs reports the
+    // (markdown.rs, end_saves_before_reload). sdkjs reports the
     // document as saved when a save begins, so until the last one ends
     // `modified` can be false with nothing written (app_quit::has_unsaved_changes).
     pub saves_pending: Mutex<u32>,
@@ -39,6 +39,9 @@ pub struct AppState {
     // Held by a write of the Markdown file from its start to its end
     // (markdown.rs, store_markdown), so two never overlap.
     pub markdown_write: Mutex<()>,
+    // The reloads of the Markdown page and the page of the last one
+    // (markdown.rs, PageReloads).
+    pub markdown_reloads: Mutex<crate::markdown::PageReloads>,
     // The path a 0-byte file was opened from (#33). It is not in the recent
     // list yet: the file still has no content, and an entry that opens to
     // nothing is worse than no entry. The first save that actually writes it
@@ -1243,6 +1246,7 @@ pub fn current_document(state: State<'_, AppState>) -> Option<GrantedFile> {
 #[tauri::command]
 pub fn close_document(window: tauri::WebviewWindow, state: State<'_, AppState>) {
     set_current_file(&state, None);
+    state.markdown_reloads.lock().unwrap().end();
     // Only the title: the document is closed whether or not it changes.
     let _ = window.set_title(crate::bridge::WINDOW_TITLE);
 }
@@ -1583,6 +1587,7 @@ pub(crate) fn test_state_for(root: &Path, instance: crate::temp_layout::Instance
         saves_pending: Mutex::new(0),
         markdown_writes: crate::markdown::RunningWrites::default(),
         markdown_write: Mutex::new(()),
+        markdown_reloads: Mutex::new(crate::markdown::PageReloads::default()),
         pending_recent: Mutex::new(None),
         recovery: Mutex::new(None),
         pending_open: crate::pending_open::PendingOpens::default(),

@@ -73,19 +73,22 @@ pub fn end_save(state: &AppState) {
 
 // The Markdown page was reloaded: the saves the page before it began and
 // never ended are not the new page's to end. They stay counted until the new
-// page has reported its own modified flag (markdown_reload_reported): until
-// then the text on screen before the reload may be in the recovery copy
-// alone, with `modified` still false. A write of theirs still running is
-// counted by the backend itself (markdown.rs, RunningWrites).
+// page has reported its own modified flag (markdown.rs,
+// end_saves_before_reload): until then the text on screen before the reload
+// may be in the recovery copy alone, with `modified` still false. A write of
+// theirs still running is counted by the backend itself (markdown.rs,
+// RunningWrites).
 pub fn forget_page_saves(state: &AppState) {
     *state.saves_pending.lock().unwrap() = 0;
 }
 
 // A document was just opened or created. A save of the previous one that
-// never ended (its page reloaded mid-save) must not keep it counted as unsaved.
+// never ended (its page reloaded mid-save) must not keep it counted as unsaved,
+// and no page of a reload before it ends the saves of this one.
 pub fn mark_document_clean(state: &AppState) {
     *state.modified.lock().unwrap() = false;
     *state.saves_pending.lock().unwrap() = 0;
+    state.markdown_reloads.lock().unwrap().end();
 }
 
 // An exit the user confirmed: there were no changes, or they chose to discard
