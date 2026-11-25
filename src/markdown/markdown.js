@@ -341,7 +341,9 @@
 
   function writeRecoveryCopy() {
     recoveryTimer = null;
-    if (recoveryStopped || !isModified()) return;
+    if (recoveryStopped || !Text.needsRecoveryCopy(saveState, currentText())) return;
+    // Text that differs from the one being written gets its copy after the
+    // save: the backend drops the copy when the write ends.
     if (saving) {
       scheduleRecoveryCopy();
       return;
