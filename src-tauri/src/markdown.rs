@@ -9,6 +9,7 @@ use crate::path_grants::{file_name, GrantKind, PathGrants};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, Mutex};
 use tauri::State;
 
 pub const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
@@ -292,6 +293,46 @@ pub async fn new_markdown(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// The writes of the open Markdown file under way (store_markdown). The page
+// that asked for one may be gone before it ends (a reload), so the backend
+// counts them itself: an exit asks while one runs
+// (app_quit::has_unsaved_changes), and a reloaded page gets its document
+// once none does (reload_markdown).
+#[derive(Default)]
+pub struct RunningWrites {
+    count: Mutex<u32>,
+    ended: Condvar,
+}
+
+// One write: counted from `begin` until it is dropped.
+pub struct RunningWrite<'a> {
+    writes: &'a RunningWrites,
+}
+
+impl RunningWrites {
+    pub fn begin(&self) -> RunningWrite<'_> {
+        *self.count.lock().unwrap() += 1;
+        RunningWrite { writes: self }
+    }
+
+    pub fn any(&self) -> bool {
+        *self.count.lock().unwrap() > 0
+    }
+
+    // Returns once no write is running.
+    pub fn wait_until_none(&self) {
+        let count = self.count.lock().unwrap();
+        let _none = self.ended.wait_while(count, |count| *count > 0).unwrap();
+    }
+}
+
+impl Drop for RunningWrite<'_> {
+    fn drop(&mut self) {
+        *self.writes.count.lock().unwrap() -= 1;
+        self.writes.ended.notify_all();
+    }
+}
+
 struct SavedMarkdown {
     path: PathBuf,
     // The save went to another file, which is now the open document.
@@ -299,12 +340,13 @@ struct SavedMarkdown {
 }
 
 // Writes `data` (base64) as it is: over the open Markdown file, or to the file
-// a Save token names.
+// a Save token names. Counted as a running write until it returns.
 fn store_markdown(
     state: &AppState,
     data: &str,
     token: Option<&str>,
 ) -> Result<SavedMarkdown, String> {
+    let _running = state.markdown_writes.begin();
     let current = state.current_file.lock().unwrap().clone();
     let dest = markdown_save_destination(&state.grants, token, current.clone())?;
     // As the editors' Save As (save_file_as): the other window would write
@@ -493,7 +535,14 @@ fn live_markdown_copy(session: Option<&crate::recovery::RecoverySession>) -> Opt
 // or when the open file holds the copy's bytes (a save wrote them and the
 // page was reloaded before it dropped the copy), which ends the session. The
 // page then opens the file as before (read_markdown).
+//
+// The page before the reload may have left a write running. This waits for
+// it: the file and the copy are compared once the file is written, and the
+// new page cannot close the document or save over it meanwhile. The saves
+// that page counted end with it.
 fn reload_markdown(state: &AppState) -> Result<Option<ReloadedMarkdown>, String> {
+    state.markdown_writes.wait_until_none();
+    crate::app_quit::forget_page_saves(state);
     let copy = live_markdown_copy(state.recovery.lock().unwrap().as_ref());
     let Some(copy) = copy else {
         return Ok(None);
@@ -796,6 +845,76 @@ mod tests {
         assert!(!copy.exists());
         assert!(state.recovery.lock().unwrap().is_none());
         assert_eq!(std::fs::read(&file).unwrap(), b"text\n");
+    }
+
+    // The page counted its save and was reloaded while the file was written,
+    // with text typed meanwhile as the copy: the reload brings the copy back
+    // and no file is opened. That page's save is forgotten, and the new
+    // page's own save ends at zero.
+    #[test]
+    fn a_save_after_a_reload_during_a_write_leaves_no_save_pending() {
+        let dir = test_dir("reload-during-write");
+        let file = file_with(&dir, "notes.md", b"old\n");
+        let (state, _copy) = window_with_copy(&dir, &file, b"typed meanwhile\n");
+        crate::app_quit::begin_save(&state);
+        store_markdown(&state, TEXT_B64, None).unwrap();
+
+        let reloaded = reload_markdown(&state).unwrap();
+        assert_eq!(reloaded_text(reloaded), Some(b"typed meanwhile\n".to_vec()));
+
+        crate::app_quit::begin_save(&state);
+        store_markdown(&state, TEXT_B64, None).unwrap();
+        crate::app_quit::end_save(&state);
+
+        assert_eq!(*state.saves_pending.lock().unwrap(), 0);
+        assert!(!state.markdown_writes.any());
+    }
+
+    #[test]
+    fn a_write_counts_as_running_only_until_it_returns() {
+        let dir = test_dir("write-counted");
+        let file = file_with(&dir, "notes.md", b"old\n");
+        let state = window_state(&dir, 1);
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        open_markdown(&state, &token).unwrap();
+
+        store_markdown(&state, TEXT_B64, None).unwrap();
+        assert!(!state.markdown_writes.any());
+
+        // A write that fails ends too.
+        assert!(store_markdown(&state, "not base64", None).is_err());
+        assert!(!state.markdown_writes.any());
+    }
+
+    // The write the page before the reload left running ends after the
+    // reload was asked for: the reload answers only then, with the file as
+    // the write left it.
+    #[test]
+    fn a_reload_waits_for_a_write_still_running() {
+        let dir = test_dir("reload-waits");
+        let file = file_with(&dir, "notes.md", b"old\n");
+        let (state, copy) = window_with_copy(&dir, &file, b"text\n");
+        crate::app_quit::begin_save(&state);
+        let write = state.markdown_writes.begin();
+        let (answered, reload_answer) = std::sync::mpsc::channel();
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let reloaded = reload_markdown(&state).unwrap();
+                answered.send(reloaded.is_none()).unwrap();
+            });
+            let early = reload_answer.recv_timeout(Duration::from_millis(200));
+            assert!(early.is_err(), "the reload answered while the write was running");
+            assert!(crate::app_quit::has_unsaved_changes(&state));
+
+            std::fs::write(&file, b"text\n").unwrap();
+            drop(write);
+
+            let opens_the_file = reload_answer.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(opens_the_file, "the file holds the copy once the write has ended");
+        });
+        assert!(!copy.exists());
+        assert!(!crate::app_quit::has_unsaved_changes(&state));
     }
 
     // The copy was written before a Save As wrote the same text: a start

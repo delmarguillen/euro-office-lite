@@ -48,10 +48,12 @@ pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
 // to the saved state, with none running, does not. sdkjs sends no such report
 // for a print, which the page counts with them all the same (bridge.js,
 // Print). The page applies the same rule (bridge.js, _eoHasUnsavedChanges).
+// A write of the Markdown file still running counts too, whatever the page
+// reports: the page that began it may be gone (markdown.rs, RunningWrites).
 pub fn has_unsaved_changes(state: &AppState) -> bool {
     let modified = *state.modified.lock().unwrap();
     let saves_pending = *state.saves_pending.lock().unwrap();
-    modified || saves_pending > 0
+    modified || saves_pending > 0 || state.markdown_writes.any()
 }
 
 // The page begins and ends each save of unsaved changes (set_save_pending) and
@@ -67,6 +69,13 @@ pub fn begin_save(state: &AppState) {
 pub fn end_save(state: &AppState) {
     let mut saves_pending = state.saves_pending.lock().unwrap();
     *saves_pending = saves_pending.saturating_sub(1);
+}
+
+// The Markdown page was reloaded: the saves the page before it began and
+// never ended are not the new page's to end. A write of theirs still running
+// is counted by the backend itself (markdown.rs, RunningWrites).
+pub fn forget_page_saves(state: &AppState) {
+    *state.saves_pending.lock().unwrap() = 0;
 }
 
 // A document was just opened or created. A save of the previous one that
@@ -422,6 +431,49 @@ mod tests {
         begin_save_after_a_change(&state);
 
         assert!(has_unsaved_changes(&state));
+    }
+
+    #[test]
+    fn a_markdown_write_still_running_asks_before_quitting() {
+        let state = test_state(&scratch("markdown-write-quit"));
+        let write = state.markdown_writes.begin();
+        assert_eq!(
+            quit_action(has_unsaved_changes(&state)),
+            QuitAction::Confirm
+        );
+
+        drop(write);
+
+        assert!(!has_unsaved_changes(&state));
+    }
+
+    // The page that began the save was reloaded while the file was written:
+    // nothing takes its save away, and the write is still running.
+    #[test]
+    fn a_reloaded_page_starts_with_no_save_of_its_own_and_the_write_still_counts() {
+        let state = test_state(&scratch("reload-during-write"));
+        begin_save_after_a_change(&state);
+        let write = state.markdown_writes.begin();
+
+        forget_page_saves(&state);
+
+        assert_eq!(*state.saves_pending.lock().unwrap(), 0);
+        assert!(has_unsaved_changes(&state));
+        drop(write);
+        assert!(!has_unsaved_changes(&state));
+    }
+
+    #[test]
+    fn an_exit_during_a_markdown_write_keeps_the_recovery_folder() {
+        let root = scratch("exit-during-markdown-write");
+        let state = test_state(&root);
+        let dir = live_session(&state, &root.join("recover"));
+        let _write = state.markdown_writes.begin();
+
+        mark_exit_confirmed(&state);
+        on_exit(&state);
+
+        assert!(dir.exists());
     }
 
     #[test]

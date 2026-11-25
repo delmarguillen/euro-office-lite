@@ -27,10 +27,14 @@ pub struct AppState {
     pub doc_seq: std::sync::atomic::AtomicU64,
     pub modified: Mutex<bool>,
     // Saves of unsaved changes under way: the page adds one as each begins and
-    // takes one away as each ends (set_save_pending). sdkjs reports the
+    // takes one away as each ends (set_save_pending), and a reloaded Markdown
+    // page starts from none (app_quit::forget_page_saves). sdkjs reports the
     // document as saved when a save begins, so until the last one ends
     // `modified` can be false with nothing written (app_quit::has_unsaved_changes).
     pub saves_pending: Mutex<u32>,
+    // The writes of the open Markdown file under way, counted by the backend
+    // (markdown.rs, RunningWrites).
+    pub markdown_writes: crate::markdown::RunningWrites,
     // The path a 0-byte file was opened from (#33). It is not in the recent
     // list yet: the file still has no content, and an entry that opens to
     // nothing is worse than no entry. The first save that actually writes it
@@ -1573,6 +1577,7 @@ pub(crate) fn test_state_for(root: &Path, instance: crate::temp_layout::Instance
         doc_seq: std::sync::atomic::AtomicU64::new(1),
         modified: Mutex::new(false),
         saves_pending: Mutex::new(0),
+        markdown_writes: crate::markdown::RunningWrites::default(),
         pending_recent: Mutex::new(None),
         recovery: Mutex::new(None),
         pending_open: crate::pending_open::PendingOpens::default(),

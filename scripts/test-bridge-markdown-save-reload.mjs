@@ -22,6 +22,11 @@
 // A start after the process ended offers the copies left that do not hold
 // the bytes of the file (recovery::scan_candidates).
 //
+// A reload while the file is being written: the backend counts the write
+// itself (RunningWrites), answers markdown_recovery_reload once it has ended
+// and forgets the saves the page before the reload counted. The fake reads
+// all three as app_quit::has_unsaved_changes does.
+//
 // Run: node scripts/test-bridge-markdown-save-reload.mjs
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -35,12 +40,17 @@ const NAME = 'a.md';
 const toBase64 = (text) => Buffer.from(text).toString('base64');
 const fromBase64 = (data) => Buffer.from(data, 'base64').toString();
 // What a failed check prints of the backend.
-const told = ({ file, copy, released, modified, savesPending }) => JSON.stringify({ file, copy, released, modified, savesPending });
+const told = ({ file, copy, released, modified, savesPending, writesRunning, closed }) =>
+  JSON.stringify({ file, copy, released, modified, savesPending, writesRunning, closed });
 
 // a.md holding `fileText`, with no recovery copy.
 function makeBackend(fileText) {
   const backend = {
     file: fileText, copy: null, modified: false, savesPending: 0, write: null,
+    // Writes of the file under way, and the reloads waiting for them to end.
+    writesRunning: 0, reloadsWaiting: [],
+    // The page closed the document.
+    closed: false,
     // Copies the page let go of without deleting them.
     released: [],
     // The copies and the file, in the order they reached the disk.
@@ -54,6 +64,13 @@ function makeBackend(fileText) {
     backend.copy = fromBase64(data);
     backend.landed.push('copy ' + backend.copy);
   };
+  const writeEnded = () => {
+    backend.writesRunning -= 1;
+    backend.reloadsWaiting.splice(0).forEach((resume) => resume());
+  };
+  const noWriteRunning = async () => {
+    while (backend.writesRunning > 0) await new Promise((resolve) => backend.reloadsWaiting.push(resolve));
+  };
   backend.answers = {
     current_document: () => ({ token: 't', name: NAME }),
     read_markdown: () => {
@@ -64,6 +81,7 @@ function makeBackend(fileText) {
     },
     // The write waits until the check ends it.
     save_markdown: ({ data }) => new Promise((resolve, reject) => {
+      backend.writesRunning += 1;
       backend.write = { data, answer: () => resolve(NAME), fail: () => reject(new Error('save-denied')) };
     }),
     markdown_recovery_write: ({ data }) => {
@@ -75,23 +93,33 @@ function makeBackend(fileText) {
       if (!discard && backend.copy !== null) backend.released.push(backend.copy);
       backend.copy = null;
     },
-    markdown_recovery_reload: () => {
+    markdown_recovery_reload: async () => {
+      await noWriteRunning();
+      backend.savesPending = 0;
       if (backend.copy === backend.file) backend.copy = null;
       if (backend.copy === null) return null;
       return { data: toBase64(backend.copy), name: NAME, hasFile: true };
     },
     set_document_modified: ({ modified }) => { backend.modified = modified; },
     set_save_pending: ({ pending }) => { backend.savesPending += pending ? 1 : -1; },
+    close_document: () => { backend.closed = true; },
   };
   // The file is written: the backend's part of a save.
   backend.endWrite = () => {
     backend.file = fromBase64(backend.write.data);
     backend.landed.push('file ' + backend.file);
+    writeEnded();
   };
   // The page hears that the save ended.
   backend.answerSave = () => backend.write.answer();
+  // The write ends with nothing written.
+  backend.failWrite = () => writeEnded();
   // Nothing is written, and the page hears that the save failed.
-  backend.failSave = () => backend.write.fail();
+  backend.failSave = () => {
+    backend.failWrite();
+    backend.write.fail();
+  };
+  backend.unsaved = () => backend.modified || backend.savesPending > 0 || backend.writesRunning > 0;
   // The held copies reach the disk, and those the page asks for meanwhile.
   backend.landHeldCopies = async () => {
     while (backend.heldCopies.length) {
@@ -133,7 +161,8 @@ const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((res
 
 // The page against `backend`: opened on the file (`search` with its token),
 // or reloaded (no `search`, as takePending leaves the address). Its timers
-// run only when a check runs them.
+// run only when a check runs them. A reloaded page may still be waiting for
+// its document when this returns.
 async function loadPage(backend, search) {
   const listeners = {};
   const stub = makeStubs(listeners);
@@ -167,6 +196,7 @@ async function loadPage(backend, search) {
     type: async (text) => { stub('md-source').value = text; listeners['md-source:input'](); await settle(); },
     runTimers: async () => { timers.splice(0).forEach((callback) => callback()); await settle(); },
     clickSave: async () => { listeners['md-save:click'](); await settle(); },
+    clickClose: async () => { listeners['md-close:click'](); await settle(); },
   };
 }
 
@@ -355,6 +385,51 @@ async function checkCopyThatCannotBeReplaced() {
     reloaded.text() === 'ABC' && !backend.modified, String(reloaded.text()) + ' ' + told(backend));
 }
 
+// The page is reloaded while B is being written, and Close is pressed on the
+// new page before the write ends.
+async function checkCloseAfterAReloadDuringTheWrite() {
+  const { backend } = await saveBOverA();
+  const reloaded = await reloadPage(backend);
+  check(results, 'reload during the write: the backend counts the document as unsaved', backend.unsaved(), told(backend));
+  await reloaded.clickClose();
+  check(results, 'reload during the write, Close: the document stays open and keeps its copy while the file is written',
+    !backend.closed && backend.copy === 'B', told(backend));
+  backend.endWrite();
+  await settle();
+  check(results, 'reload during the write, Close: the document closes once the file is written',
+    backend.closed && backend.file === 'B', told(backend));
+}
+
+// The write of B ends after the reload, and the new page saves C.
+async function checkSaveAfterAReloadDuringTheWrite() {
+  const { backend } = await saveBOverA();
+  const reloaded = await reloadPage(backend);
+  backend.endWrite();
+  await settle();
+  check(results, 'reload during the write, write ended: the page shows B and nothing is unsaved',
+    reloaded.text() === 'B' && !backend.unsaved(), String(reloaded.text()) + ' ' + told(backend));
+  await reloaded.type('C');
+  await reloaded.clickSave();
+  backend.endWrite();
+  backend.answerSave();
+  await settle();
+  check(results, 'reload during the write, then C saved: the file holds C', backend.file === 'C', told(backend));
+  check(results, 'reload during the write, then C saved: no save is pending and nothing is unsaved',
+    backend.savesPending === 0 && backend.writesRunning === 0 && !backend.unsaved(), told(backend));
+}
+
+// The write of B fails after the reload: B is in no file.
+async function checkFailedWriteAfterAReload() {
+  const { backend } = await saveBOverA();
+  const reloaded = await reloadPage(backend);
+  backend.failWrite();
+  await settle();
+  check(results, 'reload during the write, write failed: the page shows B, marked modified',
+    reloaded.text() === 'B' && backend.modified, String(reloaded.text()) + ' ' + told(backend));
+  check(results, 'reload during the write, write failed: no save is pending',
+    backend.savesPending === 0 && backend.writesRunning === 0, told(backend));
+}
+
 await checkUndoThenReloadAfterTheSave();
 await checkUndoThenReloadAsTheWriteEnds();
 await checkTypingOnThenReload();
@@ -365,4 +440,7 @@ await checkProcessEndsAroundTheWrite();
 await checkReloadAsAbcIsWritten();
 await checkCopyOnItsWayWhenTheSaveBegins();
 await checkCopyThatCannotBeReplaced();
+await checkCloseAfterAReloadDuringTheWrite();
+await checkSaveAfterAReloadDuringTheWrite();
+await checkFailedWriteAfterAReload();
 finish(results);

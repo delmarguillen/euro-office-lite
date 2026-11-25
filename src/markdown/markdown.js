@@ -290,10 +290,7 @@
   // The stylesheet is the page's own; the srcdoc document shares its base URL.
   function prepareFrame() {
     return new Promise(function(resolve) {
-      frame.addEventListener('load', function() {
-        frame.contentDocument.addEventListener('keydown', onKeyDown, true);
-        resolve();
-      }, { once: true });
+      frame.addEventListener('load', resolve, { once: true });
       frame.srcdoc = '<!DOCTYPE html><html><head><meta charset="utf-8">' +
         '<link rel="stylesheet" href="markdown-preview.css"></head>' +
         '<body class="markdown-body"></body></html>';
@@ -550,9 +547,12 @@
     }
   }
 
-  // Close, the window's close button and Quit decide once no save is
-  // writing: the write can still fail, or end with other text on screen.
+  // Close, the window's close button and Quit decide once the document is on
+  // screen and no save is writing: the write can still fail, or end with
+  // other text on screen. A reloaded page is not on screen until the write
+  // the page before it left running has ended (startReloaded).
   async function confirmDiscard() {
+    await started;
     // A write always ends inside its saveRun, so this cannot spin.
     while (Text.closeAction(saveState, currentText()) === 'wait') {
       await saveRun.catch(function() {});
@@ -874,7 +874,8 @@
   // copy comes back marked modified and stays offered until saved or
   // discarded (markdown_recovery_reload). False when there is no copy, or the
   // file already holds its bytes: the page then opens the file, which ends
-  // the session.
+  // the session. The backend answers once a write the page before the reload
+  // left running has ended.
   async function startReloaded(framed) {
     var reloaded;
     try {
@@ -936,17 +937,27 @@
     render();
   }
 
-  source.addEventListener('input', onTextChanged);
-  document.addEventListener('keydown', onKeyDown, true);
-  editButton.addEventListener('click', function() { setEditing(!editing); });
-  document.getElementById('md-save').addEventListener('click', function() { save(false); });
-  document.getElementById('md-save-as').addEventListener('click', function() { save(true); });
+  // What the user does to the document, listened for once it is on screen:
+  // before that there is no text to edit, save or export.
+  function listenToUser() {
+    source.addEventListener('input', onTextChanged);
+    document.addEventListener('keydown', onKeyDown, true);
+    frame.contentDocument.addEventListener('keydown', onKeyDown, true);
+    editButton.addEventListener('click', function() { setEditing(!editing); });
+    document.getElementById('md-save').addEventListener('click', function() { save(false); });
+    document.getElementById('md-save-as').addEventListener('click', function() { save(true); });
+    document.getElementById('md-export').addEventListener('click', exportHtml);
+  }
+
+  // Close waits for the document itself (confirmDiscard).
   document.getElementById('md-close').addEventListener('click', closeDocument);
-  document.getElementById('md-export').addEventListener('click', exportHtml);
 
   tauri.event.listen('pending-open-file', drainPendingOpens);
 
+  // Settles once the document is on screen, or the page is leaving.
+  var started = start().catch(function(error) { log('start failed: ' + errorText(error)); });
+
   // The event for a file queued before this page listened is gone: the
   // queue is read once the page has started.
-  start().then(drainPendingOpens);
+  started.then(listenToUser).then(drainPendingOpens);
 })();
