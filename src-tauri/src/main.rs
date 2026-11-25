@@ -568,6 +568,7 @@ fn main() {
             markdown::markdown_recovery_write,
             markdown::markdown_recovery_load,
             markdown::markdown_recovery_reload,
+            markdown::markdown_reload_reported,
             markdown::save_markdown,
             markdown::markdown_image,
         ])

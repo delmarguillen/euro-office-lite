@@ -72,8 +72,11 @@ pub fn end_save(state: &AppState) {
 }
 
 // The Markdown page was reloaded: the saves the page before it began and
-// never ended are not the new page's to end. A write of theirs still running
-// is counted by the backend itself (markdown.rs, RunningWrites).
+// never ended are not the new page's to end. They stay counted until the new
+// page has reported its own modified flag (markdown_reload_reported): until
+// then the text on screen before the reload may be in the recovery copy
+// alone, with `modified` still false. A write of theirs still running is
+// counted by the backend itself (markdown.rs, RunningWrites).
 pub fn forget_page_saves(state: &AppState) {
     *state.saves_pending.lock().unwrap() = 0;
 }
@@ -447,8 +450,8 @@ mod tests {
         assert!(!has_unsaved_changes(&state));
     }
 
-    // The page that began the save was reloaded while the file was written:
-    // nothing takes its save away, and the write is still running.
+    // The page that began the save was reloaded while the file was written,
+    // and the new page reported: the write is still running.
     #[test]
     fn a_reloaded_page_starts_with_no_save_of_its_own_and_the_write_still_counts() {
         let state = test_state(&scratch("reload-during-write"));

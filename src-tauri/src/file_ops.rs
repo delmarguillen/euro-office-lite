@@ -28,7 +28,8 @@ pub struct AppState {
     pub modified: Mutex<bool>,
     // Saves of unsaved changes under way: the page adds one as each begins and
     // takes one away as each ends (set_save_pending), and a reloaded Markdown
-    // page starts from none (app_quit::forget_page_saves). sdkjs reports the
+    // page starts from none once it has reported its modified flag
+    // (app_quit::forget_page_saves). sdkjs reports the
     // document as saved when a save begins, so until the last one ends
     // `modified` can be false with nothing written (app_quit::has_unsaved_changes).
     pub saves_pending: Mutex<u32>,

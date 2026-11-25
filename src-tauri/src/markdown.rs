@@ -550,10 +550,10 @@ fn live_markdown_copy(session: Option<&crate::recovery::RecoverySession>) -> Opt
 // The page before the reload may have left a write running. This waits for
 // it: the file and the copy are compared once the file is written, and the
 // new page cannot close the document or save over it meanwhile. The saves
-// that page counted end with it.
+// that page counted stay counted until the new page has reported its own
+// modified flag (markdown_reload_reported): an exit asks meanwhile.
 fn reload_markdown(state: &AppState) -> Result<Option<ReloadedMarkdown>, String> {
     state.markdown_writes.wait_until_none();
-    crate::app_quit::forget_page_saves(state);
     let copy = live_markdown_copy(state.recovery.lock().unwrap().as_ref());
     let Some(copy) = copy else {
         return Ok(None);
@@ -586,6 +586,15 @@ pub async fn markdown_recovery_reload(
     state: State<'_, AppState>,
 ) -> Result<Option<ReloadedMarkdown>, String> {
     reload_markdown(&state)
+}
+
+// The reloaded page shows the copy and has reported its modified flag
+// (markdown.js, startReloaded): the saves the page before it counted and
+// never ended are forgotten only now.
+#[tauri::command]
+pub async fn markdown_reload_reported(state: State<'_, AppState>) -> Result<(), String> {
+    crate::app_quit::forget_page_saves(&state);
+    Ok(())
 }
 
 // An image of the Markdown document, as a data: URL's parts. `src` is the
@@ -872,6 +881,7 @@ mod tests {
 
         let reloaded = reload_markdown(&state).unwrap();
         assert_eq!(reloaded_text(reloaded), Some(b"typed meanwhile\n".to_vec()));
+        crate::app_quit::forget_page_saves(&state);
 
         crate::app_quit::begin_save(&state);
         store_markdown(&state, TEXT_B64, None).unwrap();
@@ -879,6 +889,34 @@ mod tests {
 
         assert_eq!(*state.saves_pending.lock().unwrap(), 0);
         assert!(!state.markdown_writes.any());
+    }
+
+    // B is saved, the text goes back to A while B is written and A is the
+    // copy: the page reported no change, and only its save counts as unsaved.
+    // After the reload A is in the copy alone until the new page reports it.
+    #[test]
+    fn a_reload_keeps_the_document_unsaved_until_the_new_page_reports() {
+        let dir = test_dir("reload-handover");
+        let file = file_with(&dir, "notes.md", b"A\n");
+        let (state, copy) = window_with_copy(&dir, &file, b"A\n");
+        crate::app_quit::begin_save(&state);
+        store_markdown(&state, TEXT_B64, None).unwrap();
+
+        let reloaded = reload_markdown(&state).unwrap();
+
+        assert_eq!(reloaded_text(reloaded), Some(b"A\n".to_vec()));
+        assert!(crate::app_quit::has_unsaved_changes(&state), "after the reload");
+        assert!(!crate::app_quit::discard_recovery_on_exit(
+            crate::app_quit::has_unsaved_changes(&state)
+        ));
+
+        // The new page: set_document_modified, then markdown_reload_reported.
+        *state.modified.lock().unwrap() = true;
+        crate::app_quit::forget_page_saves(&state);
+
+        assert_eq!(*state.saves_pending.lock().unwrap(), 0);
+        assert!(crate::app_quit::has_unsaved_changes(&state), "once reported");
+        assert_eq!(std::fs::read(&copy).unwrap(), b"A\n");
     }
 
     #[test]
@@ -955,7 +993,7 @@ mod tests {
             assert!(opens_the_file, "the file holds the copy once the write has ended");
         });
         assert!(!copy.exists());
-        assert!(!crate::app_quit::has_unsaved_changes(&state));
+        assert!(!state.markdown_writes.any());
     }
 
     // The copy was written before a Save As wrote the same text: a start

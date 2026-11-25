@@ -809,9 +809,30 @@
   // without deleting it, so the start screen offers it again; never through
   // read_markdown, which would delete it.
   async function releaseRecoveryCopy(error) {
+    await letGoOfRecoveryCopy(error);
+    await showThenLeave(showRecoverFailed);
+  }
+
+  async function letGoOfRecoveryCopy(error) {
     log('recovery copy not shown: ' + errorText(error));
     await invoke('recovery_end', { discard: false }).catch(function() {});
+  }
+
+  // The same for a reloaded page, which also ends the saves the page before
+  // it counted (endSavesOfThePageBefore): the copy is no longer this
+  // process's to delete.
+  async function releaseReloadedCopy(error) {
+    await letGoOfRecoveryCopy(error);
+    await endSavesOfThePageBefore();
     await showThenLeave(showRecoverFailed);
+  }
+
+  // The backend keeps counting the saves the page before the reload began
+  // and never ended, so an exit asks while the text that page showed may be
+  // in the recovery copy alone. It forgets them here, once this page has
+  // reported its own modified flag.
+  function endSavesOfThePageBefore() {
+    return invoke('markdown_reload_reported').catch(function() {});
   }
 
   function showRecoverFailed() {
@@ -875,13 +896,14 @@
   // discarded (markdown_recovery_reload). False when there is no copy, or the
   // file already holds its bytes: the page then opens the file, which ends
   // the session. The backend answers once a write the page before the reload
-  // left running has ended.
+  // left running has ended, and counts that page's saves as unsaved until
+  // this one has reported its modified flag.
   async function startReloaded(framed) {
     var reloaded;
     try {
       reloaded = await invoke('markdown_recovery_reload');
     } catch (error) {
-      await releaseRecoveryCopy(error);
+      await releaseReloadedCopy(error);
       return true;
     }
     if (!reloaded) return false;
@@ -889,7 +911,7 @@
     try {
       decoded = Text.decode(base64ToBytes(reloaded.data));
     } catch (error) {
-      await releaseRecoveryCopy(error);
+      await releaseReloadedCopy(error);
       return true;
     }
     format = decoded;
@@ -900,6 +922,7 @@
     // set_document_modified marks the title it finds: the name goes first.
     await invoke('set_window_title', { name: reloaded.name }).catch(function() {});
     await reportModified(true);
+    await endSavesOfThePageBefore();
     await framed;
     render();
     await setEditing(true);

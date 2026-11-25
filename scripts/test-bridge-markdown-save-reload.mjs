@@ -23,9 +23,13 @@
 // the bytes of the file (recovery::scan_candidates).
 //
 // A reload while the file is being written: the backend counts the write
-// itself (RunningWrites), answers markdown_recovery_reload once it has ended
-// and forgets the saves the page before the reload counted. The fake reads
-// all three as app_quit::has_unsaved_changes does.
+// itself (RunningWrites) and answers markdown_recovery_reload once it has
+// ended. It forgets the saves the page before the reload counted when the
+// new page says it has reported its modified flag
+// (markdown_reload_reported). The fake reads all three as
+// app_quit::has_unsaved_changes does, and closes its window as main.rs does:
+// with nothing unsaved the process exits and the copy goes with it
+// (app_quit::on_exit); otherwise the page is asked (confirm-close).
 //
 // Run: node scripts/test-bridge-markdown-save-reload.mjs
 import { readFile } from 'node:fs/promises';
@@ -40,8 +44,8 @@ const NAME = 'a.md';
 const toBase64 = (text) => Buffer.from(text).toString('base64');
 const fromBase64 = (data) => Buffer.from(data, 'base64').toString();
 // What a failed check prints of the backend.
-const told = ({ file, copy, released, modified, savesPending, writesRunning, closed }) =>
-  JSON.stringify({ file, copy, released, modified, savesPending, writesRunning, closed });
+const told = ({ file, copy, released, modified, savesPending, writesRunning, closed, exited, asked }) =>
+  JSON.stringify({ file, copy, released, modified, savesPending, writesRunning, closed, exited, asked });
 
 // a.md holding `fileText`, with no recovery copy.
 function makeBackend(fileText) {
@@ -59,6 +63,11 @@ function makeBackend(fileText) {
     holdCopies: false, heldCopies: [],
     // With failCopies, no copy can be written.
     failCopies: false,
+    // With holdTitles, set_window_title answers when the check lets it.
+    holdTitles: false, heldTitles: [],
+    // The process exited without asking; the times the page asked before
+    // discarding changes, and what the user answers.
+    exited: false, asked: 0, discardWhenAsked: true,
   };
   const landCopy = (data) => {
     backend.copy = fromBase64(data);
@@ -95,10 +104,14 @@ function makeBackend(fileText) {
     },
     markdown_recovery_reload: async () => {
       await noWriteRunning();
-      backend.savesPending = 0;
       if (backend.copy === backend.file) backend.copy = null;
       if (backend.copy === null) return null;
       return { data: toBase64(backend.copy), name: NAME, hasFile: true };
+    },
+    markdown_reload_reported: () => { backend.savesPending = 0; },
+    set_window_title: () => {
+      if (!backend.holdTitles) return null;
+      return new Promise((resolve) => { backend.heldTitles.push(resolve); });
     },
     set_document_modified: ({ modified }) => { backend.modified = modified; },
     set_save_pending: ({ pending }) => { backend.savesPending += pending ? 1 : -1; },
@@ -120,6 +133,11 @@ function makeBackend(fileText) {
     backend.write.fail();
   };
   backend.unsaved = () => backend.modified || backend.savesPending > 0 || backend.writesRunning > 0;
+  backend.answerTitles = async () => {
+    backend.holdTitles = false;
+    backend.heldTitles.splice(0).forEach((answer) => answer());
+    await settle();
+  };
   // The held copies reach the disk, and those the page asks for meanwhile.
   backend.landHeldCopies = async () => {
     while (backend.heldCopies.length) {
@@ -165,6 +183,7 @@ const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((res
 // its document when this returns.
 async function loadPage(backend, search) {
   const listeners = {};
+  const events = {};
   const stub = makeStubs(listeners);
   const timers = [];
   const invoke = async (command, args) => (backend.answers[command] ? backend.answers[command](args) : null);
@@ -179,7 +198,11 @@ async function loadPage(backend, search) {
       getElementById: stub, querySelectorAll: () => [], documentElement: stub('html'), addEventListener() {},
       createElement: () => ({}), head, body: stub('body'),
     },
-    __TAURI__: { core: { invoke }, event: { listen: async () => {} }, dialog: { confirm: async () => true, message: async () => {} } },
+    __TAURI__: {
+      core: { invoke },
+      event: { listen: async (event, handler) => { events[event] = handler; } },
+      dialog: { confirm: async () => { backend.asked += 1; return backend.discardWhenAsked; }, message: async () => {} },
+    },
     markdownit: stub('markdownit'), markdownitFootnote: stub('footnote'), markdownitTaskLists: stub('tasks'), DOMPurify: stub('DOMPurify'),
     addEventListener() {},
   };
@@ -197,6 +220,16 @@ async function loadPage(backend, search) {
     runTimers: async () => { timers.splice(0).forEach((callback) => callback()); await settle(); },
     clickSave: async () => { listeners['md-save:click'](); await settle(); },
     clickClose: async () => { listeners['md-close:click'](); await settle(); },
+    // The window's close button, and Quit: the same rule (app_quit.rs).
+    closeWindow: async () => {
+      if (backend.unsaved()) {
+        events['confirm-close']();
+      } else {
+        backend.exited = true;
+        backend.copy = null;
+      }
+      await settle();
+    },
   };
 }
 
@@ -430,6 +463,49 @@ async function checkFailedWriteAfterAReload() {
     backend.savesPending === 0 && backend.writesRunning === 0, told(backend));
 }
 
+// B is saved, the user undoes back to A while it is written and the timer
+// copies A: the page reports no change, and only its save counts as unsaved.
+// The file is written and the page reloaded. The new page has its document
+// and is waiting for its title: it has not reported A as modified yet.
+async function reloadWithAOnlyInTheCopy() {
+  const { backend, page } = await saveBOverA();
+  await page.type('A');
+  await page.runTimers();
+  backend.endWrite();
+  backend.holdTitles = true;
+  backend.discardWhenAsked = false;
+  const reloaded = await reloadPage(backend);
+  return { backend, reloaded };
+}
+
+// The window is closed, or Quit chosen, in that moment.
+async function checkWindowClosedWhileAReloadedPageStarts() {
+  const { backend, reloaded } = await reloadWithAOnlyInTheCopy();
+  check(results, 'reload, A only in the copy, page not started: the file holds B and nothing is reported modified',
+    backend.file === 'B' && backend.copy === 'A' && !backend.modified, told(backend));
+  check(results, 'reload, A only in the copy, page not started: the backend counts the document as unsaved',
+    backend.unsaved(), told(backend));
+  await reloaded.closeWindow();
+  check(results, 'reload, window closed before the page started: the process does not exit and A stays in the copy',
+    !backend.exited && backend.copy === 'A', told(backend));
+  await backend.answerTitles();
+  check(results, 'reload, window closed before the page started: the page asks once it shows A',
+    backend.asked === 1 && reloaded.text() === 'A' && !backend.exited && backend.copy === 'A', told(backend));
+  check(results, 'reload, page started: A is reported modified and the saves of the page before are forgotten',
+    backend.modified && backend.savesPending === 0, told(backend));
+}
+
+// Close is pressed in that moment.
+async function checkCloseWhileAReloadedPageStarts() {
+  const { backend, reloaded } = await reloadWithAOnlyInTheCopy();
+  await reloaded.clickClose();
+  check(results, 'reload, Close before the page started: the document stays open with A in the copy',
+    !backend.closed && backend.asked === 0 && backend.copy === 'A', told(backend));
+  await backend.answerTitles();
+  check(results, 'reload, Close before the page started: the page asks once it shows A',
+    backend.asked === 1 && !backend.closed && backend.copy === 'A', told(backend));
+}
+
 await checkUndoThenReloadAfterTheSave();
 await checkUndoThenReloadAsTheWriteEnds();
 await checkTypingOnThenReload();
@@ -443,4 +519,6 @@ await checkCopyThatCannotBeReplaced();
 await checkCloseAfterAReloadDuringTheWrite();
 await checkSaveAfterAReloadDuringTheWrite();
 await checkFailedWriteAfterAReload();
+await checkWindowClosedWhileAReloadedPageStarts();
+await checkCloseWhileAReloadedPageStarts();
 finish(results);
