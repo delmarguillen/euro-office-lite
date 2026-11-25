@@ -324,12 +324,29 @@ fn store_markdown(
     let new_file = current.as_ref() != Some(&dest);
     if new_file {
         crate::file_ops::set_current_file(state, Some(dest.clone()));
+        name_live_markdown_session(state, &dest);
     }
     drop(claim);
     // The recovery copy stays. The text on screen may have changed while this
     // was written, and only the page knows: it drops the copy or replaces it
     // once the write has ended (markdown.js, settleRecoveryCopy).
     Ok(SavedMarkdown { path: dest, new_file })
+}
+
+// The live Markdown session's copy is of `file` from now on: a Save As just
+// wrote it. A start that finds the copy compares it with the file doc.info
+// names (recovery.rs, scan_candidates).
+fn name_live_markdown_session(state: &AppState, file: &Path) {
+    let named = {
+        let live = state.recovery.lock().unwrap();
+        let Some(session) = live.as_ref().filter(|session| session.markdown) else {
+            return;
+        };
+        crate::recovery::name_markdown_session(session, Some(file))
+    };
+    if let Err(error) = named {
+        log_event(state, &format!("[RECOVER] markdown doc.info failed: {}", error));
+    }
 }
 
 // Save and Save As of the Markdown page. Returns the saved file's name.
@@ -470,25 +487,29 @@ fn live_markdown_copy(session: Option<&crate::recovery::RecoverySession>) -> Opt
 
 // A reload of the page (F5, devtools) while the document has a recovery
 // copy: the copy comes back and the session stays, so the open file, its
-// save suggestion and the copy are as they were. None when there is no copy;
-// the page then opens the file as before (read_markdown).
-#[tauri::command]
-pub async fn markdown_recovery_reload(
-    state: State<'_, AppState>,
-) -> Result<Option<ReloadedMarkdown>, String> {
+// save suggestion and the copy are as they were. None when there is no copy,
+// or when the open file holds the copy's bytes (a save wrote them and the
+// page was reloaded before it dropped the copy), which ends the session. The
+// page then opens the file as before (read_markdown).
+fn reload_markdown(state: &AppState) -> Result<Option<ReloadedMarkdown>, String> {
     let copy = live_markdown_copy(state.recovery.lock().unwrap().as_ref());
     let Some(copy) = copy else {
         return Ok(None);
     };
-    let bytes = read_limited(&copy, MARKDOWN_MAX_BYTES)?;
     let current = state.current_file.lock().unwrap().clone();
+    if current.as_deref().is_some_and(|file| crate::recovery::same_bytes(&copy, file)) {
+        crate::recovery::end_session(state, true);
+        log_event(state, "[RECOVER] markdown reload: the file holds the copy");
+        return Ok(None);
+    }
+    let bytes = read_limited(&copy, MARKDOWN_MAX_BYTES)?;
     let name = match &current {
         Some(path) => file_name(path),
         None => crate::recovery::recovered_name(copy.parent().unwrap_or(&copy))
             .unwrap_or_else(|| "Untitled.md".to_string()),
     };
     log_event(
-        &state,
+        state,
         &format!("[RECOVER] markdown reload bytes={}", bytes.len()),
     );
     Ok(Some(ReloadedMarkdown {
@@ -496,6 +517,13 @@ pub async fn markdown_recovery_reload(
         name,
         has_file: current.is_some(),
     }))
+}
+
+#[tauri::command]
+pub async fn markdown_recovery_reload(
+    state: State<'_, AppState>,
+) -> Result<Option<ReloadedMarkdown>, String> {
+    reload_markdown(&state)
 }
 
 // An image of the Markdown document, as a data: URL's parts. `src` is the
@@ -719,6 +747,72 @@ mod tests {
 
         assert_eq!(std::fs::read(&copy).unwrap(), b"typed meanwhile\n");
         assert_eq!(live_markdown_copy(state.recovery.lock().unwrap().as_ref()), Some(copy));
+    }
+
+    // A window with `file` open and `copy` as its live recovery copy.
+    fn window_with_copy(dir: &Path, file: &Path, copy: &[u8]) -> (AppState, PathBuf) {
+        let state = window_state(dir, 1);
+        let token = state.grants.grant(file.to_path_buf(), GrantKind::Open).token;
+        open_markdown(&state, &token).unwrap();
+        let session =
+            crate::recovery::begin_markdown_session(&dir.join("recover"), Some(file), "0.0.0", "1-1")
+                .unwrap();
+        crate::recovery::write_markdown_copy(&session, copy).unwrap();
+        let copy_path = crate::recovery::markdown_text_path(&session.dir);
+        *state.recovery.lock().unwrap() = Some(session);
+        (state, copy_path)
+    }
+
+    fn reloaded_text(reloaded: Option<ReloadedMarkdown>) -> Option<Vec<u8>> {
+        reloaded.map(|reloaded| STANDARD.decode(reloaded.data).unwrap())
+    }
+
+    #[test]
+    fn a_reload_brings_back_a_copy_that_differs_from_the_file() {
+        let dir = test_dir("reload-differs");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let (state, copy) = window_with_copy(&dir, &file, b"typed\n");
+
+        let reloaded = reload_markdown(&state).unwrap();
+
+        assert_eq!(reloaded_text(reloaded), Some(b"typed\n".to_vec()));
+        assert!(copy.is_file());
+    }
+
+    // A save wrote the copy's text and the page was reloaded before it
+    // dropped the copy.
+    #[test]
+    fn a_reload_drops_a_copy_with_the_bytes_of_the_file() {
+        let dir = test_dir("reload-same");
+        let file = file_with(&dir, "notes.md", b"old\n");
+        let (state, copy) = window_with_copy(&dir, &file, b"text\n");
+        store_markdown(&state, TEXT_B64, None).unwrap();
+
+        let reloaded = reload_markdown(&state).unwrap();
+
+        assert!(reloaded.is_none());
+        assert!(!copy.exists());
+        assert!(state.recovery.lock().unwrap().is_none());
+        assert_eq!(std::fs::read(&file).unwrap(), b"text\n");
+    }
+
+    // The copy was written before a Save As wrote the same text: a start
+    // after a crash finds the file it is of, and does not offer it.
+    #[test]
+    fn a_save_as_makes_the_live_session_name_the_new_file() {
+        let dir = test_dir("save-as-names");
+        let file = file_with(&dir, "notes.md", b"old\n");
+        let (state, _copy) = window_with_copy(&dir, &file, b"text\n");
+        let other = dir.join("other.md");
+        let save = state.grants.grant(other.clone(), GrantKind::Save).token;
+
+        store_markdown(&state, TEXT_B64, Some(&save)).unwrap();
+        // The process dies.
+        drop(state);
+
+        let offered = crate::recovery::scan_candidates(&dir.join("recover"), 0, |_| false);
+        assert!(offered.is_empty());
+        assert_eq!(std::fs::read(&other).unwrap(), b"text\n");
     }
 
     #[test]

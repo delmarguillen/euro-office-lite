@@ -848,8 +848,9 @@
 
   // A reload (F5, devtools) while the document had a recovery copy: the
   // copy comes back marked modified and stays offered until saved or
-  // discarded (markdown_recovery_reload). False only when there is no copy:
-  // the page then opens the file, which ends the session.
+  // discarded (markdown_recovery_reload). False when there is no copy, or the
+  // file already holds its bytes: the page then opens the file, which ends
+  // the session.
   async function startReloaded(framed) {
     var reloaded;
     try {

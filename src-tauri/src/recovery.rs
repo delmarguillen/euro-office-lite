@@ -328,6 +328,11 @@ pub fn scan_candidates(
         }
 
         if is_markdown_folder(&dir) {
+            // The file already holds the copy's bytes: nothing to recover.
+            if markdown_copy_is_in_its_file(&dir) {
+                let _ = std::fs::remove_dir_all(&dir);
+                continue;
+            }
             match markdown_candidate(&dir) {
                 Some(candidate) => candidates.push(candidate),
                 // No text was ever written: nothing of the user's is here.
@@ -501,7 +506,8 @@ pub fn recovered_paths(saved: Option<&str>) -> (Option<PathBuf>, Option<PathBuf>
 // folder holds the bytes Save would write (BOM and line ends included),
 // replaced whole while the document is modified, next to the same rec.lock
 // and a doc.info whose doc_type is "markdown". The scan offers such a folder
-// whenever it holds text, whatever its age: only the user discards it.
+// whenever it holds text that is not in its file, whatever its age: only the
+// user discards it.
 
 pub const MARKDOWN_DOC_TYPE: &str = "markdown";
 const MARKDOWN_TEXT_FILE: &str = "document.md";
@@ -539,6 +545,30 @@ fn markdown_candidate(dir: &Path) -> Option<Candidate> {
         modified_ms: file_mtime_ms(&text),
         id,
     })
+}
+
+// Whether both files can be read and hold the same bytes.
+pub fn same_bytes(one: &Path, other: &Path) -> bool {
+    let (Ok(one_meta), Ok(other_meta)) = (std::fs::metadata(one), std::fs::metadata(other)) else {
+        return false;
+    };
+    if one_meta.len() != other_meta.len() {
+        return false;
+    }
+    let (Ok(one_bytes), Ok(other_bytes)) = (std::fs::read(one), std::fs::read(other)) else {
+        return false;
+    };
+    one_bytes == other_bytes
+}
+
+// Whether the folder's copy holds the bytes of the file doc.info names: a
+// save wrote the file and the process ended before the copy was dropped. A
+// document with no file never matches.
+fn markdown_copy_is_in_its_file(dir: &Path) -> bool {
+    let Some(path) = read_doc_info(dir).and_then(|info| info.path) else {
+        return false;
+    };
+    same_bytes(&markdown_text_path(dir), Path::new(&path))
 }
 
 // The name doc.info gives the document.
@@ -1511,6 +1541,69 @@ mod tests {
         // Offering it does not remove it: it is offered again next time.
         assert_eq!(scan_unlocked(&root).len(), 1);
         assert!(markdown_text_path(&dir).is_file());
+    }
+
+    // A Markdown session of `file`, its process gone, with `copy` as its text.
+    fn crashed_markdown_folder(root: &Path, file: Option<&Path>, copy: &[u8]) -> PathBuf {
+        let session = markdown_session_in(root, file);
+        write_markdown_copy(&session, copy).unwrap();
+        session.dir.clone()
+    }
+
+    #[test]
+    fn a_markdown_copy_with_the_bytes_of_its_file_is_dropped_not_offered() {
+        let root = scratch();
+        let file = root.join("notes.md");
+        std::fs::write(&file, b"\xEF\xBB\xBF# saved\r\n").unwrap();
+        let recover = root.join("recover");
+        let dir = crashed_markdown_folder(&recover, Some(&file), b"\xEF\xBB\xBF# saved\r\n");
+
+        assert!(scan_unlocked(&recover).is_empty());
+        assert!(!dir.exists());
+        assert_eq!(std::fs::read(&file).unwrap(), b"\xEF\xBB\xBF# saved\r\n");
+    }
+
+    #[test]
+    fn a_markdown_copy_that_differs_from_its_file_is_offered() {
+        let root = scratch();
+        let file = root.join("notes.md");
+        std::fs::write(&file, b"# saved\n").unwrap();
+        let recover = root.join("recover");
+        // The same length as the file, and one byte longer.
+        for copy in [&b"# typed\n"[..], &b"# saved\n\n"[..]] {
+            let dir = crashed_markdown_folder(&recover, Some(&file), copy);
+            let offered = scan_unlocked(&recover);
+            assert_eq!(offered.len(), 1, "{copy:?}");
+            assert_eq!(std::fs::read(markdown_text_path(&dir)).unwrap(), copy);
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_markdown_copy_whose_file_is_gone_or_was_never_saved_is_offered() {
+        let root = scratch();
+        let recover = root.join("recover");
+        let gone = crashed_markdown_folder(&recover, Some(&root.join("gone.md")), b"text");
+        assert_eq!(scan_unlocked(&recover).len(), 1);
+        std::fs::remove_dir_all(&gone).unwrap();
+
+        let unsaved = crashed_markdown_folder(&recover, None, b"");
+        assert_eq!(scan_unlocked(&recover).len(), 1);
+        assert!(unsaved.is_dir());
+    }
+
+    #[test]
+    fn files_are_the_same_only_when_both_are_read_and_equal() {
+        let root = scratch();
+        let one = root.join("one");
+        let other = root.join("other");
+        std::fs::write(&one, b"text").unwrap();
+        assert!(!same_bytes(&one, &other), "the other is missing");
+        std::fs::write(&other, b"text").unwrap();
+        assert!(same_bytes(&one, &other));
+        std::fs::write(&other, b"tex!").unwrap();
+        assert!(!same_bytes(&one, &other));
+        assert!(!same_bytes(&one, &root), "a folder is not a file");
     }
 
     #[test]
