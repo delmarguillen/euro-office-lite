@@ -518,7 +518,10 @@ fn main() {
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
             modified: Mutex::new(false),
-            save_pending: Mutex::new(false),
+            saves_pending: Mutex::new(0),
+            markdown_writes: markdown::RunningWrites::default(),
+            markdown_write: Mutex::new(()),
+            markdown_reloads: Mutex::new(markdown::PageReloads::default()),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
             pending_open: pending_open::PendingOpens::with_launch_file(
@@ -593,6 +596,7 @@ fn main() {
             markdown::markdown_recovery_write,
             markdown::markdown_recovery_load,
             markdown::markdown_recovery_reload,
+            markdown::markdown_reload_reported,
             markdown::save_markdown,
             markdown::markdown_image,
         ])

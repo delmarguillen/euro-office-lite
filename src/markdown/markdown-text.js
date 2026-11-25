@@ -151,6 +151,13 @@
     return { modified: text !== state.saved, savePending: state.writing !== null };
   }
 
+  // Whether the text on screen is in no file and needs a recovery copy. While
+  // a write runs the file is about to hold the text being written.
+  function needsRecoveryCopy(state, text) {
+    if (state.writing !== null) return text !== state.writing;
+    return text !== state.saved;
+  }
+
   // Close, the window's close button and Quit: 'wait' for the write and ask
   // again, 'ask' before discarding changes, or 'close'.
   function closeAction(state, text) {
@@ -168,6 +175,7 @@
     savedState: savedState,
     afterSaveEvent: afterSaveEvent,
     unsavedChanges: unsavedChanges,
+    needsRecoveryCopy: needsRecoveryCopy,
     closeAction: closeAction,
     MARKDOWN_EXTENSIONS: MARKDOWN_EXTENSIONS
   };

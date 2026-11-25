@@ -26,10 +26,22 @@ pub struct AppState {
     // addresses (temp_layout.rs, "Document images").
     pub doc_seq: std::sync::atomic::AtomicU64,
     pub modified: Mutex<bool>,
-    // A save of unsaved changes is under way (set_save_pending). sdkjs reports
-    // the document as saved when a save begins, so until the save ends
+    // Saves of unsaved changes under way: the page adds one as each begins and
+    // takes one away as each ends (set_save_pending), and a reloaded Markdown
+    // page starts from none once it has reported its modified flag
+    // (markdown.rs, end_saves_before_reload). sdkjs reports the
+    // document as saved when a save begins, so until the last one ends
     // `modified` can be false with nothing written (app_quit::has_unsaved_changes).
-    pub save_pending: Mutex<bool>,
+    pub saves_pending: Mutex<u32>,
+    // The writes of the open Markdown file under way, counted by the backend
+    // (markdown.rs, RunningWrites).
+    pub markdown_writes: crate::markdown::RunningWrites,
+    // Held by a write of the Markdown file from its start to its end
+    // (markdown.rs, store_markdown), so two never overlap.
+    pub markdown_write: Mutex<()>,
+    // The reloads of the Markdown page and the page of the last one
+    // (markdown.rs, PageReloads).
+    pub markdown_reloads: Mutex<crate::markdown::PageReloads>,
     // The path a 0-byte file was opened from (#33). It is not in the recent
     // list yet: the file still has no content, and an entry that opens to
     // nothing is worse than no entry. The first save that actually writes it
@@ -623,7 +635,6 @@ pub async fn save_file(
         super::recent::record(&app, &recorded.to_string_lossy());
     }
 
-    crate::app_quit::mark_document_saved(&state);
     Ok("ok".to_string())
 }
 
@@ -666,7 +677,6 @@ pub async fn save_file_as(
     // the entry is consumed is that same path (#33).
     end_pending_recent(&state.pending_recent, &dest);
     set_current_file(&state, Some(dest));
-    crate::app_quit::mark_document_saved(&state);
     super::recent::record(&app, &path);
     drop(claim);
     Ok("ok".to_string())
@@ -796,7 +806,6 @@ async fn save_pdf_inner(
         super::recent::record(app, &dest.to_string_lossy());
     }
     drop(claim);
-    crate::app_quit::mark_document_saved(state);
     Ok("ok".to_string())
 }
 
@@ -1237,6 +1246,7 @@ pub fn current_document(state: State<'_, AppState>) -> Option<GrantedFile> {
 #[tauri::command]
 pub fn close_document(window: tauri::WebviewWindow, state: State<'_, AppState>) {
     set_current_file(&state, None);
+    state.markdown_reloads.lock().unwrap().end();
     // Only the title: the document is closed whether or not it changes.
     let _ = window.set_title(crate::bridge::WINDOW_TITLE);
 }
@@ -1574,7 +1584,10 @@ pub(crate) fn test_state_for(root: &Path, instance: crate::temp_layout::Instance
         instance,
         doc_seq: std::sync::atomic::AtomicU64::new(1),
         modified: Mutex::new(false),
-        save_pending: Mutex::new(false),
+        saves_pending: Mutex::new(0),
+        markdown_writes: crate::markdown::RunningWrites::default(),
+        markdown_write: Mutex::new(()),
+        markdown_reloads: Mutex::new(crate::markdown::PageReloads::default()),
         pending_recent: Mutex::new(None),
         recovery: Mutex::new(None),
         pending_open: crate::pending_open::PendingOpens::default(),
