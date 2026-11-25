@@ -136,6 +136,9 @@
   // False for a new document until its first save, which goes through Save As.
   var hasFile = false;
   var reportedModified = false;
+  // The number the backend gave this page when it was reloaded with a
+  // recovery copy (markdown_recovery_reload); null otherwise.
+  var reloadedPage = null;
   var saving = false;
   // The Save under way, its dialog included: Close and Quit wait for it while
   // it writes.
@@ -155,11 +158,17 @@
   }
 
   // set_document_modified gates the close warning in Rust and marks the title.
+  // A reloaded page sends its number: the backend drops what a page before
+  // the reload reports late (app_quit::report_modified).
   function reportModified(force) {
     var modified = isModified();
     if (modified === reportedModified && !force) return Promise.resolve();
     reportedModified = modified;
-    return invoke('set_document_modified', { modified: modified }).catch(function() {});
+    return sendModified(modified);
+  }
+
+  function sendModified(modified) {
+    return invoke('set_document_modified', { modified: modified, page: reloadedPage }).catch(function() {});
   }
 
   function base64ToBytes(base64) {
@@ -564,7 +573,7 @@
 
   async function leaveToStart() {
     leaving = true;
-    await invoke('set_document_modified', { modified: false }).catch(function() {});
+    await sendModified(false);
     // As bridge.js's _forceReload: the process outlives the page, and without
     // this the other windows would still be told the file is open here.
     await invoke('close_document').catch(function() {});
@@ -788,9 +797,6 @@
   }
 
   var currentName = '';
-  // The number the backend gave this page when it was reloaded with a
-  // recovery copy (markdown_recovery_reload); null otherwise.
-  var reloadedPage = null;
 
   function showName(name) {
     currentName = name;

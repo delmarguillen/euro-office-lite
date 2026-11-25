@@ -534,7 +534,8 @@ pub struct ReloadedMarkdown {
 // Each reload of the Markdown page gives the new page a number. Only the
 // page of the last reload may end the saves the pages before it counted, and
 // only once (end_saves_before_reload): a report sent by an earlier page and
-// handled late would end the saves of a later one.
+// handled late would end the saves of a later one. The same holds for the
+// modified flag (app_quit::report_modified).
 #[derive(Default)]
 pub struct PageReloads {
     // The last number given out. Numbers are never given out twice.
@@ -570,6 +571,12 @@ impl PageReloads {
     // A document was opened or closed: no reloaded page is in the window.
     pub fn end(&mut self) {
         self.page = None;
+    }
+
+    // Whether the window shows the page `page` names: the page of the last
+    // reload, or, with none, a page that came from no reload.
+    pub fn shows(&self, page: Option<u64>) -> bool {
+        self.page == page
     }
 }
 
@@ -1114,6 +1121,61 @@ mod tests {
         let taken = end_saves_before_reload(&state, reloaded.page);
         assert_eq!(*state.saves_pending.lock().unwrap(), 1, "the open document's save");
         assert!(!taken);
+    }
+
+    // B is saved over A and the text goes back to A while B is written: the
+    // page reports no change, and the timer copies A. The page is reloaded
+    // and the new page reports A as modified. The first page's report of no
+    // change is handled only then.
+    #[test]
+    fn a_modified_flag_from_the_page_before_a_reload_changes_nothing() {
+        let dir = test_dir("reload-late-modified");
+        let file = file_with(&dir, "notes.md", b"A\n");
+        let (state, copy) = window_with_copy(&dir, &file, b"A\n");
+        crate::app_quit::begin_save(&state);
+        store_markdown(&state, "Qgo=", None).unwrap(); // "B\n"
+        let reloaded = reload_markdown(&state).unwrap().unwrap();
+        assert!(crate::app_quit::report_modified(&state, true, Some(reloaded.page)));
+        assert!(end_saves_before_reload(&state, reloaded.page));
+
+        let taken = crate::app_quit::report_modified(&state, false, None);
+
+        assert!(*state.modified.lock().unwrap(), "A is in the copy alone");
+        assert!(crate::app_quit::has_unsaved_changes(&state));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"A\n");
+        assert!(!taken);
+    }
+
+    // The same with a page that was itself reloaded before.
+    #[test]
+    fn a_modified_flag_from_an_earlier_reloaded_page_changes_nothing() {
+        let dir = test_dir("reload-late-modified-numbered");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let (state, _copy) = window_with_copy(&dir, &file, b"typed\n");
+        let first = reload_markdown(&state).unwrap().unwrap();
+        let second = reload_markdown(&state).unwrap().unwrap();
+        assert!(crate::app_quit::report_modified(&state, true, Some(second.page)));
+
+        let taken = crate::app_quit::report_modified(&state, false, Some(first.page));
+
+        assert!(*state.modified.lock().unwrap());
+        assert!(!taken);
+    }
+
+    // Once a document opens, its page reports with no number, and the page
+    // of the reload before it no longer reports.
+    #[test]
+    fn the_page_of_an_opened_document_reports_with_no_number() {
+        let dir = test_dir("open-after-reload-modified");
+        let file = file_with(&dir, "notes.md", b"text\n");
+        let (state, _copy) = window_with_copy(&dir, &file, b"typed\n");
+        let reloaded = reload_markdown(&state).unwrap().unwrap();
+        let token = state.grants.grant(file.clone(), GrantKind::Open).token;
+        open_markdown(&state, &token).unwrap();
+
+        assert!(crate::app_quit::report_modified(&state, true, None));
+        assert!(!crate::app_quit::report_modified(&state, false, Some(reloaded.page)));
+        assert!(*state.modified.lock().unwrap());
     }
 
     #[test]

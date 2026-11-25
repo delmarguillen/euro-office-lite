@@ -56,6 +56,20 @@ pub fn has_unsaved_changes(state: &AppState) -> bool {
     modified || saves_pending > 0 || state.markdown_writes.any()
 }
 
+// The modified flag a page reports (set_document_modified). A Markdown page
+// reloaded with a recovery copy sends the number its reload gave it, any other
+// page none. A report from a page the window no longer shows is dropped: the
+// page before a reload may have a report handled after the new page's, with
+// the text it showed in the recovery copy alone. False when dropped.
+pub fn report_modified(state: &AppState, modified: bool, page: Option<u64>) -> bool {
+    let reloads = state.markdown_reloads.lock().unwrap();
+    if !reloads.shows(page) {
+        return false;
+    }
+    *state.modified.lock().unwrap() = modified;
+    true
+}
+
 // The page begins and ends each save of unsaved changes (set_save_pending) and
 // reports the modified flag (set_document_modified). No save command changes
 // either: with two saves running the end of one says nothing about the other,

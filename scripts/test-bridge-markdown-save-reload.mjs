@@ -27,8 +27,10 @@
 // ended. It forgets the saves the page before the reload counted when the
 // new page says it has reported its modified flag
 // (markdown_reload_reported), once, and only for the page of the last
-// reload: each reload gives its page a number (PageReloads). The fake reads
-// all three as
+// reload: each reload gives its page a number (PageReloads). A modified flag
+// is taken only from the page the window shows: the one with the number of
+// the last reload, or one with no number when no reload came after the last
+// document opened (app_quit::report_modified). The fake reads all three as
 // app_quit::has_unsaved_changes does, and closes its window as main.rs does:
 // with nothing unsaved the process exits and the copy goes with it
 // (app_quit::on_exit); otherwise the page is asked (confirm-close).
@@ -75,6 +77,9 @@ function makeBackend(fileText) {
     // With holdReports, markdown_reload_reported is handled when the check
     // lets it. The page that sent it is gone by then: it hears nothing.
     holdReports: false, heldReports: [],
+    // With holdModified, set_document_modified is handled when the check
+    // lets it, and the page that sent it is gone by then too.
+    holdModified: false, heldModified: [],
     // The process exited without asking; the times the page asked before
     // discarding changes, and what the user answers.
     exited: false, asked: 0, discardWhenAsked: true,
@@ -91,6 +96,10 @@ function makeBackend(fileText) {
     if (page !== backend.page || backend.reported) return;
     backend.reported = true;
     backend.savesPending = 0;
+  };
+  const reportModified = (modified, page) => {
+    if (page !== backend.page) return;
+    backend.modified = modified;
   };
   const noWriteRunning = async () => {
     while (backend.writesRunning > 0) await new Promise((resolve) => backend.reloadsWaiting.push(resolve));
@@ -139,7 +148,11 @@ function makeBackend(fileText) {
       if (!backend.holdTitles) return null;
       return new Promise((resolve) => { backend.heldTitles.push(resolve); });
     },
-    set_document_modified: ({ modified }) => { backend.modified = modified; },
+    set_document_modified: ({ modified, page = null }) => {
+      if (!backend.holdModified) return reportModified(modified, page);
+      backend.heldModified.push(() => reportModified(modified, page));
+      return new Promise(() => {});
+    },
     set_save_pending: ({ pending }) => { backend.savesPending += pending ? 1 : -1; },
     close_document: () => { backend.closed = true; backend.page = null; },
   };
@@ -167,6 +180,11 @@ function makeBackend(fileText) {
   backend.handleHeldReports = async () => {
     backend.holdReports = false;
     backend.heldReports.splice(0).forEach((handle) => handle());
+    await settle();
+  };
+  backend.handleHeldModified = async () => {
+    backend.holdModified = false;
+    backend.heldModified.splice(0).forEach((handle) => handle());
     await settle();
   };
   // The held copies reach the disk, and those the page asks for meanwhile.
@@ -601,6 +619,29 @@ async function checkLateReportFromAnEarlierReload() {
     backend.asked === 1 && !backend.exited && backend.copy === 'B', told(backend));
 }
 
+// B is saved, the user undoes back to A while it is written, and the page's
+// report of no change is handled late. The timer copies A, the file is
+// written and the page reloaded: the new page reports A as modified, and
+// then the first page's report is handled.
+async function checkLateModifiedFromThePageBeforeTheReload() {
+  const { backend, page } = await saveBOverA();
+  backend.holdModified = true;
+  await page.type('A');
+  backend.holdModified = false;
+  await page.runTimers();
+  backend.endWrite();
+  const reloaded = await reloadPage(backend);
+  check(results, 'reload, A only in the copy: the new page reports A as modified and the saves before are forgotten',
+    reloaded.text() === 'A' && backend.modified && backend.savesPending === 0 && backend.copy === 'A', told(backend));
+  await backend.handleHeldModified();
+  check(results, 'reload, the page before reports no change late: A still counts as modified',
+    backend.modified && backend.unsaved(), told(backend));
+  backend.discardWhenAsked = false;
+  await reloaded.closeWindow();
+  check(results, 'reload, the page before reports no change late, window closed: the page asks and A stays in the copy',
+    backend.asked === 1 && !backend.exited && backend.copy === 'A', told(backend));
+}
+
 await checkUndoThenReloadAfterTheSave();
 await checkUndoThenReloadAsTheWriteEnds();
 await checkTypingOnThenReload();
@@ -619,4 +660,5 @@ await checkCloseWhileAReloadedPageStarts();
 await checkCopyWrittenWhileThePageReloads();
 await checkCopyOfTheFileAfterAReload();
 await checkLateReportFromAnEarlierReload();
+await checkLateModifiedFromThePageBeforeTheReload();
 finish(results);
