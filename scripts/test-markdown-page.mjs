@@ -68,9 +68,13 @@ function installFakeTauri(fake) {
       return args.token ? 'copy.md' : fake.name;
     },
     markdown_recovery_write: (args) => { sessionStorage.setItem('copy', args.data); },
-    markdown_recovery_reload: () => (stored('copy')
-      ? { data: stored('copy'), name: fake.name, hasFile: !fake.isNew && !fake.recoverId }
-      : null),
+    // A copy with the bytes of the file is dropped (reload_markdown).
+    markdown_recovery_reload: () => {
+      if (stored('copy') === stored('disk')) sessionStorage.removeItem('copy');
+      return stored('copy')
+        ? { data: stored('copy'), name: fake.name, hasFile: !fake.isNew && !fake.recoverId }
+        : null;
+    },
     // discard:false lets go of the session and keeps its copy.
     recovery_end: (args) => { if (args.discard) sessionStorage.removeItem('copy'); },
     pick_save_target: (args) => (args.requestedExt === 'html'
@@ -620,6 +624,10 @@ const commandsNamed = async (calls, name) => (await calls()).filter((call) => ca
   const names = (await calls()).map((call) => call.command);
   const lastSave = names.lastIndexOf('save_markdown');
   check(results, 'no copy is written after a save of the same text', lastSave > 0 && names.indexOf('markdown_recovery_write', lastSave) === -1);
+  const all = await calls();
+  const copyBefore = all[names.lastIndexOf('markdown_recovery_write', lastSave)];
+  check(results, 'the bytes a save writes are the copy before the file is written',
+    lastSave > 0 && copyBefore.args.data === all[lastSave].args.data, names.join(' '));
   const dropped = (await commandsNamed(calls, 'recovery_end')).filter((call) => call.args.discard === true);
   check(results, 'saving the text on screen drops the copy through the page, once', dropped.length === 1
     && names.indexOf('recovery_end') > lastSave, names.join(' '));

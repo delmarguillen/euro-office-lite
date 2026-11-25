@@ -5,13 +5,22 @@
 // fails: the file holds the text from before, and the screen the one that
 // was being saved.
 //
+// A save also never leaves a copy of text older than the file's: the copy
+// the timer wrote is of AB, ABC is saved, and the process ends or the page is
+// reloaded once the file is written, before the page hears of it.
+//
 // The page's own scripts (src/markdown) run against stand-ins for the
 // webview. The fake backend keeps the file and the recovery copy, which
 // outlive a reload, and drops the copy where the backend does:
 // - read_markdown: opening the file ends the session and counts nothing as
 //   unsaved (start_markdown_document);
-// - recovery_end with discard: the page asks (recovery::end_session);
-// - save_markdown writes the file and keeps the session (store_markdown).
+// - recovery_end: the page asks (recovery::end_session). Without discard the
+//   session ends and its folder stays for the next start;
+// - save_markdown writes the file and keeps the session (store_markdown);
+// - markdown_recovery_reload: a copy with the bytes of the file is dropped
+//   and the page opens the file (reload_markdown).
+// A start after the process ended offers the copies left that do not hold
+// the bytes of the file (recovery::scan_candidates).
 //
 // Run: node scripts/test-bridge-markdown-save-reload.mjs
 import { readFile } from 'node:fs/promises';
@@ -26,11 +35,25 @@ const NAME = 'a.md';
 const toBase64 = (text) => Buffer.from(text).toString('base64');
 const fromBase64 = (data) => Buffer.from(data, 'base64').toString();
 // What a failed check prints of the backend.
-const told = ({ file, copy, modified, savesPending }) => JSON.stringify({ file, copy, modified, savesPending });
+const told = ({ file, copy, released, modified, savesPending }) => JSON.stringify({ file, copy, released, modified, savesPending });
 
 // a.md holding `fileText`, with no recovery copy.
 function makeBackend(fileText) {
-  const backend = { file: fileText, copy: null, modified: false, savesPending: 0, write: null };
+  const backend = {
+    file: fileText, copy: null, modified: false, savesPending: 0, write: null,
+    // Copies the page let go of without deleting them.
+    released: [],
+    // The copies and the file, in the order they reached the disk.
+    landed: [],
+    // With holdCopies, a copy reaches the disk when the check lands it.
+    holdCopies: false, heldCopies: [],
+    // With failCopies, no copy can be written.
+    failCopies: false,
+  };
+  const landCopy = (data) => {
+    backend.copy = fromBase64(data);
+    backend.landed.push('copy ' + backend.copy);
+  };
   backend.answers = {
     current_document: () => ({ token: 't', name: NAME }),
     read_markdown: () => {
@@ -43,20 +66,42 @@ function makeBackend(fileText) {
     save_markdown: ({ data }) => new Promise((resolve, reject) => {
       backend.write = { data, answer: () => resolve(NAME), fail: () => reject(new Error('save-denied')) };
     }),
-    markdown_recovery_write: ({ data }) => { backend.copy = fromBase64(data); },
-    recovery_end: ({ discard }) => { if (discard) backend.copy = null; },
-    markdown_recovery_reload: () => (backend.copy === null
-      ? null
-      : { data: toBase64(backend.copy), name: NAME, hasFile: true }),
+    markdown_recovery_write: ({ data }) => {
+      if (backend.failCopies) throw new Error('the copy cannot be written');
+      if (!backend.holdCopies) return landCopy(data);
+      return new Promise((resolve) => { backend.heldCopies.push(() => { landCopy(data); resolve(); }); });
+    },
+    recovery_end: ({ discard }) => {
+      if (!discard && backend.copy !== null) backend.released.push(backend.copy);
+      backend.copy = null;
+    },
+    markdown_recovery_reload: () => {
+      if (backend.copy === backend.file) backend.copy = null;
+      if (backend.copy === null) return null;
+      return { data: toBase64(backend.copy), name: NAME, hasFile: true };
+    },
     set_document_modified: ({ modified }) => { backend.modified = modified; },
     set_save_pending: ({ pending }) => { backend.savesPending += pending ? 1 : -1; },
   };
   // The file is written: the backend's part of a save.
-  backend.endWrite = () => { backend.file = fromBase64(backend.write.data); };
+  backend.endWrite = () => {
+    backend.file = fromBase64(backend.write.data);
+    backend.landed.push('file ' + backend.file);
+  };
   // The page hears that the save ended.
   backend.answerSave = () => backend.write.answer();
   // Nothing is written, and the page hears that the save failed.
   backend.failSave = () => backend.write.fail();
+  // The held copies reach the disk, and those the page asks for meanwhile.
+  backend.landHeldCopies = async () => {
+    while (backend.heldCopies.length) {
+      backend.heldCopies.shift()();
+      await settle();
+    }
+  };
+  // What the start screen offers once the process has ended.
+  backend.offeredAtStart = () => [...backend.released, backend.copy]
+    .filter((copy) => copy !== null && copy !== backend.file);
   return backend;
 }
 
@@ -232,10 +277,92 @@ async function checkFailedSaveAfterUndo() {
     !backend.modified && backend.savesPending === 0, told(backend));
 }
 
+// a.md holds A. The user types AB, the copy's timer comes due, and ABC is
+// typed and saved before it comes due again. The save is being written.
+async function saveAbcOverACopyOfAb(backend) {
+  const page = await openPage(backend);
+  await page.type('AB');
+  await page.runTimers();
+  await page.type('ABC');
+  await page.clickSave();
+  return page;
+}
+
+// The process ends while ABC is being written, and once it is written,
+// before the page hears of it.
+async function checkProcessEndsAroundTheWrite() {
+  const backend = makeBackend('A');
+  await saveAbcOverACopyOfAb(backend);
+  check(results, 'copy of AB, ABC being written, process ends: the next start offers ABC',
+    backend.offeredAtStart().join('|') === 'ABC', told(backend));
+  backend.endWrite();
+  check(results, 'copy of AB, ABC written, process ends: the copy left is not older than the file',
+    backend.file === 'ABC' && backend.copy === 'ABC', told(backend));
+  check(results, 'copy of AB, ABC written, process ends: the next start offers nothing',
+    backend.offeredAtStart().length === 0, backend.offeredAtStart().join('|'));
+}
+
+// The page is reloaded once ABC is written, before it hears of it. Saving
+// from the reloaded page must not put AB over ABC.
+async function checkReloadAsAbcIsWritten() {
+  const backend = makeBackend('A');
+  await saveAbcOverACopyOfAb(backend);
+  backend.endWrite();
+
+  const reloaded = await reloadPage(backend);
+  check(results, 'copy of AB, ABC written, reload: the page shows ABC', reloaded.text() === 'ABC', String(reloaded.text()));
+  check(results, 'copy of AB, ABC written, reload: ABC is not marked modified', !backend.modified, told(backend));
+  await reloaded.clickSave();
+  if (backend.write) backend.endWrite();
+  check(results, 'copy of AB, ABC written, reload, Save: the file still holds ABC', backend.file === 'ABC', told(backend));
+}
+
+// The copy of AB is still on its way to the disk when ABC is saved. The
+// backend takes the writes it has been asked for in any order: here the file
+// goes first whenever it has been asked for.
+async function checkCopyOnItsWayWhenTheSaveBegins() {
+  const backend = makeBackend('A');
+  backend.holdCopies = true;
+  await saveAbcOverACopyOfAb(backend);
+  const fileAskedFor = backend.write !== null;
+  check(results, 'copy of AB on its way, Save: the file is not asked for yet', !fileAskedFor, told(backend));
+  if (fileAskedFor) backend.endWrite();
+  await backend.landHeldCopies();
+  if (!fileAskedFor) backend.endWrite();
+  check(results, 'copy of AB on its way, Save: AB, then ABC, reach the disk before the file',
+    backend.landed.join(', ') === 'copy AB, copy ABC, file ABC', backend.landed.join(', '));
+  check(results, 'copy of AB on its way, Save: the next start offers nothing',
+    backend.offeredAtStart().length === 0, backend.offeredAtStart().join('|'));
+}
+
+// The copy of ABC cannot be written before the save: AB, the copy on disk,
+// would be older than the file. The save is written all the same.
+async function checkCopyThatCannotBeReplaced() {
+  const backend = makeBackend('A');
+  const page = await openPage(backend);
+  await page.type('AB');
+  await page.runTimers();
+  backend.failCopies = true;
+  await page.type('ABC');
+  await page.clickSave();
+  check(results, 'copy not replaced: the save is written all the same', backend.write !== null, told(backend));
+  check(results, 'copy not replaced: AB is let go of, not deleted',
+    backend.copy === null && backend.released.join('|') === 'AB', told(backend));
+  backend.endWrite();
+
+  const reloaded = await reloadPage(backend);
+  check(results, 'copy not replaced, reload: the page shows the file, unmodified',
+    reloaded.text() === 'ABC' && !backend.modified, String(reloaded.text()) + ' ' + told(backend));
+}
+
 await checkUndoThenReloadAfterTheSave();
 await checkUndoThenReloadAsTheWriteEnds();
 await checkTypingOnThenReload();
 await checkSaveThenReload();
 await checkFailedSaveThenReload();
 await checkFailedSaveAfterUndo();
+await checkProcessEndsAroundTheWrite();
+await checkReloadAsAbcIsWritten();
+await checkCopyOnItsWayWhenTheSaveBegins();
+await checkCopyThatCannotBeReplaced();
 finish(results);

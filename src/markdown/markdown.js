@@ -331,6 +331,10 @@
   // (settleRecoveryCopy) and when the user discards the changes. The backend
   // drops it at exit. Writes and drops go one after another, in the order
   // they were asked for.
+  //
+  // The copy on disk is never of text older than the file's: a save writes
+  // the file only after its own text is the copy (copyBeforeWrite), and the
+  // copies that follow are of text typed later.
   var recoveryTimer = null;
   var recoveryWrite = Promise.resolve();
   var recoveryStopped = false;
@@ -358,8 +362,27 @@
     });
   }
 
+  // For the start of a save's write; `data` is what it writes. Resolves once
+  // the copies asked for before the save are on disk and, after them, `data`
+  // is the copy: none of them can reach the disk after the file. A copy of
+  // text typed from here on waits its turn behind this one.
+  function copyBeforeWrite(data) {
+    return queueRecoveryStep(function() {
+      if (recoveryStopped) return null;
+      return invoke('markdown_recovery_write', { data: data }).catch(releaseOlderCopy);
+    });
+  }
+
+  // The copy on disk could not be replaced, and the file is about to hold
+  // newer text. The backend lets go of it without deleting it: the start
+  // screen offers it, and a reload opens the file.
+  function releaseOlderCopy(error) {
+    log('recovery copy before the save failed: ' + errorText(error));
+    return invoke('recovery_end', { discard: false });
+  }
+
   // For the end of a save's write; `written` when it wrote the file. The copy
-  // on disk is of text from before the save or typed during it, and the
+  // on disk is of the text the save wrote or of text typed during it, and the
   // backend has kept it. Decided when its turn comes, with the text then on
   // screen:
   // - text that is in no file, which after a failed write can be the one it
@@ -485,6 +508,7 @@
     await invoke('set_save_pending', { pending: true }).catch(function() {});
     var written = false;
     try {
+      await copyBeforeWrite(data);
       var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
       written = true;
       return name;

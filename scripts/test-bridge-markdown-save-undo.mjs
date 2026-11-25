@@ -137,8 +137,9 @@ async function editAndStartSave(page) {
 async function checkUndoDuringTheWrite() {
   const page = await openPage();
   await editAndStartSave(page);
+  // Copied when its timer came due, and again before the file is written.
   check(results, 'page: the edit got its recovery copy and the save is writing',
-    page.copies.join('|') === 'AB' && page.commands.includes('save_markdown'), page.commands.join(' '));
+    page.copies.join('|') === 'AB|AB' && page.commands.includes('save_markdown'), page.commands.join(' '));
   await page.type('A');
   // The copy's timer comes due while the file is still being written.
   await page.runTimers();
@@ -150,7 +151,7 @@ async function checkUndoDuringTheWrite() {
     page.backend.modified && page.backend.savesPending === 0, JSON.stringify(page.backend));
   // Copied when its timer came due during the write, and again as the write ended.
   check(results, 'page, undo, write ended: the text on screen got a recovery copy',
-    page.copies.join('|') === 'AB|A|A', page.copies.join('|'));
+    page.copies.join('|') === 'AB|AB|A|A', page.copies.join('|'));
 }
 
 async function checkSaveWithoutUndo() {
@@ -160,8 +161,10 @@ async function checkSaveWithoutUndo() {
   await page.runTimers();
   check(results, 'page, no undo, write ended: the backend counts nothing as unsaved',
     !page.backend.modified && page.backend.savesPending === 0, JSON.stringify(page.backend));
-  check(results, 'page, no undo, write ended: no recovery copy of saved text',
-    page.copies.join('|') === 'AB', page.copies.join('|'));
+  const lastCopy = page.commands.lastIndexOf('markdown_recovery_write');
+  check(results, 'page, no undo, write ended: no copy after the save\'s own, which is dropped',
+    page.copies.join('|') === 'AB|AB' && page.commands.lastIndexOf('recovery_end') > lastCopy,
+    page.copies.join('|') + ' ' + page.commands.join(' '));
 }
 
 await checkHelpers();

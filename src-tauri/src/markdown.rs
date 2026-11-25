@@ -327,9 +327,10 @@ fn store_markdown(
         name_live_markdown_session(state, &dest);
     }
     drop(claim);
-    // The recovery copy stays. The text on screen may have changed while this
-    // was written, and only the page knows: it drops the copy or replaces it
-    // once the write has ended (markdown.js, settleRecoveryCopy).
+    // The recovery copy stays. The page made it the bytes written here before
+    // asking for this write (markdown.js, copyBeforeWrite). The text on screen
+    // may have changed since, and only the page knows: it drops the copy or
+    // replaces it once the write has ended (settleRecoveryCopy).
     Ok(SavedMarkdown { path: dest, new_file })
 }
 
@@ -393,9 +394,10 @@ pub async fn export_markdown_html(
 
 // The recovery copy of the page's text while it is in no file: `data` is
 // base64 of the bytes Save would write. The first call starts the session
-// (recovery.rs, "Markdown sessions"); later ones replace the copy. Ended by
-// recovery_end, which the page sends once a save has written the text on
-// screen and when it discards the changes, and at exit.
+// (recovery.rs, "Markdown sessions"); later ones replace the copy. The page
+// sends them one at a time, and the bytes of a save before save_markdown.
+// Ended by recovery_end, which the page sends once a save has written the
+// text on screen and when it discards the changes, and at exit.
 #[tauri::command]
 pub async fn markdown_recovery_write(
     app: tauri::AppHandle,
