@@ -136,6 +136,9 @@
   // False for a new document until its first save, which goes through Save As.
   var hasFile = false;
   var reportedModified = false;
+  // The number the backend gave this page when it was reloaded with a
+  // recovery copy (markdown_recovery_reload); null otherwise.
+  var reloadedPage = null;
   var saving = false;
   // The Save under way, its dialog included: Close and Quit wait for it while
   // it writes.
@@ -155,11 +158,17 @@
   }
 
   // set_document_modified gates the close warning in Rust and marks the title.
+  // A reloaded page sends its number: the backend drops what a page before
+  // the reload reports late (app_quit::report_modified).
   function reportModified(force) {
     var modified = isModified();
     if (modified === reportedModified && !force) return Promise.resolve();
     reportedModified = modified;
-    return invoke('set_document_modified', { modified: modified }).catch(function() {});
+    return sendModified(modified);
+  }
+
+  function sendModified(modified) {
+    return invoke('set_document_modified', { modified: modified, page: reloadedPage }).catch(function() {});
   }
 
   function base64ToBytes(base64) {
@@ -290,10 +299,7 @@
   // The stylesheet is the page's own; the srcdoc document shares its base URL.
   function prepareFrame() {
     return new Promise(function(resolve) {
-      frame.addEventListener('load', function() {
-        frame.contentDocument.addEventListener('keydown', onKeyDown, true);
-        resolve();
-      }, { once: true });
+      frame.addEventListener('load', resolve, { once: true });
       frame.srcdoc = '<!DOCTYPE html><html><head><meta charset="utf-8">' +
         '<link rel="stylesheet" href="markdown-preview.css"></head>' +
         '<body class="markdown-body"></body></html>';
@@ -324,12 +330,17 @@
   }
 
   // ── Crash recovery ──
-  // While the document is modified, markdown_recovery_write keeps a copy of
-  // the bytes Save would write in the app's recovery folder (recovery.rs).
-  // Writes go one after another, and Save waits for the last one: a copy
-  // written after a save would be offered for text that is already saved.
-  // The backend drops the copy after a successful save and at exit; this page
-  // drops it with recovery_end when the user discards the changes.
+  // While the text on screen is in no file, markdown_recovery_write keeps a
+  // copy of the bytes Save would write in the app's recovery folder
+  // (recovery.rs). Only this page drops the copy while the document is open,
+  // with recovery_end: once a save has written the text on screen
+  // (settleRecoveryCopy) and when the user discards the changes. The backend
+  // drops it at exit. Writes and drops go one after another, in the order
+  // they were asked for.
+  //
+  // The copy on disk is never of text older than the file's: a save writes
+  // the file only after its own text is the copy (copyBeforeWrite), and the
+  // copies that follow are of text typed later.
   var recoveryTimer = null;
   var recoveryWrite = Promise.resolve();
   var recoveryStopped = false;
@@ -339,18 +350,63 @@
     recoveryTimer = setTimeout(writeRecoveryCopy, RECOVERY_DELAY_MS);
   }
 
+  // `step` runs after the copies and drops already asked for.
+  function queueRecoveryStep(step) {
+    recoveryWrite = recoveryWrite.then(step).catch(function(error) {
+      log('recovery copy failed: ' + errorText(error));
+    });
+    return recoveryWrite;
+  }
+
+  // Also while a save is being written: the backend leaves the copy alone.
   function writeRecoveryCopy() {
     recoveryTimer = null;
-    if (recoveryStopped || !isModified()) return;
-    if (saving) {
-      scheduleRecoveryCopy();
-      return;
-    }
+    if (recoveryStopped || !Text.needsRecoveryCopy(saveState, currentText())) return;
     var data = bytesToBase64(Text.encode(currentText(), format));
-    recoveryWrite = recoveryWrite.then(function() {
+    queueRecoveryStep(function() {
       return invoke('markdown_recovery_write', { data: data });
-    }).catch(function(error) {
-      log('recovery copy failed: ' + errorText(error));
+    });
+  }
+
+  // For the start of a save's write; `data` is what it writes. Resolves once
+  // the copies asked for before the save are on disk and, after them, `data`
+  // is the copy: none of them can reach the disk after the file. A copy of
+  // text typed from here on waits its turn behind this one.
+  function copyBeforeWrite(data) {
+    return queueRecoveryStep(function() {
+      if (recoveryStopped) return null;
+      return invoke('markdown_recovery_write', { data: data }).catch(releaseOlderCopy);
+    });
+  }
+
+  // The copy on disk could not be replaced, and the file is about to hold
+  // newer text. The backend lets go of it without deleting it: the start
+  // screen offers it, and a reload opens the file.
+  function releaseOlderCopy(error) {
+    log('recovery copy before the save failed: ' + errorText(error));
+    return invoke('recovery_end', { discard: false });
+  }
+
+  // For the end of a save's write; `written` when it wrote the file. The copy
+  // on disk is of the text the save wrote or of text typed during it, and the
+  // backend has kept it. Decided when its turn comes, with the text then on
+  // screen:
+  // - text that is in no file, which after a failed write can be the one it
+  //   was writing: its copy replaces the one on disk in one step
+  //   (recovery.rs, write_markdown_copy), without waiting for the timer.
+  //   Nothing is dropped: the older copy stays until the new one is written.
+  // - the text just written: the file holds it, and the copy is dropped.
+  // - the text the file had, after a failed write: the copy stays.
+  function settleRecoveryCopy(written) {
+    return queueRecoveryStep(function() {
+      if (recoveryStopped) return null;
+      var text = currentText();
+      if (Text.needsRecoveryCopy(saveState, text)) {
+        var data = bytesToBase64(Text.encode(text, format));
+        return invoke('markdown_recovery_write', { data: data });
+      }
+      if (!written) return null;
+      return invoke('recovery_end', { discard: true });
     });
   }
 
@@ -450,24 +506,25 @@
   }
 
   // The backend counts the document as unsaved from here until the write ends
-  // (app_quit::has_unsaved_changes), also while the last recovery copy is
-  // still being written and when the text goes back to the saved one
-  // meanwhile: the file is about to change.
+  // and the recovery copy is settled (app_quit::has_unsaved_changes), also
+  // when the text goes back to the saved one meanwhile: the file is about to
+  // change.
   async function writeSave(text, data, target) {
     saveState = Text.afterSaveEvent(saveState, { type: 'write-start', text: text });
     await invoke('set_save_pending', { pending: true }).catch(function() {});
+    var written = false;
     try {
-      // A copy written after the save would be offered for saved text.
-      await recoveryWrite;
+      await copyBeforeWrite(data);
       var name = await invoke('save_markdown', { data: data, token: target ? target.token : null });
-      saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: true });
+      written = true;
       return name;
-    } catch (error) {
-      saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: false });
-      // The modified flag first, so the backend never sees both off.
+    } finally {
+      saveState = Text.afterSaveEvent(saveState, { type: 'write-end', ok: written });
+      await settleRecoveryCopy(written);
+      // The backend ends no save on its own. The modified flag goes first, so
+      // it never sees both off while the text on screen is not the saved one.
       await reportModified(true);
       await invoke('set_save_pending', { pending: false }).catch(function() {});
-      throw error;
     }
   }
 
@@ -499,9 +556,12 @@
     }
   }
 
-  // Close, the window's close button and Quit decide once no save is
-  // writing: the write can still fail, or end with other text on screen.
+  // Close, the window's close button and Quit decide once the document is on
+  // screen and no save is writing: the write can still fail, or end with
+  // other text on screen. A reloaded page is not on screen until the write
+  // the page before it left running has ended (startReloaded).
   async function confirmDiscard() {
+    await started;
     // A write always ends inside its saveRun, so this cannot spin.
     while (Text.closeAction(saveState, currentText()) === 'wait') {
       await saveRun.catch(function() {});
@@ -513,7 +573,7 @@
 
   async function leaveToStart() {
     leaving = true;
-    await invoke('set_document_modified', { modified: false }).catch(function() {});
+    await sendModified(false);
     // As bridge.js's _forceReload: the process outlives the page, and without
     // this the other windows would still be told the file is open here.
     await invoke('close_document').catch(function() {});
@@ -758,9 +818,33 @@
   // without deleting it, so the start screen offers it again; never through
   // read_markdown, which would delete it.
   async function releaseRecoveryCopy(error) {
+    await letGoOfRecoveryCopy(error);
+    await showThenLeave(showRecoverFailed);
+  }
+
+  async function letGoOfRecoveryCopy(error) {
     log('recovery copy not shown: ' + errorText(error));
     await invoke('recovery_end', { discard: false }).catch(function() {});
+  }
+
+  // The same for a reloaded page, which also ends the saves the page before
+  // it counted (endSavesOfThePageBefore): the copy is no longer this
+  // process's to delete. A page whose reload failed has no number, and
+  // those saves stay counted until a document opens.
+  async function releaseReloadedCopy(error) {
+    await letGoOfRecoveryCopy(error);
+    await endSavesOfThePageBefore();
     await showThenLeave(showRecoverFailed);
+  }
+
+  // The backend keeps counting the saves the page before the reload began
+  // and never ended, so an exit asks while the text that page showed may be
+  // in the recovery copy alone. It forgets them here, once this page has
+  // reported its own modified flag, and only for the page of the last
+  // reload: this one's number (reloadedPage).
+  function endSavesOfThePageBefore() {
+    if (reloadedPage === null) return Promise.resolve();
+    return invoke('markdown_reload_reported', { page: reloadedPage }).catch(function() {});
   }
 
   function showRecoverFailed() {
@@ -820,33 +904,40 @@
   }
 
   // A reload (F5, devtools) while the document had a recovery copy: the
-  // copy comes back marked modified and stays offered until saved or
-  // discarded (markdown_recovery_reload). False only when there is no copy:
-  // the page then opens the file, which ends the session.
+  // copy comes back and stays until saved or discarded
+  // (markdown_recovery_reload). Marked modified, unless the file already
+  // holds its bytes: the text is then the file's, and the copy is dropped as
+  // after any save (settleRecoveryCopy) or when the document closes. False
+  // when there is no copy: the page then opens the file. The backend answers
+  // once a write the page before the reload left running has ended, and
+  // counts that page's saves as unsaved until this one has reported its
+  // modified flag.
   async function startReloaded(framed) {
     var reloaded;
     try {
       reloaded = await invoke('markdown_recovery_reload');
     } catch (error) {
-      await releaseRecoveryCopy(error);
+      await releaseReloadedCopy(error);
       return true;
     }
     if (!reloaded) return false;
+    reloadedPage = reloaded.page;
     var decoded;
     try {
       decoded = Text.decode(base64ToBytes(reloaded.data));
     } catch (error) {
-      await releaseRecoveryCopy(error);
+      await releaseReloadedCopy(error);
       return true;
     }
     format = decoded;
     hasFile = reloaded.hasFile;
     source.value = decoded.text;
-    saveState = Text.savedState(null);
+    saveState = Text.savedState(reloaded.modified ? null : decoded.text);
     showName(reloaded.name);
     // set_document_modified marks the title it finds: the name goes first.
     await invoke('set_window_title', { name: reloaded.name }).catch(function() {});
     await reportModified(true);
+    await endSavesOfThePageBefore();
     await framed;
     render();
     await setEditing(true);
@@ -884,17 +975,27 @@
     render();
   }
 
-  source.addEventListener('input', onTextChanged);
-  document.addEventListener('keydown', onKeyDown, true);
-  editButton.addEventListener('click', function() { setEditing(!editing); });
-  document.getElementById('md-save').addEventListener('click', function() { save(false); });
-  document.getElementById('md-save-as').addEventListener('click', function() { save(true); });
+  // What the user does to the document, listened for once it is on screen:
+  // before that there is no text to edit, save or export.
+  function listenToUser() {
+    source.addEventListener('input', onTextChanged);
+    document.addEventListener('keydown', onKeyDown, true);
+    frame.contentDocument.addEventListener('keydown', onKeyDown, true);
+    editButton.addEventListener('click', function() { setEditing(!editing); });
+    document.getElementById('md-save').addEventListener('click', function() { save(false); });
+    document.getElementById('md-save-as').addEventListener('click', function() { save(true); });
+    document.getElementById('md-export').addEventListener('click', exportHtml);
+  }
+
+  // Close waits for the document itself (confirmDiscard).
   document.getElementById('md-close').addEventListener('click', closeDocument);
-  document.getElementById('md-export').addEventListener('click', exportHtml);
 
   tauri.event.listen('pending-open-file', drainPendingOpens);
 
+  // Settles once the document is on screen, or the page is leaving.
+  var started = start().catch(function(error) { log('start failed: ' + errorText(error)); });
+
   // The event for a file queued before this page listened is gone: the
   // queue is read once the page has started.
-  start().then(drainPendingOpens);
+  started.then(listenToUser).then(drainPendingOpens);
 })();

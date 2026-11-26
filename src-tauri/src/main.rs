@@ -9,6 +9,7 @@ mod default_folders;
 mod dictionaries;
 mod dictionary_import;
 mod dmabuf_default;
+mod external_links;
 mod file_dialogs;
 mod file_ops;
 mod fonts_state;
@@ -36,6 +37,7 @@ mod x2t_task;
 use file_ops::AppState;
 use launch_args::TitleBar;
 use std::sync::Mutex;
+use tauri::utils::config::WindowConfig;
 use tauri::{Emitter, Manager};
 
 fn percent_decode_str(input: &str) -> String {
@@ -160,6 +162,29 @@ fn on_wayland(window: &tauri::WebviewWindow) -> bool {
 #[cfg(not(target_os = "linux"))]
 fn on_wayland(_window: &tauri::WebviewWindow) -> bool {
     false
+}
+
+// main is left out of the windows Tauri creates by itself, so setup can build it
+// with the handler that sends hyperlinks to the system (external_links.rs).
+fn take_main_window_config(windows: &mut [WindowConfig]) -> WindowConfig {
+    let main = windows
+        .iter_mut()
+        .find(|window| window.label == window_state::MAIN_WINDOW)
+        .expect("main window in tauri.conf.json");
+    main.create = false;
+    let mut config = main.clone();
+    config.create = true;
+    config
+}
+
+fn build_main_window(
+    app: &tauri::App,
+    config: &WindowConfig,
+) -> tauri::Result<()> {
+    tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
+        .on_new_window(external_links::handle_new_window)
+        .build()?;
+    Ok(())
 }
 
 // The plugin skips main (see window_state::plugin), so this is the one place it
@@ -436,6 +461,8 @@ fn main() {
             window.visible = false;
         }
     }
+    // Built in setup instead, where the new-window handler can be attached.
+    let main_window_config = take_main_window_config(&mut context.config_mut().app.windows);
     #[cfg(not(target_os = "linux"))]
     if title_bar != TitleBar::Default {
         log_startup("title bar option ignored: it only applies on Linux Wayland");
@@ -491,7 +518,10 @@ fn main() {
             instance,
             doc_seq: std::sync::atomic::AtomicU64::new(1),
             modified: Mutex::new(false),
-            save_pending: Mutex::new(false),
+            saves_pending: Mutex::new(0),
+            markdown_writes: markdown::RunningWrites::default(),
+            markdown_write: Mutex::new(()),
+            markdown_reloads: Mutex::new(markdown::PageReloads::default()),
             pending_recent: Mutex::new(None),
             recovery: Mutex::new(None),
             pending_open: pending_open::PendingOpens::with_launch_file(
@@ -566,6 +596,7 @@ fn main() {
             markdown::markdown_recovery_write,
             markdown::markdown_recovery_load,
             markdown::markdown_recovery_reload,
+            markdown::markdown_reload_reported,
             markdown::save_markdown,
             markdown::markdown_image,
         ])
@@ -887,6 +918,7 @@ fn main() {
             }
         })
         .setup(move |app| {
+            build_main_window(app, &main_window_config)?;
             // Restored before it is shown, so a hidden window appears once.
             restore_main_window(app);
             if new_window {

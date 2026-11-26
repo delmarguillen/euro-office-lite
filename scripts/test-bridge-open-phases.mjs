@@ -1,8 +1,9 @@
 // Checks the phase marks of a document open (bridge.js, _eoOpenPhases): the
 // line of each phase, the id the backend gets, that dt is the time since the
 // previous mark of the same open, and that a failed or finished open marks
-// nothing more. Also the sdk_min and sdk_all marks editor-patches.js takes
-// from the globals sdkjs defines in the editor frame.
+// nothing more. Also the marks taken from the events of the editor API, and
+// the sdk_min and sdk_all marks editor-patches.js takes from the globals sdkjs
+// defines in the editor frame.
 //
 // Run: node scripts/test-bridge-open-phases.mjs [path/to/bridge.js]
 import { readFile } from 'node:fs/promises';
@@ -107,6 +108,81 @@ async function loadWith(openFile) {
   bridge.run("_eoOpenPhases.mark('fonts'); _eoOpenPhases.mark('document_ready');");
   bridge.stopTimers();
   check(results, 'without an open nothing is marked', phaseLines(bridge).length === 0, phaseNames(bridge));
+}
+
+// The marks taken from the events of the editor API (_eoWatchOpenPhases). The
+// API here sends an event the way sdkjs does: to the listeners in the order
+// they were added, a listener added meanwhile included.
+const FAKE_API = `
+  window.AscDesktopEditor._editorWindow = {
+    Asc: { c_oAscAsyncAction: { Open: 0, LoadDocumentFonts: 2, LoadDocumentImages: 3 } }
+  };
+  window.__api = {
+    callbacks: {},
+    asc_registerCallback: function(name, fn) {
+      (this.callbacks[name] = this.callbacks[name] || []).push(fn);
+    },
+    sendEvent: function(name) {
+      var list = this.callbacks[name] || [];
+      var args = Array.prototype.slice.call(arguments, 1);
+      for (var i = 0; i < list.length; i++) list[i].apply(this, args);
+    }
+  };
+  __api.asc_registerCallback('asc_onDocumentContentReady', function() { _eoLog('editor UI handler'); });
+  _eoWatchOpenPhases(__api);
+  _eoWatchOpenPhases(__api);
+`;
+const END_FONTS = "__api.sendEvent('asc_onEndAction', 1, 2);";
+const END_IMAGES = "__api.sendEvent('asc_onEndAction', 1, 3);";
+const CONTENT_READY = "__api.sendEvent('asc_onEndAction', 1, 0); __api.sendEvent('asc_onDocumentContentReady'); _eoLog('task end');";
+const listeners = (bridge, name) => bridge.sandbox.__api.callbacks[name].length;
+
+{
+  const { bridge } = await loadWith(() => 'Ymlu');
+  bridge.run(FAKE_API);
+  check(results, 'watching an API twice adds one listener',
+    listeners(bridge, 'asc_onEndAction') === 1, String(listeners(bridge, 'asc_onEndAction')));
+  bridge.run(END_FONTS + CONTENT_READY);
+  await sleep(0);
+  check(results, 'without an open the editor events mark nothing', phaseLines(bridge).length === 0, phaseNames(bridge));
+
+  bridge.run(`_eoOpenGranted(${JSON.stringify(REPORT)})`);
+  await sleep(10);
+  bridge.run(END_FONTS);
+  check(results, 'a font action before the document is decoded is not the document\'s',
+    phaseNames(bridge) === 'request,result', phaseNames(bridge));
+  bridge.run('window.AscDesktopEditor.LocalStartOpen();');
+  bridge.run("_eoOpenPhases.mark('doc_decoded'); _eoOpenPhases.mark('doc_parsed');");
+  bridge.run(END_FONTS + END_FONTS + CONTENT_READY);
+  await sleep(0);
+  bridge.run("_eoOpenPhases.mark('spell_init'); _eoOpenPhases.mark('document_ready'); _eoOpenPhases.end();");
+  check(results, 'an open without images marks every phase of the document but doc_images, in order',
+    phaseNames(bridge) === 'request,result,doc_request,doc_decoded,doc_parsed,doc_fonts,content_ready,ui_ready,layout,spell_init,document_ready',
+    phaseNames(bridge));
+  const at = (text, from = 0) => bridge.logs.findIndex((line, index) => index >= from && line.includes(text));
+  const handler = at('editor UI handler', at('phase=content_ready'));
+  check(results, 'content_ready comes before the handlers of the event and ui_ready after them',
+    handler === at('phase=content_ready') + 1 && at('phase=ui_ready') === handler + 1,
+    `${at('phase=content_ready')} ${handler} ${at('phase=ui_ready')}`);
+  check(results, 'layout is marked when the task that sent the event has ended',
+    at('task end') < at('phase=layout'));
+  const lines = phaseLines(bridge);
+  check(results, 'the dts of the open add up to its last t',
+    lines.reduce((sum, line) => sum + line.dt, 0) === lines[lines.length - 1].t, JSON.stringify(lines));
+
+  // The next document of the same editor frame, with images.
+  const first = phaseLines(bridge).length;
+  bridge.run(`_eoOpenGranted(${JSON.stringify(REPORT)})`);
+  await sleep(10);
+  bridge.run("_eoOpenPhases.mark('doc_decoded');");
+  bridge.run(END_FONTS + END_IMAGES + CONTENT_READY + CONTENT_READY);
+  await sleep(0);
+  bridge.stopTimers();
+  const second = phaseLines(bridge).slice(first).map((line) => line.phase).join();
+  check(results, 'an open with images marks doc_images, and a second Open action marks nothing',
+    second === 'request,result,doc_decoded,doc_fonts,doc_images,content_ready,ui_ready,layout', second);
+  check(results, 'the listener of ui_ready is added once per API',
+    listeners(bridge, 'asc_onDocumentContentReady') === 2, String(listeners(bridge, 'asc_onDocumentContentReady')));
 }
 
 // The sdk_min and sdk_all marks editor-patches.js takes from the globals the

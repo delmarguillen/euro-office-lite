@@ -1,7 +1,8 @@
 // Runs the Markdown page's own script (src/markdown/markdown.js) against
 // stand-ins for the webview, with the recovery copy and the save held open:
 // edit, Save, undo back to the saved text and Close must not close the
-// document before the save is written.
+// document before the save is written. The save writes the file once the
+// copy asked for before it, and then its own, are written.
 //
 // Run: node scripts/test-bridge-markdown-save-race.mjs
 import { readFile } from 'node:fs/promises';
@@ -78,12 +79,20 @@ listeners['md-save:click']();
 await type('A');
 listeners['md-close:click']();
 await settle();
+// The copy the timer asked for.
+held.recovery();
+await settle();
+check(results, 'the save waits for its own copy before it writes the file', !('save' in held), commands.join(' '));
+// The copy of the text the save writes.
 held.recovery();
 await settle();
 const closedEarly = commands.includes('close_document');
-check(results, 'Close waits for the save that is waiting on the recovery copy', !closedEarly, commands.join(' '));
+check(results, 'Close waits for the save that is being written', !closedEarly, commands.join(' '));
 check(results, 'the save went on to be written', 'save' in held, commands.join(' '));
 if (held.save) held.save('a.md');
+await settle();
+// The copy of the text on screen, written as the save ends.
+held.recovery();
 await settle();
 check(results, 'once the save is written, Close closes the document', commands.includes('close_document'), commands.join(' '));
 finish(results);

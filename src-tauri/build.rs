@@ -60,6 +60,7 @@ const APP_COMMANDS: &[&str] = &[
     "markdown_recovery_write",
     "markdown_recovery_load",
     "markdown_recovery_reload",
+    "markdown_reload_reported",
     "save_markdown",
     "markdown_image",
 ];

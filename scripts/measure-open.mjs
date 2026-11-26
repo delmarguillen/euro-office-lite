@@ -25,10 +25,24 @@
 //   sdk_min         page     min part of sdkjs evaluated (sdk-all-min.js in a release)
 //   sdk_all         page     rest of sdkjs evaluated (sdk-all.js in a release)
 //   app_ready       page     onAppReady
-//   document_ready  page     onDocumentReady
+//   doc_request     page     sdkjs asked for the document
+//   doc_decoded     page     base64 of the document decoded into bytes
+//   doc_parsed      page     sdkjs read the document (openDocument returned)
+//   doc_fonts       page     fonts of the document loaded
+//   doc_images      page     images of the document loaded; "-" without images
+//   content_ready   page     sdkjs about to send asc_onDocumentContentReady
+//   ui_ready        page     the handlers of that event returned
+//   layout          page     the task that sent it ended
+//   spell_init      page     editor UI took the spellcheck languages
+//   document_ready  page     onDocumentReady reached the page
 //   sum                      the phase columns of the row added up
 //   total                    from the request to document_ready; "-" if not reached
 //   status                   ok, failed (the backend refused) or partial (the marks stop)
+//
+// The columns keep this order whatever the order of the marks. sdkjs loads
+// the rest of itself while the editor UI starts, so sdk_all can come after
+// app_ready: its column is then the time since app_ready, and sdk_min +
+// app_ready + sdk_all is the time from sdk_min to the later of the two.
 //
 // A phase with no mark shows "-", and its time goes to the next phase that
 // has one. With two or more complete opens a last row gives the median of
@@ -77,7 +91,11 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const BACKEND_PHASES = ['command', 'start', 'copy', 'convert', 'encode', 'respond'];
-const PAGE_PHASES = ['request', 'result', 'fonts', 'iframe', 'sdk_min', 'sdk_all', 'app_ready', 'document_ready'];
+const PAGE_PHASES = [
+  'request', 'result', 'fonts', 'iframe', 'sdk_min', 'sdk_all', 'app_ready',
+  'doc_request', 'doc_decoded', 'doc_parsed', 'doc_fonts', 'doc_images',
+  'content_ready', 'ui_ready', 'layout', 'spell_init', 'document_ready',
+];
 // In the order an open goes through them. `request` is the origin, so it has
 // no column of its own.
 const TIMELINE = ['request', ...BACKEND_PHASES, ...PAGE_PHASES.slice(1)];

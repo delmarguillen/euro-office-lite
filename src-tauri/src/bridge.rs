@@ -11,13 +11,18 @@ pub fn set_window_title(window: WebviewWindow, name: String) -> Result<(), Strin
         .map_err(|e| e.to_string())
 }
 
+// `page`: the number of a Markdown page reloaded with a recovery copy, none
+// for any other page (app_quit::report_modified).
 #[tauri::command]
 pub fn set_document_modified(
     window: WebviewWindow,
     state: State<'_, AppState>,
     modified: bool,
+    page: Option<u64>,
 ) -> Result<(), String> {
-    *state.modified.lock().unwrap() = modified;
+    if !crate::app_quit::report_modified(&state, modified, page) {
+        return Ok(());
+    }
     let current = window.title().map_err(|e| e.to_string())?;
     let base = current.trim_start_matches("● ");
     let title = if modified {
@@ -30,7 +35,11 @@ pub fn set_document_modified(
 
 #[tauri::command]
 pub fn set_save_pending(state: State<'_, AppState>, pending: bool) {
-    *state.save_pending.lock().unwrap() = pending;
+    if pending {
+        crate::app_quit::begin_save(&state);
+        return;
+    }
+    crate::app_quit::end_save(&state);
 }
 
 #[tauri::command]

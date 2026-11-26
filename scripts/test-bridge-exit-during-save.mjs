@@ -1,8 +1,9 @@
 // Checks what the backend would decide if the app exited at each step of a
 // save: whether the document still has unsaved changes. The fake backend
-// keeps the two flags the Rust side keeps (AppState.modified and
-// AppState.save_pending) and reads them the way app_quit::has_unsaved_changes
-// does; a save command that works clears both, as mark_document_saved does.
+// keeps what the Rust side keeps (AppState.modified and
+// AppState.saves_pending) and reads them the way app_quit::has_unsaved_changes
+// does. As there, only the page changes them (set_document_modified,
+// set_save_pending): no save command does.
 //
 // sdkjs calls onDocumentModifiedChanged(false) about 2 ms before it calls
 // LocalFileSave, so the checks follow that order: change, false, save.
@@ -22,23 +23,22 @@ function deferred() {
 }
 
 async function makeRun({ docType = 'word' } = {}) {
-  const backend = { modified: false, savePending: false };
+  const backend = { modified: false, savesPending: 0 };
   const pending = { save: null, pick: null, print: null };
-  const markSaved = () => { backend.modified = false; backend.savePending = false; };
   const bridge = await loadBridge({
     invoke: {
       write_editor_bin: () => 'ok',
       current_document: () => ({ token: 'tok-current', name: docType === 'pdf' ? 'form.pdf' : 'report.docx' }),
       pick_save_target: () => (pending.pick = deferred()).promise,
       recovery_mark_saved: () => null,
-      save_file: () => (pending.save = deferred()).promise.then(markSaved),
-      save_file_as: () => (pending.save = deferred()).promise.then(markSaved),
-      save_pdf: () => (pending.save = deferred()).promise.then(markSaved),
+      save_file: () => (pending.save = deferred()).promise,
+      save_file_as: () => (pending.save = deferred()).promise,
+      save_pdf: () => (pending.save = deferred()).promise,
       print_document: () => (pending.print = deferred()).promise,
       open_pdf_viewer: () => null,
       set_window_title: () => null,
       set_document_modified: (args) => { backend.modified = args.modified; return null; },
-      set_save_pending: (args) => { backend.savePending = args.pending; return null; },
+      set_save_pending: (args) => { backend.savesPending += args.pending ? 1 : -1; return null; },
     },
   });
   bridge.sandbox.__TAURI__.dialog = { message: () => Promise.resolve() };
@@ -58,7 +58,7 @@ async function makeRun({ docType = 'word' } = {}) {
   return run;
 }
 
-const unsaved = (run) => run.backend.modified || run.backend.savePending;
+const unsaved = (run) => run.backend.modified || run.backend.savesPending > 0;
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 async function settleAll() {
