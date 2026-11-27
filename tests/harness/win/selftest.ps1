@@ -238,6 +238,28 @@ function Test-Json {
     Assert-Equal 'JSON string escapes' (ConvertTo-JsonString $text) '"a\"b\\c\n\td"'
 }
 
+# The parts of -ClearDesktop that need no window: which rectangle covers the
+# screen, and which process shows a screen of a first sign-in.
+function Test-FirstRunScreens {
+    Assert-Equal 'a window as large as the screen covers it' (Test-RectCoversScreen @(0, 0, 1024, 768) 1024 768) $true
+    Assert-Equal 'a window larger than the screen covers it' (Test-RectCoversScreen @(-8, -8, 1040, 784) 1024 768) $true
+    Assert-Equal 'a smaller window does not cover the screen' (Test-RectCoversScreen @(100, 100, 800, 600) 1024 768) $false
+    Assert-Equal 'a window that starts inside the screen does not cover it' (Test-RectCoversScreen @(1, 0, 1024, 768) 1024 768) $false
+    Assert-Equal 'a screen without a size is not covered' (Test-RectCoversScreen @(0, 0, 1024, 768) 0 0) $false
+    $windows = 'C:\Windows'
+    Assert-Equal 'first sign-in: a host by its name' (Test-FirstRunProcess 'WWAHost' '' $false $windows) $true
+    Assert-Equal 'first sign-in: a program of SystemApps with the foreground' (Test-FirstRunProcess 'Other' 'C:\Windows\SystemApps\Some.App_x\Other.exe' $true $windows) $true
+    Assert-Equal 'first sign-in: the folder matches without case' (Test-FirstRunProcess 'Other' 'c:\windows\system32\oobe\Other.exe' $true $windows) $true
+    Assert-Equal 'first sign-in: a program of SystemApps without the foreground' (Test-FirstRunProcess 'Other' 'C:\Windows\SystemApps\Some.App_x\Other.exe' $false $windows) $false
+    Assert-Equal 'first sign-in: not the shell' (Test-FirstRunProcess 'explorer' 'C:\Windows\explorer.exe' $true $windows) $false
+    Assert-Equal 'first sign-in: not the app' (Test-FirstRunProcess 'euro-office-lite' 'C:\Users\u\AppData\Local\Euro-Office-Lite\euro-office-lite.exe' $true $windows) $false
+    Assert-Equal 'first sign-in: not a process whose path cannot be read' (Test-FirstRunProcess 'Other' '' $true $windows) $false
+    $plain = New-Options 'all' '' '' $false $false (Join-Path $Work 'options')
+    $clearing = New-Options 'all' '' '' $false $false (Join-Path $Work 'options') $true
+    Assert-Equal 'the desktop is left alone unless -ClearDesktop is given' $plain.ClearDesktop $false
+    Assert-Equal '-ClearDesktop reaches the options' $clearing.ClearDesktop $true
+}
+
 # --- a stand-in for the app -----------------------------------------------------
 
 $Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Log = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false; SaveFails = $false; LogsOldSave = $false; SaveDialog = $false; Session = ''; KeepsRecovery = $true }
@@ -636,6 +658,7 @@ $TestInputs = Get-TestInputs $GivenInputs
 Test-Scripts
 Test-CaseFiles
 Test-Keys
+Test-FirstRunScreens
 Test-ByteChecks
 Test-ZipChecks $TestInputs
 Test-PdfChecks

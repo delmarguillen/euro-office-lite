@@ -269,6 +269,11 @@ public static class EolNative
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr dialog, int id);
     [DllImport("user32.dll", EntryPoint = "PostMessageW")]
     public static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr window, uint which);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll", EntryPoint = "FindWindowExW", CharSet = CharSet.Unicode)]
+    public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string title);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
 
     // The visible top-level windows of a process.
     public static IntPtr[] WindowsOf(uint processId)
@@ -288,6 +293,44 @@ public static class EolNative
     {
         uint owner;
         return GetWindowThreadProcessId(window, out owner);
+    }
+
+    public static uint ProcessOf(IntPtr window)
+    {
+        uint owner;
+        GetWindowThreadProcessId(window, out owner);
+        return owner;
+    }
+
+    // Every top-level window, from the front to the back. EnumWindows gives
+    // only the windows of desktop apps; this walk also gives the screens the
+    // system shows above the desktop.
+    public static IntPtr[] TopLevelWindows()
+    {
+        List<IntPtr> found = new List<IntPtr>();
+        IntPtr window = FindWindowEx(IntPtr.Zero, IntPtr.Zero, null, null);
+        while (window != IntPtr.Zero && found.Count < 10000)
+        {
+            found.Add(window);
+            window = FindWindowEx(IntPtr.Zero, window, null, null);
+        }
+        return found.ToArray();
+    }
+
+    // The top-level window a window belongs to (GA_ROOT), or itself.
+    public static IntPtr RootOf(IntPtr window)
+    {
+        if (window == IntPtr.Zero) return window;
+        IntPtr root = GetAncestor(window, 2);
+        return root == IntPtr.Zero ? window : root;
+    }
+
+    // DWMWA_CLOAKED: the window exists and counts as visible, but is not drawn.
+    public static bool IsCloaked(IntPtr window)
+    {
+        int cloaked;
+        if (DwmGetWindowAttribute(window, 14, out cloaked, 4) != 0) return false;
+        return cloaked != 0;
     }
 
     public static string ClassOf(IntPtr window)
@@ -363,6 +406,10 @@ function Test-Foreground([IntPtr]$window) {
     return ([EolNative]::GetForegroundWindow() -eq $window)
 }
 
+# A key no keyboard has (0xE8). Pressed while ALT is down, it makes the ALT a
+# chord: the window that sees ALT go up does not open its menu.
+$MenuMaskKey = 0xE8
+
 # Brings a window to the foreground and says whether it got there. Keys go to
 # the foreground window, so nothing is typed when this is false.
 function Set-Foreground([IntPtr]$window) {
@@ -377,7 +424,124 @@ function Set-Foreground([IntPtr]$window) {
     [void][EolNative]::SetForegroundWindow($window)
     [void][EolNative]::AttachThreadInput($own, $other, $false)
     Start-Sleep -Milliseconds 200
+    if (Test-Foreground $window) { return $true }
+    # Last try: the system lets SetForegroundWindow through once ALT is
+    # pressed (LockSetForegroundWindow, Remarks).
+    Send-KeyEvent 0x12 $false
+    [void][EolNative]::SetForegroundWindow($window)
+    Send-KeyChord ([int[]]@($MenuMaskKey))
+    Send-KeyEvent 0x12 $true
+    Start-Sleep -Milliseconds 200
     return (Test-Foreground $window)
+}
+
+# Class, title and process of a window, for the log and the detail of a case.
+function Get-WindowDescription([IntPtr]$window) {
+    if ($window -eq [IntPtr]::Zero) { return 'no window' }
+    $ownerId = [EolNative]::ProcessOf($window)
+    $name = '?'
+    $process = Get-Process -Id $ownerId -ErrorAction SilentlyContinue
+    if ($process) { $name = $process.ProcessName }
+    return ("class '{0}', title '{1}', process {2} (pid {3})" -f [EolNative]::ClassOf($window), [EolNative]::TitleOf($window), $name, $ownerId)
+}
+
+# What has the foreground now: said in the detail of a case that could not get it.
+function Get-ForegroundDescription {
+    return (Get-WindowDescription ([EolNative]::GetForegroundWindow()))
+}
+
+# --- screens over the desktop ----------------------------------------------------
+
+# Whether a rectangle (left, top, width, height) covers a screen of that size
+# placed at 0,0.
+function Test-RectCoversScreen([int[]]$rect, [int]$screenWidth, [int]$screenHeight) {
+    if ($screenWidth -le 0 -or $screenHeight -le 0) { return $false }
+    if ($rect[0] -gt 0 -or $rect[1] -gt 0) { return $false }
+    return ((($rect[0] + $rect[2]) -ge $screenWidth) -and (($rect[1] + $rect[3]) -ge $screenHeight))
+}
+
+# A window that is shown and covers the primary screen (SM_CXSCREEN, SM_CYSCREEN).
+function Test-CoversScreen([IntPtr]$window) {
+    if (-not [EolNative]::IsWindowVisible($window)) { return $false }
+    if ([EolNative]::IsCloaked($window)) { return $false }
+    return (Test-RectCoversScreen ([EolNative]::RectOf($window)) ([EolNative]::GetSystemMetrics(0)) ([EolNative]::GetSystemMetrics(1)))
+}
+
+# The programs that show the screens of a first sign-in ("Choose privacy
+# settings for your device" and the like) over the desktop of a new user.
+$FirstRunHosts = 'WWAHost', 'CloudExperienceHost', 'CloudExperienceHostBroker', 'UserOOBEBroker', 'FirstLogonAnim', 'msoobe'
+
+# The folders of Windows whose programs show such screens.
+function Get-FirstRunFolders([string]$windowsDir) {
+    $root = $windowsDir.TrimEnd('\')
+    return @(($root + '\SystemApps'), ($root + '\System32\oobe'))
+}
+
+# Whether a process is one that shows a screen of a first sign-in: by its name,
+# or, for the window that has the foreground, by the folder of its program.
+# The path may be empty: not every process lets its path be read.
+function Test-FirstRunProcess([string]$name, [string]$path, [bool]$hasForeground, [string]$windowsDir) {
+    if ($FirstRunHosts -contains $name) { return $true }
+    if (-not $hasForeground -or -not $path -or -not $windowsDir) { return $false }
+    foreach ($folder in (Get-FirstRunFolders $windowsDir)) {
+        if ($path.StartsWith($folder + '\', [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
+function Get-ProcessPath($process) {
+    try {
+        return [string]$process.Path
+    } catch {
+        return ''
+    }
+}
+
+# The screens of a first sign-in that cover the desktop, each with Handle,
+# ProcessId and Description. Such a screen keeps the foreground, whatever
+# SetForegroundWindow is called with, and takes the clicks meant for the app.
+function Get-BlockingWindows {
+    $foreground = [EolNative]::RootOf([EolNative]::GetForegroundWindow())
+    $seen = @{}
+    $found = @()
+    foreach ($window in (@($foreground) + @([EolNative]::TopLevelWindows()))) {
+        if ($window -eq [IntPtr]::Zero) { continue }
+        $key = $window.ToInt64()
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        if (-not (Test-CoversScreen $window)) { continue }
+        $ownerId = [EolNative]::ProcessOf($window)
+        if ($ownerId -eq $PID) { continue }
+        $process = Get-Process -Id $ownerId -ErrorAction SilentlyContinue
+        if (-not $process) { continue }
+        $first = Test-FirstRunProcess $process.ProcessName (Get-ProcessPath $process) ($window -eq $foreground) $env:WINDIR
+        if (-not $first) { continue }
+        $found += New-Object PSObject -Property @{ Handle = $window; ProcessId = [int]$ownerId; Description = (Get-WindowDescription $window) }
+    }
+    return $found
+}
+
+# Ends the processes of the screens of a first sign-in that cover the desktop,
+# and says in the log what it found and what has the foreground afterwards.
+# For a machine that is thrown away after the run: -ClearDesktop of run.ps1.
+function Clear-Desktop {
+    Write-Log ('foreground before the cases: ' + (Get-ForegroundDescription))
+    $ended = 0
+    foreach ($round in 1..3) {
+        $blocking = @(Get-BlockingWindows)
+        if ($blocking.Count -eq 0) { break }
+        foreach ($entry in $blocking) {
+            Write-Log ('a first sign-in screen covers the desktop, ending its process: ' + $entry.Description)
+            Stop-Process -Id $entry.ProcessId -Force -ErrorAction SilentlyContinue
+            $ended++
+        }
+        [void](Wait-Until 10 { @(Get-BlockingWindows).Count -eq 0 })
+    }
+    foreach ($entry in @(Get-BlockingWindows)) {
+        Write-Log ('still covers the desktop: ' + $entry.Description)
+    }
+    if ($ended -eq 0) { return }
+    Write-Log ('foreground after ending them: ' + (Get-ForegroundDescription))
 }
 
 function Click-WindowCenter([IntPtr]$window) {

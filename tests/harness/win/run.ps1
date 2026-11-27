@@ -1,10 +1,12 @@
-# run.ps1 CASE|all [-Installer FILE] [-Inputs DIR] [-Control] [-Screenshots] [-Out DIR]
+# run.ps1 CASE|all [-Installer FILE] [-Inputs DIR] [-Control] [-Screenshots] [-ClearDesktop] [-Out DIR]
 #
 # Runs the harness cases of ..\cases against the installed app on the desktop
 # of this session and writes OUT\result.json, with the schema run.sh writes.
 # -Installer runs that NSIS installer silently first. -Inputs takes the input
 # files from a folder made by gen/mkinputs.py instead of running Python here.
 # -Control judges each case by its control_expect (what a build without the fix does).
+# -ClearDesktop ends, before the cases, the processes of the first sign-in
+# screens of Windows that cover the desktop: for a machine thrown away after the run.
 # Exit status: 0 every case ok, 1 some case not ok, 2 the harness could not run.
 param(
     [Parameter(Position = 0)][string]$Selection,
@@ -12,6 +14,7 @@ param(
     [string]$Inputs,
     [switch]$Control,
     [switch]$Screenshots,
+    [switch]$ClearDesktop,
     [string]$Out
 )
 
@@ -19,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 $HarnessDir = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib.ps1')
 
-$Usage = 'usage: run.ps1 CASE|all [-Installer FILE] [-Inputs DIR] [-Control] [-Screenshots] [-Out DIR]'
+$Usage = 'usage: run.ps1 CASE|all [-Installer FILE] [-Inputs DIR] [-Control] [-Screenshots] [-ClearDesktop] [-Out DIR]'
 
 function Get-DefaultOut {
     $work = $env:HARNESS_WORK
@@ -33,7 +36,7 @@ function Get-SaveWait {
     return 30
 }
 
-function New-Options([string]$selection, [string]$installer, [string]$inputs, [bool]$control, [bool]$screenshots, [string]$out) {
+function New-Options([string]$selection, [string]$installer, [string]$inputs, [bool]$control, [bool]$screenshots, [string]$out, [bool]$clearDesktop = $false) {
     if (-not $out) { $out = Get-DefaultOut }
     if ($inputs) { $inputs = Resolve-FullPath $inputs }
     return @{
@@ -42,6 +45,7 @@ function New-Options([string]$selection, [string]$installer, [string]$inputs, [b
         Inputs = $inputs
         Control = $control
         Screenshots = $screenshots
+        ClearDesktop = $clearDesktop
         Out = Resolve-FullPath $out
         SaveWait = Get-SaveWait
         Python = ''
@@ -786,6 +790,16 @@ function Add-CaseResult($options, $run, [bool]$ok, [string]$shot, [int]$seconds)
     Write-Log ($run.Name + ': ok=' + $okJson + ' observed=' + $run.Observed)
 }
 
+# A case that could not get the foreground says which window kept it.
+function Add-ForegroundNote($run) {
+    if ($run.Observed -ne 'not-in-foreground') { return }
+    try {
+        Add-Note $run ('the foreground stays with: ' + (Get-ForegroundDescription))
+    } catch {
+        Add-Note $run ('the foreground window could not be read: ' + $_.Exception.Message)
+    }
+}
+
 function Invoke-Case($options, [string]$name) {
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
     $run = New-Run $name
@@ -814,6 +828,7 @@ function Invoke-Case($options, [string]$name) {
         $run.Observed = 'harness-error'
         Add-Note $run $_.Exception.Message
     }
+    Add-ForegroundNote $run
     $ok = ($run.Observed -eq $run.Expected)
     $shot = Get-CaseScreenshot $options $run $ok
     try {
@@ -871,6 +886,14 @@ function Invoke-Harness($options) {
     Set-InputSource $options
     Write-PdfToTextInUse
     Initialize-Native
+    if ($options.ClearDesktop) {
+        # A desktop that could not be cleared does not stop the run: the cases say what they found.
+        try {
+            Clear-Desktop
+        } catch {
+            Write-Log ('the desktop could not be cleared: ' + $_.Exception.Message)
+        }
+    }
     foreach ($name in (Get-SelectedCases $options.Selection)) {
         # Nothing a case prints may end up in the exit status this function returns.
         Invoke-Case $options $name | Out-Null
@@ -883,5 +906,5 @@ function Invoke-Harness($options) {
 # Dot-sourced (selftest.ps1): only the functions are wanted.
 if ($MyInvocation.InvocationName -eq '.') { return }
 
-$options = New-Options $Selection $Installer $Inputs $Control.IsPresent $Screenshots.IsPresent $Out
+$options = New-Options $Selection $Installer $Inputs $Control.IsPresent $Screenshots.IsPresent $Out $ClearDesktop.IsPresent
 exit (Invoke-Harness $options)
