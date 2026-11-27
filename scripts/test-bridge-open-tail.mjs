@@ -1,6 +1,6 @@
 // Checks the marks of the end of a document open (bridge.js): the microtasks
 // that run between the end of the task that sent asc_onDocumentContentReady
-// and the spellcheck language list.
+// and the spellcheck language list, and the first animation frame after them.
 //
 // Run: node scripts/test-bridge-open-tail.mjs [path/to/bridge.js]
 import { check, finish, loadBridge } from './bridge-test-harness.mjs';
@@ -87,6 +87,80 @@ const CONTENT_READY = "_eoOpenPhases.mark('doc_decoded'); __api.sendEvent('asc_o
     queued >= 0 && queued < microtasks && microtasks < list, `${queued} ${microtasks} ${list}`);
   check(results, 'spell_init comes after the editor UI took the list',
     list >= 0 && list < at(bridge, 'phase=spell_init'), `${list} ${at(bridge, 'phase=spell_init')}`);
+}
+
+// The animation frames of the page and of the editor frame, run by hand. The
+// editor frame already holds the request of sdkjs's paint loop.
+const FRAMES = `
+  window.__pageFrames = [];
+  window.requestAnimationFrame = function(fn) { __pageFrames.push(fn); };
+  window.__editorFrames = [function() { _eoLog('sdkjs paint loop'); }];
+  window.AscDesktopEditor._editorWindow.requestAnimationFrame = function(fn) { __editorFrames.push(fn); };
+  window.__runFrame = function() {
+    var callbacks = __pageFrames.concat(__editorFrames);
+    __pageFrames = [];
+    __editorFrames = [];
+    for (var i = 0; i < callbacks.length; i++) callbacks[i]();
+  };
+`;
+const requested = (bridge) => `${bridge.sandbox.__pageFrames.length},${bridge.sandbox.__editorFrames.length}`;
+
+{
+  const bridge = await loadWithDictionaries();
+  bridge.run(EDITOR + FRAMES);
+  bridge.run(OPEN);
+  await sleep(10);
+  bridge.run(CONTENT_READY);
+  check(results, 'no frame is asked for while the task that sent the event runs',
+    requested(bridge) === '0,1', requested(bridge));
+  await sleep(0);
+  check(results, 'once the task has ended one frame is asked of the page and one of the editor frame',
+    requested(bridge) === '1,2', requested(bridge));
+  bridge.run('__runFrame();');
+  bridge.run("_eoOpenPhases.mark('document_ready'); _eoOpenPhases.end();");
+  bridge.stopTimers();
+
+  check(results, 'the open marks frame and doc_drawn between spell_init and document_ready',
+    phaseNames(bridge) === 'request,result,doc_decoded,content_ready,ui_ready,layout,microtasks,spell_init,frame,doc_drawn,document_ready',
+    phaseNames(bridge));
+  const frame = at(bridge, 'phase=frame');
+  const paint = at(bridge, 'sdkjs paint loop');
+  const drawn = at(bridge, 'phase=doc_drawn');
+  check(results, 'frame comes before the paint loop of sdkjs and doc_drawn after it',
+    frame >= 0 && frame < paint && paint < drawn, `${frame} ${paint} ${drawn}`);
+  check(results, 'the marks ask for no further frame', requested(bridge) === '0,0', requested(bridge));
+}
+
+// The frame comes after onDocumentReady: the open has ended.
+{
+  const bridge = await loadWithDictionaries();
+  bridge.run(EDITOR + FRAMES);
+  bridge.run(OPEN);
+  await sleep(10);
+  bridge.run(CONTENT_READY);
+  await sleep(0);
+  bridge.run("_eoOpenPhases.mark('document_ready'); _eoOpenPhases.end();");
+  bridge.run('__runFrame();');
+  bridge.stopTimers();
+  check(results, 'a frame after document_ready marks nothing',
+    phaseNames(bridge) === 'request,result,doc_decoded,content_ready,ui_ready,layout,microtasks,spell_init,document_ready',
+    phaseNames(bridge));
+}
+
+// The editor frame has no requestAnimationFrame yet.
+{
+  const bridge = await loadWithDictionaries();
+  bridge.run(EDITOR + FRAMES);
+  bridge.run('delete window.AscDesktopEditor._editorWindow.requestAnimationFrame;');
+  bridge.run(OPEN);
+  await sleep(10);
+  bridge.run(CONTENT_READY);
+  await sleep(0);
+  bridge.run('__runFrame();');
+  bridge.stopTimers();
+  check(results, 'without a frame of the editor only the page\'s frame is marked',
+    phaseNames(bridge) === 'request,result,doc_decoded,content_ready,ui_ready,layout,microtasks,spell_init,frame',
+    phaseNames(bridge));
 }
 
 // No open in progress: a new document sends the same events.

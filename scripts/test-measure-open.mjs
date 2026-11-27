@@ -77,7 +77,9 @@ const RUN_2 = [
   '[JS] [2026-11-22T10:05:12.458Z] [OPEN] phase=layout open=mwr7k2aa-1 t=12458 dt=400',
   '[JS] [2026-11-22T10:05:12.698Z] [OPEN] phase=microtasks open=mwr7k2aa-1 t=12698 dt=240',
   '[JS] [2026-11-22T10:05:12.738Z] [OPEN] phase=spell_init open=mwr7k2aa-1 t=12738 dt=40',
-  '[JS] [2026-11-22T10:05:13.138Z] [OPEN] phase=document_ready open=mwr7k2aa-1 t=13138 dt=400',
+  '[JS] [2026-11-22T10:05:12.768Z] [OPEN] phase=frame open=mwr7k2aa-1 t=12768 dt=30',
+  '[JS] [2026-11-22T10:05:12.828Z] [OPEN] phase=doc_drawn open=mwr7k2aa-1 t=12828 dt=60',
+  '[JS] [2026-11-22T10:05:13.138Z] [OPEN] phase=document_ready open=mwr7k2aa-1 t=13138 dt=310',
   '',
 ].join('\r\n');
 
@@ -95,12 +97,12 @@ const RUN_3 = `[2026-11-22T10:10:00.000Z] [OPEN] phase=request open=mwr8zzzz-1 t
 [2026-11-22T10:10:05.835Z] [OPEN] phase=iframe open=mwr8zzzz-1 t=5835 dt=30
 `;
 
-const EXPECTED = `log           open        command  start  copy  convert  encode  respond  result  fonts  iframe  sdk_min  sdk_all  app_ready  doc_request  doc_decoded  doc_parsed  doc_fonts  doc_images  content_ready  ui_ready  layout  microtasks  spell_init  document_ready      sum    total  status
-run-1.log     mwr6aaaa-1        3     10    30        -       -     2000       -      -       -        -        -          -            -            -           -          -           -              -         -       -           -           -               -     2043        -  failed
-run-1.log     mwr6hjgo-2        2     15    40     8200     120        3    1500     20      35     9000     6000       4000            -            -           -          -           -              -         -       -           -           -            7000    35935    35935  ok
-run-2.log     mwr7k2aa-1        1      5    20     4000      80        2     500     10      20     3000      500       2000          100          120         500        700           -            100       400     400         240          40             400    13138    13138  ok
-run-3.log     mwr8zzzz-1        0      8    22     5000     100        2     668      5      30        -        -          -            -            -           -          -           -              -         -       -           -           -               -     5835        -  partial
-median (n=2)                  1.5     10    30     6100     100      2.5    1000     15    27.5     6000     3250       3000          100          120         500        700           -            100       400     400         240          40            3700  24536.5  24536.5
+const EXPECTED = `log           open        command  start  copy  convert  encode  respond  result  fonts  iframe  sdk_min  sdk_all  app_ready  doc_request  doc_decoded  doc_parsed  doc_fonts  doc_images  content_ready  ui_ready  layout  microtasks  spell_init  frame  doc_drawn  document_ready      sum    total  status
+run-1.log     mwr6aaaa-1        3     10    30        -       -     2000       -      -       -        -        -          -            -            -           -          -           -              -         -       -           -           -      -          -               -     2043        -  failed
+run-1.log     mwr6hjgo-2        2     15    40     8200     120        3    1500     20      35     9000     6000       4000            -            -           -          -           -              -         -       -           -           -      -          -            7000    35935    35935  ok
+run-2.log     mwr7k2aa-1        1      5    20     4000      80        2     500     10      20     3000      500       2000          100          120         500        700           -            100       400     400         240          40     30         60             310    13138    13138  ok
+run-3.log     mwr8zzzz-1        0      8    22     5000     100        2     668      5      30        -        -          -            -            -           -          -           -              -         -       -           -           -      -          -               -     5835        -  partial
+median (n=2)                  1.5     10    30     6100     100      2.5    1000     15    27.5     6000     3250       3000          100          120         500        700           -            100       400     400         240          40     30         60            3655  24536.5  24536.5
 clocks: run-3.log mwr8zzzz-1: the wall clocks do not place the backend inside the request; offset corrected
 `;
 

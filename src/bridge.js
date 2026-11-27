@@ -548,11 +548,14 @@ window._eoLog = function() {
 //   layout          the task that sent it has ended
 //   microtasks      the microtasks queued ahead of the language list have run
 //   spell_init      the editor UI took the list of spellcheck languages
+//   frame           the first animation frame after that task has begun
+//   doc_drawn       sdkjs's paint loop has run in that frame
 //   document_ready  the editor's onDocumentReady
 //
 // sdkjs loads the rest of itself while the editor UI starts, so app_ready and
 // sdk_all come in either order. From doc_request to spell_init the marks are
-// taken inside the editor frame's own tasks (_eoWatchOpenPhases); the last one
+// taken inside the editor frame's own tasks (_eoWatchOpenPhases), frame and
+// doc_drawn in animation frame callbacks (_eoMarkFirstFrame); the last one
 // waits for the message of the editor frame to reach this page.
 var _eoOpenPhases = (function() {
   var sequence = 0;
@@ -613,6 +616,17 @@ var _eoOpenPhases = (function() {
 })();
 window._eoOpenPhases = _eoOpenPhases;
 
+// The first animation frame after an open's layout. A frame runs the page's
+// callbacks before the editor frame's, and there sdkjs's paint loop asked for
+// its frame a frame earlier (PaintMessageLoop, common/Drawings/WorkEvents.js):
+// frame is taken before the turn of that loop, doc_drawn after it.
+function _eoMarkFirstFrame(editorWindow) {
+  if (typeof window.requestAnimationFrame !== 'function') return;
+  window.requestAnimationFrame(function() { _eoOpenPhases.mark('frame'); });
+  if (!editorWindow || typeof editorWindow.requestAnimationFrame !== 'function') return;
+  editorWindow.requestAnimationFrame(function() { _eoOpenPhases.mark('doc_drawn'); });
+}
+
 // The marks of an open that sdkjs's own events give, on the API of the editor
 // frame. Only listeners are added.
 //
@@ -640,7 +654,10 @@ function _eoWatchOpenPhases(api) {
         _eoOpenPhases.mark('doc_images');
       } else if (id === actions['Open'] && !_eoOpenPhases.has('content_ready')) {
         _eoOpenPhases.mark('content_ready');
-        Promise.resolve().then(function() { _eoOpenPhases.mark('layout'); });
+        Promise.resolve().then(function() {
+          _eoOpenPhases.mark('layout');
+          _eoMarkFirstFrame(editorWindow);
+        });
         if (!uiWatched) {
           uiWatched = true;
           api.asc_registerCallback('asc_onDocumentContentReady', function() {

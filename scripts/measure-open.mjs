@@ -35,6 +35,8 @@
 //   layout          page     the task that sent it ended
 //   microtasks      page     microtasks queued ahead of the language list ran
 //   spell_init      page     editor UI took the spellcheck languages
+//   frame           page     first animation frame after that task began
+//   doc_drawn       page     sdkjs's paint loop ran in that frame
 //   document_ready  page     onDocumentReady reached the page
 //   sum                      the phase columns of the row added up
 //   total                    from the request to document_ready; "-" if not reached
@@ -96,7 +98,7 @@ const PAGE_PHASES = [
   'request', 'result', 'fonts', 'iframe', 'sdk_min', 'sdk_all', 'app_ready',
   'doc_request', 'doc_decoded', 'doc_parsed', 'doc_fonts', 'doc_images',
   'content_ready', 'ui_ready', 'layout', 'microtasks', 'spell_init',
-  'document_ready',
+  'frame', 'doc_drawn', 'document_ready',
 ];
 // In the order an open goes through them. `request` is the origin, so it has
 // no column of its own.
