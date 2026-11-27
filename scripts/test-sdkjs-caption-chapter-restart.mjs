@@ -130,6 +130,47 @@ same('Heading 9: the fields name Heading 9 and level 9', run('instructionsOf(tab
   'SEQ Table \\* Arabic \\s 9',
 ]);
 
+// --- A caption saved before with \s 0 next to a new one ---
+// This editor used to write \s 0 for Heading 1; Word writes the level from 1
+// and never 0. A document with both counts once per chapter.
+run = openWordEditor(process.argv[2]);
+run(CAPTIONS);
+run(`
+  numberHeadings(['Chapter %1.', '%1.%2.']);
+  var oldFields = [];
+  function addOldCaption(label) {
+    var p = addParagraph(label + ' ');
+    oldFields.push(addField(p, ' STYLEREF "Heading 1" \\\\s'));
+    addText(p, '-');
+    oldFields.push(addField(p, ' SEQ ' + label + ' \\\\* Arabic \\\\s 0'));
+    captions.push(p);
+    return p;
+  }
+  addParagraph('First', heading(1));
+  var old1 = addOldCaption('Table');
+  addParagraph('Second', heading(1));
+  var old2 = addOldCaption('Table');
+  var body = addParagraph('Body');
+  recalculate();
+  updateFields(oldFields);
+  var table = insertCaption(body, 'Table', 0);
+`);
+same('\\s 0: the old field keeps its instruction', run('instructionsOf(old2)'), [
+  'STYLEREF "Heading 1" \\s',
+  'SEQ Table \\* Arabic \\s 0',
+]);
+same('\\s 0 next to \\s 1, as inserted: 1-1, 2-1 and 2-2', run('[textOf(old1), textOf(old2), textOf(table)]'), [
+  'Table 1-1',
+  'Table 2-1',
+  'Table 2-2',
+]);
+run('updateAllFields();');
+same('\\s 0 next to \\s 1, after updating the fields: 1-1, 2-1 and 2-2', run('[textOf(old1), textOf(old2), textOf(table)]'), [
+  'Table 1-1',
+  'Table 2-1',
+  'Table 2-2',
+]);
+
 // --- Without the chapter number ---
 run = openWordEditor(process.argv[2]);
 run(CAPTIONS);

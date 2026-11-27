@@ -24,3 +24,16 @@ index 74039704da..2c5814451e 100644
          }
          oBeginChar    = new ParaFieldChar(fldchartype_Begin, this);
          oSeparateChar = new ParaFieldChar(fldchartype_Separate, this);
+diff --git a/word/Editor/Paragraph/ComplexFieldInstruction.js b/word/Editor/Paragraph/ComplexFieldInstruction.js
+index a77be42800..1f89d34a26 100644
+--- a/word/Editor/Paragraph/ComplexFieldInstruction.js
++++ b/word/Editor/Paragraph/ComplexFieldInstruction.js
+@@ -811,6 +811,8 @@ CFieldInstructionSEQ.prototype.GetText = function ()
+ 		if(this.S)
+ 		{
+ 			nLvl = parseInt(this.S);
++			// Older captions of this editor wrote \s 0 for Heading 1; Word counts the level from 1
++			if(0 === nLvl) nLvl = 1;
+ 			if(!isNaN(nLvl))
+ 			{
+ 				--nLvl;
