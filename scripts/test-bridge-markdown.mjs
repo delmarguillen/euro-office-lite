@@ -178,7 +178,7 @@ for (const name of ['notes.md', 'report.docx']) {
   const body = source.slice(start, source.indexOf('\n    }\n', start));
   check(results, 'the start screen routes Markdown before converting',
     start >= 0 && body.indexOf('_eoOpenMarkdown(file)') !== -1 &&
-    body.indexOf('_eoOpenMarkdown(file)') < body.indexOf('_eoOpenCommandForPath'));
+    body.indexOf('_eoOpenMarkdown(file)') < body.indexOf('_eoOpenWithEditor('));
 }
 
 // ── The extension lists agree ──

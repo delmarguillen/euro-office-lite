@@ -131,6 +131,15 @@
     }
     #placeholder.active { display: block; }
 
+    /* An editor created while its document is converted loads behind a copy
+       of the page background, the start screen above it as it was. */
+    body.editor-behind::before {
+      content: ""; position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 1;
+      background: inherit;
+    }
+    body.editor-behind .start { position: relative; z-index: 2; }
+    body.editor-behind iframe[name="frameEditor"] { position: absolute; left: 0; top: 0; }
+
     /* Full window so it also catches clicks meant for the start screen. */
     #opening {
       position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 1000;

@@ -1178,14 +1178,19 @@
 
     window._openEditor = openEditor;
     window._eoOpenPath = _openPath;
-    async function openEditor(docType) {
+    // `awaited`, when given, is the document the backend is still converting
+    // (bridge.js, _eoAwaitDocument): the editor is created without waiting
+    // for it, behind the page and its opening indicator until it arrives.
+    async function openEditor(docType, awaited) {
       // The font cache may still be building (fonts_state.rs): sdkjs reads
       // AllFonts.js once, so the editor waits for the final one. Then fetch it
       // before the iframe is created so injection does not race LoadDocumentFonts.
       await window._eoWaitForFonts();
       await _prepareSystemFonts();
+      // The conversion failed meanwhile: no editor for a document that is not coming.
+      if (awaited && awaited.state === 'failed') return;
       window._eoOpenPhases.mark('fonts');
-      if (!window._pendingFileData) {
+      if (!awaited && !window._pendingFileData) {
         try {
           var b64 = await window.__TAURI__.core.invoke('create_new', { docType: docType });
           var defaultName = docType === 'cell' ? _t('newSpreadsheet') : docType === 'slide' ? _t('newPresentation') : _t('newDocument');
@@ -1196,9 +1201,15 @@
       }
       window.AscDesktopEditor._currentDocType = docType;
       window._eoCloseSettings(false);
-      startScreen.classList.add('hidden');
       document.getElementById('placeholder').classList.add('active');
-      window._eoHideOpening();
+      if (awaited && awaited.state === 'converting') {
+        window._eoSetEditorBehind(true);
+      } else {
+        startScreen.classList.add('hidden');
+        window._eoHideOpening();
+      }
+      if (awaited) awaited.editorCreated = true;
+      var pendingName = window._pendingFileData && window._pendingFileData.name;
 
       new DocsAPI.DocEditor('placeholder', {
         type: 'desktop',
@@ -1206,7 +1217,7 @@
         height: '100%',
         documentType: docType,
         document: {
-          title: (window._pendingFileData && window._pendingFileData.name) || _t('newDocument'),
+          title: (awaited && awaited.name) || pendingName || _t('newDocument'),
           url: '_offline_',
           fileType: _fileTypeFor(docType),
           // Known up front, so the PDF editor starts without asking the page.
@@ -1332,10 +1343,7 @@
       var openId = window._eoOpenPhases.begin();
       window._eoShowOpening(window._eoOpeningFileText(file.name));
       try {
-        var b64data = await window.__TAURI__.core.invoke(window._eoOpenCommandForPath(file.name), { token: file.token, openId: openId });
-        window._eoOpenPhases.mark('result');
-        window._pendingFileData = { data: b64data, path: file.name, name: file.name };
-        openEditor(window._eoDocTypeForPath(file.name));
+        await window._eoOpenWithEditor(file, openId);
         return true;
       } catch(e) {
         window._eoOpenPhases.end();
@@ -1398,14 +1406,9 @@
       startScreen.classList.add('hidden');
       window._eoShowOpening(window._eoOpeningFileText(pending.name));
 
-      var docType = window._eoDocTypeForPath(pending.name);
       var openId = window._eoOpenPhases.begin();
 
-      window.__TAURI__.core.invoke(window._eoOpenCommandForPath(pending.name), { token: pending.token, openId: openId }).then(function(b64data) {
-        window._eoOpenPhases.mark('result');
-        window._pendingFileData = { data: b64data, path: pending.name, name: pending.name };
-        openEditor(docType);
-      }).catch(function(e) {
+      window._eoOpenWithEditor(pending, openId).catch(function(e) {
         window._eoOpenPhases.end();
         window._eoLog('[EO] Error reopening file:', e);
         window._eoHideOpening();
@@ -1534,9 +1537,9 @@
       var stillListed = !!state && state.files.some(function(listed) {
         return listed.path === file.path;
       });
-      await window.__TAURI__.dialog.message(
+      await window._eoAfterOpenFailure(window.__TAURI__.dialog.message(
         _t(stillListed ? 'openErrorMsg' : 'openFailedMsg'),
-        { title: _t('openFailed'), kind: 'error' });
+        { title: _t('openFailed'), kind: 'error' }));
       if (state) _renderRecentFiles(state);
     }
 
