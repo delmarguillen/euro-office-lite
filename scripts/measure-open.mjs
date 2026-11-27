@@ -25,6 +25,8 @@
 //   sdk_min         page     min part of sdkjs evaluated (sdk-all-min.js in a release)
 //   sdk_all         page     rest of sdkjs evaluated (sdk-all.js in a release)
 //   app_ready       page     onAppReady
+//   doc_info        page     sdkjs has the document's info, asks for its permissions
+//   doc_load        page     editor UI set for those permissions (asc_LoadDocument)
 //   doc_request     page     sdkjs asked for the document
 //   doc_decoded     page     base64 of the document decoded into bytes
 //   doc_parsed      page     sdkjs read the document (openDocument returned)
@@ -96,7 +98,7 @@ import { pathToFileURL } from 'node:url';
 const BACKEND_PHASES = ['command', 'start', 'copy', 'convert', 'encode', 'respond'];
 const PAGE_PHASES = [
   'request', 'result', 'fonts', 'iframe', 'sdk_min', 'sdk_all', 'app_ready',
-  'doc_request', 'doc_decoded', 'doc_parsed', 'doc_fonts', 'doc_images',
+  'doc_info', 'doc_load', 'doc_request', 'doc_decoded', 'doc_parsed', 'doc_fonts', 'doc_images',
   'content_ready', 'ui_ready', 'layout', 'microtasks', 'spell_init',
   'frame', 'doc_drawn', 'document_ready',
 ];

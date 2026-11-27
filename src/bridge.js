@@ -538,6 +538,8 @@ window._eoLog = function() {
 //   sdk_min         the editor frame has evaluated the min part of sdkjs
 //   sdk_all         the editor frame has evaluated the rest of sdkjs
 //   app_ready       the editor's onAppReady
+//   doc_info        sdkjs has the document's info and asks for its permissions
+//   doc_load        the editor UI is set for those permissions (asc_LoadDocument)
 //   doc_request     sdkjs asked for the document (LocalStartOpen)
 //   doc_decoded     the base64 of the document is decoded into bytes
 //   doc_parsed      sdkjs's openDocument returned: the document is read
@@ -553,7 +555,9 @@ window._eoLog = function() {
 //   document_ready  the editor's onDocumentReady
 //
 // sdkjs loads the rest of itself while the editor UI starts, so app_ready and
-// sdk_all come in either order. From doc_request to spell_init the marks are
+// sdk_all come in either order. sdkjs asks for the document once it has the
+// document's info and its font engine, so doc_request comes before doc_load
+// when the engine is ready first. From doc_info to spell_init the marks are
 // taken inside the editor frame's own tasks (_eoWatchOpenPhases), frame and
 // doc_drawn in animation frame callbacks (_eoMarkFirstFrame); the last one
 // waits for the message of the editor frame to reach this page.
@@ -637,16 +641,34 @@ function _eoMarkFirstFrame(editorWindow) {
 // ends, before the one that sends the spellcheck languages: layout.
 // The font and image actions also run for a paste or a font change, and before
 // the document: they count once its bytes are decoded.
+//
+// The editor UI adds its listener of asc_onGetEditorPermissions when it takes
+// the document's info, after this one: doc_info is taken ahead of the work the
+// UI does there, which ends with asc_LoadDocument starting the Open action.
+function _eoOpenActions() {
+  var editorWindow = window.AscDesktopEditor._editorWindow;
+  return (editorWindow && editorWindow.Asc && editorWindow.Asc.c_oAscAsyncAction) || null;
+}
+
 function _eoWatchOpenPhases(api) {
   if (!api || api.__eoOpenPhasesWatched) return;
   if (typeof api.asc_registerCallback !== 'function') return;
   api.__eoOpenPhasesWatched = true;
   var uiWatched = false;
+  api.asc_registerCallback('asc_onGetEditorPermissions', function() {
+    _eoOpenPhases.mark('doc_info');
+  });
+  api.asc_registerCallback('asc_onStartAction', function(type, id) {
+    try {
+      var actions = _eoOpenActions();
+      if (!actions) return;
+      if (id === actions['Open']) _eoOpenPhases.mark('doc_load');
+    } catch(e) {}
+  });
   api.asc_registerCallback('asc_onEndAction', function(type, id) {
     try {
       if (!_eoOpenPhases.has('doc_decoded')) return;
-      var editorWindow = window.AscDesktopEditor._editorWindow;
-      var actions = editorWindow && editorWindow.Asc && editorWindow.Asc.c_oAscAsyncAction;
+      var actions = _eoOpenActions();
       if (!actions) return;
       if (id === actions['LoadDocumentFonts']) {
         _eoOpenPhases.mark('doc_fonts');
@@ -656,7 +678,7 @@ function _eoWatchOpenPhases(api) {
         _eoOpenPhases.mark('content_ready');
         Promise.resolve().then(function() {
           _eoOpenPhases.mark('layout');
-          _eoMarkFirstFrame(editorWindow);
+          _eoMarkFirstFrame(window.AscDesktopEditor._editorWindow);
         });
         if (!uiWatched) {
           uiWatched = true;

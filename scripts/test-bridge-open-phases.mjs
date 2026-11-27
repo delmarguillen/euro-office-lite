@@ -1,7 +1,8 @@
 // Checks the phase marks of a document open (bridge.js, _eoOpenPhases): the
 // line of each phase, the id the backend gets, that dt is the time since the
 // previous mark of the same open, and that a failed or finished open marks
-// nothing more. Also the marks taken from the events of the editor API, and
+// nothing more. Also the marks taken from the events of the editor API, the
+// two between app_ready and doc_request among them, and
 // the sdk_min and sdk_all marks editor-patches.js takes from the globals sdkjs
 // defines in the editor frame.
 //
@@ -135,7 +136,7 @@ const FAKE_API = `
 const END_FONTS = "__api.sendEvent('asc_onEndAction', 1, 2);";
 const END_IMAGES = "__api.sendEvent('asc_onEndAction', 1, 3);";
 const CONTENT_READY = "__api.sendEvent('asc_onEndAction', 1, 0); __api.sendEvent('asc_onDocumentContentReady'); _eoLog('task end');";
-const listeners = (bridge, name) => bridge.sandbox.__api.callbacks[name].length;
+const listeners = (bridge, name) => (bridge.sandbox.__api.callbacks[name] || []).length;
 
 {
   const { bridge } = await loadWith(() => 'Ymlu');
@@ -183,6 +184,53 @@ const listeners = (bridge, name) => bridge.sandbox.__api.callbacks[name].length;
     second === 'request,result,doc_decoded,doc_fonts,doc_images,content_ready,ui_ready,layout', second);
   check(results, 'the listener of ui_ready is added once per API',
     listeners(bridge, 'asc_onDocumentContentReady') === 2, String(listeners(bridge, 'asc_onDocumentContentReady')));
+}
+
+// The marks between app_ready and doc_request. sdkjs sends
+// asc_onGetEditorPermissions once it has the document's info, and the editor
+// UI, which listens after the bridge, ends its work there with the Open action.
+{
+  const PERMISSIONS = "__api.sendEvent('asc_onGetEditorPermissions', {});";
+  const START_OPEN = "__api.sendEvent('asc_onStartAction', 1, 0);";
+  const START_FONTS = "__api.sendEvent('asc_onStartAction', 1, 2);";
+  const { bridge } = await loadWith(() => 'Ymlu');
+  bridge.run(FAKE_API);
+  bridge.run("__api.asc_registerCallback('asc_onGetEditorPermissions', function() { _eoLog('editor UI permissions'); });");
+  check(results, 'watching an API twice adds one listener of each of the two events',
+    listeners(bridge, 'asc_onGetEditorPermissions') === 2 && listeners(bridge, 'asc_onStartAction') === 1,
+    `${listeners(bridge, 'asc_onGetEditorPermissions')} ${listeners(bridge, 'asc_onStartAction')}`);
+  bridge.run(PERMISSIONS + START_OPEN);
+  check(results, 'without an open the permissions and the Open action mark nothing',
+    phaseLines(bridge).length === 0, phaseNames(bridge));
+
+  bridge.run(`_eoOpenGranted(${JSON.stringify(REPORT)})`);
+  await sleep(10);
+  bridge.run("_eoOpenPhases.mark('app_ready');");
+  bridge.run(START_FONTS);
+  check(results, 'an action that is not Open is not the document being loaded',
+    phaseNames(bridge) === 'request,result,app_ready', phaseNames(bridge));
+  bridge.run(PERMISSIONS + START_FONTS + START_OPEN + START_OPEN + PERMISSIONS);
+  bridge.run('window.AscDesktopEditor.LocalStartOpen();');
+  bridge.stopTimers();
+  check(results, 'doc_info and doc_load are marked once each, between app_ready and doc_request',
+    phaseNames(bridge) === 'request,result,app_ready,doc_info,doc_load,doc_request', phaseNames(bridge));
+  const info = bridge.logs.findIndex((line) => line.includes('phase=doc_info'));
+  check(results, 'doc_info comes right before the editor UI takes the permissions',
+    info >= 0 && bridge.logs[info + 1] === 'editor UI permissions', `${info} ${bridge.logs[info + 1]}`);
+}
+
+// The font engine can be ready before the editor UI is: sdkjs then asks for
+// the document while it takes the document's info.
+{
+  const { bridge } = await loadWith(() => 'Ymlu');
+  bridge.run(FAKE_API);
+  bridge.run(`_eoOpenGranted(${JSON.stringify(REPORT)})`);
+  await sleep(10);
+  bridge.run('window.AscDesktopEditor.LocalStartOpen();');
+  bridge.run("__api.sendEvent('asc_onGetEditorPermissions', {}); __api.sendEvent('asc_onStartAction', 1, 0);");
+  bridge.stopTimers();
+  check(results, 'a doc_request that comes first leaves doc_info and doc_load after it',
+    phaseNames(bridge) === 'request,result,doc_request,doc_info,doc_load', phaseNames(bridge));
 }
 
 // The sdk_min and sdk_all marks editor-patches.js takes from the globals the

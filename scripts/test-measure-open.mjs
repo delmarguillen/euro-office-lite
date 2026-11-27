@@ -51,7 +51,7 @@ const RUN_1 = `[START] instance=1700000000000-1
 // As standard output has it, with Windows line ends: the page's lines after
 // "[JS] ". A complete open whose page lines arrive before the backend's,
 // whose onAppReady comes before sdk-all.js has loaded, and with the marks
-// between the editor asking for the document and onDocumentReady. The document
+// from the editor taking the document's info to onDocumentReady. The document
 // has no images: no doc_images.
 const RUN_2 = [
   '[JS] [2026-11-22T10:05:00.000Z] [OPEN] phase=request open=mwr7k2aa-1 t=0 dt=0 wall=1795313100000',
@@ -68,7 +68,9 @@ const RUN_2 = [
   '[JS] [2026-11-22T10:05:07.638Z] [OPEN] phase=sdk_min open=mwr7k2aa-1 t=7638 dt=3000',
   '[JS] [2026-11-22T10:05:09.638Z] [OPEN] phase=app_ready open=mwr7k2aa-1 t=9638 dt=2000',
   '[JS] [2026-11-22T10:05:10.138Z] [OPEN] phase=sdk_all open=mwr7k2aa-1 t=10138 dt=500',
-  '[JS] [2026-11-22T10:05:10.238Z] [OPEN] phase=doc_request open=mwr7k2aa-1 t=10238 dt=100',
+  '[JS] [2026-11-22T10:05:10.148Z] [OPEN] phase=doc_info open=mwr7k2aa-1 t=10148 dt=10',
+  '[JS] [2026-11-22T10:05:10.218Z] [OPEN] phase=doc_load open=mwr7k2aa-1 t=10218 dt=70',
+  '[JS] [2026-11-22T10:05:10.238Z] [OPEN] phase=doc_request open=mwr7k2aa-1 t=10238 dt=20',
   '[JS] [2026-11-22T10:05:10.358Z] [OPEN] phase=doc_decoded open=mwr7k2aa-1 t=10358 dt=120',
   '[JS] [2026-11-22T10:05:10.858Z] [OPEN] phase=doc_parsed open=mwr7k2aa-1 t=10858 dt=500',
   '[JS] [2026-11-22T10:05:11.558Z] [OPEN] phase=doc_fonts open=mwr7k2aa-1 t=11558 dt=700',
@@ -97,12 +99,12 @@ const RUN_3 = `[2026-11-22T10:10:00.000Z] [OPEN] phase=request open=mwr8zzzz-1 t
 [2026-11-22T10:10:05.835Z] [OPEN] phase=iframe open=mwr8zzzz-1 t=5835 dt=30
 `;
 
-const EXPECTED = `log           open        command  start  copy  convert  encode  respond  result  fonts  iframe  sdk_min  sdk_all  app_ready  doc_request  doc_decoded  doc_parsed  doc_fonts  doc_images  content_ready  ui_ready  layout  microtasks  spell_init  frame  doc_drawn  document_ready      sum    total  status
-run-1.log     mwr6aaaa-1        3     10    30        -       -     2000       -      -       -        -        -          -            -            -           -          -           -              -         -       -           -           -      -          -               -     2043        -  failed
-run-1.log     mwr6hjgo-2        2     15    40     8200     120        3    1500     20      35     9000     6000       4000            -            -           -          -           -              -         -       -           -           -      -          -            7000    35935    35935  ok
-run-2.log     mwr7k2aa-1        1      5    20     4000      80        2     500     10      20     3000      500       2000          100          120         500        700           -            100       400     400         240          40     30         60             310    13138    13138  ok
-run-3.log     mwr8zzzz-1        0      8    22     5000     100        2     668      5      30        -        -          -            -            -           -          -           -              -         -       -           -           -      -          -               -     5835        -  partial
-median (n=2)                  1.5     10    30     6100     100      2.5    1000     15    27.5     6000     3250       3000          100          120         500        700           -            100       400     400         240          40     30         60            3655  24536.5  24536.5
+const EXPECTED = `log           open        command  start  copy  convert  encode  respond  result  fonts  iframe  sdk_min  sdk_all  app_ready  doc_info  doc_load  doc_request  doc_decoded  doc_parsed  doc_fonts  doc_images  content_ready  ui_ready  layout  microtasks  spell_init  frame  doc_drawn  document_ready      sum    total  status
+run-1.log     mwr6aaaa-1        3     10    30        -       -     2000       -      -       -        -        -          -         -         -            -            -           -          -           -              -         -       -           -           -      -          -               -     2043        -  failed
+run-1.log     mwr6hjgo-2        2     15    40     8200     120        3    1500     20      35     9000     6000       4000         -         -            -            -           -          -           -              -         -       -           -           -      -          -            7000    35935    35935  ok
+run-2.log     mwr7k2aa-1        1      5    20     4000      80        2     500     10      20     3000      500       2000        10        70           20          120         500        700           -            100       400     400         240          40     30         60             310    13138    13138  ok
+run-3.log     mwr8zzzz-1        0      8    22     5000     100        2     668      5      30        -        -          -         -         -            -            -           -          -           -              -         -       -           -           -      -          -               -     5835        -  partial
+median (n=2)                  1.5     10    30     6100     100      2.5    1000     15    27.5     6000     3250       3000        10        70           20          120         500        700           -            100       400     400         240          40     30         60            3655  24536.5  24536.5
 clocks: run-3.log mwr8zzzz-1: the wall clocks do not place the backend inside the request; offset corrected
 `;
 
