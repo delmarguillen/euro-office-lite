@@ -4,6 +4,8 @@
 // Each info row is one family; the i* are indices into __fonts_files, -1 when
 // the family has no face in that style. That file is the one a PDF embeds.
 
+use crate::x2t_task::fallback_fonts;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FontInfo {
     pub name: String,
@@ -148,15 +150,29 @@ fn plain(path: &str) -> String {
         .to_string()
 }
 
-// "bundled" for a file in the app's binaries/fonts, "system" for anything
-// else: a system copy of a bundled family takes over its row.
+// "bundled" for a file in the app's binaries/fonts, "fallback" for one of the
+// app's fallback fonts in the font cache, "system" for anything else: a
+// system copy of a bundled family takes over its row.
 pub fn origin(path: &str, binaries_dir: &str) -> &'static str {
     let prefix = format!("{}/fonts/", plain(binaries_dir).trim_end_matches('/'));
     if plain(path).starts_with(&prefix) {
-        "bundled"
-    } else {
-        "system"
+        return "bundled";
     }
+    if is_fallback(path) {
+        return "fallback";
+    }
+    "system"
+}
+
+fn is_fallback(path: &str) -> bool {
+    let path = plain(path);
+    for font in fallback_fonts::ALL {
+        let ending = format!("/{}/{}", fallback_fonts::DIR_NAME, font.file_name());
+        if path.ends_with(&ending) {
+            return true;
+        }
+    }
+    false
 }
 
 pub const CHECKED_FAMILIES: [&str; 4] = ["Liberation Sans", "Liberation Serif", "Liberation Mono", "Carlito"];
@@ -254,6 +270,15 @@ mod tests {
         assert_eq!(origin("C:/Windows/Fonts/arial.ttf", r"C:\App\binaries"), "system");
         // A sibling folder that only shares the prefix is not the fonts folder.
         assert_eq!(origin(&format!("{}/fonts-extra/X.ttf", BIN), BIN), "system");
+    }
+
+    #[test]
+    fn origin_tells_the_fallback_fonts_of_the_font_cache_from_system_fonts() {
+        assert_eq!(origin("/tmp/cache/fallback-fonts/EuroOfficeEmoji.ttf", BIN), "fallback");
+        assert_eq!(origin("C:/Temp/cache/fallback-fonts/EuroOfficeSigns.ttf", r"C:\App\binaries"), "fallback");
+        // The same file anywhere else is a font the user installed.
+        assert_eq!(origin("/usr/share/fonts/EuroOfficeEmoji.ttf", BIN), "system");
+        assert_eq!(origin("/usr/share/fonts/fallback-fonts/Other.ttf", BIN), "system");
     }
 
     #[test]
