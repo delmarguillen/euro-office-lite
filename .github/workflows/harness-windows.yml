@@ -14,6 +14,12 @@ name: Harness (Windows)
 # The pdf-text cases read the PDF with the pdftotext of Git for Windows; the
 # standard error of run.ps1, in the log of the harness step, says which one.
 #
+# windows-11-arm is a Windows 11 desktop image whose user signs in for the
+# first time: "Choose privacy settings for your device" covers the desktop and
+# keeps the foreground, so no key or click reached the app. run.ps1 gets
+# -ClearDesktop and ends the process of that screen before the cases; its
+# standard error says what it ended and what has the foreground afterwards.
+#
 # result.json is uploaded on every run; the output of run.ps1, the app logs
 # and the screenshots only when the job fails.
 
@@ -86,6 +92,22 @@ jobs:
           python tests/harness/gen/mkinputs.py "$env:RUNNER_TEMP\harness-inputs"
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      - name: Keep the privacy screen of a first sign-in from coming back
+        # The policy "Don't launch privacy settings experience on user logon".
+        # The user is already signed in, so it does not close the screen that
+        # is there (run.ps1 -ClearDesktop does): it is for a second launch.
+        # Not being able to write it does not stop the job.
+        shell: pwsh
+        run: |
+          try {
+            $key = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE'
+            if (-not (Test-Path -Path $key)) { New-Item -Path $key -Force | Out-Null }
+            Set-ItemProperty -Path $key -Name DisablePrivacyExperience -Type DWord -Value 1
+            Write-Output 'DisablePrivacyExperience = 1'
+          } catch {
+            Write-Output "::warning::could not set DisablePrivacyExperience: $($_.Exception.Message)"
+          }
+
       - name: Run the harness
         # Below the job timeout, so the upload steps still run.
         timeout-minutes: 35
@@ -111,8 +133,9 @@ jobs:
 
           # run.ps1 drives the app on the desktop and writes its progress with
           # [Console]::Error: it runs as a child process with both streams in
-          # files, and its exit status is the step's.
-          $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" all -Installer "{1}" -Inputs "{2}" -Out "{3}"' -f $script, $installer, $inputs, $out
+          # files, and its exit status is the step's. The runner is thrown
+          # away after the job: -ClearDesktop may end the first sign-in screens.
+          $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" all -Installer "{1}" -Inputs "{2}" -Out "{3}" -ClearDesktop' -f $script, $installer, $inputs, $out
           $child = Start-Process powershell -ArgumentList $arguments -PassThru `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
           # Reading the handle now keeps the exit code readable after the end.

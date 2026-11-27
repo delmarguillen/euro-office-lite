@@ -1,5 +1,7 @@
--- click.applescript PID: clicks the middle of the first standard window of
--- the process PID.
+-- click.applescript PID: has System Events click the middle of the first
+-- standard window of the process PID. System Events sends the click to the UI
+-- element it finds there: enough for a button, not for the canvas of an
+-- editor. mac/lib.sh uses it only when click.js could not click with the mouse.
 on run argv
 	set targetPid to (item 1 of argv) as integer
 	tell application "System Events"

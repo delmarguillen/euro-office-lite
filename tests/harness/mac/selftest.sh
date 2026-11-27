@@ -122,6 +122,12 @@ case "$*" in
   *press.applescript*)
     [ -z "$FAKE_NOTHING_NAMED" ] || exit 1
     ;;
+  *center.applescript*)
+    echo "${FAKE_CENTER-512 384}"
+    ;;
+  *click.js*)
+    [ -z "$FAKE_NO_MOUSE" ] || exit 1
+    ;;
 esac
 exit 0
 EOF
@@ -284,8 +290,27 @@ test_presentation_closes_tip() {
   FAKE_TITLE='Euro-Office Lite - slide.pptx' edit_case pptx-edit-save || return 1
   local tip click
   tip=$(grep -n 'press\.applescript [0-9]* Got it$' "$FAKE_LOG" | cut -d: -f1)
-  click=$(grep -n 'click\.applescript' "$FAKE_LOG" | cut -d: -f1)
+  click=$(grep -n 'click\.js' "$FAKE_LOG" | cut -d: -f1)
   [ -n "$tip" ] && [ -n "$click" ] && [ "$tip" -lt "$click" ]
+}
+
+# The click in the window is a mouse click at the point center.applescript
+# gives, each number an argument of its own; System Events does not click.
+test_click_is_a_mouse_click() {
+  FAKE_CENTER='640 -20' edit_case docx-edit-save || return 1
+  grep -q 'osascript -l JavaScript .*/click\.js 640 -20$' "$FAKE_LOG" || return 1
+  ! grep -q 'click\.applescript' "$FAKE_LOG"
+}
+
+# Without the mouse click, or without a point to click at, System Events
+# clicks instead and the keys of the case still go out.
+test_click_falls_back() {
+  FAKE_NO_MOUSE=1 edit_case docx-edit-save || return 1
+  grep -q 'click\.applescript [0-9]*$' "$FAKE_LOG" || return 1
+  grep -q 'key code 119 using {command down}' "$FAKE_LOG" || return 1
+  FAKE_CENTER='' edit_case docx-edit-save || return 1
+  ! grep -q 'click\.js' "$FAKE_LOG" || return 1
+  grep -q 'click\.applescript [0-9]*$' "$FAKE_LOG"
 }
 
 test_missing_button_is_noted() {
@@ -396,6 +421,8 @@ check "a case with an unknown key is skipped with its reason" test_skip_unknown_
 check "follow_log.py copies only the new lines" test_follower
 check "a Markdown case presses Edit by name, without Tab" test_markdown_presses_edit
 check "a presentation closes the Got it tip before the click" test_presentation_closes_tip
+check "the click in the window is a mouse click at its middle" test_click_is_a_mouse_click
+check "System Events clicks when the mouse click cannot be made" test_click_falls_back
 check "a button that is not there is noted" test_missing_button_is_noted
 check "Linux presses Edit with its keys, then keys_before" test_linux_button_keys
 check "install from .dmg, open, quit" test_install_and_open

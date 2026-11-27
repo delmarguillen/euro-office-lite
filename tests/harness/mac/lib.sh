@@ -229,13 +229,30 @@ close_feature_tip() {
   log "no Got it tip in the window"
 }
 
+# click_window_center PID: a click of the mouse in the middle of the window:
+# center.applescript says where and click.js posts the events of the mouse.
+# The click of System Events (click.applescript) presses the UI element at the
+# point and does nothing on the canvas of an editor, where a presentation
+# needs the click to get into the text box; it is only what is left when the
+# mouse click cannot be made, and the log says so.
+click_window_center() {
+  local point
+  point=$(osascript "$MAC_DIR/center.applescript" "$1") || point=""
+  # Unquoted on purpose: the two numbers are the two arguments of click.js.
+  if [[ $point =~ ^-?[0-9]+\ -?[0-9]+$ ]] && osascript -l JavaScript "$MAC_DIR/click.js" $point >/dev/null; then
+    return 0
+  fi
+  log "no mouse click in the middle of the window (point '$point'): System Events clicks there instead"
+  osascript "$MAC_DIR/click.applescript" "$1" >/dev/null
+}
+
 # focus_document PID: brings the app to the front and clicks in the middle
 # of its window, like the Linux harness.
 focus_document() {
   activate_app
   sleep 0.5
   close_feature_tip "$1"
-  osascript "$MAC_DIR/click.applescript" "$1" >/dev/null
+  click_window_center "$1"
   sleep 0.5
 }
 
