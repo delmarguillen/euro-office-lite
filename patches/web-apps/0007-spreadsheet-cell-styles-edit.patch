@@ -1,7 +1,7 @@
 Origin: own
 
 diff --git a/apps/spreadsheeteditor/main/app/controller/Toolbar.js b/apps/spreadsheeteditor/main/app/controller/Toolbar.js
-index c3be91bd4f..800d5dee14 100644
+index c3be91bd4f..a5df9bce3b 100644
 --- a/apps/spreadsheeteditor/main/app/controller/Toolbar.js
 +++ b/apps/spreadsheeteditor/main/app/controller/Toolbar.js
 @@ -476,6 +476,7 @@ define([
@@ -12,7 +12,7 @@ index c3be91bd4f..800d5dee14 100644
                  toolbar.cmbNumberFormat.on('selected',                      _.bind(this.onNumberFormatSelect, this));
                  toolbar.cmbNumberFormat.on('show:before',                   _.bind(this.onNumberFormatOpenBefore, this, true));
                  if (toolbar.cmbNumberFormat.cmpEl)
-@@ -2257,6 +2258,107 @@ define([
+@@ -2257,6 +2258,118 @@ define([
              }
          },
  
@@ -26,7 +26,12 @@ index c3be91bd4f..800d5dee14 100644
 +            menu.styleName = name;
 +            menu.styleCaption = record.get('tip') || name;
 +            // Cells without formatting draw with the workbook defaults, so Normal is not editable.
-+            menu.items[0].setDisabled(name === 'Normal');
++            var isNormal = name === 'Normal';
++            _.each(menu.items, function(item) {
++                if (item.value === 'modify' || item.value === 'update') {
++                    item.setDisabled(isNormal);
++                }
++            });
 +
 +            var menuContainer = this.toolbar.$el.find('#menu-cell-style-container');
 +            if (!menu.rendered) {
@@ -61,6 +66,7 @@ index c3be91bd4f..800d5dee14 100644
 +            this.cellStyleMenu = new Common.UI.Menu({
 +                items: [
 +                    {caption: this.textModifyStyle, value: 'modify'},
++                    {caption: this.textUpdateStyleFromSelection, value: 'update'},
 +                    {caption: this.textDuplicateStyle, value: 'duplicate'},
 +                    {caption: this.textNewStyleFromSelection, value: 'selection'}
 +                ]
@@ -76,6 +82,9 @@ index c3be91bd4f..800d5dee14 100644
 +            var name = menu.styleName;
 +            if (item.value === 'modify') {
 +                this.openCellStyleDialog(true, name, this.api.asc_getCellStyleXfs(name));
++            } else if (item.value === 'update') {
++                // The Modify dialog of this style, showing the active cell's format: nothing is saved before OK.
++                this.openCellStyleDialog(true, name, this.api.asc_getCellStyleXfs(name), undefined, this.api.asc_getCellInfo().asc_getXfs());
 +            } else if (item.value === 'duplicate') {
 +                this.openCellStyleDialog(false, this.getFreeCellStyleName(menu.styleCaption), this.api.asc_getCellStyleXfs(name), name);
 +            } else if (item.value === 'selection') {
@@ -95,7 +104,8 @@ index c3be91bd4f..800d5dee14 100644
 +        },
 +
 +        // sourceName: the style a copy is made from, so the copy applies what it applies.
-+        openCellStyleDialog: function(isModify, name, xfs, sourceName) {
++        // valuesXfs: a format the dialog shows in place of the style's, to update the style from it.
++        openCellStyleDialog: function(isModify, name, xfs, sourceName, valuesXfs) {
 +            var me = this;
 +            var langId = me.api.asc_getLocale() || 0x0409;
 +            (new SSE.Views.CellStyleDialog({
@@ -105,6 +115,7 @@ index c3be91bd4f..800d5dee14 100644
 +                isModify: isModify,
 +                name: name,
 +                xfs: xfs,
++                valuesXfs: valuesXfs,
 +                handler: function(result, settings) {
 +                    if (result === 'ok' && settings) {
 +                        var error = isModify ? me.api.asc_modifyCellStyle(name, settings.xfs) : me.api.asc_addCellStyle(settings.name, settings.xfs, sourceName);
@@ -120,7 +131,7 @@ index c3be91bd4f..800d5dee14 100644
          onShowBeforeCondFormat: function(cmp, id) {
              if (cmp.mnuDataBars.menu.items.length>0) // menu is inited
                  return;
-@@ -5304,7 +5406,8 @@ define([
+@@ -5304,7 +5417,8 @@ define([
              }
          },
  
@@ -130,7 +141,7 @@ index c3be91bd4f..800d5dee14 100644
              var me = this;
              if (_.isUndefined(me.fontStore)) {
                  me.fontStore = new Common.Collections.Fonts();
-@@ -5317,10 +5420,14 @@ define([
+@@ -5317,10 +5431,14 @@ define([
                  });
                  me.fontStore.add(arr);
              }
@@ -146,7 +157,7 @@ index c3be91bd4f..800d5dee14 100644
                  pageSetup: pageSetup,
                  handler: function(dlg, result) {
                      if (result === 'ok') {
-@@ -5750,6 +5857,12 @@ define([
+@@ -5750,6 +5868,13 @@ define([
              Common.UI.TooltipManager.closeTip('rtlDirection');
              Common.UI.TooltipManager.closeTip('cellFormat');
              Common.UI.TooltipManager.closeTip('solver');
@@ -156,16 +167,17 @@ index c3be91bd4f..800d5dee14 100644
 +        textModifyStyle: 'Modify',
 +        textDuplicateStyle: 'Duplicate',
 +        textNewStyleFromSelection: 'New style from selection',
++        textUpdateStyleFromSelection: 'Update from selection',
 +        textNewStyleName: 'Style',
 +        textCellStyleError: 'The cell style could not be saved.'
      }, SSE.Controllers.Toolbar || {}));
  });
 diff --git a/apps/spreadsheeteditor/main/app/view/CellStyleDialog.js b/apps/spreadsheeteditor/main/app/view/CellStyleDialog.js
 new file mode 100644
-index 0000000000..2ac516942d
+index 0000000000..d9e206a774
 --- /dev/null
 +++ b/apps/spreadsheeteditor/main/app/view/CellStyleDialog.js
-@@ -0,0 +1,508 @@
+@@ -0,0 +1,537 @@
 +/*
 + * (c) Copyright Ascensio System SIA 2010-2024
 + *
@@ -197,6 +209,8 @@ index 0000000000..2ac516942d
 + *  alignment and number format.
 + *  Returns the name and an Asc.asc_CellXfs; only the fields the user changed are
 + *  set on that xfs, the rest stays as the style (or the selection) had it.
++ *  With valuesXfs the controls start with that format (the active cell's), and
++ *  what differs from the style counts as changed.
 + */
 +
 +define([
@@ -264,6 +278,7 @@ index 0000000000..2ac516942d
 +            this.langId   = options.langId;
 +            this.name     = options.name;
 +            this.xfs      = options.xfs;
++            this.valuesXfs = options.valuesXfs;
 +
 +            this.options.handler = function(result, settings) {
 +                if (result === 'ok' && !this.isNameValid()) {
@@ -481,10 +496,19 @@ index 0000000000..2ac516942d
 +        },
 +
 +        afterRender: function() {
-+            var xfs = this.xfs;
 +            this.cmbFont.fillFonts(this.fontStore);
 +            this.txtName.setValue(this.name);
++            this.setControlValues(this.xfs);
++            this.initial = this.getControlValues();
++            if (!this.valuesXfs) {
++                return;
++            }
++            var styleColors = this.getButtonColors();
++            this.setControlValues(this.valuesXfs);
++            this.markChangedColors(styleColors);
++        },
 +
++        setControlValues: function(xfs) {
 +            this.fontName = xfs.asc_getFontName();
 +            this.cmbFont.setValue(this.fontName);
 +            this.cmbFontSize.setValue(xfs.asc_getFontSize());
@@ -504,8 +528,25 @@ index 0000000000..2ac516942d
 +            this.format = xfs.asc_getNumFormat();
 +            this.formatInfo = xfs.asc_getNumFormatInfo();
 +            this.txtFormat.setValue(this.format);
++        },
 +
-+            this.initial = this.getControlValues();
++        getColorButtons: function() {
++            return [this.btnTextColor, this.btnFillColor].concat(_.pluck(this.borderSides, 'button'));
++        },
++
++        // The color each button shows, comparable with ===.
++        getButtonColors: function() {
++            return _.map(this.getColorButtons(), function(button) {
++                return JSON.stringify(button.currentColor);
++            });
++        },
++
++        // A color the buttons show now that differs from the style's is written on OK, as one the user picked.
++        markChangedColors: function(styleColors) {
++            var colors = this.getButtonColors();
++            _.each(this.getColorButtons(), function(button, index) {
++                button.isColorChanged = colors[index] !== styleColors[index];
++            });
 +        },
 +
 +        // Same color handling as the conditional formatting dialog (FormatRulesEditDlg).
@@ -699,7 +740,7 @@ index fbfc52054d..255f919359 100644
      'spreadsheeteditor/main/app/view/FormatRulesManagerDlg',
      'spreadsheeteditor/main/app/view/MacroDialog',
 diff --git a/apps/spreadsheeteditor/main/locale/en.json b/apps/spreadsheeteditor/main/locale/en.json
-index 16e04a045e..f3893f39be 100644
+index 16e04a045e..2e9a7d112e 100644
 --- a/apps/spreadsheeteditor/main/locale/en.json
 +++ b/apps/spreadsheeteditor/main/locale/en.json
 @@ -2070,7 +2070,9 @@
@@ -722,7 +763,15 @@ index 16e04a045e..f3893f39be 100644
    "SSE.Controllers.Toolbar.textOperator": "Operators",
    "SSE.Controllers.Toolbar.textPasteSpecial": "Paste special",
    "SSE.Controllers.Toolbar.textPivot": "Pivot Table",
-@@ -2599,6 +2604,45 @@
+@@ -2090,6 +2095,7 @@
+   "SSE.Controllers.Toolbar.textScript": "Scripts",
+   "SSE.Controllers.Toolbar.textShapes": "Shapes",
+   "SSE.Controllers.Toolbar.textSymbols": "Symbols",
++  "SSE.Controllers.Toolbar.textUpdateStyleFromSelection": "Update from selection",
+   "SSE.Controllers.Toolbar.textWarning": "Warning",
+   "SSE.Controllers.Toolbar.txtAccent_Accent": "Acute",
+   "SSE.Controllers.Toolbar.txtAccent_ArrowD": "Right-left arrow above",
+@@ -2599,6 +2605,45 @@
    "SSE.Views.CellSettings.tipRemoveGradientPoint": "Remove gradient point",
    "SSE.Views.CellSettings.tipRight": "Set outer right border only",
    "SSE.Views.CellSettings.tipTop": "Set outer top border only",
@@ -769,7 +818,7 @@ index 16e04a045e..f3893f39be 100644
    "SSE.Views.ChartDataDialog.errorInvalidReference": "The reference is not valid. Reference must be to an open sheet.",
    "SSE.Views.ChartDataDialog.errorMaxPoints": "The maximum number of points in series per chart is 4096.",
 diff --git a/apps/spreadsheeteditor/main/locale/es.json b/apps/spreadsheeteditor/main/locale/es.json
-index b0cb01c660..609612f139 100644
+index b0cb01c660..274fa49359 100644
 --- a/apps/spreadsheeteditor/main/locale/es.json
 +++ b/apps/spreadsheeteditor/main/locale/es.json
 @@ -2064,7 +2064,9 @@
@@ -792,7 +841,15 @@ index b0cb01c660..609612f139 100644
    "SSE.Controllers.Toolbar.textOperator": "Operadores",
    "SSE.Controllers.Toolbar.textPivot": "Tabla dinámica",
    "SSE.Controllers.Toolbar.textRadical": "Radicales",
-@@ -2568,6 +2573,45 @@
+@@ -2083,6 +2088,7 @@
+   "SSE.Controllers.Toolbar.textScript": "Índices",
+   "SSE.Controllers.Toolbar.textShapes": "Formas",
+   "SSE.Controllers.Toolbar.textSymbols": "Símbolos",
++  "SSE.Controllers.Toolbar.textUpdateStyleFromSelection": "Actualizar desde la selección",
+   "SSE.Controllers.Toolbar.textWarning": "Aviso",
+   "SSE.Controllers.Toolbar.txtAccent_Accent": "Agudo",
+   "SSE.Controllers.Toolbar.txtAccent_ArrowD": "Flecha derecha-izquierda superior",
+@@ -2568,6 +2574,45 @@
    "SSE.Views.CellSettings.tipRemoveGradientPoint": "Eliminar gradiente de punto",
    "SSE.Views.CellSettings.tipRight": "Establecer solo borde exterior derecho",
    "SSE.Views.CellSettings.tipTop": "Establecer solo borde exterior superior",

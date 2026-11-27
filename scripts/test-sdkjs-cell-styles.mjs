@@ -1225,6 +1225,61 @@ same('border sides, a line not in the list: kept when another side changes', att
 run = openDialogEditor(attempt('api.asc_nativeGetFile()'));
 same('border sides, reopen: the style and B1 keep the four sides', attempt("[styleSides('Frame'), cellSides('B1')]"), [frameModified, frameModified]);
 
+// --- Update a style from the selection (#75) ---
+// The toolbar opens the Modify dialog of the style with the active cell's format
+// (asc_getCellInfo().asc_getXfs(), the cell's xfs cloned) as valuesXfs.
+run(`
+  function cellValues(ref) { return ws().getRange2(ref).getXfs(false).clone(); }
+  function openUpdateDialog(name, ref) { return openDialog(true, name, api.asc_getCellStyleXfs(name), cellValues(ref)); }
+  function fontOf(xfs) { return [xfs.getFont2().getName(), xfs.getFont2().getScheme()]; }
+  function setCellSide(ref, side, style, c) {
+    var sideXfs = new AscCommonExcel.CellXfs();
+    sideXfs.border = ws().getRange2(ref).getXfs(false).border;
+    sideXfs.asc_setBorderSide(Asc.c_oAscBorderOptions[side], Asc.c_oAscBorderStyles[style], c);
+    ws().getRange2(ref).setBorder(sideXfs.border);
+  }
+`);
+// C5 uses Frame and has a format of its own on top: bold, yellow fill, 0.0% and a green bottom line.
+// It is away from B1: a border set by hand also changes the side a neighbour shares.
+attempt(`
+  ws().getRange2('C5').setValue('0.5');
+  select('C5'); api.asc_setCellStyle('Frame');
+  ws().getRange2('C5').setBold(true);
+  ws().getRange2('C5').setFillColor(AscCommonExcel.createRgbColor(255, 255, 0));
+  ws().getRange2('C5').setNumFormat('0.0%');
+  setCellSide('C5', 'Bottom', 'Thick', color(0, 255, 0));
+  var frameFontBefore = fontOf(api.asc_getCellStyleXfs('Frame'));
+  var pointsBeforeUpdate = historyPoints();
+  var updateDialog = openUpdateDialog('Frame', 'C5');
+  var updateShown = [updateDialog.btnBold.pressed, buttonHex(updateDialog.btnFillColor), updateDialog.format, shownSides(updateDialog)[1]];
+  var beforeOk = [historyPoints() - pointsBeforeUpdate, api.asc_getCellStyleXfs('Frame').getFont2().getBold()];
+  var updateResult = modifyFromDialog(updateDialog, 'Frame');
+  var frameUpdated = api.asc_getCellStyleXfs('Frame');
+`);
+const frameFromC5 = ['Top=Thick:ff0000', 'Bottom=Thick:00ff00', 'Left=Dotted:ff8000', 'Right=Dashed:000000'];
+same('update from the selection: the dialog shows the cell\'s format', attempt('updateShown'), [true, 'ffff00', '0.0%', 'Bottom=Thick:00ff00']);
+same('update from the selection: nothing is saved before OK', attempt('beforeOk'), [0, false]);
+same('update from the selection, OK: the style takes the cell\'s format', attempt("[updateResult, frameUpdated.getFont2().getBold(), frameUpdated.asc_getFillColor().asc_getB(), frameUpdated.getNum2().getFormat(), styleSides('Frame')]"), [No, true, 0, '0.0%', frameFromC5]);
+same('update from the selection, OK: one history point', attempt('historyPoints() - pointsBeforeUpdate'), 1);
+same('update from the selection, OK: the font the cell shares is not written', attempt('fontOf(frameUpdated)'), attempt('frameFontBefore'));
+same('update from the selection, OK: B1, with the style only, follows', attempt("[describe('B1').bold, describe('B1').fill, describe('B1').num, cellSides('B1')]"), [true, '255,255,0', '0.0%', frameFromC5]);
+attempt('AscCommon.History.Undo();');
+same('update from the selection, undo: the style and B1 are back', attempt("[api.asc_getCellStyleXfs('Frame').getFont2().getBold(), describe('B1').bold, cellSides('B1')]"), [false, false, frameModified]);
+attempt('AscCommon.History.Redo();');
+
+// The cell does not need to have the style: D9 is plain with italic text.
+attempt(`
+  ws().getRange2('D9').setValue('1');
+  ws().getRange2('D9').setItalic(true);
+  var plainUpdate = modifyFromDialog(openUpdateDialog('Good', 'D9'), 'Good');
+  var goodAfter = api.asc_getCellStyleXfs('Good');
+`);
+const noSides = ['Top=None', 'Bottom=None', 'Left=None', 'Right=None'];
+same('update from a cell without the style: the style takes its format, D9 keeps no style', attempt("[plainUpdate, goodAfter.getFont2().getItalic(), !!goodAfter.getFill2().notEmpty(), styleSides('Good'), describe('D9').style]"), [No, true, false, noSides, 'Normal']);
+same('update from a cell without the style: A2, with Good, follows', attempt("[describe('A2').italic, !!cellXfs('A2').getFill2().notEmpty(), cellSides('A2')]"), [true, false, noSides]);
+run = openDialogEditor(attempt('api.asc_nativeGetFile()'));
+same('update from the selection, reopen: Frame keeps the cell\'s format', attempt("(function (x) { return [x.getFont2().getBold(), x.getNum2().getFormat(), styleSides('Frame')]; })(api.asc_getCellStyleXfs('Frame'))"), [true, '0.0%', frameFromC5]);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {
