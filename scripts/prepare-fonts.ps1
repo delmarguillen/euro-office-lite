@@ -13,7 +13,7 @@ $tempDir = Join-Path $env:TEMP "euro-office-fonts"
 # Local/common.js overrides LoadFontAsync and does NOT apply XOR decode.
 
 $liberationVersion = "2.1.5"
-$liberationUrl = "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz"
+$liberationUrl = "https://github.com/delmarguillen/euro-office-lite/releases/download/dependencies/liberation-fonts-ttf-2.1.5.tar.gz"
 # Carlito 1.104; a commit, not a branch, so the fonts cannot change under us.
 $carlitoUrl = "https://github.com/googlefonts/carlito/raw/3a810cab78ebd6e2e4eed42af9e8453c4f9b850a/fonts/ttf/Carlito-Regular.ttf"
 $carlitoUrlBase = "https://github.com/googlefonts/carlito/raw/3a810cab78ebd6e2e4eed42af9e8453c4f9b850a/fonts/ttf"
