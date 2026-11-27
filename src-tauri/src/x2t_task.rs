@@ -457,8 +457,28 @@ fn x2t_path(path: &str) -> String {
     path.to_string()
 }
 
+// The format x2t writes when a document is opened or inserted.
+pub const EDITOR_BIN_FORMAT: i32 = 8192;
+
+// The font folder for a conversion to Editor.bin. Without m_sFontDir x2t scans
+// every system font file on each open; with it, it reads that folder's
+// font_selection.bin and never writes there (core ApplicationFonts.cpp,
+// InitializeFromFolder). Other conversions and a missing folder get nothing.
+pub fn editor_bin_font_dir_xml(format_to: i32, font_dir: Option<&std::path::Path>) -> String {
+    if format_to != EDITOR_BIN_FORMAT {
+        return String::new();
+    }
+    let Some(font_dir) = font_dir else {
+        return String::new();
+    };
+    let font_dir = strip_extended_prefix(font_dir);
+    let path = x2t_path(&font_dir.to_string_lossy());
+    format!("<m_sFontDir>{}</m_sFontDir>\n", xml_escape(&path))
+}
+
 // Paths are passed raw and escaped here, once. `extra` is already XML: the
-// numeric CSV/TXT elements from TextOptions::xml_elements.
+// numeric CSV/TXT elements from TextOptions::xml_elements and the font folder
+// from editor_bin_font_dir_xml.
 pub fn convert_params_xml(
     input: &str,
     output: &str,
@@ -3005,6 +3025,43 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         let text = "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n";
         let with_text = convert_params_xml("/d/in.csv", "/t/Editor.bin", 8192, "/t", text);
         assert!(with_text.ends_with(&expected_end), "{}", with_text);
+    }
+
+    #[test]
+    fn an_open_names_the_font_cache_folder() {
+        let folder = std::path::Path::new("/c/fonts/gen-1");
+        let fonts = editor_bin_font_dir_xml(EDITOR_BIN_FORMAT, Some(folder));
+        assert_eq!(fonts, "<m_sFontDir>/c/fonts/gen-1</m_sFontDir>\n");
+        let xml = convert_params_xml("/d/in.docx", "/t/Editor.bin", EDITOR_BIN_FORMAT, "/t", &fonts);
+        let expected_end = format!("{}{}</TaskQueueDataConvert>", fonts, x2t_options_xml());
+        assert!(xml.ends_with(&expected_end), "{}", xml);
+    }
+
+    #[test]
+    fn without_a_font_cache_an_open_scans_the_system_fonts() {
+        assert_eq!(editor_bin_font_dir_xml(EDITOR_BIN_FORMAT, None), "");
+    }
+
+    #[test]
+    fn a_save_gets_no_font_folder() {
+        let folder = std::path::Path::new("/c/fonts/gen-1");
+        assert_eq!(editor_bin_font_dir_xml(65, Some(folder)), "");
+        assert_eq!(editor_bin_font_dir_xml(513, Some(folder)), "");
+    }
+
+    #[test]
+    fn the_font_folder_is_escaped_once() {
+        let folder = std::path::Path::new("/opt/R&D <x>/fonts");
+        let fonts = editor_bin_font_dir_xml(EDITOR_BIN_FORMAT, Some(folder));
+        assert_eq!(fonts, "<m_sFontDir>/opt/R&amp;D &lt;x&gt;/fonts</m_sFontDir>\n");
+    }
+
+    #[test]
+    fn the_font_folder_loses_the_extended_prefix() {
+        let folder = std::path::Path::new(r"\\?\C:\Users\me\fonts");
+        let fonts = editor_bin_font_dir_xml(EDITOR_BIN_FORMAT, Some(folder));
+        assert!(!fonts.contains('?'), "{}", fonts);
+        assert!(fonts.contains("C:"), "{}", fonts);
     }
 
     #[test]

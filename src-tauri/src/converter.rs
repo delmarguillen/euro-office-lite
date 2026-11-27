@@ -42,17 +42,18 @@ pub async fn convert_file(
 
     let params_path = params_path(std::path::Path::new(temp_dir), "convert");
 
-    let xml = convert_params_xml(
-        input,
-        output,
-        format_to,
-        temp_dir,
-        // Only set for CSV and TXT: x2t will not read them without an encoding
-        // and, for CSV, a delimiter (exit 89), and writes with these too.
-        &text_options
-            .map(|options| options.xml_elements())
-            .unwrap_or_default(),
-    );
+    // Only set for CSV and TXT: x2t will not read them without an encoding
+    // and, for CSV, a delimiter (exit 89), and writes with these too.
+    let mut extra = text_options
+        .map(|options| options.xml_elements())
+        .unwrap_or_default();
+    // The generation this process holds until it ends, the one its editor
+    // reads; before it is ready x2t scans the system fonts as before.
+    let font_dir = app.state::<crate::file_ops::AppState>().fonts.generation_dir();
+    log_editor_bin_fonts(format_to, font_dir.as_deref());
+    extra.push_str(&x2t_task::editor_bin_font_dir_xml(format_to, font_dir.as_deref()));
+
+    let xml = convert_params_xml(input, output, format_to, temp_dir, &extra);
     write_file(&params_path, &xml)?;
 
     // The std command keeps what the shell plugin set up: the path of x2t and,
@@ -174,6 +175,17 @@ fn x2t_command(
 
 fn log_pdf(msg: &str) {
     crate::temp_layout::append_log(&format!("[PDF] {}", msg));
+}
+
+fn log_editor_bin_fonts(format_to: i32, font_dir: Option<&std::path::Path>) {
+    if format_to != x2t_task::EDITOR_BIN_FORMAT {
+        return;
+    }
+    let source = match font_dir {
+        Some(_) => "font cache",
+        None => "system fonts (no font cache yet)",
+    };
+    crate::temp_layout::append_log(&format!("[X2T] Editor.bin fonts={}", source));
 }
 
 // Without the font cache x2t still exits 0 but the PDF loses its text: the font
