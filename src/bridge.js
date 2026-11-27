@@ -1384,6 +1384,15 @@ function _eoOpeningEnded() {
   return new Promise(function(resolve) { _eoOpeningWaiters.push(resolve); });
 }
 
+// A file to open here waits for the open in progress: two at once in one window
+// can leave the backend and the editor with different files.
+async function _eoWaitForOpenInProgress(file) {
+  while (_eoIsOpening()) {
+    window._eoLog('[OPEN] waiting for the open in progress: ' + file.name);
+    await _eoOpeningEnded();
+  }
+}
+
 function _eoWakeOpeningWaiters() {
   var waiters = _eoOpeningWaiters;
   _eoOpeningWaiters = [];
@@ -1635,7 +1644,7 @@ async function _eoPickDocument() {
 async function _eoEditPdf() {
   var file = await invoke('pick_pdf', { pdfLabel: 'PDF', all: _t('all') });
   if (!file) return;
-  await _eoOpenGranted(file);
+  await window.AscDesktopEditor.LocalFileOpen(file);
 }
 window._eoEditPdf = _eoEditPdf;
 
@@ -3583,9 +3592,12 @@ window.AscDesktopEditor = {
   // `file` is { token, name } from the backend; without it, the open dialog.
   LocalFileOpen: async function(file) {
     // One open at a time: Ctrl+O stays live while the indicator is up.
-    if (_eoIsOpening()) return;
+    if (!file && _eoIsOpening()) return;
     if (!file) file = await _eoPickDocument();
     if (!file || !file.token) return;
+    // Another open may have started meanwhile, during the dialog (a file the
+    // Finder hands over): this one waits, then goes where it would have gone.
+    await _eoWaitForOpenInProgress(file);
 
     // The open document stays as it is, saved or not.
     if (window.AscDesktopEditor._currentDocType) {
@@ -4370,7 +4382,9 @@ async function _eoNewFromTemplate() {
   if (_eoIsOpening()) return;
   var file = await invoke('pick_template', { templates: _t('templates') });
   if (!file) return;
-  await _eoCreateFromTemplate(file);
+  // As for a template the system hands over: here, or in a new window if a
+  // document was opened during the dialog.
+  await window.AscDesktopEditor.LocalFileOpen({ token: file.token, name: file.name, newDocument: true });
 }
 window._eoNewFromTemplate = _eoNewFromTemplate;
 
@@ -4402,10 +4416,6 @@ async function _eoDrainPendingOpens() {
 async function _eoOpenNextPending() {
   var file = await invoke('take_pending_open_file');
   if (!file) return false;
-  while (_eoIsOpening()) {
-    window._eoLog('[OPEN] waiting for the open in progress: ' + file.name);
-    await _eoOpeningEnded();
-  }
   await window.AscDesktopEditor.LocalFileOpen(file);
   return true;
 }

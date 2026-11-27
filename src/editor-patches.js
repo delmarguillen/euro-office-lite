@@ -1308,13 +1308,11 @@
       });
     });
 
-    document.querySelector('.btn[data-open]').addEventListener('click', async function() {
+    // As Ctrl+O: LocalFileOpen shows the dialog and keeps the chosen file from
+    // starting a second open in this window.
+    document.querySelector('.btn[data-open]').addEventListener('click', function() {
       if (!window.AscDesktopEditor) return;
-
-      var file = await window.__TAURI__.core.invoke('pick_document',
-        { documents: _t('documents'), all: _t('all') });
-      if (!file) return;
-      _openPath(file);
+      window.AscDesktopEditor.LocalFileOpen();
     });
 
     document.querySelector('.btn[data-new-markdown]').addEventListener('click', function() {
