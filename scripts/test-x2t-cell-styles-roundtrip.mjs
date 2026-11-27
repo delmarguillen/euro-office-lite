@@ -12,6 +12,9 @@
 // document, the predefined styles and the cells (value, formula, style and
 // formatting).
 //
+// A third workbook has a style with another line and color on each border
+// side; its xlsx must carry the four sides as they were set.
+//
 // A second workbook undoes a new style after a predefined one came in, which
 // leaves an XfId unused; its xlsx must point only to cellStyleXfs it has. The
 // workbook opened from the saved xlsx, without that gap, must be written with
@@ -433,6 +436,37 @@ function checkSameBytes(label, run) {
   console.log((same ? 'ok   ' : 'DIFF ') + label);
 }
 
+// A style with another line and color on each side, set side by side as the
+// cell style dialog does, applied to A1. The result is asc_addCellStyle's.
+const FRAME_CELLS = ['A1'];
+const FRAME_EDIT = `(function () {
+  if (typeof AscCommonExcel.CellXfs.prototype.asc_setBorderSide !== 'function') return 'asc_setBorderSide is missing';
+  var sides = Asc.c_oAscBorderOptions;
+  var lines = Asc.c_oAscBorderStyles;
+  var frame = new AscCommonExcel.CellXfs();
+  frame.asc_setBorderSide(sides.Top, lines.Thick, color(255, 0, 0));
+  frame.asc_setBorderSide(sides.Bottom, lines.Double, color(0, 0, 255));
+  frame.asc_setBorderSide(sides.Left, lines.Dotted, color(0, 255, 0));
+  frame.asc_setBorderSide(sides.Right, lines.Dashed, color(255, 128, 0));
+  var result = api.asc_addCellStyle('Frame', frame);
+  ws().getRange2('A1').setValue('1');
+  select('A1'); api.asc_setCellStyle('Frame');
+  return result;
+})()`;
+// The four sides of the Frame style in xl/styles.xml. x2t writes a color of
+// the default indexed palette by its index: 2 red, 3 green, 4 blue.
+const FRAME_XML_SIDES = [
+  /<left style="dotted"><color (rgb="FF00FF00"|indexed="3")\/><\/left>/,
+  /<right style="dashed"><color rgb="FFFF8000"\/><\/right>/,
+  /<top style="thick"><color (rgb="FFFF0000"|indexed="2")\/><\/top>/,
+  /<bottom style="double"><color (rgb="FF0000FF"|indexed="4")\/><\/bottom>/,
+];
+// Whether one border of xl/styles.xml has all the given sides.
+function xlsxHasBorder(file, sides) {
+  const borders = xmlSection(zipPart(file, 'xl/styles.xml'), 'borders').match(/<border\b[\s\S]*?<\/border>/g) || [];
+  return borders.some((border) => sides.every((side) => side.test(border)));
+}
+
 // --- Run ---
 
 const blank = path.join(workDir, 'blank.xlsx');
@@ -477,6 +511,23 @@ if (references.broken.length > 0) {
   differences.push({ label: 'xlsx after undo', what: 'styles.xml', property: 'xfId', saved: 'below ' + references.count, reopened: references.broken.join(',') });
 }
 compare('xlsx after undo', gapSaved, snapshotOf(openFile(gapXlsx), GAP_CELLS));
+
+// A style with another line and color on each side, through xlsx.
+const frameEditor = openFile(blank);
+const frameResult = frameEditor(FRAME_EDIT);
+if (frameResult !== No) {
+  console.log('DIFF border sides: ' + frameResult);
+  differences.push({ label: 'border sides', what: 'style Frame', property: 'added', saved: No, reopened: frameResult });
+} else {
+  const frameSaved = snapshotOf(frameEditor, FRAME_CELLS);
+  const frameXlsx = saveFile(frameEditor, path.join(workDir, 'frame.xlsx'));
+  const hasSides = xlsxHasBorder(frameXlsx, FRAME_XML_SIDES);
+  console.log((hasSides ? 'ok   ' : 'DIFF ') + 'border sides: styles.xml has the four sides as they were set');
+  if (!hasSides) {
+    differences.push({ label: 'border sides', what: 'styles.xml', property: 'border', saved: FRAME_XML_SIDES.map((side) => side.source).join(''), reopened: xmlSection(zipPart(frameXlsx, 'xl/styles.xml'), 'borders') });
+  }
+  compare('border sides: xlsx', frameSaved, snapshotOf(openFile(frameXlsx), FRAME_CELLS));
+}
 
 for (const d of differences) {
   console.log('  ' + d.label + ': ' + d.what + ' ' + d.property + ': ' + d.saved + ' -> ' + d.reopened);
