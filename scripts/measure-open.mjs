@@ -33,6 +33,7 @@
 //   content_ready   page     sdkjs about to send asc_onDocumentContentReady
 //   ui_ready        page     the handlers of that event returned
 //   layout          page     the task that sent it ended
+//   microtasks      page     microtasks queued ahead of the language list ran
 //   spell_init      page     editor UI took the spellcheck languages
 //   document_ready  page     onDocumentReady reached the page
 //   sum                      the phase columns of the row added up
@@ -94,7 +95,8 @@ const BACKEND_PHASES = ['command', 'start', 'copy', 'convert', 'encode', 'respon
 const PAGE_PHASES = [
   'request', 'result', 'fonts', 'iframe', 'sdk_min', 'sdk_all', 'app_ready',
   'doc_request', 'doc_decoded', 'doc_parsed', 'doc_fonts', 'doc_images',
-  'content_ready', 'ui_ready', 'layout', 'spell_init', 'document_ready',
+  'content_ready', 'ui_ready', 'layout', 'microtasks', 'spell_init',
+  'document_ready',
 ];
 // In the order an open goes through them. `request` is the origin, so it has
 // no column of its own.

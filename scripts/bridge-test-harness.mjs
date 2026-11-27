@@ -16,7 +16,7 @@ export function bridgePathFromArgs() {
   return arg ? path.resolve(arg) : path.join(projectRoot, 'src', 'bridge.js');
 }
 
-export async function loadBridge({ platform = 'Linux x86_64', invoke = {} } = {}) {
+export async function loadBridge({ platform = 'Linux x86_64', invoke = {}, fetch = null } = {}) {
   const logs = [];
   const timers = new Set();
   // What the bridge listens for, so a check can send it a backend event.
@@ -53,8 +53,9 @@ export async function loadBridge({ platform = 'Linux x86_64', invoke = {} } = {}
       return timer;
     },
     clearTimeout(timer) { timers.delete(timer); clearTimeout(timer); },
-    // The spellcheck setup asks for its manifest at load; nothing here needs it.
-    fetch: () => new Promise(() => {}),
+    // The spellcheck setup asks for its manifest at load. Without a fetch of
+    // the check's own, the answer never comes.
+    fetch: fetch || (() => new Promise(() => {})),
     performance: { now: () => performance.now() },
     atob: (text) => Buffer.from(text, 'base64').toString('binary'),
     btoa: (text) => Buffer.from(text, 'binary').toString('base64'),

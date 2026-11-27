@@ -546,6 +546,7 @@ window._eoLog = function() {
 //   content_ready   sdkjs is about to send asc_onDocumentContentReady
 //   ui_ready        every handler of asc_onDocumentContentReady has returned
 //   layout          the task that sent it has ended
+//   microtasks      the microtasks queued ahead of the language list have run
 //   spell_init      the editor UI took the list of spellcheck languages
 //   document_ready  the editor's onDocumentReady
 //
@@ -3193,6 +3194,10 @@ var SpellCheckBridge = (function() {
 
   function _emitInit(api, editorWindow) {
     _dictionariesReady().then(function() {
+      // With both lists already in, this runs in the microtasks of the task
+      // that sent asc_onDocumentContentReady, behind the ones the editor UI
+      // queued first. The mark keeps their time out of spell_init.
+      _eoOpenPhases.mark('microtasks');
       var packed = _packedLanguages(editorWindow) || {};
       var lcids = [];
       for (var lcid in packed) {
