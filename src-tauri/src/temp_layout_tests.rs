@@ -416,6 +416,51 @@ fn a_half_published_generation_is_not_used() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// A generation as the scan leaves it when it was given the emoji fallback
+// font: the font in the generation's own folder, and its path in AllFonts.js.
+fn published_with_a_fallback_font(root: &Path) -> (PathBuf, PathBuf) {
+    let dir = published(root, "0-0-1", expected_marker().as_bytes(), b"cache");
+    let font = dir.join("fallback-fonts").join("EuroOfficeEmoji.ttf");
+    std::fs::create_dir_all(font.parent().unwrap()).unwrap();
+    let bytes: &[u8] = include_bytes!("../fallback-fonts/EuroOfficeEmoji.ttf");
+    std::fs::write(&font, bytes).unwrap();
+    let path = font.display().to_string().replace('\\', "/");
+    let list = format!("window[\"__fonts_files\"] = [\n\"{}\"\n];\n", path);
+    std::fs::write(dir.join("AllFonts.js"), list).unwrap();
+    (dir, font)
+}
+
+// AllFonts.js names the fallback font by its path in the generation, so a
+// generation that lost the file is rebuilt like one that lost its lists.
+#[test]
+fn a_generation_that_lost_a_fallback_font_is_not_used() {
+    let root = scratch_root();
+    let (incomplete, font) = published_with_a_fallback_font(&root);
+    assert!(fonts_ready(&root));
+
+    std::fs::remove_file(&font).unwrap();
+
+    assert!(!fonts_ready(&root));
+    let outcome = ensure_font_cache(&root, "2-1", |dir: &Path| build(dir, b"new"), WAIT, POLL);
+    let FontCache::Generated(new) = outcome else {
+        panic!("not built: {:?}", outcome);
+    };
+    assert_eq!(read_both(new.dir()), both(b"new"));
+    assert!(!incomplete.exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_generation_with_a_cut_fallback_font_is_not_used() {
+    let root = scratch_root();
+    let (_, font) = published_with_a_fallback_font(&root);
+
+    std::fs::write(&font, b"cut short").unwrap();
+
+    assert!(!fonts_ready(&root));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // A run that fails leaves the earlier generation as it was, still read by the
 // instance holding it, and leaves nothing of its own.
 #[test]
@@ -1330,6 +1375,23 @@ fn the_binaries_folder_is_recorded_by_its_real_path() {
 
 fn fingerprint(dirs: &[PathBuf]) -> String {
     font_sources_text(Path::new("/no-binaries"), dirs)
+}
+
+// The fallback fonts are built into the app, so a build with other fonts must
+// not read a cache made with these: the sources name each with its length.
+#[test]
+fn the_sources_name_the_fallback_fonts_built_into_the_app() {
+    let sources = fingerprint(&[]);
+    let line = sources
+        .lines()
+        .find(|line| line.starts_with("fallback\t"))
+        .unwrap_or_else(|| panic!("no fallback line in {:?}", sources));
+
+    for name in ["EuroOfficeSigns.ttf", "EuroOfficeEmoji.ttf"] {
+        let bytes = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("fallback-fonts").join(name)).unwrap();
+        let entry = format!("{}:{}:", name, bytes.len());
+        assert!(line.contains(&entry), "{} not in {:?}", entry, line);
+    }
 }
 
 // Folder times have a fine resolution, but not every file system has one.

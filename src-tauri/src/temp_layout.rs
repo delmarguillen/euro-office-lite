@@ -321,11 +321,12 @@ fn marker_text(version: &str, sources: &str) -> String {
     format!("{}\n{}", version, sources)
 }
 
-// One line for the binaries folder, then one per font folder. The folder
-// limit is shared by all of them.
+// One line for the binaries folder, one for the fallback fonts built into
+// the app, then one per font folder. The folder limit is shared by all of them.
 pub fn font_sources_text(binaries_dir: &Path, font_dirs: &[PathBuf]) -> String {
     let binaries = std::fs::canonicalize(binaries_dir).unwrap_or_else(|_| binaries_dir.to_path_buf());
     let mut text = format!("binaries\t{}\n", binaries.display());
+    text.push_str(&format!("fallback\t{}\n", crate::x2t_task::fallback_fonts::fingerprint()));
     let mut budget = FINGERPRINT_MAX_DIRS;
     for dir in font_dirs {
         text.push_str(&font_dir_fingerprint(dir, &mut budget));
@@ -487,9 +488,9 @@ fn adopt_generation(root: &Path, expected: &str) -> Option<FontGeneration> {
 }
 
 // x2t's scan always writes both files and the PDF export uses both, so a
-// generation missing either is incomplete. One whose marker differs does not
-// count either: the scan can change with the bundled x2t and fonts, and with
-// the fonts installed.
+// generation missing either is incomplete; so is one that lost a fallback
+// font its list names. One whose marker differs does not count either: the
+// scan can change with the bundled x2t and fonts, and with the fonts installed.
 fn generation_ready(dir: &Path, expected: &str) -> bool {
     let Ok(marker) = std::fs::read(dir.join(FONTS_MARKER)) else {
         return false;
@@ -501,6 +502,9 @@ fn generation_ready(dir: &Path, expected: &str) -> bool {
         return false;
     }
     if !is_nonempty(&dir.join("font_selection.bin")) {
+        return false;
+    }
+    if !crate::x2t_task::fallback_fonts::listed_are_present(dir) {
         return false;
     }
     !(cfg!(target_os = "windows") && has_extended_paths(dir))

@@ -120,6 +120,52 @@ pub fn write_into(generation_dir: &Path, fonts: &[FallbackFont]) -> std::io::Res
     Ok(dir)
 }
 
+// Whether every fallback font the generation's AllFonts.js lists is still in
+// the fallback folder, whole. x2t writes the paths with forward slashes.
+pub fn listed_are_present(generation_dir: &Path) -> bool {
+    let Ok(all_fonts_js) = std::fs::read(generation_dir.join("AllFonts.js")) else {
+        return false;
+    };
+    for font in ALL {
+        let listed = format!("{}/{}\"", DIR_NAME, font.file_name());
+        if !contains(&all_fonts_js, listed.as_bytes()) {
+            continue;
+        }
+        let file = generation_dir.join(DIR_NAME).join(font.file_name());
+        let Ok(metadata) = std::fs::metadata(&file) else {
+            return false;
+        };
+        if metadata.len() != font.bytes().len() as u64 {
+            return false;
+        }
+    }
+    true
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|window| window == needle)
+}
+
+// One line that changes with the fonts built into the app, for the font cache
+// marker: the name, length and FNV-1a hash of each.
+pub fn fingerprint() -> String {
+    let mut parts = Vec::new();
+    for font in ALL {
+        let bytes = font.bytes();
+        parts.push(format!("{}:{}:{:016x}", font.file_name(), bytes.len(), fnv1a(bytes)));
+    }
+    parts.join(" ")
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,5 +433,68 @@ mod tests {
         let signs = std::fs::read(dir.join("EuroOfficeSigns.ttf")).unwrap();
         assert_eq!(signs, FallbackFont::Signs.bytes());
         let _ = std::fs::remove_dir_all(&generation);
+    }
+
+    fn generation_listing(name: &str, fonts: &[FallbackFont]) -> PathBuf {
+        let generation = scratch_dir(name);
+        let dir = write_into(&generation, fonts).unwrap();
+        let mut files = vec!["\"/usr/share/fonts/A.ttf\"".to_string()];
+        for font in fonts {
+            let path = dir.join(font.file_name());
+            files.push(format!("\"{}\"", path.display().to_string().replace('\\', "/")));
+        }
+        let list = format!("window[\"__fonts_files\"] = [\n{}\n];\n", files.join(",\n"));
+        std::fs::write(generation.join("AllFonts.js"), list).unwrap();
+        generation
+    }
+
+    #[test]
+    fn a_generation_with_every_listed_fallback_font_is_whole() {
+        let generation = generation_listing("whole", &ALL);
+        assert!(listed_are_present(&generation));
+        let _ = std::fs::remove_dir_all(&generation);
+    }
+
+    #[test]
+    fn a_generation_that_lists_no_fallback_font_is_whole_without_the_folder() {
+        let generation = generation_listing("none", &[]);
+        std::fs::remove_dir_all(generation.join(DIR_NAME)).unwrap();
+        assert!(listed_are_present(&generation));
+        let _ = std::fs::remove_dir_all(&generation);
+    }
+
+    #[test]
+    fn a_generation_that_lost_a_listed_fallback_font_is_not_whole() {
+        let generation = generation_listing("lost", &ALL);
+        std::fs::remove_file(generation.join(DIR_NAME).join("EuroOfficeEmoji.ttf")).unwrap();
+        assert!(!listed_are_present(&generation));
+        let _ = std::fs::remove_dir_all(&generation);
+    }
+
+    #[test]
+    fn a_generation_with_a_cut_fallback_font_is_not_whole() {
+        let generation = generation_listing("cut", &ALL);
+        let file = generation.join(DIR_NAME).join("EuroOfficeSigns.ttf");
+        std::fs::write(&file, &FallbackFont::Signs.bytes()[..1000]).unwrap();
+        assert!(!listed_are_present(&generation));
+        let _ = std::fs::remove_dir_all(&generation);
+    }
+
+    #[test]
+    fn a_generation_without_its_font_list_is_not_whole() {
+        let generation = scratch_dir("no-list");
+        assert!(!listed_are_present(&generation));
+        let _ = std::fs::remove_dir_all(&generation);
+    }
+
+    #[test]
+    fn the_fingerprint_names_each_font_with_its_length() {
+        let text = fingerprint();
+        for font in ALL {
+            let start = format!("{}:{}:", font.file_name(), font.bytes().len());
+            assert!(text.contains(&start), "{}", text);
+        }
+        assert_eq!(fnv1a(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a(b"a"), 0xaf63_dc4c_8601_ec8c);
     }
 }
