@@ -3896,8 +3896,8 @@ mod fallback_scan_tests {
                 folder.clone(),
             ]
         );
-        assert!(folder.join("EuroOfficeEmoji.ttf").is_file());
-        assert!(!folder.join("EuroOfficeSigns.ttf").exists());
+        assert!(folder.join("EOLiteEmoji.ttf").is_file());
+        assert!(!folder.join("EOLiteSigns.ttf").exists());
         let _ = std::fs::remove_dir_all(&fontdata);
     }
 
@@ -3932,7 +3932,7 @@ mod fallback_scan_tests {
     fn real_x2t_lists_the_emoji_font_from_the_folder_it_scanned() {
         let (fontdata, list) = real_scan("real-emoji");
 
-        let font = fontdata.join("fallback-fonts").join("EuroOfficeEmoji.ttf");
+        let font = fontdata.join("fallback-fonts").join("EOLiteEmoji.ttf");
         assert!(font.is_file(), "{} is missing", font.display());
         let listed = format!("{}\"", font.display());
         assert!(list.contains(&listed), "{} not in AllFonts.js", listed);

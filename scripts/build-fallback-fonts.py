@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Builds the two fallback fonts in src-tauri/fallback-fonts/.
 
-  EuroOfficeSigns.ttf    DejaVu Sans 2.37, U+2190-2BFF
-  EuroOfficeEmoji.ttf    Noto Emoji 3.002 at weight 400, U+1F000-1FAFF
+  EOLiteSigns.ttf    DejaVu Sans 2.37, U+2190-2BFF
+  EOLiteEmoji.ttf    Noto Emoji 3.002 at weight 400, U+1F000-1FAFF
 
 Both leave out every code point a font in src/fonts already has. Needs
 fontTools 4.69.1; another version may write different bytes.
@@ -130,16 +130,16 @@ def build_signs(downloads, bundled):
         source = tar.extractfile(DEJAVU_MEMBER)
         font = TTFont(source)
         keep_only(font, wanted_code_points(font, SYMBOLS_RANGE, bundled))
-    rename(font, "Euro-Office Signs", "EuroOfficeSigns", "DejaVu Sans 2.37")
-    save(font, "EuroOfficeSigns.ttf")
+    rename(font, "EOLite Signs", "EOLiteSigns", "DejaVu Sans 2.37")
+    save(font, "EOLiteSigns.ttf")
 
 
 def build_emoji(downloads, bundled):
     source = download(NOTO_EMOJI_URL, NOTO_EMOJI_SHA256, downloads / "NotoEmoji-wght.ttf")
     font = instancer.instantiateVariableFont(TTFont(source), {"wght": 400})
     keep_only(font, wanted_code_points(font, EMOJI_RANGE, bundled))
-    rename(font, "Euro-Office Emoji", "EuroOfficeEmoji", "Noto Emoji 3.002")
-    save(font, "EuroOfficeEmoji.ttf")
+    rename(font, "EOLite Emoji", "EOLiteEmoji", "Noto Emoji 3.002")
+    save(font, "EOLiteEmoji.ttf")
 
 
 def main():

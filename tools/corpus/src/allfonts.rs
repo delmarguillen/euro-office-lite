@@ -274,10 +274,10 @@ mod tests {
 
     #[test]
     fn origin_tells_the_fallback_fonts_of_the_font_cache_from_system_fonts() {
-        assert_eq!(origin("/tmp/cache/fallback-fonts/EuroOfficeEmoji.ttf", BIN), "fallback");
-        assert_eq!(origin("C:/Temp/cache/fallback-fonts/EuroOfficeSigns.ttf", r"C:\App\binaries"), "fallback");
+        assert_eq!(origin("/tmp/cache/fallback-fonts/EOLiteEmoji.ttf", BIN), "fallback");
+        assert_eq!(origin("C:/Temp/cache/fallback-fonts/EOLiteSigns.ttf", r"C:\App\binaries"), "fallback");
         // The same file anywhere else is a font the user installed.
-        assert_eq!(origin("/usr/share/fonts/EuroOfficeEmoji.ttf", BIN), "system");
+        assert_eq!(origin("/usr/share/fonts/EOLiteEmoji.ttf", BIN), "system");
         assert_eq!(origin("/usr/share/fonts/fallback-fonts/Other.ttf", BIN), "system");
     }
 

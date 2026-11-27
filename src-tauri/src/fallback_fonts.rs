@@ -20,15 +20,15 @@ pub const ALL: [FallbackFont; 2] = [FallbackFont::Signs, FallbackFont::Emoji];
 impl FallbackFont {
     pub fn file_name(self) -> &'static str {
         match self {
-            FallbackFont::Signs => "EuroOfficeSigns.ttf",
-            FallbackFont::Emoji => "EuroOfficeEmoji.ttf",
+            FallbackFont::Signs => "EOLiteSigns.ttf",
+            FallbackFont::Emoji => "EOLiteEmoji.ttf",
         }
     }
 
     pub fn bytes(self) -> &'static [u8] {
         match self {
-            FallbackFont::Signs => include_bytes!("../fallback-fonts/EuroOfficeSigns.ttf"),
-            FallbackFont::Emoji => include_bytes!("../fallback-fonts/EuroOfficeEmoji.ttf"),
+            FallbackFont::Signs => include_bytes!("../fallback-fonts/EOLiteSigns.ttf"),
+            FallbackFont::Emoji => include_bytes!("../fallback-fonts/EOLiteEmoji.ttf"),
         }
     }
 
@@ -425,12 +425,12 @@ mod tests {
         let dir = write_into(&generation, &[FallbackFont::Emoji]).unwrap();
 
         assert_eq!(dir, generation.join("fallback-fonts"));
-        let emoji = std::fs::read(dir.join("EuroOfficeEmoji.ttf")).unwrap();
+        let emoji = std::fs::read(dir.join("EOLiteEmoji.ttf")).unwrap();
         assert_eq!(emoji, FallbackFont::Emoji.bytes());
-        assert!(!dir.join("EuroOfficeSigns.ttf").exists());
+        assert!(!dir.join("EOLiteSigns.ttf").exists());
 
         write_into(&generation, &ALL).unwrap();
-        let signs = std::fs::read(dir.join("EuroOfficeSigns.ttf")).unwrap();
+        let signs = std::fs::read(dir.join("EOLiteSigns.ttf")).unwrap();
         assert_eq!(signs, FallbackFont::Signs.bytes());
         let _ = std::fs::remove_dir_all(&generation);
     }
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn a_generation_that_lost_a_listed_fallback_font_is_not_whole() {
         let generation = generation_listing("lost", &ALL);
-        std::fs::remove_file(generation.join(DIR_NAME).join("EuroOfficeEmoji.ttf")).unwrap();
+        std::fs::remove_file(generation.join(DIR_NAME).join("EOLiteEmoji.ttf")).unwrap();
         assert!(!listed_are_present(&generation));
         let _ = std::fs::remove_dir_all(&generation);
     }
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn a_generation_with_a_cut_fallback_font_is_not_whole() {
         let generation = generation_listing("cut", &ALL);
-        let file = generation.join(DIR_NAME).join("EuroOfficeSigns.ttf");
+        let file = generation.join(DIR_NAME).join("EOLiteSigns.ttf");
         std::fs::write(&file, &FallbackFont::Signs.bytes()[..1000]).unwrap();
         assert!(!listed_are_present(&generation));
         let _ = std::fs::remove_dir_all(&generation);

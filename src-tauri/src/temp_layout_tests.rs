@@ -420,9 +420,9 @@ fn a_half_published_generation_is_not_used() {
 // font: the font in the generation's own folder, and its path in AllFonts.js.
 fn published_with_a_fallback_font(root: &Path) -> (PathBuf, PathBuf) {
     let dir = published(root, "0-0-1", expected_marker().as_bytes(), b"cache");
-    let font = dir.join("fallback-fonts").join("EuroOfficeEmoji.ttf");
+    let font = dir.join("fallback-fonts").join("EOLiteEmoji.ttf");
     std::fs::create_dir_all(font.parent().unwrap()).unwrap();
-    let bytes: &[u8] = include_bytes!("../fallback-fonts/EuroOfficeEmoji.ttf");
+    let bytes: &[u8] = include_bytes!("../fallback-fonts/EOLiteEmoji.ttf");
     std::fs::write(&font, bytes).unwrap();
     let path = font.display().to_string().replace('\\', "/");
     let list = format!("window[\"__fonts_files\"] = [\n\"{}\"\n];\n", path);
@@ -1387,7 +1387,7 @@ fn the_sources_name_the_fallback_fonts_built_into_the_app() {
         .find(|line| line.starts_with("fallback\t"))
         .unwrap_or_else(|| panic!("no fallback line in {:?}", sources));
 
-    for name in ["EuroOfficeSigns.ttf", "EuroOfficeEmoji.ttf"] {
+    for name in ["EOLiteSigns.ttf", "EOLiteEmoji.ttf"] {
         let bytes = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("fallback-fonts").join(name)).unwrap();
         let entry = format!("{}:{}:", name, bytes.len());
         assert!(line.contains(&entry), "{} not in {:?}", entry, line);
