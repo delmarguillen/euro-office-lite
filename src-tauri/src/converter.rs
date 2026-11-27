@@ -10,7 +10,7 @@ pub async fn convert_file(
     app: &AppHandle,
     input: &str,
     output: &str,
-    _format_from: i32,
+    format_from: i32,
     format_to: i32,
     temp_dir: &str,
     text_options: Option<crate::text_import::TextOptions>,
@@ -48,10 +48,15 @@ pub async fn convert_file(
         .map(|options| options.xml_elements())
         .unwrap_or_default();
     // The generation this process holds until it ends, the one its editor
-    // reads; before it is ready x2t scans the system fonts as before.
+    // reads; before it is ready, and for a spreadsheet, x2t scans the system
+    // fonts as before.
     let font_dir = app.state::<crate::file_ops::AppState>().fonts.generation_dir();
-    log_editor_bin_fonts(format_to, font_dir.as_deref());
-    extra.push_str(&x2t_task::editor_bin_font_dir_xml(format_to, font_dir.as_deref()));
+    log_editor_bin_fonts(format_from, format_to, font_dir.as_deref());
+    extra.push_str(&x2t_task::editor_bin_font_dir_xml(
+        format_from,
+        format_to,
+        font_dir.as_deref(),
+    ));
 
     let xml = convert_params_xml(input, output, format_to, temp_dir, &extra);
     write_file(&params_path, &xml)?;
@@ -177,15 +182,23 @@ fn log_pdf(msg: &str) {
     crate::temp_layout::append_log(&format!("[PDF] {}", msg));
 }
 
-fn log_editor_bin_fonts(format_to: i32, font_dir: Option<&std::path::Path>) {
+fn log_editor_bin_fonts(format_from: i32, format_to: i32, font_dir: Option<&std::path::Path>) {
     if format_to != x2t_task::EDITOR_BIN_FORMAT {
         return;
     }
-    let source = match font_dir {
-        Some(_) => "font cache",
-        None => "system fonts (no font cache yet)",
-    };
+    let source = editor_bin_fonts_source(format_from, font_dir);
     crate::temp_layout::append_log(&format!("[X2T] Editor.bin fonts={}", source));
+}
+
+// The same choice as x2t_task::editor_bin_font_dir_xml, in words.
+fn editor_bin_fonts_source(format_from: i32, font_dir: Option<&std::path::Path>) -> &'static str {
+    if x2t_task::is_spreadsheet_format(format_from) {
+        return "system fonts (spreadsheet)";
+    }
+    if font_dir.is_none() {
+        return "system fonts (no font cache yet)";
+    }
+    "font cache"
 }
 
 // Without the font cache x2t still exits 0 but the PDF loses its text: the font

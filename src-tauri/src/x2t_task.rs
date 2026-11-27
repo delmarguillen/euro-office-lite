@@ -460,12 +460,30 @@ fn x2t_path(path: &str) -> String {
 // The format x2t writes when a document is opened or inserted.
 pub const EDITOR_BIN_FORMAT: i32 = 8192;
 
+// The x2t family of every spreadsheet format detect_format returns (257-266):
+// AVS_OFFICESTUDIO_FILE_SPREADSHEET in core/Common/OfficeFileFormats.h.
+const SPREADSHEET_FAMILY: i32 = 0x0100;
+
+pub fn is_spreadsheet_format(format: i32) -> bool {
+    format & 0xFF00 == SPREADSHEET_FAMILY
+}
+
 // The font folder for a conversion to Editor.bin. Without m_sFontDir x2t scans
 // every system font file on each open; with it, it reads that folder's
 // font_selection.bin and never writes there (core ApplicationFonts.cpp,
 // InitializeFromFolder). Other conversions and a missing folder get nothing.
-pub fn editor_bin_font_dir_xml(format_to: i32, font_dir: Option<&std::path::Path>) -> String {
+// Nor does a spreadsheet: it saves the column widths x2t computes from the
+// metrics of its default font, and with the folder a quoted font name (as
+// LibreOffice writes any name with a space) is measured with another font.
+pub fn editor_bin_font_dir_xml(
+    format_from: i32,
+    format_to: i32,
+    font_dir: Option<&std::path::Path>,
+) -> String {
     if format_to != EDITOR_BIN_FORMAT {
+        return String::new();
+    }
+    if is_spreadsheet_format(format_from) {
         return String::new();
     }
     let Some(font_dir) = font_dir else {
@@ -3027,10 +3045,52 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
         assert!(with_text.ends_with(&expected_end), "{}", with_text);
     }
 
+    const DOCX: i32 = 65;
+
+    fn font_dir_for(file_name: &str) -> String {
+        let folder = std::path::Path::new("/c/fonts/gen-1");
+        let format_from = detect_format(std::path::Path::new(file_name));
+        editor_bin_font_dir_xml(format_from, EDITOR_BIN_FORMAT, Some(folder))
+    }
+
+    #[test]
+    fn a_spreadsheet_opens_without_the_font_folder() {
+        let spreadsheets = [
+            "a.xlsx", "a.xls", "a.xlsm", "a.xltx", "a.xltm", "a.xlsb", "a.ods", "a.ots",
+            "a.fods", "a.csv", "A.ODS",
+        ];
+        for name in spreadsheets {
+            assert_eq!(font_dir_for(name), "", "{}", name);
+        }
+    }
+
+    #[test]
+    fn a_document_and_a_presentation_open_with_the_font_folder() {
+        for name in ["a.docx", "a.odt", "a.txt", "a.pptx", "a.odp"] {
+            assert!(font_dir_for(name).contains("<m_sFontDir>"), "{}", name);
+        }
+    }
+
+    #[test]
+    fn only_the_spreadsheet_formats_are_spreadsheets() {
+        let mut spreadsheets = Vec::new();
+        for ext in CONVERTED_EXTENSIONS {
+            let format = detect_format(std::path::Path::new(&format!("a.{}", ext)));
+            if is_spreadsheet_format(format) {
+                spreadsheets.push(ext);
+            }
+        }
+        let expected = ["xlsx", "xls", "xlsm", "xltx", "xltm", "xlsb", "ods", "ots", "fods", "csv"];
+        assert_eq!(spreadsheets, expected);
+        assert!(!is_spreadsheet_format(EDITOR_BIN_FORMAT));
+        assert!(!is_spreadsheet_format(513));
+        assert!(!is_spreadsheet_format(0));
+    }
+
     #[test]
     fn an_open_names_the_font_cache_folder() {
         let folder = std::path::Path::new("/c/fonts/gen-1");
-        let fonts = editor_bin_font_dir_xml(EDITOR_BIN_FORMAT, Some(folder));
+        let fonts = editor_bin_font_dir_xml(DOCX, EDITOR_BIN_FORMAT, Some(folder));
         assert_eq!(fonts, "<m_sFontDir>/c/fonts/gen-1</m_sFontDir>\n");
         let xml = convert_params_xml("/d/in.docx", "/t/Editor.bin", EDITOR_BIN_FORMAT, "/t", &fonts);
         let expected_end = format!("{}{}</TaskQueueDataConvert>", fonts, x2t_options_xml());
@@ -3039,27 +3099,27 @@ xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n\
 
     #[test]
     fn without_a_font_cache_an_open_scans_the_system_fonts() {
-        assert_eq!(editor_bin_font_dir_xml(EDITOR_BIN_FORMAT, None), "");
+        assert_eq!(editor_bin_font_dir_xml(DOCX, EDITOR_BIN_FORMAT, None), "");
     }
 
     #[test]
     fn a_save_gets_no_font_folder() {
         let folder = std::path::Path::new("/c/fonts/gen-1");
-        assert_eq!(editor_bin_font_dir_xml(65, Some(folder)), "");
-        assert_eq!(editor_bin_font_dir_xml(513, Some(folder)), "");
+        assert_eq!(editor_bin_font_dir_xml(EDITOR_BIN_FORMAT, 65, Some(folder)), "");
+        assert_eq!(editor_bin_font_dir_xml(EDITOR_BIN_FORMAT, 513, Some(folder)), "");
     }
 
     #[test]
     fn the_font_folder_is_escaped_once() {
         let folder = std::path::Path::new("/opt/R&D <x>/fonts");
-        let fonts = editor_bin_font_dir_xml(EDITOR_BIN_FORMAT, Some(folder));
+        let fonts = editor_bin_font_dir_xml(DOCX, EDITOR_BIN_FORMAT, Some(folder));
         assert_eq!(fonts, "<m_sFontDir>/opt/R&amp;D &lt;x&gt;/fonts</m_sFontDir>\n");
     }
 
     #[test]
     fn the_font_folder_loses_the_extended_prefix() {
         let folder = std::path::Path::new(r"\\?\C:\Users\me\fonts");
-        let fonts = editor_bin_font_dir_xml(EDITOR_BIN_FORMAT, Some(folder));
+        let fonts = editor_bin_font_dir_xml(DOCX, EDITOR_BIN_FORMAT, Some(folder));
         assert!(!fonts.contains('?'), "{}", fonts);
         assert!(fonts.contains("C:"), "{}", fonts);
     }
