@@ -717,6 +717,10 @@ var _UI_STRINGS = {
     dmabufSetting: 'Hardware acceleration', dmabufAuto: 'Automatic', dmabufOn: 'On', dmabufOff: 'Off',
     dmabufRestart: 'Applies after restarting the app.',
     dmabufEnvSet: 'This app was started with WEBKIT_DISABLE_DMABUF_RENDERER set. That value is used and this setting is ignored.',
+    titleBarSetting: 'Title bar', titleBarApp: 'From the app', titleBarSystem: 'From the system', titleBarNone: 'None',
+    titleBarRestart: 'Applies after restarting the app.',
+    titleBarGnome: 'On GNOME, the window may not move when you drag it with this option.',
+    titleBarOverride: 'This app was started with --system-title-bar, --no-title-bar or EURO_OFFICE_LITE_TITLE_BAR. That choice is used and this setting is ignored.',
     openNewWindowFailedMsg: 'The file could not be opened in a new window. The current document has not changed.',
     openElsewhereMsg: 'This file is already open in another window. Use that window to work on it.',
     unsavedDiscardClose: 'The current document has unsaved changes. Do you want to discard them and close?',
@@ -772,6 +776,10 @@ var _UI_STRINGS = {
     dmabufSetting: 'Aceleración por hardware', dmabufAuto: 'Automático', dmabufOn: 'Activado', dmabufOff: 'Desactivado',
     dmabufRestart: 'Se aplica al reiniciar la aplicación.',
     dmabufEnvSet: 'La aplicación se inició con WEBKIT_DISABLE_DMABUF_RENDERER definida. Se usa ese valor y este ajuste no tiene efecto.',
+    titleBarSetting: 'Barra de título', titleBarApp: 'De la aplicación', titleBarSystem: 'Del sistema', titleBarNone: 'Ninguna',
+    titleBarRestart: 'Se aplica al reiniciar la aplicación.',
+    titleBarGnome: 'En GNOME, con esta opción puede que la ventana no se mueva al arrastrarla.',
+    titleBarOverride: 'La aplicación se inició con --system-title-bar, --no-title-bar o EURO_OFFICE_LITE_TITLE_BAR. Se usa esa opción y este ajuste no tiene efecto.',
     openNewWindowFailedMsg: 'No se pudo abrir el archivo en una ventana nueva. El documento actual no ha cambiado.',
     openElsewhereMsg: 'Este archivo ya está abierto en otra ventana. Usa esa ventana para trabajar con él.',
     unsavedDiscardClose: 'El documento actual tiene cambios sin guardar. ¿Desea descartarlos y cerrar?',
@@ -817,6 +825,10 @@ var _UI_STRINGS = {
     dmabufSetting: 'Accélération matérielle', dmabufAuto: 'Automatique', dmabufOn: 'Activée', dmabufOff: 'Désactivée',
     dmabufRestart: 'Prend effet après le redémarrage de l\'application.',
     dmabufEnvSet: 'L\'application a été lancée avec WEBKIT_DISABLE_DMABUF_RENDERER défini. Cette valeur est utilisée et ce réglage est ignoré.',
+    titleBarSetting: 'Barre de titre', titleBarApp: 'De l\'application', titleBarSystem: 'Du système', titleBarNone: 'Aucune',
+    titleBarRestart: 'Prend effet après le redémarrage de l\'application.',
+    titleBarGnome: 'Sous GNOME, avec cette option, la fenêtre peut ne pas se déplacer quand on la fait glisser.',
+    titleBarOverride: 'L\'application a été lancée avec --system-title-bar, --no-title-bar ou EURO_OFFICE_LITE_TITLE_BAR. Ce choix est utilisé et ce réglage est ignoré.',
     openNewWindowFailedMsg: 'Impossible d\'ouvrir le fichier dans une nouvelle fenêtre. Le document actuel n\'a pas changé.',
     openElsewhereMsg: 'Ce fichier est déjà ouvert dans une autre fenêtre. Utilisez l\'autre fenêtre pour y travailler.',
     unsavedDiscardClose: 'Le document actuel contient des modifications non enregistrées. Voulez-vous les abandonner et fermer ?',
@@ -857,6 +869,10 @@ var _UI_STRINGS = {
     dmabufSetting: 'Hardwarebeschleunigung', dmabufAuto: 'Automatisch', dmabufOn: 'Ein', dmabufOff: 'Aus',
     dmabufRestart: 'Wird nach einem Neustart der App wirksam.',
     dmabufEnvSet: 'Die App wurde mit gesetzter Variable WEBKIT_DISABLE_DMABUF_RENDERER gestartet. Dieser Wert gilt, diese Einstellung hat keine Wirkung.',
+    titleBarSetting: 'Titelleiste', titleBarApp: 'Von der App', titleBarSystem: 'Vom System', titleBarNone: 'Keine',
+    titleBarRestart: 'Wird nach einem Neustart der App wirksam.',
+    titleBarGnome: 'Unter GNOME lässt sich das Fenster mit dieser Option möglicherweise nicht durch Ziehen verschieben.',
+    titleBarOverride: 'Die App wurde mit --system-title-bar, --no-title-bar oder EURO_OFFICE_LITE_TITLE_BAR gestartet. Diese Wahl gilt, diese Einstellung hat keine Wirkung.',
     openNewWindowFailedMsg: 'Die Datei konnte nicht in einem neuen Fenster geöffnet werden. Das aktuelle Dokument ist unverändert.',
     openElsewhereMsg: 'Diese Datei ist bereits in einem anderen Fenster geöffnet. Bearbeiten Sie sie im anderen Fenster.',
     unsavedDiscardClose: 'Das aktuelle Dokument enthält ungespeicherte Änderungen. Möchten Sie diese verwerfen und schließen?',
@@ -897,6 +913,10 @@ var _UI_STRINGS = {
     dmabufSetting: 'Accelerazione hardware', dmabufAuto: 'Automatica', dmabufOn: 'Attiva', dmabufOff: 'Disattiva',
     dmabufRestart: 'Si applica dopo il riavvio dell\'app.',
     dmabufEnvSet: 'L\'app è stata avviata con WEBKIT_DISABLE_DMABUF_RENDERER impostata. Si usa quel valore e questa impostazione non ha effetto.',
+    titleBarSetting: 'Barra del titolo', titleBarApp: 'Dell\'app', titleBarSystem: 'Del sistema', titleBarNone: 'Nessuna',
+    titleBarRestart: 'Si applica dopo il riavvio dell\'app.',
+    titleBarGnome: 'Su GNOME, con questa opzione la finestra potrebbe non spostarsi quando la si trascina.',
+    titleBarOverride: 'L\'app è stata avviata con --system-title-bar, --no-title-bar o EURO_OFFICE_LITE_TITLE_BAR. Si usa quella scelta e questa impostazione non ha effetto.',
     openNewWindowFailedMsg: 'Impossibile aprire il file in una nuova finestra. Il documento attuale non è cambiato.',
     openElsewhereMsg: 'Questo file è già aperto in un\'altra finestra. Usa quella finestra per lavorarci.',
     unsavedDiscardClose: 'Il documento attuale ha modifiche non salvate. Vuoi eliminarle e chiudere?',
@@ -937,6 +957,10 @@ var _UI_STRINGS = {
     dmabufSetting: 'Aceleração por hardware', dmabufAuto: 'Automático', dmabufOn: 'Ativado', dmabufOff: 'Desativado',
     dmabufRestart: 'Aplica-se depois de reiniciar a aplicação.',
     dmabufEnvSet: 'A aplicação foi iniciada com WEBKIT_DISABLE_DMABUF_RENDERER definido. Esse valor é usado e esta definição não tem efeito.',
+    titleBarSetting: 'Barra de título', titleBarApp: 'Da aplicação', titleBarSystem: 'Do sistema', titleBarNone: 'Nenhuma',
+    titleBarRestart: 'Aplica-se depois de reiniciar a aplicação.',
+    titleBarGnome: 'No GNOME, com esta opção a janela pode não se mover ao ser arrastada.',
+    titleBarOverride: 'A aplicação foi iniciada com --system-title-bar, --no-title-bar ou EURO_OFFICE_LITE_TITLE_BAR. Essa opção é usada e esta definição não tem efeito.',
     openNewWindowFailedMsg: 'Não foi possível abrir o arquivo em uma nova janela. O documento atual não foi alterado.',
     openElsewhereMsg: 'Este arquivo já está aberto em outra janela. Use essa janela para trabalhar nele.',
     unsavedDiscardClose: 'O documento atual tem alterações não salvas. Deseja descartá-las e fechar?',
@@ -977,6 +1001,10 @@ var _UI_STRINGS = {
     dmabufSetting: 'Аппаратное ускорение', dmabufAuto: 'Автоматически', dmabufOn: 'Вкл.', dmabufOff: 'Выкл.',
     dmabufRestart: 'Применяется после перезапуска приложения.',
     dmabufEnvSet: 'Приложение запущено с заданной переменной WEBKIT_DISABLE_DMABUF_RENDERER. Используется её значение, эта настройка не действует.',
+    titleBarSetting: 'Строка заголовка', titleBarApp: 'От приложения', titleBarSystem: 'От системы', titleBarNone: 'Нет',
+    titleBarRestart: 'Применяется после перезапуска приложения.',
+    titleBarGnome: 'В GNOME с этим вариантом окно может не перемещаться при перетаскивании.',
+    titleBarOverride: 'Приложение запущено с --system-title-bar, --no-title-bar или EURO_OFFICE_LITE_TITLE_BAR. Используется этот выбор, эта настройка не действует.',
     openNewWindowFailedMsg: 'Не удалось открыть файл в новом окне. Текущий документ не изменён.',
     openElsewhereMsg: 'Этот файл уже открыт в другом окне. Работайте с ним в том окне.',
     unsavedDiscardClose: 'Текущий документ содержит несохранённые изменения. Отменить их и закрыть?',
@@ -1017,6 +1045,10 @@ var _UI_STRINGS = {
     dmabufSetting: 'Апаратне прискорення', dmabufAuto: 'Автоматично', dmabufOn: 'Увімк.', dmabufOff: 'Вимк.',
     dmabufRestart: 'Застосовується після перезапуску застосунку.',
     dmabufEnvSet: 'Застосунок запущено із заданою змінною WEBKIT_DISABLE_DMABUF_RENDERER. Використовується її значення, цей параметр не діє.',
+    titleBarSetting: 'Рядок заголовка', titleBarApp: 'Від застосунку', titleBarSystem: 'Від системи', titleBarNone: 'Немає',
+    titleBarRestart: 'Застосовується після перезапуску застосунку.',
+    titleBarGnome: 'У GNOME з цим варіантом вікно може не переміщуватися під час перетягування.',
+    titleBarOverride: 'Застосунок запущено з --system-title-bar, --no-title-bar або EURO_OFFICE_LITE_TITLE_BAR. Використовується цей вибір, цей параметр не діє.',
     openNewWindowFailedMsg: 'Не вдалося відкрити файл у новому вікні. Поточний документ не змінено.',
     openElsewhereMsg: 'Цей файл уже відкрито в іншому вікні. Працюйте з ним у тому вікні.',
     unsavedDiscardClose: 'Поточний документ має незбережені зміни. Бажаєте скасувати їх і закрити?',
@@ -1057,6 +1089,10 @@ var _UI_STRINGS = {
     dmabufSetting: '硬件加速', dmabufAuto: '自动', dmabufOn: '开启', dmabufOff: '关闭',
     dmabufRestart: '重启应用后生效。',
     dmabufEnvSet: '启动应用时已设置 WEBKIT_DISABLE_DMABUF_RENDERER，将使用该值，此设置不生效。',
+    titleBarSetting: '标题栏', titleBarApp: '应用自带', titleBarSystem: '系统提供', titleBarNone: '无',
+    titleBarRestart: '重启应用后生效。',
+    titleBarGnome: '在 GNOME 中，使用此选项时可能无法拖动窗口。',
+    titleBarOverride: '启动应用时使用了 --system-title-bar、--no-title-bar 或 EURO_OFFICE_LITE_TITLE_BAR，将使用该选择，此设置不生效。',
     openNewWindowFailedMsg: '无法在新窗口中打开文件。当前文档未更改。',
     openElsewhereMsg: '此文件已在另一个窗口中打开。请在该窗口中编辑它。',
     unsavedDiscardClose: '当前文档有未保存的更改。是否放弃更改并关闭？',
@@ -1097,6 +1133,10 @@ var _UI_STRINGS = {
     dmabufSetting: 'ハードウェアアクセラレーション', dmabufAuto: '自動', dmabufOn: 'オン', dmabufOff: 'オフ',
     dmabufRestart: 'アプリを再起動すると反映されます。',
     dmabufEnvSet: 'アプリは WEBKIT_DISABLE_DMABUF_RENDERER を設定した状態で起動されました。その値が使われ、この設定は無効です。',
+    titleBarSetting: 'タイトルバー', titleBarApp: 'アプリ', titleBarSystem: 'システム', titleBarNone: 'なし',
+    titleBarRestart: 'アプリを再起動すると反映されます。',
+    titleBarGnome: 'GNOME では、このオプションを選ぶとウィンドウをドラッグで移動できない場合があります。',
+    titleBarOverride: 'アプリは --system-title-bar、--no-title-bar または EURO_OFFICE_LITE_TITLE_BAR を指定して起動されました。その指定が使われ、この設定は無効です。',
     openNewWindowFailedMsg: '新しいウィンドウでファイルを開けませんでした。現在のドキュメントは変更されていません。',
     openElsewhereMsg: 'このファイルは別のウィンドウで既に開かれています。そのウィンドウで作業してください。',
     unsavedDiscardClose: '現在のドキュメントには未保存の変更があります。変更を破棄して閉じますか？',
@@ -2287,6 +2327,7 @@ function _eoInitStartSettings(options) {
   });
 
   _eoInitDmabufSetting();
+  _eoInitTitleBarSetting();
 }
 window._eoInitStartSettings = _eoInitStartSettings;
 window._eoCloseSettings = _eoCloseSettings;
@@ -2317,6 +2358,44 @@ function _eoInitDmabufSetting() {
       .then(function() { saved = select.value; })
       .catch(function(e) {
         window._eoLog('[EO] Hardware acceleration setting not stored: ' + (e.message || e));
+        select.value = saved;
+      });
+  });
+}
+
+// Linux on Wayland only: who draws the window's title bar (the app, the
+// system or nobody). The backend says whether this session has the setting,
+// what is saved and which notes apply. A change applies after the app
+// restarts; a title bar option or variable given at start wins, and the note
+// says so.
+function _eoInitTitleBarSetting() {
+  var section = document.getElementById('title-bar-section');
+  var select = document.getElementById('title-bar-select');
+  var gnomeNote = document.getElementById('title-bar-gnome');
+  var overrideNote = document.getElementById('title-bar-override');
+  if (!section || !select) return;
+
+  var saved = 'app';
+  function show(state) {
+    saved = state.setting;
+    select.value = saved;
+    if (gnomeNote) gnomeNote.hidden = !state.gnomeNote;
+    if (overrideNote) overrideNote.hidden = !state.overridden;
+  }
+
+  invoke('title_bar_setting_state').then(function(state) {
+    if (!state || !state.supported) return;
+    show(state);
+    section.hidden = false;
+  }).catch(function(e) {
+    window._eoLog('[EO] Title bar setting not read: ' + (e.message || e));
+  });
+
+  select.addEventListener('change', function() {
+    invoke('set_title_bar_setting', { setting: select.value })
+      .then(show)
+      .catch(function(e) {
+        window._eoLog('[EO] Title bar setting not stored: ' + (e.message || e));
         select.value = saved;
       });
   });
