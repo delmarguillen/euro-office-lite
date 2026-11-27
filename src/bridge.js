@@ -2715,6 +2715,9 @@ var SpellCheckBridge = (function() {
   var _userFolders = null;
   var _userFoldersPromise = null;
   var _waitLogged = false;
+  // performance.now() when the worker was created; 0 once its first answer
+  // has been logged.
+  var _workerStarted = 0;
   var _tasks = {};
   var _nextTaskId = 1;
 
@@ -3045,7 +3048,17 @@ var SpellCheckBridge = (function() {
     }
   }
 
+  // The first answer of a worker waits for its script, its wasm and the
+  // dictionaries of the languages of that task.
+  function _logFirstAnswer() {
+    if (!_workerStarted) return;
+    var waited = Math.round(performance.now() - _workerStarted);
+    _workerStarted = 0;
+    _log('first answer of the worker ' + waited + ' ms after it was created');
+  }
+
   function _onWorkerMessage(data) {
+    _logFirstAnswer();
     if (!data) return;
     var id = data.__eoTask;
     var task = (id !== undefined && id !== null) ? _tasks[id] : null;
@@ -3079,6 +3092,7 @@ var SpellCheckBridge = (function() {
       _log('worker could not be created: ' + (e.message || e));
       return null;
     }
+    _workerStarted = performance.now();
     _worker.onerror = function(e) {
       _log('worker error: ' + ((e && e.message) || 'unknown') +
            ' at ' + ((e && e.filename) || '?') + ':' + ((e && e.lineno) || 0));
