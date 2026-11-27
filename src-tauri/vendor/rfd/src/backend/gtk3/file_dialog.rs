@@ -1,4 +1,5 @@
 pub mod dialog_ffi;
+mod filename;
 
 use dialog_ffi::GtkFileDialog;
 

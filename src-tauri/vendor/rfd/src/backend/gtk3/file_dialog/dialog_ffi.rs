@@ -1,4 +1,5 @@
 use super::super::AsGtkDialog;
+use super::filename::path_from_filename;
 use crate::FileDialog;
 use gtk_sys::GtkFileChooserNative;
 
@@ -97,15 +98,9 @@ impl GtkFileDialog {
     }
 
     pub fn get_result(&self) -> Option<PathBuf> {
-        let cstr = unsafe {
+        unsafe {
             let chosen_filename = gtk_sys::gtk_file_chooser_get_filename(self.ptr as _);
-            CStr::from_ptr(chosen_filename).to_str()
-        };
-
-        if let Ok(cstr) = cstr {
-            Some(PathBuf::from(cstr.to_owned()))
-        } else {
-            None
+            path_from_filename(chosen_filename)
         }
     }
 
