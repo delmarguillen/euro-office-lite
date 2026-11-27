@@ -1248,7 +1248,7 @@ pub fn close_document(window: tauri::WebviewWindow, state: State<'_, AppState>) 
     set_current_file(&state, None);
     state.markdown_reloads.lock().unwrap().end();
     // Only the title: the document is closed whether or not it changes.
-    let _ = window.set_title(crate::bridge::WINDOW_TITLE);
+    let _ = crate::bridge::set_title(&window, crate::bridge::WINDOW_TITLE);
 }
 
 // Asked once by the frontend; "fonts-ready" carries the change after that.
