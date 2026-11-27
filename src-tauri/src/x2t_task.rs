@@ -3,6 +3,11 @@
 // and run x2t with exactly the app's code. Log lines go out through a `log`
 // parameter, without the prefix the app adds.
 
+#[path = "fallback_fonts.rs"]
+pub mod fallback_fonts;
+
+use fallback_fonts::FallbackFont;
+
 // x2t is a console program; without this flag Windows opens a console window for it.
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -1709,7 +1714,83 @@ pub fn generate_fonts(
         }
     };
 
-    let mut cmd = font_scan_command(&x2t_exe, fontdata_dir, binaries_dir);
+    let first = fallback_fonts::scanned_first(std::env::consts::OS).to_vec();
+    let mut scan =
+        |fallback: &[FallbackFont]| scan_fonts(&x2t_exe, fontdata_dir, binaries_dir, fallback, log);
+    let still_needed =
+        |scanned: &[FallbackFont]| fallback_fonts_still_needed(fontdata_dir, scanned);
+    scan_with_fallback(first, &mut scan, &still_needed, log)
+}
+
+// Scans with `fallback`, and once more with the fonts `still_needed` names:
+// those whose probes the first scan left without a font.
+fn scan_with_fallback(
+    mut fallback: Vec<FallbackFont>,
+    scan: &mut dyn FnMut(&[FallbackFont]) -> bool,
+    still_needed: &dyn Fn(&[FallbackFont]) -> Vec<FallbackFont>,
+    log: &dyn Fn(&str),
+) -> bool {
+    if !scan(&fallback) {
+        return false;
+    }
+    let needed = still_needed(&fallback);
+    if needed.is_empty() {
+        return true;
+    }
+    log(&format!(
+        "No font found for the probes of {:?}: scanning again with them",
+        needed
+    ));
+    fallback.extend(needed);
+    scan(&fallback)
+}
+
+// What the scan that just wrote AllFonts.js into `fontdata_dir` still needs.
+fn fallback_fonts_still_needed(
+    fontdata_dir: &std::path::Path,
+    scanned: &[FallbackFont],
+) -> Vec<FallbackFont> {
+    let Ok(all_fonts_js) = std::fs::read(fontdata_dir.join("AllFonts.js")) else {
+        return Vec::new();
+    };
+    fallback_fonts::still_needed(scanned, &String::from_utf8_lossy(&all_fonts_js))
+}
+
+// Puts `fallback` in the generation's own folder and hands that folder to
+// the scan. Without a font the command stays as it was.
+fn add_fallback_fonts(
+    cmd: &mut std::process::Command,
+    fontdata_dir: &std::path::Path,
+    fallback: &[FallbackFont],
+    log: &dyn Fn(&str),
+) -> bool {
+    if fallback.is_empty() {
+        return true;
+    }
+    let dir = match fallback_fonts::write_into(fontdata_dir, fallback) {
+        Ok(dir) => dir,
+        Err(error) => {
+            log(&format!("ERROR: cannot write the fallback fonts: {}", error));
+            return false;
+        }
+    };
+    log(&format!("Fallback font directory: {} {:?}", dir.display(), fallback));
+    cmd.arg(strip_extended_prefix(&dir));
+    true
+}
+
+// One run of x2t's font scan into `fontdata_dir`.
+fn scan_fonts(
+    x2t_exe: &std::path::Path,
+    fontdata_dir: &std::path::Path,
+    binaries_dir: &std::path::Path,
+    fallback: &[FallbackFont],
+    log: &dyn Fn(&str),
+) -> bool {
+    let mut cmd = font_scan_command(x2t_exe, fontdata_dir, binaries_dir);
+    if !add_fallback_fonts(&mut cmd, fontdata_dir, fallback, log) {
+        return false;
+    }
     for dir in extra_font_dirs() {
         log(&format!("Extra font directory: {}", dir.display()));
         cmd.arg(dir);
@@ -3724,6 +3805,162 @@ mod font_scan_tests {
             assert_eq!(Path::new(cmd.get_program()), plain.join("x2t.exe"));
             assert_eq!(cmd.get_current_dir(), Some(plain.join("binaries").as_path()));
         }
+    }
+}
+
+#[cfg(test)]
+mod fallback_scan_tests {
+    use super::fallback_fonts::{self, FallbackFont};
+    use super::{add_fallback_fonts, font_scan_command, scan_with_fallback};
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("eo-fallback-scan-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // Runs scan_with_fallback with a scan that succeeds `successes` times and
+    // returns what each scan was given.
+    fn scans(
+        first: &[FallbackFont],
+        needed: &[FallbackFont],
+        successes: usize,
+    ) -> (bool, Vec<Vec<FallbackFont>>) {
+        let seen = RefCell::new(Vec::new());
+        let mut scan = |fallback: &[FallbackFont]| {
+            seen.borrow_mut().push(fallback.to_vec());
+            seen.borrow().len() <= successes
+        };
+        let still_needed = |_: &[FallbackFont]| needed.to_vec();
+        let done = scan_with_fallback(first.to_vec(), &mut scan, &still_needed, &|_| {});
+        (done, seen.into_inner())
+    }
+
+    #[test]
+    fn a_scan_that_needs_nothing_more_runs_once() {
+        let (done, seen) = scans(&[FallbackFont::Emoji], &[], 2);
+        assert!(done);
+        assert_eq!(seen, vec![vec![FallbackFont::Emoji]]);
+    }
+
+    #[test]
+    fn a_scan_that_left_probes_without_a_font_runs_again_with_that_font() {
+        let (done, seen) = scans(&[FallbackFont::Emoji], &[FallbackFont::Signs], 2);
+        assert!(done);
+        assert_eq!(
+            seen,
+            vec![
+                vec![FallbackFont::Emoji],
+                vec![FallbackFont::Emoji, FallbackFont::Signs],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_scan_is_not_run_again() {
+        let (done, seen) = scans(&[], &[FallbackFont::Signs], 0);
+        assert!(!done);
+        assert_eq!(seen, vec![Vec::<FallbackFont>::new()]);
+    }
+
+    #[test]
+    fn a_failed_second_scan_fails_the_generation() {
+        let (done, seen) = scans(&[], &[FallbackFont::Signs], 1);
+        assert!(!done);
+        assert_eq!(seen.len(), 2);
+    }
+
+    fn scan_args(fontdata: &Path, fallback: &[FallbackFont]) -> Vec<PathBuf> {
+        let binaries = Path::new("/opt/eo/binaries");
+        let mut cmd = font_scan_command(&binaries.join("x2t"), fontdata, binaries);
+        assert!(add_fallback_fonts(&mut cmd, fontdata, fallback, &|_| {}));
+        cmd.get_args().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn the_scan_is_given_the_fallback_folder_of_the_generation() {
+        let fontdata = scratch_dir("given");
+
+        let args = scan_args(&fontdata, &[FallbackFont::Emoji]);
+
+        let folder = fontdata.join(fallback_fonts::DIR_NAME);
+        assert_eq!(
+            args,
+            vec![
+                PathBuf::from("-create-allfonts"),
+                fontdata.clone(),
+                PathBuf::from("/opt/eo/binaries/fonts"),
+                folder.clone(),
+            ]
+        );
+        assert!(folder.join("EuroOfficeEmoji.ttf").is_file());
+        assert!(!folder.join("EuroOfficeSigns.ttf").exists());
+        let _ = std::fs::remove_dir_all(&fontdata);
+    }
+
+    #[test]
+    fn a_scan_without_fallback_fonts_gets_no_folder() {
+        let fontdata = scratch_dir("none");
+
+        let args = scan_args(&fontdata, &[]);
+
+        assert_eq!(args.len(), 3);
+        assert!(!fontdata.join(fallback_fonts::DIR_NAME).exists());
+        let _ = std::fs::remove_dir_all(&fontdata);
+    }
+
+    // The two tests below scan with a real x2t. Ignored by default: they need
+    // x2t and its libraries in EO_X2T_BINARIES, as get-x2t-ci.sh unpacks them.
+    // Run: EO_X2T_BINARIES=/path/binaries cargo test -- --ignored real_x2t
+    fn real_scan(name: &str) -> (PathBuf, String) {
+        let Ok(binaries) = std::env::var("EO_X2T_BINARIES") else {
+            panic!("EO_X2T_BINARIES is not set");
+        };
+        let fontdata = scratch_dir(name);
+        let log = |line: &str| eprintln!("{}", line);
+        assert!(super::generate_fonts(&fontdata, Path::new(&binaries), None, &log));
+        let list = std::fs::read(fontdata.join("AllFonts.js")).unwrap();
+        (fontdata, String::from_utf8_lossy(&list).into_owned())
+    }
+
+    #[test]
+    #[ignore]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn real_x2t_lists_the_emoji_font_from_the_folder_it_scanned() {
+        let (fontdata, list) = real_scan("real-emoji");
+
+        let font = fontdata.join("fallback-fonts").join("EuroOfficeEmoji.ttf");
+        assert!(font.is_file(), "{} is missing", font.display());
+        let listed = format!("{}\"", font.display());
+        assert!(list.contains(&listed), "{} not in AllFonts.js", listed);
+        let _ = std::fs::remove_dir_all(&fontdata);
+    }
+
+    // Whatever fonts the machine has: with none for a probe the scan runs
+    // again with the fallback font that has it.
+    #[test]
+    #[ignore]
+    fn real_x2t_leaves_no_probe_without_a_font() {
+        let (fontdata, list) = real_scan("real-probes");
+
+        assert_eq!(fallback_fonts::still_needed(&[], &list), Vec::new());
+        let _ = std::fs::remove_dir_all(&fontdata);
+    }
+
+    #[test]
+    fn fallback_fonts_that_cannot_be_written_fail_the_scan() {
+        let fontdata = scratch_dir("blocked");
+        std::fs::write(fontdata.join(fallback_fonts::DIR_NAME), b"a file, not a folder").unwrap();
+        let binaries = Path::new("/opt/eo/binaries");
+        let mut cmd = font_scan_command(&binaries.join("x2t"), &fontdata, binaries);
+
+        assert!(!add_fallback_fonts(&mut cmd, &fontdata, &[FallbackFont::Emoji], &|_| {}));
+
+        assert_eq!(cmd.get_args().count(), 3);
+        let _ = std::fs::remove_dir_all(&fontdata);
     }
 }
 
