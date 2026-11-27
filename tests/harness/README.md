@@ -79,8 +79,17 @@ workflow: by hand with the build run id in `run_id`, or after every Windows
 Dev Build that succeeds.
 
 The job makes the inputs with `gen/mkinputs.py` under `$RUNNER_TEMP`, then
-starts `run.ps1 all -Installer <exe> -Inputs <dir> -Out <dir>` as a child
-process, as described in [Windows](#windows), and fails when it exits 1 or 2.
+starts `run.ps1 all -Installer <exe> -Inputs <dir> -Out <dir> -ClearDesktop`
+as a child process, as described in [Windows](#windows), and fails when it
+exits 1 or 2.
+
+`windows-11-arm` is a Windows 11 desktop image whose user signs in for the
+first time: "Choose privacy settings for your device" covers the desktop and
+keeps the foreground, and every case that needs a key or a click ended in
+`not-in-foreground`. `-ClearDesktop` ends the process of that screen before
+the cases, and the output of run.ps1 says which process it was and what has
+the foreground afterwards. A step before the harness also sets the policy
+`DisablePrivacyExperience`, so the screen is not launched a second time.
 Every job has `result.json` in the artifact
 `harness-windows-<arch>-result-<attempt>`, unless the harness could not run.
 A failed job also has `harness-windows-<arch>-diagnostics-<attempt>`: the
@@ -108,7 +117,7 @@ win\run.ps1 all -Installer some-setup.exe -Inputs C:\h\inputs -Out C:\h\run
 win\restore.ps1 C:\h\backup                  # put the user state back, checked by sha256
 ```
 
-`run.ps1 CASE|all [-Installer FILE] [-Inputs DIR] [-Control] [-Screenshots] [-Out DIR]`.
+`run.ps1 CASE|all [-Installer FILE] [-Inputs DIR] [-Control] [-Screenshots] [-ClearDesktop] [-Out DIR]`.
 `-Installer` runs the installer silently (`/S`) first. Exit status: 0 every
 case ok, 1 some case failed, 2 the harness could not run.
 
@@ -128,6 +137,17 @@ case ok, 1 some case failed, 2 the harness could not run.
 
   run.ps1 writes its progress to standard error; the exit status of the child
   is that of run.ps1.
+- A case ends in `not-in-foreground` when its window could not be brought to
+  the foreground, after three tries: `SetForegroundWindow`, the same with the
+  input of the thread that has the foreground attached, and the same with ALT
+  held down. Nothing is typed then, and the detail of the case says which
+  window kept the foreground: its class, title and process.
+- `-ClearDesktop` is for a machine that is thrown away after the run. Before
+  the cases it ends the processes whose window covers the whole screen and
+  belongs to a first sign-in screen of Windows: a program named in
+  `$FirstRunHosts` (`win/lib.ps1`), or the window with the foreground when its
+  program is in `%WINDIR%\SystemApps` or `%WINDIR%\System32\oobe`. Without
+  the switch run.ps1 ends nothing.
 - Inputs: `gen/mkinputs.py DIR` writes the input of every case to
   `DIR\CASE\` and stops when a file does not have the sha256 its case gives.
   On a machine without Python, run it elsewhere and copy `DIR` over;
@@ -185,6 +205,15 @@ Exit status as in run.sh.
   Accessibility and Automation (System Events) for `osascript`, and Screen
   Recording for `screencapture`. The GitHub macOS images grant them to
   `/bin/bash` and `/usr/bin/osascript`.
+- The click in the middle of the window is a click of the mouse:
+  `mac/center.applescript` gives the point and `mac/click.js` (JavaScript for
+  Automation) posts the pointer move, the button down and the button up as
+  Quartz events, which needs the Accessibility permission. The `click at` of
+  System Events is not used for it: it sends a click to the UI element it
+  finds at the point, which presses a button of a page but does nothing on
+  the canvas of an editor, and a presentation takes the typed text only after
+  a click in its text box. When the mouse click cannot be made, the log says
+  so and System Events clicks instead (`mac/click.applescript`).
 - `--dmg` mounts the image with `hdiutil`, copies the `.app` to
   `/Applications/Euro-Office-Lite.app` with `ditto` when its binary differs
   from the installed one, and stops (exit 2) unless
