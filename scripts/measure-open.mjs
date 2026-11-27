@@ -49,6 +49,13 @@
 // app_ready: its column is then the time since app_ready, and sdk_min +
 // app_ready + sdk_all is the time from sdk_min to the later of the two.
 //
+// The editor is created while the backend converts, so the backend's marks and
+// `result` fall among the page's from `fonts` on. A column is still the time
+// since the mark before it in time, whichever side logged that mark: the time
+// the backend took is respond - command in its own lines, and the time the
+// editor took to ask for the document is doc_request - iframe in the page's.
+// A `result` after `doc_request` is an editor that waited for its document.
+//
 // A phase with no mark shows "-", and its time goes to the next phase that
 // has one. With two or more complete opens a last row gives the median of
 // each column over them.
