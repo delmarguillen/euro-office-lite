@@ -1688,6 +1688,13 @@ function _eoShowNewWindowError() {
   );
 }
 
+// A file opens in this window only with no document in it and none on its
+// way: otherwise in a new one.
+function _eoOpensHere() {
+  if (window.AscDesktopEditor._currentDocType) return false;
+  return !_eoLeavingForMarkdown;
+}
+
 // The editor's recent list names entries by path. The backend's own list
 // gives the token for that path.
 async function _eoOpenRecent(path) {
@@ -1715,11 +1722,16 @@ function _eoIsMarkdownPath(name) {
 }
 window._eoIsMarkdownPath = _eoIsMarkdownPath;
 
+// Set once this page is going to the Markdown page, which shows no opening
+// indicator: from then on nothing opens here (_eoOpensHere).
+var _eoLeavingForMarkdown = false;
+
 // What the Markdown page is to open goes in its address, one key and value,
 // which the page reads and takes out at once (markdown.js, takePending). Not
 // in localStorage: on WebKitGTK, with another process of the app open, the
 // page did not see what the start screen had just written there.
 function _eoGoToMarkdownPage(key, value) {
+  _eoLeavingForMarkdown = true;
   window.location.href = EO_MARKDOWN_PAGE + '?' + key + '=' + encodeURIComponent(value);
 }
 
@@ -3600,7 +3612,7 @@ window.AscDesktopEditor = {
     await _eoWaitForOpenInProgress(file);
 
     // The open document stays as it is, saved or not.
-    if (window.AscDesktopEditor._currentDocType) {
+    if (!_eoOpensHere()) {
       await _eoOpenInNewWindow(file);
       return;
     }
@@ -4412,8 +4424,10 @@ async function _eoDrainPendingOpens() {
   }
 }
 
-// False when nothing was waiting.
+// False when nothing was waiting or the page is going to the Markdown page,
+// which takes what is still waiting when it loads.
 async function _eoOpenNextPending() {
+  if (_eoLeavingForMarkdown) return false;
   var file = await invoke('take_pending_open_file');
   if (!file) return false;
   await window.AscDesktopEditor.LocalFileOpen(file);
