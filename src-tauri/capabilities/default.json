@@ -48,6 +48,8 @@
     "allow-clear-recent-files",
     "allow-dmabuf-setting-state",
     "allow-set-dmabuf-setting",
+    "allow-title-bar-setting-state",
+    "allow-set-title-bar-setting",
     "allow-default-folders-state",
     "allow-pick-default-folder",
     "allow-clear-default-folder",

@@ -200,10 +200,16 @@ fn load_setting_from(path: &Path) -> Loaded {
 }
 
 fn save_setting_to(path: &Path, setting: Setting) -> Result<(), String> {
-    let parent = path.parent().ok_or("no-folder")?;
-    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let json = serde_json::to_string_pretty(&StoredSetting { dmabuf: setting })
         .map_err(|error| error.to_string())?;
+    write_setting_file(path, &json)
+}
+
+// Writes a settings file, creating its folder. Also used for the title bar
+// setting (title_bar_setting.rs).
+pub fn write_setting_file(path: &Path, json: &str) -> Result<(), String> {
+    let parent = path.parent().ok_or("no-folder")?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     // Write through a temporary file so a crash mid-write cannot leave a
     // truncated file behind; rename replaces the destination.
     let tmp = path.with_extension("json.tmp");
@@ -231,13 +237,18 @@ fn linux_config_dir(
     Some(PathBuf::from(home).join(".config").join(identifier))
 }
 
-fn settings_path(identifier: &str) -> Option<PathBuf> {
+// The app's config folder on Linux, known before Tauri starts. The title bar
+// setting is kept there too (title_bar_setting.rs).
+pub fn config_dir(identifier: &str) -> Option<PathBuf> {
     linux_config_dir(
         std::env::var_os("XDG_CONFIG_HOME"),
         std::env::var_os("HOME"),
         identifier,
     )
-    .map(|dir| dir.join(SETTING_FILE))
+}
+
+fn settings_path(identifier: &str) -> Option<PathBuf> {
+    config_dir(identifier).map(|dir| dir.join(SETTING_FILE))
 }
 
 fn settings_path_for(app: &AppHandle) -> Option<PathBuf> {

@@ -41,6 +41,8 @@ const APP_COMMANDS: &[&str] = &[
     "clear_recent_files",
     "dmabuf_setting_state",
     "set_dmabuf_setting",
+    "title_bar_setting_state",
+    "set_title_bar_setting",
     "default_folders_state",
     "pick_default_folder",
     "clear_default_folder",
