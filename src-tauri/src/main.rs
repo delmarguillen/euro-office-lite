@@ -36,6 +36,8 @@ mod temp_layout;
 #[cfg(test)]
 mod template_round_trip_tests;
 mod text_import;
+#[cfg(test)]
+mod text_round_trip_tests;
 mod title_bar_setting;
 mod window_state;
 mod x2t_task;
