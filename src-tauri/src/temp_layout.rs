@@ -767,7 +767,7 @@ const PORTAL_HOST_PATH: &std::ffi::CStr = c"user.document-portal.host-path";
 // Where the document portal is mounted in this sandbox. None outside Flatpak.
 #[cfg(target_os = "linux")]
 fn document_portal() -> Option<PathBuf> {
-    if !Path::new("/.flatpak-info").exists() {
+    if !in_flatpak() {
         return None;
     }
     // Flatpak mounts the portal at /run/flatpak/doc and links this path to
@@ -1361,6 +1361,7 @@ pub fn temp_root(_identifier: &str) -> Result<RootChoice, String> {
 // cache folder in the user's home is next, which also keeps the font cache
 // across restarts. After that, a folder made new for this start: first in the
 // user's cache folder, then in the temp folder. Err when none can be had.
+// Inside a Flatpak the order of the first two is reversed (root_candidates).
 #[cfg(unix)]
 pub fn temp_root(identifier: &str) -> Result<RootChoice, String> {
     let uid = unsafe { libc::getuid() };
@@ -1369,16 +1370,10 @@ pub fn temp_root(identifier: &str) -> Result<RootChoice, String> {
     #[cfg(not(target_os = "macos"))]
     let shared_tmp = std::env::temp_dir();
 
-    let mut candidates = vec![shared_tmp.join(format!("euro-office-lite-{}", uid))];
-    let mut fresh_in = Vec::new();
-    if let Some(cache) = user_cache_dir() {
-        let app_cache = cache.join(identifier);
-        candidates.push(app_cache.join("tmp"));
-        fresh_in.push(app_cache);
-    }
-    fresh_in.push(shared_tmp);
+    let app_cache = user_cache_dir().map(|cache| cache.join(identifier));
+    let roots = root_candidates(&shared_tmp, uid, app_cache.as_deref(), in_flatpak());
     let counter = std::sync::atomic::AtomicU32::new(0);
-    choose_root(&candidates, &fresh_in, uid, || {
+    choose_root(&roots.candidates, &roots.fresh_in, uid, || {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_nanos())
@@ -1391,6 +1386,65 @@ pub fn temp_root(identifier: &str) -> Result<RootChoice, String> {
             counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         )
     })
+}
+
+// What temp_root tries: each of `candidates` in order, then a folder made new
+// in one of `fresh_in`.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+struct RootCandidates {
+    candidates: Vec<PathBuf>,
+    fresh_in: Vec<PathBuf>,
+}
+
+// `app_cache` is the app's folder in the user's cache, None when there is no
+// cache folder. Inside a Flatpak the temp folder belongs to the sandbox and is
+// emptied when the app's last process ends, but recovering a crashed document
+// needs that instance's folder afterwards: there the cache comes first. The
+// temp folder stays behind it, so the app still starts when the cache cannot
+// be used.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn root_candidates(
+    shared_tmp: &Path,
+    uid: u32,
+    app_cache: Option<&Path>,
+    in_flatpak: bool,
+) -> RootCandidates {
+    let in_tmp = shared_tmp.join(format!("euro-office-lite-{}", uid));
+    let Some(app_cache) = app_cache else {
+        return RootCandidates {
+            candidates: vec![in_tmp],
+            fresh_in: vec![shared_tmp.to_path_buf()],
+        };
+    };
+    let in_cache = app_cache.join("tmp");
+    let fresh_in = vec![app_cache.to_path_buf(), shared_tmp.to_path_buf()];
+    if in_flatpak {
+        return RootCandidates {
+            candidates: vec![in_cache, in_tmp],
+            fresh_in,
+        };
+    }
+    RootCandidates {
+        candidates: vec![in_tmp, in_cache],
+        fresh_in,
+    }
+}
+
+// Flatpak creates this file at the root of every sandbox it starts. The file
+// is checked rather than FLATPAK_ID: only Flatpak puts it there, while a
+// variable comes with whatever environment the app was started from.
+#[cfg(unix)]
+const FLATPAK_INFO: &str = "/.flatpak-info";
+
+#[cfg(unix)]
+fn in_flatpak() -> bool {
+    is_flatpak_sandbox(Path::new(FLATPAK_INFO))
+}
+
+// Apart from the real path, so tests can point it at a folder of their own.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn is_flatpak_sandbox(info_file: &Path) -> bool {
+    info_file.exists()
 }
 
 // Where Tauri's app_cache_dir lives, worked out before Tauri is up.

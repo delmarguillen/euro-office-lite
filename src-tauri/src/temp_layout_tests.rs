@@ -1147,6 +1147,237 @@ mod private_root {
         assert_eq!(mode(&taken), 0o755, "left as it was");
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    // Both folders would pass the checks; inside a Flatpak the cache is taken
+    // and the sandbox's temp folder is not even made.
+    #[test]
+    fn inside_a_flatpak_the_root_is_the_private_folder_in_the_app_cache() {
+        let base = scratch_root();
+        let shared_tmp = base.join("tmp");
+        std::fs::create_dir_all(&shared_tmp).unwrap();
+        let app_cache = base.join("cache").join("org.euro-office.lite");
+        let roots = root_candidates(&shared_tmp, uid(), Some(&app_cache), true);
+
+        let choice = choose_root(&roots.candidates, &roots.fresh_in, uid(), || {
+            "fresh".to_string()
+        })
+        .unwrap();
+
+        assert_eq!(choice.path, app_cache.join("tmp"));
+        assert_eq!(mode(&choice.path), 0o700);
+        assert!(choice.note.is_none(), "{:?}", choice.note);
+        assert!(!shared_tmp.join(format!("euro-office-lite-{}", uid())).exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // A cache folder that fails the checks leaves the app where it was before:
+    // in the sandbox's temp folder.
+    #[test]
+    fn inside_a_flatpak_a_cache_root_open_to_others_falls_back_to_the_temp_folder() {
+        let base = scratch_root();
+        let shared_tmp = base.join("tmp");
+        std::fs::create_dir_all(&shared_tmp).unwrap();
+        let app_cache = base.join("cache").join("org.euro-office.lite");
+        std::fs::create_dir_all(app_cache.join("tmp")).unwrap();
+        std::fs::set_permissions(app_cache.join("tmp"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let roots = root_candidates(&shared_tmp, uid(), Some(&app_cache), true);
+
+        let choice = choose_root(&roots.candidates, &roots.fresh_in, uid(), || {
+            "fresh".to_string()
+        })
+        .unwrap();
+
+        assert_eq!(choice.path, shared_tmp.join(format!("euro-office-lite-{}", uid())));
+        assert!(choice.note.unwrap().contains("permissions 755"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Temp root inside and outside a Flatpak
+// ---------------------------------------------------------------------------
+
+const APP_ID: &str = "org.euro-office.lite";
+
+// XDG_CACHE_HOME inside the Flatpak: the sandbox's own cache folder, which
+// outlives the app.
+fn flatpak_user_cache() -> PathBuf {
+    PathBuf::from("/home/ana/.var/app/org.eurooffice.Lite/cache")
+}
+
+#[test]
+fn inside_a_flatpak_the_app_cache_comes_before_the_sandboxs_temp_folder() {
+    let tmp = Path::new("/tmp");
+    let app_cache = flatpak_user_cache().join(APP_ID);
+
+    let roots = root_candidates(tmp, 1000, Some(&app_cache), true);
+
+    assert_eq!(
+        roots.candidates,
+        vec![app_cache.join("tmp"), tmp.join("euro-office-lite-1000")]
+    );
+    assert_eq!(roots.fresh_in, vec![app_cache.clone(), tmp.to_path_buf()]);
+}
+
+#[test]
+fn outside_a_flatpak_the_temp_folder_comes_first_as_before() {
+    let tmp = Path::new("/tmp");
+    let app_cache = PathBuf::from("/home/ana/.cache").join(APP_ID);
+
+    let roots = root_candidates(tmp, 1000, Some(&app_cache), false);
+
+    assert_eq!(
+        roots.candidates,
+        vec![tmp.join("euro-office-lite-1000"), app_cache.join("tmp")]
+    );
+    assert_eq!(roots.fresh_in, vec![app_cache.clone(), tmp.to_path_buf()]);
+}
+
+#[test]
+fn without_a_cache_folder_only_the_temp_folder_is_tried() {
+    let tmp = Path::new("/tmp");
+    for in_flatpak in [false, true] {
+        let roots = root_candidates(tmp, 1000, None, in_flatpak);
+
+        assert_eq!(roots.candidates, vec![tmp.join("euro-office-lite-1000")]);
+        assert_eq!(roots.fresh_in, vec![tmp.to_path_buf()]);
+    }
+}
+
+#[test]
+fn the_flatpak_is_told_by_its_info_file() {
+    let dir = scratch_root();
+    let info = dir.join(".flatpak-info");
+    assert!(!is_flatpak_sandbox(&info));
+
+    std::fs::write(&info, b"[Application]\nname=org.eurooffice.Lite\n").unwrap();
+
+    assert!(is_flatpak_sandbox(&info));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// The root inside the Flatpak, the font cache and the read copies are three
+// folders side by side in the app's cache folder, none inside another.
+#[test]
+fn the_flatpak_root_the_font_cache_and_the_read_copies_are_sibling_folders() {
+    let user_cache = flatpak_user_cache();
+    let app_cache = user_cache.join(APP_ID);
+    let root = root_candidates(Path::new("/tmp"), 1000, Some(&app_cache), true).candidates[0].clone();
+    let fonts = font_cache_path(&user_cache, APP_ID);
+    let read_copies = app_cache.join(READ_COPIES_DIR);
+
+    let folders = [&root, &fonts, &read_copies];
+    for folder in folders {
+        assert_eq!(folder.parent(), Some(app_cache.as_path()), "{}", folder.display());
+    }
+    for a in folders {
+        for b in folders {
+            assert!(a == b || !a.starts_with(b), "{} is inside {}", a.display(), b.display());
+        }
+    }
+}
+
+// Each cleanup that runs at startup stays in its own folder: none of them
+// removes anything from the other two.
+#[test]
+fn the_cleanups_at_startup_stay_out_of_the_sibling_folders() {
+    let base = scratch_root();
+    let user_cache = base.join("cache");
+    let app_cache = user_cache.join(APP_ID);
+    let root = app_cache.join("tmp");
+    let fonts = font_cache_path(&user_cache, APP_ID);
+    let read_copies = app_cache.join(READ_COPIES_DIR);
+    let old = format!("{}-2", now() - 5 * 60_000);
+    // What a dead instance leaves in each, as each cleanup would find it.
+    make_folder(&root, &old, true);
+    std::fs::write(log_path(&root, &old), b"log").unwrap();
+    std::fs::create_dir_all(read_copies.join(&old)).unwrap();
+    std::fs::write(read_copies.join(&old).join(READ_COPIES_LOCK), b"").unwrap();
+    let generation = published(&fonts, "1-1-0", b"another version", b"fonts");
+    // The same names in the folders each cleanup must not enter.
+    for other in [&fonts, &read_copies] {
+        make_folder(other, &old, true);
+        std::fs::write(log_path(other, &old), b"log").unwrap();
+    }
+    published(&root, "1-1-0", b"another version", b"fonts");
+    published(&read_copies, "1-1-0", b"another version", b"fonts");
+
+    sweep_dead_instances(&root, now(), &HashSet::new(), |path| is_locked(path));
+    prune_logs(&root, 0, |_| false);
+    sweep_read_copies(&read_copies);
+    remove_old_font_generations(&fonts);
+
+    assert!(!instance_dir(&root, &old).exists());
+    assert!(!log_path(&root, &old).exists());
+    // Windows makes no read copies (ReadCopies::make_private), and its sweep
+    // cannot remove a folder while it holds the lock file inside.
+    #[cfg(unix)]
+    assert!(!read_copies.join(&old).exists());
+    assert!(!generation.exists());
+    for other in [&fonts, &read_copies] {
+        assert!(instance_dir(other, &old).exists(), "{}", other.display());
+        assert!(log_path(other, &old).exists(), "{}", other.display());
+    }
+    assert!(generations_dir(&root).join("1-1-0").exists());
+    assert!(generations_dir(&read_copies).join("1-1-0").exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// In a root that outlives the app, as the Flatpak's now does, the folder a
+// crash left goes at the next start unless a recovery folder cites it. In the
+// sandbox every instance is pid 2: only the lock tells the live one apart.
+#[test]
+fn a_crashed_instances_folder_in_a_lasting_root_goes_at_the_next_start() {
+    let base = scratch_root();
+    let root = base.join("cache").join(APP_ID).join("tmp");
+    let n = now();
+    let crashed = begin_instance(&root, n - 3 * 60_000, 2).unwrap();
+    let cited = begin_instance(&root, n - 4 * 60_000, 2).unwrap();
+    let running = begin_instance(&root, n - 2 * 60_000, 2).unwrap();
+    crashed.lock.lock().unwrap().take();
+    cited.lock.lock().unwrap().take();
+    let refs: HashSet<String> = [cited.id.clone()].into_iter().collect();
+
+    let removed = sweep_dead_instances(&root, n, &refs, |path| is_locked(path));
+
+    assert_eq!(removed, vec![crashed.id.clone()]);
+    assert!(cited.dir.exists(), "a recovery folder still needs its images");
+    assert!(running.dir.exists());
+    assert!(instance_alive(&root, &running.id));
+    running.end();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// Two sandboxes can start in the same millisecond, both as pid 2. The second
+// does not get the first one's folder: it fails and starts again under a new
+// id (main.rs, start_instance).
+#[test]
+fn a_second_start_under_the_same_id_does_not_get_the_first_ones_folder() {
+    let root = scratch_root();
+    let first = begin_instance(&root, 1_000, 2).unwrap();
+
+    assert!(begin_instance(&root, 1_000, 2).is_err());
+    assert!(first.holds_lock());
+    assert!(instance_alive(&root, &first.id));
+    first.end();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// A recovery folder written by a version whose root was the sandbox's temp
+// folder cites an instance that is gone: the text comes back without its
+// images, and no error.
+#[test]
+fn a_recovery_from_the_old_flatpak_root_finds_no_images_and_no_error() {
+    let base = scratch_root();
+    let root = base.join("cache").join(APP_ID).join("tmp");
+    let recovering = begin_instance(&root, now(), 2).unwrap();
+
+    let src = recovery_media_source(&root, Some("1764300000000-2"));
+    let copied = copy_media(&src, &recovering.dir.join("media"));
+
+    assert_eq!(copied.unwrap(), 0);
+    recovering.end();
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 // ---------------------------------------------------------------------------
