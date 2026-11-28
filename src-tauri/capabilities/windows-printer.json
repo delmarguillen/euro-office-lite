@@ -1,8 +1,8 @@
 {
   "identifier": "windows-printer",
-  "description": "Read available printers on Windows and Linux",
+  "description": "Read available printers on Windows",
   "windows": ["main"],
-  "platforms": ["windows", "linux"],
+  "platforms": ["windows"],
   "permissions": [
     "printer:allow-get-printers"
   ]

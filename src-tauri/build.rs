@@ -8,6 +8,7 @@ const APP_COMMANDS: &[&str] = &[
     "save_pdf",
     "write_editor_bin",
     "print_document",
+    "get_printers",
     "create_new",
     "create_from_template",
     "current_document",

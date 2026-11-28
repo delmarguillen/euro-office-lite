@@ -14,6 +14,8 @@ mod file_dialogs;
 mod file_ops;
 mod fonts_state;
 mod launch_args;
+#[cfg(target_os = "linux")]
+mod linux_printing;
 mod markdown;
 mod new_window;
 mod note_separator;
@@ -491,7 +493,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(window_state::plugin());
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(target_os = "windows")]
     {
         builder = builder.plugin(tauri_plugin_printer_v2::init());
     }
@@ -537,6 +539,8 @@ fn main() {
         .manage(presentation::PresentationState::default())
         .manage(presentation::FullscreenFocus::default())
         .invoke_handler(tauri::generate_handler![
+            #[cfg(target_os = "linux")]
+            linux_printing::get_printers,
             file_ops::open_file,
             file_ops::open_pdf,
             file_ops::save_file,

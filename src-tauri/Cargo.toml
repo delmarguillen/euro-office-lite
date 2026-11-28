@@ -29,11 +29,8 @@ unicode-normalization = "=0.1.24"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-printer-v2 = "0.2.4"
-
-[patch.crates-io]
-tauri-plugin-printer-v2 = { path = "vendor/tauri-plugin-printer-v2" }
 
 # Pinned to the version wry links, so PlatformWebview::inner() hands back a
 # WebView of the same type rather than a second, incompatible binding.

@@ -44,7 +44,7 @@ const linux = await preview('Linux x86_64', JSON.stringify([
   { name: 'Office', is_default: false, color_supported: false, duplex_supported: false },
   { name: 'Office/Duplex', is_default: true, color_supported: true, duplex_supported: true },
 ]));
-assert.deepEqual(linux.calls, ['plugin:printer|get_printers']);
+assert.deepEqual(linux.calls, ['get_printers']);
 assert.deepEqual(linux.messages, [['printer:config', {
   printers: [
     { name: 'Office', color_supported: false, duplex_supported: false },
@@ -58,6 +58,7 @@ for (const app of ['SSE', 'PE', 'PDFE']) {
   assert.equal(editor.messages[0][1].current_printer, 'Office');
 }
 const windows = await preview('Win32', '{"Name":"Windows printer"}');
+assert.deepEqual(windows.calls, ['plugin:printer|get_printers']);
 assert.equal(windows.messages[0][1].current_printer, 'Windows printer');
 const mac = await preview('MacIntel', '[]');
 assert.deepEqual(mac.calls, []);

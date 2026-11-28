@@ -153,7 +153,8 @@ Output goes to `src-tauri/target/release/bundle/nsis/`.
 User <-> Tauri webview <-> sdkjs/web-apps (editor UI)
                         <-> bridge.js (desktop bridge shim)
                         <-> Rust backend <-> x2t (format conversion)
-                                         <-> tauri-plugin-printer-v2 (Windows / Linux printing)
+                                         <-> tauri-plugin-printer-v2 (Windows printing)
+                                         <-> CUPS (Linux printing)
 ```
 
 - **sdkjs / web-apps**: Editor frontend (submodules, do not modify)

@@ -1234,7 +1234,7 @@ async fn send_to_printer(_app: tauri::AppHandle, printer: &str, pdf: &Path) -> R
     let printer = printer.to_string();
     let pdf = pdf.to_path_buf();
     tauri::async_runtime::spawn_blocking(move || {
-        tauri_plugin_printer_v2::linux::print_pdf(&printer, &pdf).map(|_| ())
+        crate::linux_printing::print_pdf(&printer, &pdf).map(|_| ())
     })
     .await
     .map_err(|e| e.to_string())?
