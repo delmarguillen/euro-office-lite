@@ -19,6 +19,7 @@ on:
       - 'scripts/build-frontend-prod.mjs'
       - 'scripts/validate-frontend-prod.mjs'
       - 'scripts/bridge-test-harness.mjs'
+      - 'scripts/sdkjs-word-test-harness.mjs'
       - 'scripts/spell-languages.mjs'
       - 'src/bridge.js'
       - '.github/workflows/tests.yml'
@@ -35,6 +36,7 @@ on:
       - 'scripts/build-frontend-prod.mjs'
       - 'scripts/validate-frontend-prod.mjs'
       - 'scripts/bridge-test-harness.mjs'
+      - 'scripts/sdkjs-word-test-harness.mjs'
       - 'scripts/spell-languages.mjs'
       - 'src/bridge.js'
       - '.github/workflows/tests.yml'
@@ -135,6 +137,15 @@ jobs:
 
       - name: Cell style editing tests
         run: node scripts/test-sdkjs-cell-styles.mjs
+
+      - name: Table of contents page number tests
+        run: node scripts/test-sdkjs-toc-page-numbers.mjs
+
+      - name: Caption chapter number tests
+        run: node scripts/test-sdkjs-caption-chapter-number.mjs
+
+      - name: Caption chapter restart tests
+        run: node scripts/test-sdkjs-caption-chapter-restart.mjs
 
       - name: Bridge tests
         run: |

@@ -1,0 +1,39 @@
+Origin: own
+
+diff --git a/word/Editor/Document.js b/word/Editor/Document.js
+index 74039704da..2c5814451e 100644
+--- a/word/Editor/Document.js
++++ b/word/Editor/Document.js
+@@ -25575,7 +25575,8 @@ CDocument.prototype.AddCaption = function(oPr)
+                 NewRun = new ParaRun();
+                 NewRun.AddToContent(-1, oBeginChar);
+ 
+-                var sStyleId = this.Styles.GetDefaultHeading(nHeadingLvl - 1);
++                // get_HeadingLvl counts from 0 (Heading 1 is 0)
++                var sStyleId = this.Styles.GetDefaultHeading(nHeadingLvl);
+                 var oStyle = this.Styles.Get(sStyleId);
+                 NewRun.AddInstrText(" STYLEREF \"" + oStyle.GetName() + "\" \\s");
+                 NewRun.AddToContent(-1, oSeparateChar);
+@@ -25604,7 +25605,8 @@ CDocument.prototype.AddCaption = function(oPr)
+         var sInstruction = " SEQ " + oPr.getLabelForInstruction() + " \\* " + oPr.get_FormatGeneral() + " ";
+         if(AscFormat.isRealNumber(nHeadingLvl))
+         {
+-            sInstruction += ("\\s " + nHeadingLvl);
++            // \s of SEQ takes the heading level from 1
++            sInstruction += ("\\s " + (nHeadingLvl + 1));
+         }
+         oBeginChar    = new ParaFieldChar(fldchartype_Begin, this);
+         oSeparateChar = new ParaFieldChar(fldchartype_Separate, this);
+diff --git a/word/Editor/Paragraph/ComplexFieldInstruction.js b/word/Editor/Paragraph/ComplexFieldInstruction.js
+index a77be42800..1f89d34a26 100644
+--- a/word/Editor/Paragraph/ComplexFieldInstruction.js
++++ b/word/Editor/Paragraph/ComplexFieldInstruction.js
+@@ -811,6 +811,8 @@ CFieldInstructionSEQ.prototype.GetText = function ()
+ 		if(this.S)
+ 		{
+ 			nLvl = parseInt(this.S);
++			// Older captions of this editor wrote \s 0 for Heading 1; Word counts the level from 1
++			if(0 === nLvl) nLvl = 1;
+ 			if(!isNaN(nLvl))
+ 			{
+ 				--nLvl;
