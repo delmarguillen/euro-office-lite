@@ -1913,6 +1913,68 @@ function _recoveryMarkModified(name) {
   } catch(e) {}
 }
 
+// How many times the pending changes are sent after an editor error, and how
+// long apart: sdkjs refuses the call while a save or a long action is running.
+var _EO_PENDING_CHANGES_TRIES = 10;
+var _EO_PENDING_CHANGES_RETRY_MS = 500;
+
+// Whether the editor has changes it has not handed to LocalFileSaveChanges
+// yet: the question its own autosave asks before it sends them.
+function _eoHasPendingChanges() {
+  var editorWindow = window.AscDesktopEditor._editorWindow;
+  var history = editorWindow && editorWindow.AscCommon && editorWindow.AscCommon.History;
+  if (!history || typeof history.Have_Changes !== 'function') return false;
+  return history.Have_Changes(true) === true;
+}
+
+// Sends the pending changes with the call the autosave of sdkjs makes, and
+// again later while sdkjs refuses it. A PDF has no recovery session.
+function _eoSendPendingChanges(api, triesLeft) {
+  function sendAgain() {
+    _eoSendPendingChanges(api, triesLeft - 1);
+  }
+  if (window.AscDesktopEditor._currentDocType === 'pdf') return;
+  if (!_eoHasPendingChanges()) return;
+  try {
+    api.asc_Save(true);
+  } catch(e) {
+    window._eoLog('[RECOVER] sending the pending changes failed: ' + ((e && e.message) || e));
+  }
+  if (!_eoHasPendingChanges()) {
+    window._eoLog('[RECOVER] pending changes sent after the editor error');
+    return;
+  }
+  if (triesLeft <= 1) {
+    window._eoLog('[RECOVER] pending changes not sent after the editor error');
+    return;
+  }
+  setTimeout(sendAgain, _EO_PENDING_CHANGES_RETRY_MS);
+}
+
+function _eoIsEditingError(id) {
+  var editorWindow = window.AscDesktopEditor._editorWindow;
+  var errors = editorWindow && editorWindow.Asc && editorWindow.Asc['c_oAscError'];
+  return !!errors && !!errors['ID'] && id === errors['ID']['EditingError'];
+}
+
+// sdkjs answers an unhandled exception of the editor frame with EditingError
+// and view mode, and its autosave skips an editor in view mode. The changes
+// it had not sent by then are sent here, once the task of the error has ended.
+function _eoWatchEditingError(api) {
+  function sendPendingChanges() {
+    _eoSendPendingChanges(api, _EO_PENDING_CHANGES_TRIES);
+  }
+  function onEditorError(id) {
+    if (!_eoIsEditingError(id)) return;
+    window._eoLog('[RECOVER] editor error: sending the pending changes');
+    setTimeout(sendPendingChanges, 0);
+  }
+  if (!api || api.__eoEditingErrorWatched) return;
+  if (typeof api.asc_registerCallback !== 'function') return;
+  api.__eoEditingErrorWatched = true;
+  api.asc_registerCallback('asc_onError', onEditorError);
+}
+
 // Whether the document has changes no save has written yet. sdkjs calls
 // onDocumentModifiedChanged(false) when a save begins, before LocalFileSave,
 // so _isModified is already false when the save reads it. This flag ignores
@@ -3607,6 +3669,7 @@ window.AscDesktopEditor = {
     }
 
     _eoWatchOpenPhases(api);
+    _eoWatchEditingError(api);
     SpellCheckBridge.attach(api);
   },
 
