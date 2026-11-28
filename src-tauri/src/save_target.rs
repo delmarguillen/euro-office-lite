@@ -304,7 +304,27 @@ fn save_error(dest: &Path, error: std::io::Error) -> String {
     if refused {
         return denied(dest, &error.to_string());
     }
+    if is_out_of_space(&error) {
+        return no_space(dest, &error);
+    }
     format!("could not write {}: {}", dest.display(), error)
+}
+
+fn is_out_of_space(error: &std::io::Error) -> bool {
+    matches!(error.kind(), ErrorKind::StorageFull | ErrorKind::QuotaExceeded)
+}
+
+fn no_space(path: &Path, error: &std::io::Error) -> String {
+    format!("{}: {}: {}", SAVE_NO_SPACE_ERROR, path.display(), error)
+}
+
+// The error of a failed write of one of the save's own files in the instance
+// folder, such as Editor.bin.
+pub fn work_file_error(path: &Path, error: std::io::Error) -> String {
+    if is_out_of_space(&error) {
+        return no_space(path, &error);
+    }
+    error.to_string()
 }
 
 fn denied(dest: &Path, reason: &str) -> String {
@@ -476,6 +496,37 @@ mod tests {
         permissions.set_readonly(false);
         std::fs::set_permissions(&dest, permissions).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_full_disk_is_a_no_space_error() {
+        let dest = Path::new("/docs/report.docx");
+        for kind in [ErrorKind::StorageFull, ErrorKind::QuotaExceeded] {
+            let error = save_error(dest, std::io::Error::from(kind));
+            assert!(error.starts_with("save-no-space: /docs/report.docx: "), "{}", error);
+        }
+        let other = save_error(dest, std::io::Error::from(ErrorKind::NotFound));
+        assert!(other.starts_with("could not write /docs/report.docx: "), "{}", other);
+    }
+
+    // /dev/full fails every write as a full disk does.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_work_file_a_full_disk_does_not_take_is_a_no_space_error() {
+        let full = Path::new("/dev/full");
+        let error = std::fs::write(full, b"Editor.bin").expect_err("written to /dev/full");
+
+        let message = work_file_error(full, error);
+
+        assert!(message.starts_with("save-no-space: /dev/full: "), "{}", message);
+    }
+
+    #[test]
+    fn any_other_failed_write_of_a_work_file_keeps_its_own_error() {
+        let error = std::io::Error::from(ErrorKind::NotFound);
+        let expected = error.to_string();
+
+        assert_eq!(work_file_error(Path::new("/tmp/Editor.bin"), error), expected);
     }
 
     #[test]

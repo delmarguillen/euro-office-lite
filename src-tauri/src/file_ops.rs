@@ -1003,7 +1003,8 @@ pub async fn write_editor_bin(
     )?;
     let bin_data = STANDARD.decode(&data).map_err(|e| e.to_string())?;
     let output = state.temp_dir.join("Editor.bin");
-    std::fs::write(&output, &bin_data).map_err(|e| e.to_string())?;
+    std::fs::write(&output, &bin_data)
+        .map_err(|e| crate::save_target::work_file_error(&output, e))?;
     Ok("ok".to_string())
 }
 
