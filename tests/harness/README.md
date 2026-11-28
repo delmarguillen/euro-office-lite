@@ -175,7 +175,7 @@ case ok, 1 some case failed, 2 the harness could not run.
   which one, and its version, when it starts. Without either, the case ends
   in `no-pdftotext` and is not ok.
 - The 17 TXT, CSV, `docx-edit-save` and `xlsx-save` cases take under
-  4 minutes: about 13 s per save, 2-3 s per refused file, 38 s for `txt-nul`.
+  4 minutes: about 13 s per save, 2-3 s per refused file.
   The other cases have not been timed.
 - `csv-html-emoji` fails today on Windows: the app does not open the file,
   a known defect of the app. With `docx-xlsx-content` (see [Cases](#cases)),
@@ -356,6 +356,12 @@ every system. A template (`.dotx`, `.xltx`, `.potx`) is only opened: Ctrl+S
 writes in place the formats of `SAVE_IN_PLACE_EXTENSIONS`
 (`src-tauri/src/file_dialogs.rs`), and the others go through Save As.
 
+`txt-emoji`, `txt-utf16-bom-emoji` and `txt-big-emoji-end` fail on Linux: there
+the app opens a TXT with a character above U+FFFF, from a UTF-16 copy that the
+x2t of Windows and of macOS has not been tried with. On those two systems the
+file is still refused, as the cases say. The cases stay as they are until the
+three systems open such a file.
+
 `docx-xlsx-content` fails today on both systems: the app takes any ZIP under
 `.docx` and the converter reads this one as a spreadsheet, so the open is not
 refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
@@ -392,7 +398,7 @@ refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 | `txt-crlf` | ASCII TXT with CRLF | saved with the `Z`, CRLF kept |
 | `txt-emoji` | UTF-8 TXT with an emoji | refused with the open error dialog, file unchanged |
 | `txt-html` | TXT holding HTML | opens as text; saved with the `Z`, byte for byte |
-| `txt-nul` | `hello world` and one NUL | opens, and Ctrl+S without edits writes nothing |
+| `txt-nul` | `hello world` and one NUL | refused with the open error dialog, file unchanged |
 | `txt-utf16-bom-emoji` | UTF-16 LE TXT with a BOM and an emoji | refused with the open error dialog, file unchanged |
 | `txt-utf16be-nobom` | UTF-16 BE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
 | `txt-utf16le-nobom` | UTF-16 LE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |

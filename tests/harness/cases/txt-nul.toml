@@ -1,13 +1,14 @@
-# A TXT of plain text followed by one NUL byte, a known edge case of the text
-# import: it is read as UTF-16 and shows meaningless text. Ctrl+S without an
-# edit writes nothing, since the document has no changes, so the file keeps
-# its 12 bytes: save-not-written.
-# Current behaviour, known issue: a NUL after plain text is not refused.
-description = "TXT 'hello world' plus a NUL: opens as UTF-16 text, and Ctrl+S without edits writes nothing"
+# A TXT of plain text followed by one NUL byte. Its NUL fits UTF-16 and
+# single-byte text alike, and x2t cuts a line at a NUL, so the app refuses it
+# with the open error and leaves the file as it was. Builds that took it for
+# UTF-16 opened it as meaningless text, and Ctrl+S without an edit wrote
+# nothing.
+description = "TXT 'hello world' plus a NUL: refused with the open error dialog, file unchanged"
 generate = "mktxt.py nul-after-text"
 input = "text-with-nul.txt"
 input_sha256 = "430646847e70344c09f58739e99d5bc96eac8d5fe7295cf196b986279876bf9b"
 action = "open-save"
 check = "same-text"
-expect = "save-not-written"
+expect = "rejected-with-dialog"
+control_expect = "save-not-written"
 screenshot = "on-failure"
