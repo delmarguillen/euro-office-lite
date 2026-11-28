@@ -789,6 +789,7 @@ var _UI_STRINGS = {
     openTextMsg: 'The file could not be opened. Its text cannot be read safely: it is not valid in its encoding, or it has NUL characters, as binary data and some UTF-16 files do. Saving it as UTF-8 in a text editor makes it readable.',
     openTextOutsideBmpMsg: 'The file could not be opened. It has characters, such as emoji, that this version cannot read from a text file on this system without losing them.',
     openConverterMsg: 'The file could not be opened. The converter stopped before it finished. The file may be fine: try again.',
+    insertFailedMsg: 'The file could not be compared or merged with this document: it could not be converted.',
     openingFile: 'Opening {name}…', preparingFonts: 'Preparing fonts…', creatingDocument: 'Creating document…',
     removeNoteSeparator: 'Note lines',
     noteSeparator: 'Note lines',
@@ -1396,6 +1397,12 @@ function _eoAfterOpenFailure(told) {
 }
 window._eoAfterOpenFailure = _eoAfterOpenFailure;
 
+// A compare or a merge that failed leaves the document as it was, so this
+// dialog is the only sign of it.
+function _eoShowInsertError(error) {
+  return _eoShowOpenFailure(_eoOpenErrorCause(error) || 'insertFailedMsg');
+}
+
 // What the backend answers or rejects with when the file is open in another
 // window (new_window.rs): two windows saving one file overwrite each other.
 var _EO_OPEN_ELSEWHERE = 'open-elsewhere';
@@ -1692,6 +1699,7 @@ function _eoInsertInto(file, handler, oOptions, label) {
     }
   }).catch(function(e) {
     window._eoLog('[EO] ' + label + ' error: ' + (e.message || e));
+    _eoShowInsertError(e).catch(function(){});
   });
 }
 

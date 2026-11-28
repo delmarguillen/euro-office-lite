@@ -1,4 +1,4 @@
-// Checks that the dialog of a failed open or save says the
+// Checks that the dialog of a failed open, save, compare or merge says the
 // cause when the backend's error starts with one: a text x2t would not read
 // whole, an empty file, an x2t that stopped, a full disk. Any other error
 // keeps the generic message.
@@ -14,7 +14,7 @@ const NO_SPACE = 'save-no-space: /home/user/docs/notes.txt: No space left on dev
 
 async function setup(invoke) {
   const bridge = await loadBridge({ invoke });
-  const env = { bridge, messages: [], endSaves: [] };
+  const env = { bridge, messages: [], handled: [], endSaves: [] };
   bridge.sandbox.__TAURI__.dialog = {
     message: (text, options) => {
       env.messages.push({ text, title: options && options.title });
@@ -89,9 +89,36 @@ for (const [name, error, failing, key] of SAVE_CAUSES) {
   check(results, '... and ends the save as failed', env.endSaves.join() === '1', env.endSaves.join());
 }
 
+async function compare(failure) {
+  const env = await setup({ convert_for_insert: () => { throw failure; } });
+  env.bridge.sandbox.AscDesktopEditor._currentDocType = 'word';
+  env.bridge.sandbox.AscDesktopEditor._editorWindow = {
+    onDocumentCompare: (...args) => env.handled.push(args),
+  };
+  const granted = env.bridge.run(`_eoEditorFileName(${JSON.stringify(FILE)})`);
+  await env.bridge.run(`AscDesktopEditor.CompareDocumentFile(${JSON.stringify(granted)}, null)`);
+  await settle(env);
+  return env;
+}
+
+const INSERT_CAUSES = [
+  ['a TXT x2t is given no options for', 'x2t conversion failed (exit code 89): ', 'insertFailedMsg'],
+  ['a text with a NUL', 'text-not-readable: NUL character at code unit 11', 'openTextMsg'],
+  ['an empty file', 'empty-file', 'openEmptyMsg'],
+];
+
+for (const [name, error, key] of INSERT_CAUSES) {
+  const env = await compare(error);
+  check(results, `Compare with ${name} shows ${key}`, showsOnly(env, key, 'openFailed'),
+    JSON.stringify(env.messages));
+  check(results, '... logs the error and hands the editor nothing',
+    env.handled.length === 0 && env.bridge.logs.some((line) => line.includes(error)),
+    JSON.stringify(env.bridge.logs.slice(-2)));
+}
+
 const NEW_KEYS = [
   'openTextMsg', 'openTextOutsideBmpMsg', 'openEmptyMsg', 'openConverterMsg',
-  'saveNoSpaceMsg', 'saveConverterMsg',
+  'saveNoSpaceMsg', 'saveConverterMsg', 'insertFailedMsg',
 ];
 const env = await setup({});
 const missing = NEW_KEYS.filter((key) => {

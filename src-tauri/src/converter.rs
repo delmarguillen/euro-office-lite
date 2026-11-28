@@ -524,8 +524,8 @@ fn package_images_copy(
 }
 
 // What open_file and convert_for_insert reject an OOXML document with a
-// password with, before x2t. The bridge shows the same dialog for every failed
-// open (_eoShowOpenError) and only logs a failed insert.
+// password with, before x2t. The bridge shows the generic message of a failed
+// open (_eoShowOpenError) or insert (_eoShowInsertError) for it.
 const PASSWORD_ERROR: &str = "This file has a password";
 
 fn not_valid_error(path: &std::path::Path) -> String {
