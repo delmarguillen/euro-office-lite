@@ -108,9 +108,9 @@ fn replace_beside(
 // with no temp file of its own, so pointing it at `dest` could leave the user's
 // file truncated. `reshape` runs on the staged file before it is placed. `dest`
 // changes only when the disk of `staging_dir` had the room `space` asks for,
-// and `convert` succeeded without filling it and wrote the file (non-empty,
-// unless may_be_empty). Each save stages in a subfolder of its own, removed
-// either way.
+// and `convert` succeeded without filling it and wrote the whole file
+// (non-empty, unless may_be_empty). Each save stages in a subfolder of its
+// own, removed either way.
 pub async fn convert_and_place<Convert, Converted>(
     staging_dir: &Path,
     dest: &Path,
@@ -134,6 +134,7 @@ where
     converted
         .and_then(|_| space.check_not_filled(&folder.dir))
         .and_then(|_| check_written(&staged))
+        .and_then(|_| crate::staged_output::check_whole(&staged))
         .and_then(|_| {
             reshape(&staged);
             write_beside_and_rename(&staged, dest)
@@ -819,11 +820,13 @@ mod tests {
     mod convert_and_place {
         use super::*;
         use crate::save_space::tests::{disk_with, unknown_disk};
+        use crate::staged_output::tests::{package_bytes, PDF, RTF};
         use crate::text_import::{finish_saved_text, TextKind, TextOptions, ENCODING_WINDOWS_1252};
         use std::sync::atomic::AtomicU64;
 
         const OLD: &[u8] = b"PK\x03\x04 old document";
-        const NEW: &[u8] = b"PK\x03\x04 new document";
+        // Starts as none of the formats whose end is checked.
+        const NEW: &[u8] = b"the new document";
 
         // A user folder holding `name` with OLD in it, and an empty instance
         // folder.
@@ -1066,6 +1069,50 @@ mod tests {
 
             assert_eq!(std::fs::read(&dest).unwrap(), NEW);
             clean_up(&[&user, &instance]);
+        }
+
+        fn writes(bytes: Vec<u8>) -> impl FnOnce(&Path) -> Result<String, String> {
+            move |output: &Path| {
+                std::fs::write(output, bytes).unwrap();
+                Ok("ok".to_string())
+            }
+        }
+
+        // The disk still has room, as when another program freed some after
+        // x2t's write failed.
+        #[test]
+        fn a_file_x2t_cut_short_is_an_error_and_dest_is_unchanged() {
+            let package = package_bytes();
+            let cut_short = [
+                ("doc.docx", package[..package.len() / 2].to_vec()),
+                ("sheet.ods", package[..package.len() - 1].to_vec()),
+                ("doc.pdf", PDF[..PDF.len() - 6].to_vec()),
+                ("doc.rtf", RTF[..RTF.len() - 3].to_vec()),
+            ];
+            for (name, bytes) in cut_short {
+                let (user, instance, dest) = user_and_instance("cut-short", name);
+
+                let error = run(&instance, &dest, writes(bytes), no_reshape).unwrap_err();
+
+                assert!(error.contains("did not write the whole document"), "{}: {}", name, error);
+                assert_eq!(std::fs::read(&dest).unwrap(), OLD, "{}", name);
+                assert_eq!(names_in(&user), vec![name]);
+                assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+                clean_up(&[&user, &instance]);
+            }
+        }
+
+        #[test]
+        fn a_whole_package_pdf_or_rtf_is_placed_as_x2t_wrote_it() {
+            let whole = [("doc.docx", package_bytes()), ("doc.pdf", PDF.to_vec()), ("doc.rtf", RTF.to_vec())];
+            for (name, bytes) in whole {
+                let (user, instance, dest) = user_and_instance("whole", name);
+
+                run(&instance, &dest, writes(bytes.clone()), no_reshape).unwrap();
+
+                assert_eq!(std::fs::read(&dest).unwrap(), bytes, "{}", name);
+                clean_up(&[&user, &instance]);
+            }
         }
 
         // What a save killed by a power cut left in the staging folder, x2t's

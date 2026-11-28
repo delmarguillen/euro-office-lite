@@ -31,6 +31,7 @@ mod recovery;
 mod save_full_temp_tests;
 mod save_space;
 mod save_target;
+mod staged_output;
 mod temp_layout;
 #[cfg(test)]
 mod template_round_trip_tests;
