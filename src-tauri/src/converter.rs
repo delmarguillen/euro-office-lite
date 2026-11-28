@@ -314,7 +314,8 @@ impl<'a> Spill<'a> {
 // The file system a folder is on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Volume {
-    // st_dev: the same for two folders on one file system.
+    // The same for two folders on one file system: st_dev, or on Windows the
+    // volume's serial number.
     pub device: u64,
     // Bytes free for this user.
     pub free: u64,
@@ -463,9 +464,98 @@ fn statvfs_free(dir: &std::path::Path) -> Option<u64> {
     Some((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
 }
 
-#[cfg(not(unix))]
+// The volume of `dir`, or of the nearest folder above it that exists, with the
+// space Windows reports free for this user (disk quotas included). The device
+// is the volume's serial number.
+#[cfg(windows)]
+pub fn volume_of(dir: &std::path::Path) -> Option<Volume> {
+    let existing = dir.ancestors().find(|folder| folder.exists())?;
+    let root = windows_volume::root_of(existing)?;
+    let device = windows_volume::serial_number(&root)?;
+    let free = windows_volume::free_for_caller(&root)?;
+    Some(Volume { device: u64::from(device), free })
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn volume_of(_dir: &std::path::Path) -> Option<Volume> {
     None
+}
+
+// kernel32 calls behind volume_of. Each gives None when Windows refuses.
+#[cfg(windows)]
+mod windows_volume {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MAX_PATH: usize = 260;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetVolumePathNameW(file_name: *const u16, volume_path_name: *mut u16, buffer_length: u32) -> i32;
+        fn GetVolumeInformationW(
+            root_path_name: *const u16,
+            volume_name_buffer: *mut u16,
+            volume_name_size: u32,
+            volume_serial_number: *mut u32,
+            maximum_component_length: *mut u32,
+            file_system_flags: *mut u32,
+            file_system_name_buffer: *mut u16,
+            file_system_name_size: u32,
+        ) -> i32;
+        fn GetDiskFreeSpaceExW(
+            directory_name: *const u16,
+            free_bytes_available_to_caller: *mut u64,
+            total_number_of_bytes: *mut u64,
+            total_number_of_free_bytes: *mut u64,
+        ) -> i32;
+    }
+
+    // `path` as a NUL-terminated UTF-16 string; None when it holds a NUL,
+    // which would cut it short.
+    fn wide(path: &std::ffi::OsStr) -> Option<Vec<u16>> {
+        let mut units: Vec<u16> = path.encode_wide().collect();
+        if units.contains(&0) {
+            return None;
+        }
+        units.push(0);
+        Some(units)
+    }
+
+    // The root of the volume `path` is on, with its trailing backslash: "C:\",
+    // a mount folder, "\\server\share\" or "\\?\C:\".
+    pub fn root_of(path: &std::path::Path) -> Option<Vec<u16>> {
+        let path = wide(path.as_os_str())?;
+        // A relative path is made absolute, so it may grow by a current folder.
+        let mut root = vec![0u16; path.len() + MAX_PATH];
+        let length = u32::try_from(root.len()).ok()?;
+        if unsafe { GetVolumePathNameW(path.as_ptr(), root.as_mut_ptr(), length) } == 0 {
+            return None;
+        }
+        let end = root.iter().position(|unit| *unit == 0)?;
+        root.truncate(end + 1);
+        Some(root)
+    }
+
+    pub fn serial_number(root: &[u16]) -> Option<u32> {
+        use std::ptr::null_mut;
+        let mut serial = 0u32;
+        let read = unsafe {
+            GetVolumeInformationW(root.as_ptr(), null_mut(), 0, &mut serial, null_mut(), null_mut(), null_mut(), 0)
+        };
+        if read == 0 {
+            return None;
+        }
+        Some(serial)
+    }
+
+    // lpFreeBytesAvailableToCaller: what this user may still write there.
+    pub fn free_for_caller(root: &[u16]) -> Option<u64> {
+        use std::ptr::null_mut;
+        let mut free = 0u64;
+        if unsafe { GetDiskFreeSpaceExW(root.as_ptr(), &mut free, null_mut(), null_mut()) } == 0 {
+            return None;
+        }
+        Some(free)
+    }
 }
 
 fn read_copy(
@@ -1345,7 +1435,6 @@ mod tests {
         assert_eq!(input.path().parent(), Some(spill_dir.as_path()));
     }
 
-    #[cfg(unix)]
     #[test]
     fn the_file_system_is_read_for_a_folder_that_does_not_exist_yet() {
         let root = scratch_root();
@@ -1354,6 +1443,40 @@ mod tests {
         let device = |dir: &std::path::Path| volume_of(dir).map(|volume| volume.device);
         assert_eq!(device(&root.join("not/yet")), device(&root));
         assert!(device(&root).is_some());
+    }
+
+    #[test]
+    fn two_folders_on_one_volume_have_the_same_device() {
+        let (first, second) = (scratch_root(), scratch_root());
+
+        let device = |dir: &std::path::Path| volume_of(dir).map(|volume| volume.device);
+        assert!(device(&first).is_some());
+        assert_eq!(device(&first), device(&second));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_on_a_drive_that_does_not_exist_cannot_be_told() {
+        let missing = (b'D'..=b'Z')
+            .map(|letter| format!("{}:\\", letter as char))
+            .find(|root| !std::path::Path::new(root).exists())
+            .expect("every drive letter is taken");
+
+        assert_eq!(volume_of(&std::path::Path::new(&missing).join("folder")), None);
+    }
+
+    // std::fs::canonicalize gives Windows paths with the \\?\ prefix.
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_with_the_verbatim_prefix_is_on_the_same_volume() {
+        let root = scratch_root();
+        let verbatim = std::fs::canonicalize(&root).unwrap();
+        assert!(verbatim.to_string_lossy().starts_with(r"\\?\"), "{}", verbatim.display());
+
+        let (plain, prefixed) = (volume_of(&root).unwrap(), volume_of(&verbatim).unwrap());
+        assert_eq!(plain.device, prefixed.device);
+        // Other tests write while this one runs.
+        assert!(plain.free.abs_diff(prefixed.free) < 64 * MB, "{:?} {:?}", plain, prefixed);
     }
 
 
