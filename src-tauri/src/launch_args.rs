@@ -72,9 +72,50 @@ pub fn title_bar_options(args: &LaunchArgs) -> Vec<&'static str> {
     options
 }
 
-// The command line wins over the environment, and --no-title-bar over
-// --system-title-bar. The notes are lines for the startup log.
-pub fn resolve_title_bar(args: &LaunchArgs, env: Option<&str>) -> (TitleBar, Vec<String>) {
+// What decided the title bar mode, for the startup log and the settings screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TitleBarSource {
+    CommandLine,
+    Environment,
+    // The choice saved in Configuración (title_bar_setting.rs).
+    Setting,
+    Default,
+}
+
+impl TitleBarSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TitleBarSource::CommandLine => "command-line",
+            TitleBarSource::Environment => "environment",
+            TitleBarSource::Setting => "setting",
+            TitleBarSource::Default => "default",
+        }
+    }
+
+    // The saved setting was not looked at: this start was told its mode.
+    pub fn overrides_setting(self) -> bool {
+        matches!(
+            self,
+            TitleBarSource::CommandLine | TitleBarSource::Environment
+        )
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ResolvedTitleBar {
+    pub mode: TitleBar,
+    pub source: TitleBarSource,
+    // Lines for the startup log.
+    pub notes: Vec<String>,
+}
+
+// The command line wins over the environment, the environment over the saved
+// setting, and --no-title-bar over --system-title-bar.
+pub fn resolve_title_bar(
+    args: &LaunchArgs,
+    env: Option<&str>,
+    setting: TitleBar,
+) -> ResolvedTitleBar {
     let mut notes = Vec::new();
     let from_args = match (args.system_title_bar, args.no_title_bar) {
         (true, true) => {
@@ -99,17 +140,23 @@ pub fn resolve_title_bar(args: &LaunchArgs, env: Option<&str>) -> (TitleBar, Vec
             None
         }
     };
-    let mode = match (from_args, from_env) {
+    let (mode, source) = match (from_args, from_env) {
         (Some(from_args), Some(from_env)) => {
             if from_args != from_env {
                 notes.push(format!("the command line option overrides {TITLE_BAR_ENV}"));
             }
-            from_args
+            (from_args, TitleBarSource::CommandLine)
         }
-        (Some(mode), None) | (None, Some(mode)) => mode,
-        (None, None) => TitleBar::Default,
+        (Some(mode), None) => (mode, TitleBarSource::CommandLine),
+        (None, Some(mode)) => (mode, TitleBarSource::Environment),
+        (None, None) if setting != TitleBar::Default => (setting, TitleBarSource::Setting),
+        (None, None) => (TitleBar::Default, TitleBarSource::Default),
     };
-    (mode, notes)
+    ResolvedTitleBar {
+        mode,
+        source,
+        notes,
+    }
 }
 
 #[cfg(test)]
@@ -234,7 +281,8 @@ mod tests {
     fn new_window_is_not_a_title_bar_option() {
         let parsed = parse(&[NEW_WINDOW, SYSTEM_TITLE_BAR, "a.docx"]);
         assert_eq!(title_bar_options(&parsed), vec![SYSTEM_TITLE_BAR]);
-        assert_eq!(resolve_title_bar(&parsed, None).0, TitleBar::System);
+        let resolved = resolve_title_bar(&parsed, None, TitleBar::Default);
+        assert_eq!(resolved.mode, TitleBar::System);
     }
 
     // Matching is exact: anything else is not one of our options.
@@ -245,8 +293,19 @@ mod tests {
         assert_eq!(parsed.document, Some("--system-title-bar=yes".to_string()));
     }
 
+    // Without a saved setting, as before there was one.
     fn resolve(args: &[&str], env: Option<&str>) -> (TitleBar, Vec<String>) {
-        resolve_title_bar(&parse(args), env)
+        let resolved = resolve_title_bar(&parse(args), env, TitleBar::Default);
+        (resolved.mode, resolved.notes)
+    }
+
+    fn resolve_with_setting(
+        args: &[&str],
+        env: Option<&str>,
+        setting: TitleBar,
+    ) -> (TitleBar, TitleBarSource) {
+        let resolved = resolve_title_bar(&parse(args), env, setting);
+        (resolved.mode, resolved.source)
     }
 
     #[test]
@@ -312,5 +371,73 @@ mod tests {
         let (mode, notes) = resolve(&[NO_TITLE_BAR], Some("System"));
         assert_eq!(mode, TitleBar::Undecorated);
         assert_eq!(notes.len(), 1);
+    }
+
+    #[test]
+    fn saved_setting_picks_the_mode_when_nothing_else_asks() {
+        assert_eq!(
+            resolve_with_setting(&["a.docx"], None, TitleBar::System),
+            (TitleBar::System, TitleBarSource::Setting)
+        );
+        assert_eq!(
+            resolve_with_setting(&[], Some(""), TitleBar::Undecorated),
+            (TitleBar::Undecorated, TitleBarSource::Setting)
+        );
+    }
+
+    #[test]
+    fn saved_app_title_bar_is_the_default() {
+        assert_eq!(
+            resolve_with_setting(&[], None, TitleBar::Default),
+            (TitleBar::Default, TitleBarSource::Default)
+        );
+    }
+
+    #[test]
+    fn environment_wins_over_the_saved_setting() {
+        assert_eq!(
+            resolve_with_setting(&[], Some("none"), TitleBar::System),
+            (TitleBar::Undecorated, TitleBarSource::Environment)
+        );
+        assert_eq!(
+            resolve_with_setting(&[], Some("system"), TitleBar::Undecorated),
+            (TitleBar::System, TitleBarSource::Environment)
+        );
+    }
+
+    #[test]
+    fn command_line_wins_over_environment_and_the_saved_setting() {
+        assert_eq!(
+            resolve_with_setting(&[SYSTEM_TITLE_BAR], None, TitleBar::Undecorated),
+            (TitleBar::System, TitleBarSource::CommandLine)
+        );
+        assert_eq!(
+            resolve_with_setting(&[NO_TITLE_BAR], Some("system"), TitleBar::System),
+            (TitleBar::Undecorated, TitleBarSource::CommandLine)
+        );
+    }
+
+    #[test]
+    fn ignored_environment_value_leaves_the_saved_setting_to_decide() {
+        let resolved = resolve_title_bar(&parse(&[]), Some("server"), TitleBar::System);
+        assert_eq!(resolved.mode, TitleBar::System);
+        assert_eq!(resolved.source, TitleBarSource::Setting);
+        assert_eq!(resolved.notes.len(), 1);
+    }
+
+    #[test]
+    fn only_the_command_line_and_the_environment_override_the_setting() {
+        assert!(TitleBarSource::CommandLine.overrides_setting());
+        assert!(TitleBarSource::Environment.overrides_setting());
+        assert!(!TitleBarSource::Setting.overrides_setting());
+        assert!(!TitleBarSource::Default.overrides_setting());
+    }
+
+    #[test]
+    fn sources_have_their_log_names() {
+        assert_eq!(TitleBarSource::CommandLine.as_str(), "command-line");
+        assert_eq!(TitleBarSource::Environment.as_str(), "environment");
+        assert_eq!(TitleBarSource::Setting.as_str(), "setting");
+        assert_eq!(TitleBarSource::Default.as_str(), "default");
     }
 }
