@@ -4,8 +4,9 @@
 # Runs harness cases against the app in /Applications on macOS and writes
 # OUT/result.json with the schema of ../run.sh. With --dmg, installs the app
 # of that disk image first unless its binary is already the installed one,
-# and checks it with codesign --verify. A case whose keys have no macOS
-# equivalent is skipped: "skipped": true and the reason in its detail.
+# and checks it with codesign --verify. A case for other systems (its
+# `platforms`) or whose keys have no macOS equivalent is skipped:
+# "skipped": true and the reason in its detail.
 # Exit status: 0 every case ok, 1 some case not ok, 2 the harness could not run.
 
 # ../run.sh keeps a case in an associative array (bash 4); macOS has bash 3.2.
@@ -78,12 +79,6 @@ skip_reason() {
       return
     done
   done
-}
-
-record_skipped() {
-  local name=$1 reason=$2
-  RESULTS+=("{\"case\": $(json_str "$name"), \"ok\": true, \"expected\": $(json_str "$(expected_outcome)"), \"observed\": \"skipped\", \"detail\": $(json_str "skipped on macOS: $reason"), \"screenshot\": null, \"seconds\": 0, \"skipped\": true}")
-  log "$name: skipped: $reason"
 }
 
 run_case_on_mac() {

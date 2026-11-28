@@ -6,6 +6,8 @@
 MAC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$MAC_DIR/../lib.sh"
 
+HARNESS_PLATFORM=macos
+PLATFORM_LABEL=macOS
 APP_NAME=Euro-Office-Lite
 # HARNESS_MAC_APP and HARNESS_MAC_LOGDIR are there for selftest.sh.
 APP_DIR=${HARNESS_MAC_APP:-/Applications/$APP_NAME.app}

@@ -102,6 +102,15 @@ function Test-CaseFiles {
     Assert-Equal 'expect' (Get-ExpectedOutcome $emoji $false) 'rejected-with-dialog'
     Assert-Equal 'control_expect with -Control' (Get-ExpectedOutcome $emoji $true) 'opens-empty'
     Assert-Equal 'expect when the case has no control_expect' (Get-ExpectedOutcome $xlsx $true) 'saved-as-expected'
+    Assert-Equal 'a case without platforms runs on Windows' (Get-PlatformSkipReason $xlsx) ''
+    Assert-Equal 'a case for linux is skipped on Windows' (Get-PlatformSkipReason @{ platforms = 'linux' }) 'the case is for linux'
+    Assert-Equal 'a case for linux and windows runs on Windows' (Get-PlatformSkipReason @{ platforms = 'linux windows' }) ''
+    $options = New-Options 'all' '' '' $true $false (Join-Path $Work 'options')
+    Add-SkippedResult $options 'only-linux' @{ expect = 'state-as-expected'; control_expect = 'state-mismatch'; platforms = 'linux' } 'the case is for linux'
+    $skipped = $options.Results[0] | ConvertFrom-Json
+    Assert-Equal 'skipped: ok, observed and the flag' ('{0} {1} {2}' -f $skipped.ok, $skipped.observed, $skipped.skipped) 'True skipped True'
+    Assert-Equal 'skipped: expected follows -Control' $skipped.expected 'state-mismatch'
+    Assert-Equal 'skipped: the detail says why' $skipped.detail 'skipped on Windows: the case is for linux'
     $bad = Join-Path $Work 'bad.toml'
     [System.IO.File]::WriteAllText($bad, 'input = unquoted')
     Assert-Equal 'a line outside the format is refused' ($null -eq (Read-CaseFile $bad)) $true

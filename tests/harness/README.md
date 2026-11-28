@@ -158,6 +158,8 @@ case ok, 1 some case failed, 2 the harness could not run.
   the switch run.ps1 ends nothing and closes nothing.
 - Inputs: `gen/mkinputs.py DIR` writes the input of every case to
   `DIR\CASE\` and stops when a file does not have the sha256 its case gives.
+  It leaves out the cases whose `platforms` does not list the system it runs
+  on; `--platform windows` makes the inputs of Windows on another system.
   On a machine without Python, run it elsewhere and copy `DIR` over;
   `-Inputs DIR` then takes the files from there.
 - Copy files to the machine; do not move them. A moved file keeps its ACL.
@@ -236,7 +238,7 @@ Exit status as in run.sh.
   (`HARNESS_MAC_CTRL=control` makes it Ctrl), and `ctrl+End` is Cmd+End.
   A case with a key that has no mapping is skipped: `"ok": true`,
   `"observed": "skipped"`, `"skipped": true` and the key in `detail`. No case
-  is skipped today.
+  is skipped for its keys today.
 - Dialogs are the windows of the app that are not `AXStandardWindow`, and
   their sheets (`mac/windows.applescript`).
 - Save As to PDF types the folder into Go to Folder (Cmd+Shift+G) and the
@@ -275,6 +277,7 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match`; for `open-export-pdf`, `pdf-text` |
 | `expected_generate`, `expected_sha256` | for `expected-bytes`: the generator of the file the save must write, and optionally its sha256 |
 | `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain; for `pdf-text`: `REGEX`, an extended regex a line of the PDF's text must contain |
+| `platforms` | optional: the systems the case is for, among `linux`, `windows` and `macos`, separated by spaces. Without it the case is for every system. On another system the case is skipped: `"ok": true`, `"observed": "skipped"`, `"skipped": true`, with the reason in `detail`, and the app is not started |
 | `expect` | the outcome that makes the case ok |
 | `control_expect` | optional: the outcome with `--control`, for a build without the fix |
 | `screenshot` | `on-failure` or `always` |

@@ -241,6 +241,32 @@ test_skip_unknown_key() {
   )
 }
 
+# A case for other systems is skipped before the app starts; one that names
+# this system, or none, runs.
+test_skip_other_platform() {
+  local file=$T/linux-only.toml
+  printf 'expect = "state-as-expected"\nplatforms = "linux"\n' > "$file"
+  (
+    . "$MAC/run.sh"
+    read_case "$file" || exit 1
+    [ "$(platform_skip_reason)" = "the case is for linux" ] || exit 1
+    RESULTS=()
+    record_skipped linux-only "$(platform_skip_reason)" 2>/dev/null
+    printf '%s' "${RESULTS[0]}" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(not (d["skipped"] is True and d["ok"] is True and d["detail"] == "skipped on macOS: the case is for linux"))' || exit 1
+    CASE[platforms]="linux macos"
+    [ -z "$(platform_skip_reason)" ] || exit 1
+    CASE=()
+    [ -z "$(platform_skip_reason)" ] || exit 1
+  )
+  (
+    . "$HARNESS/run.sh"
+    read_case "$file" || exit 1
+    [ -z "$(platform_skip_reason)" ] || exit 1
+    CASE[platforms]="windows macos"
+    [ "$(platform_skip_reason)" = "the case is for windows macos" ]
+  )
+}
+
 test_follower() {
   local d=$T/follow f i dead
   mkdir -p "$d/logs"
@@ -418,6 +444,7 @@ check "every case file reads and maps to macOS keys" test_cases_parse_and_map
 check "xdotool chords become System Events lines" test_chords
 check "typed text goes to osascript as an argument" test_text_is_an_argument
 check "a case with an unknown key is skipped with its reason" test_skip_unknown_key
+check "a case for other systems is skipped, on macOS and on Linux" test_skip_other_platform
 check "follow_log.py copies only the new lines" test_follower
 check "a Markdown case presses Edit by name, without Tab" test_markdown_presses_edit
 check "a presentation closes the Got it tip before the click" test_presentation_closes_tip

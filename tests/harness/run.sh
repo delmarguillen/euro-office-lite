@@ -86,6 +86,18 @@ expected_outcome() {
   case_value expect
 }
 
+# platform_skip_reason: why the case read last does not run on this system, or
+# nothing. `platforms` lists the systems a case is for: linux, windows, macos.
+platform_skip_reason() {
+  local platforms
+  platforms=$(case_value platforms)
+  [ -n "$platforms" ] || return 0
+  case " $platforms " in
+    *" $HARNESS_PLATFORM "*) return 0 ;;
+  esac
+  echo "the case is for $platforms"
+}
+
 # --- preparing a run -----------------------------------------------------------
 
 check_machine_free() {
@@ -480,14 +492,26 @@ record_case() {
   log "$name: ok=$ok observed=$OBSERVED"
 }
 
+# A skipped case is ok: it says nothing about the build.
+record_skipped() {
+  local name=$1 reason=$2
+  RESULTS+=("{\"case\": $(json_str "$name"), \"ok\": true, \"expected\": $(json_str "$(expected_outcome)"), \"observed\": \"skipped\", \"detail\": $(json_str "skipped on $PLATFORM_LABEL: $reason"), \"screenshot\": null, \"seconds\": 0, \"skipped\": true}")
+  log "$name: skipped: $reason"
+}
+
 run_case() {
-  local name=$1 started=$SECONDS expected dir source doc sha_before pid state ok shot=""
+  local name=$1 started=$SECONDS expected dir source doc sha_before pid state ok shot="" reason
   OBSERVED=""
   DETAIL=""
   RESTARTED_PID=""
   if ! read_case "$HERE/cases/$name.toml"; then
     OBSERVED=bad-case-file
     record_case "$name" false "" "" 0
+    return
+  fi
+  reason=$(platform_skip_reason)
+  if [ -n "$reason" ]; then
+    record_skipped "$name" "$reason"
     return
   fi
   expected=$(expected_outcome)

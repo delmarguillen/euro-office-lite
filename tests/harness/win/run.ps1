@@ -5,6 +5,7 @@
 # -Installer runs that NSIS installer silently first. -Inputs takes the input
 # files from a folder made by gen/mkinputs.py instead of running Python here.
 # -Control judges each case by its control_expect (what a build without the fix does).
+# A case whose `platforms` does not list windows is skipped: "skipped": true.
 # -ClearDesktop ends, before the cases, the processes of the first sign-in
 # screens of Windows that cover the desktop, and closes the Start menu or the
 # Search panel when it has the foreground, before the cases and before a
@@ -100,6 +101,16 @@ function Get-ExpectedOutcome($case, [bool]$control) {
     $controlExpect = Get-CaseValue $case 'control_expect'
     if ($control -and $controlExpect) { return $controlExpect }
     return (Get-CaseValue $case 'expect')
+}
+
+# Why the case does not run on Windows, or nothing. `platforms` lists the
+# systems a case is for: linux, windows, macos; without it, every system.
+function Get-PlatformSkipReason($case) {
+    $platforms = Get-CaseValue $case 'platforms'
+    if (-not $platforms) { return '' }
+    $names = @($platforms -split '\s+' | Where-Object { $_ })
+    if ($names -ccontains 'windows') { return '' }
+    return ('the case is for ' + $platforms)
 }
 
 # A key name Windows has no code for must fail before the app starts.
@@ -792,6 +803,22 @@ function Add-CaseResult($options, $run, [bool]$ok, [string]$shot, [int]$seconds)
     Write-Log ($run.Name + ': ok=' + $okJson + ' observed=' + $run.Observed)
 }
 
+# A skipped case is ok: it says nothing about the build.
+function Add-SkippedResult($options, [string]$name, $case, [string]$reason) {
+    $fields = @(
+        ('"case": ' + (ConvertTo-JsonString $name)),
+        '"ok": true',
+        ('"expected": ' + (ConvertTo-JsonString (Get-ExpectedOutcome $case $options.Control))),
+        '"observed": "skipped"',
+        ('"detail": ' + (ConvertTo-JsonString ('skipped on Windows: ' + $reason))),
+        '"screenshot": null',
+        '"seconds": 0',
+        '"skipped": true'
+    )
+    [void]$options.Results.Add('{' + ($fields -join ', ') + '}')
+    Write-Log ($name + ': skipped: ' + $reason)
+}
+
 # A case that could not get the foreground says which window kept it.
 function Add-ForegroundNote($run) {
     if ($run.Observed -ne 'not-in-foreground') { return }
@@ -806,7 +833,18 @@ function Invoke-Case($options, [string]$name) {
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
     $run = New-Run $name
     $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
-    if ($null -eq $case -or -not (Test-CaseKeys $case)) {
+    if ($null -eq $case) {
+        $run.Observed = 'bad-case-file'
+        Add-CaseResult $options $run $false '' 0
+        return
+    }
+    # Before the keys and the input: a case for another system has neither here.
+    $reason = Get-PlatformSkipReason $case
+    if ($reason) {
+        Add-SkippedResult $options $name $case $reason
+        return
+    }
+    if (-not (Test-CaseKeys $case)) {
         $run.Observed = 'bad-case-file'
         Add-CaseResult $options $run $false '' 0
         return

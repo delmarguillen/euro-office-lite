@@ -6,6 +6,10 @@ APP_PACKAGE=euro-office-lite
 APP_PROC=euro-office-lit
 CONFIG_DIR=$HOME/.config/org.euro-office.lite
 HARNESS_DISPLAY=${HARNESS_DISPLAY:-:99}
+# The name a case file gives this system in its `platforms`, and the one the
+# detail of a skipped case shows.
+HARNESS_PLATFORM=linux
+PLATFORM_LABEL=Linux
 
 log() { echo "[harness] $*" >&2; }
 die() { log "$*"; exit 2; }
