@@ -25,6 +25,8 @@
 //   sdk_min         page     min part of sdkjs evaluated (sdk-all-min.js in a release)
 //   sdk_all         page     rest of sdkjs evaluated (sdk-all.js in a release)
 //   app_ready       page     onAppReady
+//   doc_info        page     sdkjs has the document's info, asks for its permissions
+//   doc_load        page     editor UI set for those permissions (asc_LoadDocument)
 //   doc_request     page     sdkjs asked for the document
 //   doc_decoded     page     base64 of the document decoded into bytes
 //   doc_parsed      page     sdkjs read the document (openDocument returned)
@@ -33,7 +35,10 @@
 //   content_ready   page     sdkjs about to send asc_onDocumentContentReady
 //   ui_ready        page     the handlers of that event returned
 //   layout          page     the task that sent it ended
+//   microtasks      page     microtasks queued ahead of the language list ran
 //   spell_init      page     editor UI took the spellcheck languages
+//   frame           page     first animation frame after that task began
+//   doc_drawn       page     sdkjs's paint loop ran in that frame
 //   document_ready  page     onDocumentReady reached the page
 //   sum                      the phase columns of the row added up
 //   total                    from the request to document_ready; "-" if not reached
@@ -43,6 +48,13 @@
 // the rest of itself while the editor UI starts, so sdk_all can come after
 // app_ready: its column is then the time since app_ready, and sdk_min +
 // app_ready + sdk_all is the time from sdk_min to the later of the two.
+//
+// The editor is created while the backend converts, so the backend's marks and
+// `result` fall among the page's from `fonts` on. A column is still the time
+// since the mark before it in time, whichever side logged that mark: the time
+// the backend took is respond - command in its own lines, and the time the
+// editor took to ask for the document is doc_request - iframe in the page's.
+// A `result` after `doc_request` is an editor that waited for its document.
 //
 // A phase with no mark shows "-", and its time goes to the next phase that
 // has one. With two or more complete opens a last row gives the median of
@@ -93,8 +105,9 @@ import { pathToFileURL } from 'node:url';
 const BACKEND_PHASES = ['command', 'start', 'copy', 'convert', 'encode', 'respond'];
 const PAGE_PHASES = [
   'request', 'result', 'fonts', 'iframe', 'sdk_min', 'sdk_all', 'app_ready',
-  'doc_request', 'doc_decoded', 'doc_parsed', 'doc_fonts', 'doc_images',
-  'content_ready', 'ui_ready', 'layout', 'spell_init', 'document_ready',
+  'doc_info', 'doc_load', 'doc_request', 'doc_decoded', 'doc_parsed', 'doc_fonts', 'doc_images',
+  'content_ready', 'ui_ready', 'layout', 'microtasks', 'spell_init',
+  'frame', 'doc_drawn', 'document_ready',
 ];
 // In the order an open goes through them. `request` is the origin, so it has
 // no column of its own.

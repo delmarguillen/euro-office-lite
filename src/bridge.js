@@ -535,9 +535,14 @@ window._eoLog = function() {
 //   result          the backend answered with the document
 //   fonts           the font cache is settled and the system font list fetched
 //   iframe          DocsAPI.DocEditor created the editor iframe
+//                   (the editor is created while the backend converts, so
+//                   result comes wherever the answer falls among the marks
+//                   from fonts on; after doc_request, the editor waited for it)
 //   sdk_min         the editor frame has evaluated the min part of sdkjs
 //   sdk_all         the editor frame has evaluated the rest of sdkjs
 //   app_ready       the editor's onAppReady
+//   doc_info        sdkjs has the document's info and asks for its permissions
+//   doc_load        the editor UI is set for those permissions (asc_LoadDocument)
 //   doc_request     sdkjs asked for the document (LocalStartOpen)
 //   doc_decoded     the base64 of the document is decoded into bytes
 //   doc_parsed      sdkjs's openDocument returned: the document is read
@@ -546,12 +551,18 @@ window._eoLog = function() {
 //   content_ready   sdkjs is about to send asc_onDocumentContentReady
 //   ui_ready        every handler of asc_onDocumentContentReady has returned
 //   layout          the task that sent it has ended
+//   microtasks      the microtasks queued ahead of the language list have run
 //   spell_init      the editor UI took the list of spellcheck languages
+//   frame           the first animation frame after that task has begun
+//   doc_drawn       sdkjs's paint loop has run in that frame
 //   document_ready  the editor's onDocumentReady
 //
 // sdkjs loads the rest of itself while the editor UI starts, so app_ready and
-// sdk_all come in either order. From doc_request to spell_init the marks are
-// taken inside the editor frame's own tasks (_eoWatchOpenPhases); the last one
+// sdk_all come in either order. sdkjs asks for the document once it has the
+// document's info and its font engine, so doc_request comes before doc_load
+// when the engine is ready first. From doc_info to spell_init the marks are
+// taken inside the editor frame's own tasks (_eoWatchOpenPhases), frame and
+// doc_drawn in animation frame callbacks (_eoMarkFirstFrame); the last one
 // waits for the message of the editor frame to reach this page.
 var _eoOpenPhases = (function() {
   var sequence = 0;
@@ -612,6 +623,17 @@ var _eoOpenPhases = (function() {
 })();
 window._eoOpenPhases = _eoOpenPhases;
 
+// The first animation frame after an open's layout. A frame runs the page's
+// callbacks before the editor frame's, and there sdkjs's paint loop asked for
+// its frame a frame earlier (PaintMessageLoop, common/Drawings/WorkEvents.js):
+// frame is taken before the turn of that loop, doc_drawn after it.
+function _eoMarkFirstFrame(editorWindow) {
+  if (typeof window.requestAnimationFrame !== 'function') return;
+  window.requestAnimationFrame(function() { _eoOpenPhases.mark('frame'); });
+  if (!editorWindow || typeof editorWindow.requestAnimationFrame !== 'function') return;
+  editorWindow.requestAnimationFrame(function() { _eoOpenPhases.mark('doc_drawn'); });
+}
+
 // The marks of an open that sdkjs's own events give, on the API of the editor
 // frame. Only listeners are added.
 //
@@ -622,16 +644,34 @@ window._eoOpenPhases = _eoOpenPhases;
 // ends, before the one that sends the spellcheck languages: layout.
 // The font and image actions also run for a paste or a font change, and before
 // the document: they count once its bytes are decoded.
+//
+// The editor UI adds its listener of asc_onGetEditorPermissions when it takes
+// the document's info, after this one: doc_info is taken ahead of the work the
+// UI does there, which ends with asc_LoadDocument starting the Open action.
+function _eoOpenActions() {
+  var editorWindow = window.AscDesktopEditor._editorWindow;
+  return (editorWindow && editorWindow.Asc && editorWindow.Asc.c_oAscAsyncAction) || null;
+}
+
 function _eoWatchOpenPhases(api) {
   if (!api || api.__eoOpenPhasesWatched) return;
   if (typeof api.asc_registerCallback !== 'function') return;
   api.__eoOpenPhasesWatched = true;
   var uiWatched = false;
+  api.asc_registerCallback('asc_onGetEditorPermissions', function() {
+    _eoOpenPhases.mark('doc_info');
+  });
+  api.asc_registerCallback('asc_onStartAction', function(type, id) {
+    try {
+      var actions = _eoOpenActions();
+      if (!actions) return;
+      if (id === actions['Open']) _eoOpenPhases.mark('doc_load');
+    } catch(e) {}
+  });
   api.asc_registerCallback('asc_onEndAction', function(type, id) {
     try {
       if (!_eoOpenPhases.has('doc_decoded')) return;
-      var editorWindow = window.AscDesktopEditor._editorWindow;
-      var actions = editorWindow && editorWindow.Asc && editorWindow.Asc.c_oAscAsyncAction;
+      var actions = _eoOpenActions();
       if (!actions) return;
       if (id === actions['LoadDocumentFonts']) {
         _eoOpenPhases.mark('doc_fonts');
@@ -639,7 +679,10 @@ function _eoWatchOpenPhases(api) {
         _eoOpenPhases.mark('doc_images');
       } else if (id === actions['Open'] && !_eoOpenPhases.has('content_ready')) {
         _eoOpenPhases.mark('content_ready');
-        Promise.resolve().then(function() { _eoOpenPhases.mark('layout'); });
+        Promise.resolve().then(function() {
+          _eoOpenPhases.mark('layout');
+          _eoMarkFirstFrame(window.AscDesktopEditor._editorWindow);
+        });
         if (!uiWatched) {
           uiWatched = true;
           api.asc_registerCallback('asc_onDocumentContentReady', function() {
@@ -1265,13 +1308,26 @@ function _eoShowSavedName(savedName) {
 // `error` is what the open command rejected with. A file open in another
 // window is not damaged, so it gets its own message.
 function _eoShowOpenError(error) {
-  if (_eoIsOpenElsewhere(error)) return _eoShowOpenElsewhere();
-  return window.__TAURI__.dialog.message(
+  if (_eoIsOpenElsewhere(error)) return _eoAfterOpenFailure(_eoShowOpenElsewhere());
+  var told = window.__TAURI__.dialog.message(
     _t('openErrorMsg'),
     { title: _t('openFailed'), kind: 'error' }
   );
+  return _eoAfterOpenFailure(told);
 }
 window._eoShowOpenError = _eoShowOpenError;
+
+// `told` is the dialog of a failed open. With no editor created for the open,
+// it is returned as it is. With one, the page is loaded again once the dialog
+// is closed, and what is returned never settles: nothing more runs here.
+function _eoAfterOpenFailure(told) {
+  if (!_eoLeavingFailedEditor) return told;
+  return told.catch(function() {}).then(function() {
+    _forceReload();
+    return new Promise(function() {});
+  });
+}
+window._eoAfterOpenFailure = _eoAfterOpenFailure;
 
 // What the backend answers or rejects with when the file is open in another
 // window (new_window.rs): two windows saving one file overwrite each other.
@@ -1289,8 +1345,8 @@ function _eoShowOpenElsewhere() {
   );
 }
 
-// Converting a file happens before the editor exists and reports no progress,
-// so the shell shows an indeterminate indicator until the editor takes over
+// Converting a file reports no progress, so the shell shows an indeterminate
+// indicator until the document has reached the page and the editor takes over
 // with its own loading mask. Calling it again while visible only updates the text.
 function _eoShowOpening(text) {
   var overlay = document.getElementById('opening');
@@ -1311,7 +1367,8 @@ function _eoHideOpening() {
   if (!overlay) return;
   overlay.classList.remove('active');
   var startScreen = document.getElementById('start-screen');
-  if (startScreen) startScreen.inert = false;
+  // The start screen of a page about to be loaded again takes no clicks.
+  if (startScreen) startScreen.inert = _eoLeavingFailedEditor;
   _eoWakeOpeningWaiters();
 }
 
@@ -1332,6 +1389,88 @@ function _eoWakeOpeningWaiters() {
   _eoOpeningWaiters = [];
   waiters.forEach(function(resolve) { resolve(); });
 }
+
+// ── The editor created while its document is converted ──
+//
+// The editor and the conversion do not need each other until sdkjs asks for
+// the document (LocalStartOpen), so an open asks the backend for the document
+// and creates the editor at once. The document the editor waits for is
+// `converting` until the backend answers, then `arrived` or `failed`.
+// LocalStartOpen takes it when it has arrived, and nothing when it failed.
+//
+// A page has one editor, so at most one document is awaited. It stays here
+// after it arrives: the editor created for it never opens a blank document.
+var _eoAwaited = null;
+// An open failed with its editor already created: see _eoDocumentFailed.
+var _eoLeavingFailedEditor = false;
+
+function _eoAwaitDocument(name) {
+  var awaited = { name: name, state: 'converting', editorCreated: false };
+  awaited.arrival = new Promise(function(resolve) { awaited.arrive = resolve; });
+  _eoAwaited = awaited;
+  return awaited;
+}
+
+// An editor created during the conversion loads behind the page as the open
+// left it, the start screen included (index.html, body.editor-behind), so the
+// window shows what it showed when the editor was created afterwards.
+function _eoSetEditorBehind(behind) {
+  if (document.body) document.body.classList.toggle('editor-behind', behind);
+}
+window._eoSetEditorBehind = _eoSetEditorBehind;
+
+// The editor takes the window, as openEditor does for one it creates with its
+// document already here.
+function _eoUncoverEditor() {
+  _eoSetEditorBehind(false);
+  var startScreen = document.getElementById('start-screen');
+  if (startScreen) startScreen.classList.add('hidden');
+  _eoHideOpening();
+}
+
+function _eoDocumentArrived(awaited, pending) {
+  window._pendingFileData = pending;
+  awaited.state = 'arrived';
+  if (awaited.editorCreated) _eoUncoverEditor();
+  awaited.arrive();
+}
+
+// Without an editor yet, the page is as it was before the open. With one, the
+// editor is removed from behind the page, which looks as after any failed
+// open but has loaded an editor: _eoAfterOpenFailure loads it again.
+function _eoDocumentFailed(awaited) {
+  awaited.state = 'failed';
+  if (!awaited.editorCreated) {
+    if (_eoAwaited === awaited) _eoAwaited = null;
+    return;
+  }
+  _eoLeavingFailedEditor = true;
+  _eoRemoveFrames();
+  _eoSetEditorBehind(false);
+}
+
+// Asks the backend for the document of `file`, { token, name }, and creates
+// its editor meanwhile, once the font cache is settled. Resolves once the
+// document has reached the page; rejects with what the backend rejected with.
+// The answer is listened for first, so a refusal that is already here when
+// the fonts are settled creates no editor.
+function _eoOpenWithEditor(file, openId) {
+  var awaited = _eoAwaitDocument(file.name);
+  var asked = invoke(_eoOpenCommandForPath(file.name), { token: file.token, openId: openId });
+  var answered = asked.then(function(b64data) {
+    _eoOpenPhases.mark('result');
+    _eoDocumentArrived(awaited, { data: b64data, path: file.name, name: file.name });
+  }, function(error) {
+    _eoDocumentFailed(awaited);
+    throw error;
+  });
+  _eoWaitForFonts().then(function() {
+    if (awaited.state === 'failed') return;
+    window._openEditor(_eoDocTypeForPath(file.name), awaited);
+  });
+  return answered;
+}
+window._eoOpenWithEditor = _eoOpenWithEditor;
 
 // A function replacement, so a file name containing "$&" is inserted as is.
 function _eoOpeningFileText(path) {
@@ -1800,10 +1939,14 @@ async function _eoFailSave(ref, err, wasModified) {
 }
 
 // `next`, when given, is the page to load instead of this one.
-function _forceReload(next) {
-  window.onbeforeunload = null;
+function _eoRemoveFrames() {
   var iframes = document.querySelectorAll('iframe');
   for (var i = 0; i < iframes.length; i++) iframes[i].remove();
+}
+
+function _forceReload(next) {
+  window.onbeforeunload = null;
+  _eoRemoveFrames();
   // The document is being dropped on purpose here: it was unmodified, or the
   // user answered the discard dialog. Ending the session keeps a deliberate
   // close from coming back as a crash offer on the next start.
@@ -2697,6 +2840,9 @@ var SpellCheckBridge = (function() {
   var _userFolders = null;
   var _userFoldersPromise = null;
   var _waitLogged = false;
+  // performance.now() when the worker was created; 0 once its first answer
+  // has been logged.
+  var _workerStarted = 0;
   var _tasks = {};
   var _nextTaskId = 1;
 
@@ -3027,7 +3173,17 @@ var SpellCheckBridge = (function() {
     }
   }
 
+  // The first answer of a worker waits for its script, its wasm and the
+  // dictionaries of the languages of that task.
+  function _logFirstAnswer() {
+    if (!_workerStarted) return;
+    var waited = Math.round(performance.now() - _workerStarted);
+    _workerStarted = 0;
+    _log('first answer of the worker ' + waited + ' ms after it was created');
+  }
+
   function _onWorkerMessage(data) {
+    _logFirstAnswer();
     if (!data) return;
     var id = data.__eoTask;
     var task = (id !== undefined && id !== null) ? _tasks[id] : null;
@@ -3061,6 +3217,7 @@ var SpellCheckBridge = (function() {
       _log('worker could not be created: ' + (e.message || e));
       return null;
     }
+    _workerStarted = performance.now();
     _worker.onerror = function(e) {
       _log('worker error: ' + ((e && e.message) || 'unknown') +
            ' at ' + ((e && e.filename) || '?') + ':' + ((e && e.lineno) || 0));
@@ -3193,6 +3350,10 @@ var SpellCheckBridge = (function() {
 
   function _emitInit(api, editorWindow) {
     _dictionariesReady().then(function() {
+      // With both lists already in, this runs in the microtasks of the task
+      // that sent asc_onDocumentContentReady, behind the ones the editor UI
+      // queued first. The mark keeps their time out of spell_init.
+      _eoOpenPhases.mark('microtasks');
       var packed = _packedLanguages(editorWindow) || {};
       var lcids = [];
       for (var lcid in packed) {
@@ -3372,6 +3533,9 @@ window.AscDesktopEditor = {
             skipRecovery: !!pending.recovery,
             recovery: pending.recovery || null
           });
+        } else if (_eoAwaited) {
+          // The editor of a file: a blank document must not take its place.
+          window._eoLog('[EO] LocalStartOpen: no document left for this editor');
         } else {
           _eoSetDocumentUrls(ref);
           var emptyData = ref.ew.AscCommon.getEmpty();
@@ -3390,6 +3554,14 @@ window.AscDesktopEditor = {
       }
     };
 
+    var awaited = _eoAwaited;
+    // The open failed: this editor is being removed and opens nothing.
+    if (awaited && awaited.state === 'failed') return;
+    if (awaited && awaited.state === 'converting') {
+      window._eoLog('[EO] LocalStartOpen: the document is still being converted');
+      awaited.arrival.then(function() { setTimeout(doOpen, 100); });
+      return;
+    }
     setTimeout(doOpen, 100);
   },
 
@@ -4114,24 +4286,23 @@ async function _eoOpenGranted(file) {
     _eoOpenMarkdown(file);
     return;
   }
-  var docType = _eoDocTypeForPath(file.name);
   var openId = _eoOpenPhases.begin();
   _eoShowOpening(_eoOpeningFileText(file.name));
 
   try {
+    if (window._openEditor) {
+      await _eoOpenWithEditor(file, openId);
+      return;
+    }
     var b64data = await invoke(_eoOpenCommandForPath(file.name), { token: file.token, openId: openId });
     _eoOpenPhases.mark('result');
     window._pendingFileData = { data: b64data, path: file.name, name: file.name };
     // Converting did not need the font cache; the editor does.
     await _eoWaitForFonts();
-    if (window._openEditor) {
-      window._openEditor(docType);
-    } else {
-      window._eoLog('[OPEN] WARN: editor launcher unavailable, using fallback');
-      // The fallback never reaches openEditor, which is what hides it.
-      _eoHideOpening();
-      window.AscDesktopEditor.LocalFileOpen(file);
-    }
+    window._eoLog('[OPEN] WARN: editor launcher unavailable, using fallback');
+    // The fallback never reaches openEditor, which is what hides it.
+    _eoHideOpening();
+    window.AscDesktopEditor.LocalFileOpen(file);
   } catch(e) {
     window._eoLog('[EO] open-file: conversion failed: ' + (e.message || e));
     _eoOpenPhases.end();
