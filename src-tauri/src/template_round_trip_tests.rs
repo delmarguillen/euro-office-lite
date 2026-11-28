@@ -60,7 +60,7 @@ fn is_x2t(path: &Path) -> bool {
     is_x2t_binary(&name)
 }
 
-fn x2t_in(binaries_dir: &Path) -> PathBuf {
+pub(crate) fn x2t_in(binaries_dir: &Path) -> PathBuf {
     let entries = std::fs::read_dir(binaries_dir).expect("EO_X2T_BINARIES is not a folder");
     for entry in entries.flatten() {
         let path = entry.path();

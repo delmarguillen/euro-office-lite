@@ -27,6 +27,8 @@ mod presentation;
 mod protocol_limits;
 mod recent;
 mod recovery;
+#[cfg(test)]
+mod save_full_temp_tests;
 mod save_target;
 mod temp_layout;
 #[cfg(test)]
