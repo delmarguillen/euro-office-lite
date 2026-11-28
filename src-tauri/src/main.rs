@@ -393,6 +393,9 @@ fn main() {
             note
         ));
     }
+    if let Some(why) = root_choice.why {
+        log_startup(&format!("temp root: {} ({})", temp_root.display(), why));
+    }
     if let Some(note) = &font_choice.note {
         log_startup(&format!(
             "WARNING: font cache kept in the temp folder {}: {}",
