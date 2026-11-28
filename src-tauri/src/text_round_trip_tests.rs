@@ -192,3 +192,19 @@ fn real_x2t_reads_a_txt_outside_the_bmp_from_utf16_le_without_a_bom() {
     assert_eq!(String::from_utf8(rebuilt).unwrap(), text);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// A NUL pattern that fits UTF-16 and single-byte text alike is not opened.
+#[test]
+#[ignore]
+fn real_x2t_is_not_given_a_txt_with_a_doubtful_nul_pattern() {
+    let cases: [(&str, Vec<u8>); 4] = [
+        ("text and one NUL", b"hello world\0".to_vec()),
+        ("words and one NUL", b"abc def ghi\0".to_vec()),
+        ("NUL-terminated records", b"abc\0def\0ghi\0jkl\0".to_vec()),
+        ("UTF-16 LE that reads as BE", utf16le("一一一\n")),
+    ];
+    for (label, content) in cases {
+        let refused = open_and_save("a.txt", &content).expect_err(label);
+        assert!(refused.starts_with(crate::converter::TEXT_NOT_READABLE_ERROR), "{label}: {refused}");
+    }
+}

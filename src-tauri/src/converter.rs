@@ -316,6 +316,10 @@ pub fn prepare_editor_input_in(
     if !x2t_task::is_converted_extension(source) {
         return Err(not_valid_error(source));
     }
+    // x2t refuses an empty file with exit 88, which does not say why.
+    if x2t_task::is_empty_file(source) {
+        return Err(EMPTY_FILE_ERROR.to_string());
+    }
     let copy_dir = copy_dir_for(source, places, text_kind.is_some())?;
     let mut input = read_copy(source, &copy_dir, text_kind, text_options)?;
     let mut content = x2t_task::ContentSample::read(input.path()).map_err(|e| e.to_string())?;
@@ -457,7 +461,7 @@ fn read_copy(
     text_options: Option<crate::text_import::TextOptions>,
 ) -> Result<EditorInput, String> {
     let text_copy = crate::text_import::prepare_read_copy(source, work_dir, text_kind, text_options)
-        .map_err(|e| read_copy_error(source, e))?;
+        .map_err(read_copy_error)?;
     if let Some(copy) = text_copy {
         return Ok(EditorInput { copies: vec![copy.path], options: Some(copy.options) });
     }
@@ -466,10 +470,26 @@ fn read_copy(
     Ok(EditorInput { copies: vec![copy], options: None })
 }
 
-// A TXT x2t would read without its text gets the error of a file that is not valid.
-fn read_copy_error(source: &std::path::Path, error: std::io::Error) -> String {
+// The error of a file of 0 bytes that no blank template stands in for. The
+// bridge has a message for it (_eoOpenErrorText).
+pub const EMPTY_FILE_ERROR: &str = "empty-file";
+
+// Start of the error of a TXT or CSV that is not opened because x2t would not
+// read the text it holds: text that is not valid in its encoding, or a NUL.
+// The bridge has a message for it (_eoOpenErrorText).
+pub const TEXT_NOT_READABLE_ERROR: &str = "text-not-readable";
+
+// The same for a TXT with characters outside the BMP, where x2t loses them.
+pub const TEXT_OUTSIDE_BMP_ERROR: &str = "text-outside-bmp";
+
+// text_import refuses a text with InvalidData; anything else is a failed read
+// or write of the copy.
+fn read_copy_error(error: std::io::Error) -> String {
     if crate::text_import::is_txt_outside_the_bmp(&error) {
-        return not_valid_error(source);
+        return format!("{}: {}", TEXT_OUTSIDE_BMP_ERROR, error);
+    }
+    if error.kind() == std::io::ErrorKind::InvalidData {
+        return format!("{}: {}", TEXT_NOT_READABLE_ERROR, error);
     }
     format!("read copy: {}", error)
 }
@@ -1385,12 +1405,43 @@ mod tests {
 
     #[cfg(not(target_os = "linux"))]
     #[test]
-    fn a_txt_x2t_would_read_without_its_text_is_not_valid_and_leaves_no_copy() {
+    fn a_txt_x2t_would_read_without_its_text_is_refused_for_it_and_leaves_no_copy() {
         for text in TXT_OUTSIDE_THE_BMP {
             let (refused, work_dir) = text_editor_input("notes.txt", text.as_bytes());
 
-            assert_eq!(refused.err(), Some("This file is not a valid .txt".to_string()), "{:?}", text);
+            let error = refused.err().expect(text);
+            assert!(error.starts_with(TEXT_OUTSIDE_BMP_ERROR), "{:?}: {}", text, error);
             assert_eq!(files_in(&work_dir), 0, "{:?}", text);
+        }
+    }
+
+    #[test]
+    fn an_empty_file_is_refused_as_empty_and_leaves_no_copy() {
+        for name in ["notes.txt", "data.csv", "old.doc", "old.xls"] {
+            let (original, work_dir) = original_and_work_dir(name, b"");
+            let kind = crate::text_import::TextKind::for_path(&original);
+            let options = kind.map(|kind| crate::text_import::detect_file(&original, kind).unwrap());
+
+            let refused = prepare_editor_input(&original, &work_dir, kind, options);
+
+            assert_eq!(refused.err(), Some(EMPTY_FILE_ERROR.to_string()), "{name}");
+            assert_eq!(files_in(&work_dir), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_text_that_is_not_what_x2t_would_read_is_refused_as_not_readable() {
+        let invalid_utf16: &[u8] = &[0xFF, 0xFE, 0x61, 0x00, 0x00, 0xD8, 0x62, 0x00];
+        let cases: [(&str, &[u8], &str); 3] = [
+            ("lone.txt", invalid_utf16, "not valid UTF-16 text: unpaired surrogate D800 at code unit 1"),
+            ("nul.txt", b"hello world\0", "NUL character at code unit 11"),
+            ("bom.csv", b"\xEF\xBB\xBFa;\xFF\n", "not valid UTF-8 text: invalid sequence at byte 2"),
+        ];
+        for (name, content, detail) in cases {
+            let (refused, work_dir) = text_editor_input(name, content);
+
+            assert_eq!(refused.err(), Some(format!("{}: {}", TEXT_NOT_READABLE_ERROR, detail)), "{name}");
+            assert_eq!(files_in(&work_dir), 0, "{name}");
         }
     }
 
