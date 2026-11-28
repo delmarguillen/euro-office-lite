@@ -260,6 +260,45 @@ function Test-FirstRunScreens {
     Assert-Equal '-ClearDesktop reaches the options' $clearing.ClearDesktop $true
 }
 
+# What Close-ShellPanels does to a panel that Escape closes after
+# $closesAfter of them, or never when that is 0: 'escapes=N ended=N'.
+function Get-ShellPanelClosing([bool]$open, [int]$closesAfter) {
+    $fakePanel = @{ Open = $open; ClosesAfter = $closesAfter; Escapes = 0; Ended = 0 }
+    function Get-ForegroundShellPanel {
+        if (-not $fakePanel.Open) { return $null }
+        return (New-Object PSObject -Property @{ ProcessId = 70001; Description = 'a stand-in for the Start menu' })
+    }
+    function Get-ForegroundDescription { return 'a stand-in for the desktop' }
+    function Send-Keys([string]$keys) {
+        if ($keys -cne 'Escape') { throw ('the panel got ' + $keys) }
+        $fakePanel.Escapes++
+        if ($fakePanel.Escapes -eq $fakePanel.ClosesAfter) { $fakePanel.Open = $false }
+    }
+    function Stop-Process {
+        $fakePanel.Ended++
+        $fakePanel.Open = $false
+    }
+    Close-ShellPanels
+    return ('escapes={0} ended={1}' -f $fakePanel.Escapes, $fakePanel.Ended)
+}
+
+# The parts of -ClearDesktop that close the Start menu or the Search panel:
+# which process is one, and what is done to it on each attempt.
+function Test-ShellPanels {
+    Assert-Equal 'shell panel: the search box of the Start menu' (Test-ShellPanelProcess 'SearchHost') $true
+    Assert-Equal 'shell panel: the Start menu' (Test-ShellPanelProcess 'StartMenuExperienceHost') $true
+    Assert-Equal 'shell panel: not the shell' (Test-ShellPanelProcess 'explorer') $false
+    Assert-Equal 'shell panel: not the app' (Test-ShellPanelProcess 'euro-office-lite') $false
+    Assert-Equal 'shell panel: Escape first' (Get-ShellPanelStep 1) 'escape'
+    Assert-Equal 'shell panel: Escape on the last attempt with it' (Get-ShellPanelStep $ShellPanelEscapes) 'escape'
+    Assert-Equal 'shell panel: then its process is ended' (Get-ShellPanelStep ($ShellPanelEscapes + 1)) 'end'
+    Assert-Equal 'shell panel: nothing is sent when it does not have the foreground' (Get-ShellPanelClosing $false 0) 'escapes=0 ended=0'
+    Assert-Equal 'shell panel: one Escape when that closes it' (Get-ShellPanelClosing $true 1) 'escapes=1 ended=0'
+    Assert-Equal 'shell panel: a second Escape when the first did not' (Get-ShellPanelClosing $true 2) 'escapes=2 ended=0'
+    Assert-Equal 'shell panel: its process is ended once when Escape does not close it' (Get-ShellPanelClosing $true 0) ('escapes={0} ended=1' -f $ShellPanelEscapes)
+    Assert-Equal 'the Start menu is left alone unless -ClearDesktop is given' $ClearsDesktop $false
+}
+
 # --- a stand-in for the app -----------------------------------------------------
 
 $Fake = @{ ProcessId = 70000; Alive = $false; File = ''; Log = ''; Typed = ''; Dialogs = @(); Chords = @(); Refuses = $true; WritesNothing = $false; SaveFails = $false; LogsOldSave = $false; SaveDialog = $false; Session = ''; KeepsRecovery = $true }
@@ -659,6 +698,7 @@ Test-Scripts
 Test-CaseFiles
 Test-Keys
 Test-FirstRunScreens
+Test-ShellPanels
 Test-ByteChecks
 Test-ZipChecks $TestInputs
 Test-PdfChecks

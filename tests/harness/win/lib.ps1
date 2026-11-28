@@ -410,10 +410,23 @@ function Test-Foreground([IntPtr]$window) {
 # chord: the window that sees ALT go up does not open its menu.
 $MenuMaskKey = 0xE8
 
+# Whether run.ps1 got -ClearDesktop: only then is anything of the desktop closed.
+$ClearsDesktop = $false
+
 # Brings a window to the foreground and says whether it got there. Keys go to
 # the foreground window, so nothing is typed when this is false.
 function Set-Foreground([IntPtr]$window) {
     if ($window -eq [IntPtr]::Zero) { return $false }
+    # The Start menu may open while the cases run: the first sign-in goes on.
+    # A panel that could not be closed does not stop the case: its detail says
+    # what kept the foreground.
+    if ($ClearsDesktop) {
+        try {
+            Close-ShellPanels
+        } catch {
+            Write-Log ('the Start menu or the Search panel could not be closed: ' + $_.Exception.Message)
+        }
+    }
     if ([EolNative]::IsIconic($window)) { [void][EolNative]::ShowWindow($window, 9) }
     [void][EolNative]::SetForegroundWindow($window)
     if (Test-Foreground $window) { return $true }
@@ -521,8 +534,74 @@ function Get-BlockingWindows {
     return $found
 }
 
+# The programs of the Start menu and of its search box, which is also the
+# Search panel of the taskbar. Windows 11 opens the Start menu at the first
+# sign-in of a user; while it is open the search box has the foreground and
+# SetForegroundWindow does not take it away.
+$ShellPanelHosts = 'SearchHost', 'StartMenuExperienceHost'
+
+# Escape closes the panel, as it does for a person; a panel that is still
+# there after this many gets its process ended, which closes its window.
+$ShellPanelEscapes = 3
+$ShellPanelAttempts = 5
+
+function Test-ShellPanelProcess([string]$name) {
+    return ($ShellPanelHosts -contains $name)
+}
+
+# What an attempt to close a panel does: escape or end.
+function Get-ShellPanelStep([int]$attempt) {
+    if ($attempt -le $ShellPanelEscapes) { return 'escape' }
+    return 'end'
+}
+
+# The Start menu or the Search panel when it has the foreground, with
+# ProcessId and Description; nothing when another window has it, or none.
+function Get-ForegroundShellPanel {
+    $window = [EolNative]::RootOf([EolNative]::GetForegroundWindow())
+    if ($window -eq [IntPtr]::Zero) { return $null }
+    $ownerId = [EolNative]::ProcessOf($window)
+    $process = Get-Process -Id $ownerId -ErrorAction SilentlyContinue
+    if (-not $process) { return $null }
+    if (-not (Test-ShellPanelProcess $process.ProcessName)) { return $null }
+    return (New-Object PSObject -Property @{ ProcessId = [int]$ownerId; Description = (Get-WindowDescription $window) })
+}
+
+function Test-ShellPanelClosed {
+    return ($null -eq (Get-ForegroundShellPanel))
+}
+
+# Closes the Start menu or the Search panel while it has the foreground, and
+# says in the log what it did and what has the foreground afterwards. It sends
+# Escape only after reading that the panel has the foreground, and does
+# nothing when another window has it. For -ClearDesktop of run.ps1.
+function Close-ShellPanels {
+    $attempts = 0
+    foreach ($attempt in 1..$ShellPanelAttempts) {
+        $panel = Get-ForegroundShellPanel
+        if (-not $panel) { break }
+        $attempts++
+        if ((Get-ShellPanelStep $attempt) -eq 'escape') {
+            Write-Log ('the Start menu or the Search panel has the foreground, pressing Escape: ' + $panel.Description)
+            Send-Keys 'Escape'
+        } else {
+            Write-Log ('Escape did not close it, ending its process: ' + $panel.Description)
+            Stop-Process -Id $panel.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+        [void](Wait-Until 5 { Test-ShellPanelClosed })
+    }
+    if ($attempts -eq 0) { return }
+    $panel = Get-ForegroundShellPanel
+    if ($panel) {
+        Write-Log ('still has the foreground: ' + $panel.Description)
+        return
+    }
+    Write-Log ('foreground after closing it: ' + (Get-ForegroundDescription))
+}
+
 # Ends the processes of the screens of a first sign-in that cover the desktop,
-# and says in the log what it found and what has the foreground afterwards.
+# then closes the Start menu or the Search panel that has the foreground, and
+# says in the log what it found and what has the foreground afterwards.
 # For a machine that is thrown away after the run: -ClearDesktop of run.ps1.
 function Clear-Desktop {
     Write-Log ('foreground before the cases: ' + (Get-ForegroundDescription))
@@ -540,8 +619,12 @@ function Clear-Desktop {
     foreach ($entry in @(Get-BlockingWindows)) {
         Write-Log ('still covers the desktop: ' + $entry.Description)
     }
-    if ($ended -eq 0) { return }
-    Write-Log ('foreground after ending them: ' + (Get-ForegroundDescription))
+    if ($ended -gt 0) {
+        Write-Log ('foreground after ending them: ' + (Get-ForegroundDescription))
+        # The window under the screen that went takes the foreground in a moment.
+        [void](Wait-Until 3 { -not (Test-ShellPanelClosed) })
+    }
+    Close-ShellPanels
 }
 
 function Click-WindowCenter([IntPtr]$window) {

@@ -6,7 +6,9 @@
 # files from a folder made by gen/mkinputs.py instead of running Python here.
 # -Control judges each case by its control_expect (what a build without the fix does).
 # -ClearDesktop ends, before the cases, the processes of the first sign-in
-# screens of Windows that cover the desktop: for a machine thrown away after the run.
+# screens of Windows that cover the desktop, and closes the Start menu or the
+# Search panel when it has the foreground, before the cases and before a
+# window is brought to the foreground: for a machine thrown away after the run.
 # Exit status: 0 every case ok, 1 some case not ok, 2 the harness could not run.
 param(
     [Parameter(Position = 0)][string]$Selection,
@@ -887,6 +889,8 @@ function Invoke-Harness($options) {
     Write-PdfToTextInUse
     Initialize-Native
     if ($options.ClearDesktop) {
+        # Set-Foreground reads it: the Start menu may open after the cases began.
+        $script:ClearsDesktop = $true
         # A desktop that could not be cleared does not stop the run: the cases say what they found.
         try {
             Clear-Desktop
