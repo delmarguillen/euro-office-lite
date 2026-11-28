@@ -1201,17 +1201,77 @@ mod private_root {
         let shared_tmp = base.join("tmp");
         std::fs::create_dir_all(&shared_tmp).unwrap();
         let app_cache = base.join("cache").join("org.euro-office.lite");
-        let roots = root_candidates(&shared_tmp, uid(), Some(&app_cache), true);
 
-        let choice = choose_root(&roots.candidates, &roots.fresh_in, uid(), || {
-            "fresh".to_string()
-        })
-        .unwrap();
+        let choice = choose_temp_root(&shared_tmp, uid(), Some(&app_cache), true, fresh).unwrap();
 
         assert_eq!(choice.path, app_cache.join("tmp"));
         assert_eq!(mode(&choice.path), 0o700);
         assert!(choice.note.is_none(), "{:?}", choice.note);
-        assert!(!shared_tmp.join(format!("euro-office-lite-{}", uid())).exists());
+        assert_eq!(choice.why, Some(WHY_APP_CACHE));
+        assert!(!tmp_root_in(&shared_tmp, uid()).exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn fresh() -> String {
+        "fresh".to_string()
+    }
+
+    // An instance of an earlier version still running in the sandbox's temp
+    // folder keeps every new start there, where each sees the other's files.
+    #[test]
+    fn inside_a_flatpak_a_live_instance_in_the_temp_folder_keeps_the_root_there() {
+        let base = scratch_root();
+        let shared_tmp = base.join("tmp");
+        let in_tmp = tmp_root_in(&shared_tmp, uid());
+        ensure_private_dir(&in_tmp, uid()).unwrap();
+        let earlier = begin_instance(&in_tmp, now() - 60_000, 2).unwrap();
+        let app_cache = base.join("cache").join("org.euro-office.lite");
+
+        let choice = choose_temp_root(&shared_tmp, uid(), Some(&app_cache), true, fresh).unwrap();
+
+        assert_eq!(choice.path, in_tmp);
+        assert!(choice.note.is_none(), "{:?}", choice.note);
+        assert_eq!(choice.why, Some(WHY_IN_USE));
+        assert!(!app_cache.exists());
+        earlier.end();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // With no one alive in the sandbox's temp folder the cache is taken, and
+    // the temp folder is left exactly as it was.
+    #[test]
+    fn inside_a_flatpak_a_temp_folder_with_no_one_alive_is_left_as_it_was() {
+        let base = scratch_root();
+        let shared_tmp = base.join("tmp");
+        let in_tmp = tmp_root_in(&shared_tmp, uid());
+        ensure_private_dir(&in_tmp, uid()).unwrap();
+        let crashed = begin_instance(&in_tmp, now() - 60_000, 2).unwrap();
+        crashed.lock.lock().unwrap().take();
+        let before = tree(&in_tmp);
+        let app_cache = base.join("cache").join("org.euro-office.lite");
+
+        let choice = choose_temp_root(&shared_tmp, uid(), Some(&app_cache), true, fresh).unwrap();
+
+        assert_eq!(choice.path, app_cache.join("tmp"));
+        assert_eq!(tree(&in_tmp), before);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // A folder temp_root would not take is not looked into, live lock or not.
+    #[test]
+    fn inside_a_flatpak_a_temp_folder_open_to_others_does_not_hold_the_root() {
+        let base = scratch_root();
+        let shared_tmp = base.join("tmp");
+        let in_tmp = tmp_root_in(&shared_tmp, uid());
+        std::fs::create_dir_all(&in_tmp).unwrap();
+        let other = begin_instance(&in_tmp, now() - 60_000, 2).unwrap();
+        std::fs::set_permissions(&in_tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let app_cache = base.join("cache").join("org.euro-office.lite");
+
+        let choice = choose_temp_root(&shared_tmp, uid(), Some(&app_cache), true, fresh).unwrap();
+
+        assert_eq!(choice.path, app_cache.join("tmp"));
+        other.end();
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1225,14 +1285,11 @@ mod private_root {
         let app_cache = base.join("cache").join("org.euro-office.lite");
         std::fs::create_dir_all(app_cache.join("tmp")).unwrap();
         std::fs::set_permissions(app_cache.join("tmp"), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let roots = root_candidates(&shared_tmp, uid(), Some(&app_cache), true);
 
-        let choice = choose_root(&roots.candidates, &roots.fresh_in, uid(), || {
-            "fresh".to_string()
-        })
-        .unwrap();
+        let choice = choose_temp_root(&shared_tmp, uid(), Some(&app_cache), true, fresh).unwrap();
 
-        assert_eq!(choice.path, shared_tmp.join(format!("euro-office-lite-{}", uid())));
+        assert_eq!(choice.path, tmp_root_in(&shared_tmp, uid()));
+        assert_eq!(choice.why, None, "the note says why");
         assert!(choice.note.unwrap().contains("permissions 755"));
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1255,13 +1312,14 @@ fn inside_a_flatpak_the_app_cache_comes_before_the_sandboxs_temp_folder() {
     let tmp = Path::new("/tmp");
     let app_cache = flatpak_user_cache().join(APP_ID);
 
-    let roots = root_candidates(tmp, 1000, Some(&app_cache), true);
+    let roots = root_candidates(tmp, 1000, Some(&app_cache), FirstChoice::AppCache);
 
     assert_eq!(
         roots.candidates,
         vec![app_cache.join("tmp"), tmp.join("euro-office-lite-1000")]
     );
     assert_eq!(roots.fresh_in, vec![app_cache.clone(), tmp.to_path_buf()]);
+    assert_eq!(roots.why_first, Some(WHY_APP_CACHE));
 }
 
 #[test]
@@ -1269,24 +1327,136 @@ fn outside_a_flatpak_the_temp_folder_comes_first_as_before() {
     let tmp = Path::new("/tmp");
     let app_cache = PathBuf::from("/home/ana/.cache").join(APP_ID);
 
-    let roots = root_candidates(tmp, 1000, Some(&app_cache), false);
+    let roots = root_candidates(tmp, 1000, Some(&app_cache), FirstChoice::TempFolder);
 
     assert_eq!(
         roots.candidates,
         vec![tmp.join("euro-office-lite-1000"), app_cache.join("tmp")]
     );
     assert_eq!(roots.fresh_in, vec![app_cache.clone(), tmp.to_path_buf()]);
+    assert_eq!(roots.why_first, None);
 }
 
 #[test]
 fn without_a_cache_folder_only_the_temp_folder_is_tried() {
     let tmp = Path::new("/tmp");
-    for in_flatpak in [false, true] {
-        let roots = root_candidates(tmp, 1000, None, in_flatpak);
+    for first in [FirstChoice::TempFolder, FirstChoice::TempFolderInUse, FirstChoice::AppCache] {
+        let roots = root_candidates(tmp, 1000, None, first);
 
         assert_eq!(roots.candidates, vec![tmp.join("euro-office-lite-1000")]);
         assert_eq!(roots.fresh_in, vec![tmp.to_path_buf()]);
     }
+}
+
+// Outside a Flatpak the temp folder is not even looked into.
+#[test]
+fn only_inside_a_flatpak_is_the_temp_folder_checked_for_live_instances() {
+    assert_eq!(first_choice(false, || panic!("checked outside")), FirstChoice::TempFolder);
+    assert_eq!(first_choice(true, || true), FirstChoice::TempFolderInUse);
+    assert_eq!(first_choice(true, || false), FirstChoice::AppCache);
+}
+
+// Every file and folder under `root`, by path, to tell whether anything in
+// it changed. Empty when `root` does not exist.
+fn tree(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path.clone());
+            }
+            found.push(path);
+        }
+    }
+    found.sort();
+    found
+}
+
+// Where a Flatpak start of this version puts its root, given the temp folder
+// it would otherwise use.
+fn flatpak_first_root(shared_tmp: &Path, app_cache: &Path) -> (PathBuf, Option<&'static str>) {
+    let in_tmp = tmp_root_in(shared_tmp, 1000);
+    let first = first_choice(true, || has_live_instance(&in_tmp));
+    let roots = root_candidates(shared_tmp, 1000, Some(app_cache), first);
+    (roots.candidates[0].clone(), roots.why_first)
+}
+
+// An instance of an earlier version is alive in the sandbox's temp folder:
+// the new start joins it there, and a file the earlier one is opening cannot
+// be opened a second time.
+#[test]
+fn a_live_instance_in_the_old_flatpak_root_keeps_the_new_start_there() {
+    let base = scratch_root();
+    let shared_tmp = base.join("tmp");
+    let old_root = tmp_root_in(&shared_tmp, 1000);
+    let earlier = begin_instance(&old_root, now() - 60_000, 2).unwrap();
+    let document = base.join("report.docx");
+    std::fs::write(&document, b"docx").unwrap();
+    let held = claim_document(&old_root, &earlier.id, &document).unwrap();
+
+    let (root, why) = flatpak_first_root(&shared_tmp, &base.join("cache").join(APP_ID));
+
+    assert_eq!(root, old_root);
+    assert_eq!(why, Some(WHY_IN_USE));
+    let new = begin_instance(&root, now(), 2).unwrap();
+    assert!(claim_document(&root, &new.id, &document).is_none());
+    drop(held);
+    new.end();
+    earlier.end();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// With no one alive there, whether the folder is missing, holds no instances
+// or only dead ones, the cache is taken and the folder is not touched.
+#[test]
+fn with_no_one_alive_in_the_old_flatpak_root_the_cache_is_chosen_and_the_old_root_left_alone() {
+    let base = scratch_root();
+    let app_cache = base.join("cache").join(APP_ID);
+    let missing = base.join("missing");
+    let empty = base.join("empty");
+    std::fs::create_dir_all(tmp_root_in(&empty, 1000)).unwrap();
+    let dead = base.join("dead");
+    let crashed = begin_instance(&tmp_root_in(&dead, 1000), now() - 60_000, 2).unwrap();
+    crashed.lock.lock().unwrap().take();
+
+    for shared_tmp in [&missing, &empty, &dead] {
+        let old_root = tmp_root_in(shared_tmp, 1000);
+        let before = tree(shared_tmp);
+
+        let (root, why) = flatpak_first_root(shared_tmp, &app_cache);
+
+        assert_eq!(root, app_cache.join("tmp"), "{}", shared_tmp.display());
+        assert_eq!(why, Some(WHY_APP_CACHE));
+        assert_eq!(tree(shared_tmp), before, "{}", shared_tmp.display());
+        assert!(!old_root.join(DOCUMENTS_LOCK).exists());
+    }
+    assert!(!missing.exists());
+    assert!(!tmp_root_in(&empty, 1000).join(INSTANCES_DIR).exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// A start of this version that joined the old root keeps the next ones there
+// once the earlier version has gone: any live instance counts.
+#[test]
+fn a_new_version_alive_in_the_old_flatpak_root_keeps_the_next_start_there() {
+    let base = scratch_root();
+    let shared_tmp = base.join("tmp");
+    let old_root = tmp_root_in(&shared_tmp, 1000);
+    let earlier = begin_instance(&old_root, now() - 120_000, 2).unwrap();
+    let joined = begin_instance(&old_root, now() - 60_000, 2).unwrap();
+    earlier.lock.lock().unwrap().take();
+
+    let (root, why) = flatpak_first_root(&shared_tmp, &base.join("cache").join(APP_ID));
+
+    assert_eq!(root, old_root);
+    assert_eq!(why, Some(WHY_IN_USE));
+    joined.end();
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]
@@ -1307,7 +1477,8 @@ fn the_flatpak_is_told_by_its_info_file() {
 fn the_flatpak_root_the_font_cache_and_the_read_copies_are_sibling_folders() {
     let user_cache = flatpak_user_cache();
     let app_cache = user_cache.join(APP_ID);
-    let root = root_candidates(Path::new("/tmp"), 1000, Some(&app_cache), true).candidates[0].clone();
+    let roots = root_candidates(Path::new("/tmp"), 1000, Some(&app_cache), FirstChoice::AppCache);
+    let root = roots.candidates[0].clone();
     let fonts = font_cache_path(&user_cache, APP_ID);
     let read_copies = app_cache.join(READ_COPIES_DIR);
 
