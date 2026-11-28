@@ -9,9 +9,12 @@
 // hands to x2t to produce the xlsx, and opens it again with OpenDocumentFromBin.
 // The xlsx conversion itself runs in x2t and is not part of this script.
 //
-// Run: node scripts/apply-patches.mjs apply --only sdkjs
-//      node scripts/test-sdkjs-cell-styles.mjs [path/to/sdkjs]
-//      node scripts/apply-patches.mjs revert --only sdkjs
+// The last cases open the cell style dialog of src/web-apps on the same model,
+// with its widgets stubbed, so they need the web-apps patches as well.
+//
+// Run: node scripts/apply-patches.mjs apply
+//      node scripts/test-sdkjs-cell-styles.mjs [path/to/sdkjs [path/to/web-apps]]
+//      node scripts/apply-patches.mjs revert
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -177,7 +180,7 @@ const No = run('Asc.c_oAscError.ID.No');
 const errors = run('({ exists: Asc.c_oAscError.ID.CellStyleNameExists, empty: Asc.c_oAscError.ID.CellStyleNameEmpty, notFound: Asc.c_oAscError.ID.CellStyleNotFound, normal: Asc.c_oAscError.ID.CellStyleNormalNotEditable })');
 if (!run("typeof api.asc_modifyCellStyle === 'function' && typeof api.asc_addCellStyle === 'function'")) {
   console.log('FAIL asc_addCellStyle and asc_modifyCellStyle are missing');
-  console.log('Are the sdkjs patches applied? node scripts/apply-patches.mjs apply --only sdkjs');
+  console.log('Are the sdkjs and web-apps patches applied? node scripts/apply-patches.mjs apply');
   process.exit(1);
 }
 
@@ -1003,9 +1006,283 @@ run = openEditor(run('api.asc_nativeGetFile()'));
 run(ACCENT3_FILE_HELPERS);
 same('accent3 and Accent3 2 keep no builtinId', run('documentStyles()'), [['Normal', 0], ['accent3', null], ['Accent3 2', null]]);
 
+// --- The cell style dialog of web-apps on the model ---
+// CellStyleDialog.js runs as it is. Its widgets are plain objects that keep a
+// value and run the handlers the dialog registers; there is no DOM. Picking a
+// color triggers color:select as the color button does.
+const DIALOG_STUBS = `
+  function FakeWidget(options) {
+    this.options = options || {};
+    this.handlers = {};
+    this.value = undefined;
+    this.pressed = false;
+    this.data = this.options.data || [];
+  }
+  FakeWidget.prototype.on = function (event, handler) {
+    (this.handlers[event] = this.handlers[event] || []).push(handler);
+    return this;
+  };
+  FakeWidget.prototype.trigger = function (event) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    (this.handlers[event] || []).forEach(function (handler) { handler.apply(null, args); });
+  };
+  FakeWidget.prototype.setValue = function (value) { this.value = value; };
+  FakeWidget.prototype.getValue = function () { return this.value; };
+  FakeWidget.prototype.getRawValue = function () { return String(this.value); };
+  FakeWidget.prototype.setData = function (data) { this.data = data; };
+  FakeWidget.prototype.fillFonts = function () {};
+  FakeWidget.prototype.toggle = function (pressed) { this.pressed = pressed; };
+  FakeWidget.prototype.setColor = function (color) { this.color = color; };
+  FakeWidget.prototype.setMenu = function () {};
+  FakeWidget.prototype.getPicker = function () {
+    return { options: { transparent: this.options.transparent }, updateColors: function () {} };
+  };
+  function FakeCheckBox(options) {
+    FakeWidget.call(this, options);
+    this.value = 'unchecked';
+  }
+  FakeCheckBox.prototype = Object.create(FakeWidget.prototype);
+  FakeCheckBox.prototype.setValue = function (value) { this.value = value ? 'checked' : 'unchecked'; };
+  function DialogBase() {}
+  DialogBase.prototype.initialize = function () {};
+  DialogBase.prototype.render = function () {};
+  DialogBase.extend = function (proto) {
+    function Dialog(options) { this.initialize(options); }
+    Dialog.prototype = Object.assign(Object.create(DialogBase.prototype), proto);
+    return Dialog;
+  };
+  window.Common = {
+    UI: { InputField: FakeWidget, ComboBox: FakeWidget, ComboBoxFonts: FakeWidget, Button: FakeWidget, ButtonColored: FakeWidget, CheckBox: FakeCheckBox },
+    Views: { AdvancedSettingsWindow: DialogBase },
+    Collections: { Fonts: FakeWidget },
+    Utils: {
+      String: { parseFloat: parseFloat },
+      ThemeColor: {
+        getEffectColors: function () { return []; },
+        getStandartColors: function () { return []; },
+        selectPickerColorByEffect: function () {},
+        // As in apps/common/main/lib/util/utils.js.
+        getHexColor: function (r, g, b) {
+          return [r, g, b].map(function (v) { return ('0' + v.toString(16)).slice(-2); }).join('');
+        },
+        getRgbColor: function (clr) {
+          var color = parseInt(((typeof clr == 'object') ? clr.color : clr).replace(/#/, ''), 16);
+          var c = new Asc.asc_CColor();
+          c.put_type((typeof clr == 'object' && clr.effectId !== undefined) ? Asc.c_oAscColor.COLOR_TYPE_SCHEME : Asc.c_oAscColor.COLOR_TYPE_SRGB);
+          c.put_r(color >> 16);
+          c.put_g((color & 0xff00) >> 8);
+          c.put_b(color & 0xff);
+          c.put_a(0xff);
+          if (clr.effectId !== undefined) c.put_value(clr.effectId);
+          return c;
+        }
+      }
+    }
+  };
+  window.SSE = { Views: {} };
+  window.define = function (deps, factory) { factory(); };
+`;
+const DIALOG_HELPERS = `
+  var SIDES = ['Top', 'Bottom', 'Left', 'Right'];
+  // The dialog as the toolbar opens it, rendered.
+  function openDialog(isModify, name, xfs, valuesXfs) {
+    var dialog = new SSE.Views.CellStyleDialog({api: api, fontStore: null, langId: 0x0409, isModify: isModify, name: name, xfs: xfs, valuesXfs: valuesXfs});
+    dialog.render();
+    return dialog;
+  }
+  function sideControls(dialog, name) {
+    return dialog.borderSides.filter(function (item) { return Asc.c_oAscBorderOptions[name] === item.side; })[0];
+  }
+  function chooseLine(dialog, name, style) { sideControls(dialog, name).combo.setValue(Asc.c_oAscBorderStyles[style]); }
+  function pickColor(button, hex) { button.trigger('color:select', button, hex); }
+  function pickBorderColor(dialog, name, hex) { pickColor(sideControls(dialog, name).button, hex); }
+  function lineName(style) {
+    return Object.keys(Asc.c_oAscBorderStyles).filter(function (key) { return Asc.c_oAscBorderStyles[key] === style; })[0];
+  }
+  function buttonHex(button) { return typeof button.currentColor === 'object' ? button.currentColor.color : button.currentColor; }
+  // What the dialog shows for each side: line style and color.
+  function shownSides(dialog) {
+    return SIDES.map(function (name) {
+      var item = sideControls(dialog, name);
+      return name + '=' + lineName(item.combo.getValue()) + ':' + buttonHex(item.button);
+    });
+  }
+  // The four sides of a border: line style and color, as the file keeps them.
+  function sidesOf(xfs) {
+    var fields = {Top: 't', Bottom: 'b', Left: 'l', Right: 'r'};
+    var border = (xfs && xfs.border) || AscCommonExcel.g_oDefaultFormat.Border;
+    return SIDES.map(function (name) {
+      var prop = border[fields[name]];
+      if (!prop || prop.s === Asc.c_oAscBorderStyles.None) return name + '=None';
+      return name + '=' + lineName(prop.s) + ':' + ('000000' + prop.c.getRgb().toString(16)).slice(-6);
+    });
+  }
+  function styleSides(name) { return sidesOf(api.wbModel.CellStyles.getStyleByName(name).xfs); }
+  function cellSides(ref) { return sidesOf(cellXfs(ref)); }
+  // OK on the dialog, as the toolbar's handler does.
+  function addFromDialog(dialog) {
+    var settings = dialog.getSettings();
+    return api.asc_addCellStyle(settings.name, settings.xfs);
+  }
+  function modifyFromDialog(dialog, name) { return api.asc_modifyCellStyle(name, dialog.getSettings().xfs); }
+`;
+const webAppsRoot = process.argv[3] || fileURLToPath(new URL('../src/web-apps/', import.meta.url));
+const dialogSource = readFileSync(path.join(webAppsRoot, 'apps/spreadsheeteditor/main/app/view/CellStyleDialog.js'), 'utf8');
+const underscoreSource = readFileSync(path.join(webAppsRoot, 'vendor/underscore/underscore-min.js'), 'utf8');
+function openDialogEditor(data) {
+  const editor = openEditor(data);
+  editor(underscoreSource);
+  editor(DIALOG_STUBS);
+  editor(dialogSource);
+  editor(DIALOG_HELPERS);
+  return editor;
+}
+// A case that throws, as on a dialog without a control it uses, fails instead of stopping the run.
+function attempt(code) {
+  try {
+    return run(code);
+  } catch (error) {
+    return 'error: ' + error.message;
+  }
+}
+
+// --- Line style and color of each border side (#76) ---
+run = openDialogEditor(null);
+attempt(`
+  ws().getRange2('A1').setValue('1');
+  var frameDialog = openDialog(false, 'Frame', ws().getRange2('A1').getXfs(false).clone());
+  chooseLine(frameDialog, 'Top', 'Thick');
+  pickBorderColor(frameDialog, 'Top', 'ff0000');
+  chooseLine(frameDialog, 'Bottom', 'Double');
+  pickBorderColor(frameDialog, 'Bottom', '0000ff');
+  chooseLine(frameDialog, 'Left', 'Dotted');
+  pickBorderColor(frameDialog, 'Left', '00ff00');
+  chooseLine(frameDialog, 'Right', 'Dashed');
+  var frameResult = addFromDialog(frameDialog);
+  ws().getRange2('B1').setValue('1');
+  select('B1'); api.asc_setCellStyle('Frame');
+`);
+const frameSides = ['Top=Thick:ff0000', 'Bottom=Double:0000ff', 'Left=Dotted:00ff00', 'Right=Dashed:000000'];
+same('border sides, new style: each side keeps its own line and color', attempt("[frameResult, styleSides('Frame')]"), [No, frameSides]);
+same('border sides, new style: B1 takes the four sides', attempt("cellSides('B1')"), frameSides);
+same('border sides, new style: the style applies its border', attempt("api.wbModel.CellStyles.getStyleByName('Frame').ApplyBorder"), true);
+same('border sides, modify: the dialog opens with the borders the style has', attempt("shownSides(openDialog(true, 'Frame', api.asc_getCellStyleXfs('Frame')))"), frameSides);
+attempt(`
+  var untouchedXfs = api.asc_getCellStyleXfs('Frame');
+  var untouchedBorder = untouchedXfs.border;
+  openDialog(true, 'Frame', untouchedXfs).getSettings();
+`);
+same('border sides, modify without changes: the border is not written', attempt('untouchedXfs.border === untouchedBorder'), true);
+attempt(`
+  var pointsBeforeFrame = historyPoints();
+  var frameModify = openDialog(true, 'Frame', api.asc_getCellStyleXfs('Frame'));
+  chooseLine(frameModify, 'Bottom', 'Medium');
+  pickBorderColor(frameModify, 'Left', 'ff8000');
+  var frameModifyResult = modifyFromDialog(frameModify, 'Frame');
+`);
+const frameModified = ['Top=Thick:ff0000', 'Bottom=Medium:0000ff', 'Left=Dotted:ff8000', 'Right=Dashed:000000'];
+same('border sides, modify one line and one color: the other sides and colors stay', attempt("[frameModifyResult, styleSides('Frame')]"), [No, frameModified]);
+same('border sides, modify: one history point', attempt('historyPoints() - pointsBeforeFrame'), 1);
+same('border sides, modify: B1 follows the style', attempt("cellSides('B1')"), frameModified);
+attempt("ws().getRange2('B2').setValue('1'); select('B2'); api.asc_setCellStyle('Frame');");
+same('border sides, modify: applying the style to B2 gives the four sides', attempt("cellSides('B2')"), frameModified);
+
+// Good applies no border: one side turns the border on, and the font stays the theme font.
+attempt(`
+  ws().getRange2('A2').setValue('1');
+  select('A2'); api.asc_setCellStyle('Good');
+  var goodFontBefore = [api.asc_getCellStyleXfs('Good').getFont2().getName(), api.asc_getCellStyleXfs('Good').getFont2().getScheme()];
+  var goodBorderDialog = openDialog(true, 'Good', api.asc_getCellStyleXfs('Good'));
+  chooseLine(goodBorderDialog, 'Bottom', 'Thick');
+  var goodBorderResult = modifyFromDialog(goodBorderDialog, 'Good');
+  var goodStyle = api.wbModel.CellStyles.getStyleByName('Good');
+`);
+const bottomThick = ['Top=None', 'Bottom=Thick:000000', 'Left=None', 'Right=None'];
+same('border sides, predefined Good: one side turns ApplyBorder on, the number format stays off', attempt('[goodBorderResult, goodStyle.ApplyBorder, goodStyle.ApplyNumberFormat]'), [No, true, false]);
+same('border sides, predefined Good: A2 takes the bottom line only', attempt("cellSides('A2')"), bottomThick);
+same('border sides, predefined Good: the font is not written', attempt('[goodStyle.xfs.getFont2().getName(), goodStyle.xfs.getFont2().getScheme()]'), attempt('goodFontBefore'));
+attempt(`
+  var colorOnlyDialog = openDialog(true, 'Good', api.asc_getCellStyleXfs('Good'));
+  pickBorderColor(colorOnlyDialog, 'Top', 'ff0000');
+  var colorOnlyShown = shownSides(colorOnlyDialog)[0];
+  modifyFromDialog(colorOnlyDialog, 'Good');
+`);
+same('border sides, a color picked for a side without a line gives it a thin one', attempt("[colorOnlyShown, styleSides('Good')[0], cellSides('A2')[0]]"), ['Top=Thin:ff0000', 'Top=Thin:ff0000', 'Top=Thin:ff0000']);
+
+// A line style the dialog does not list, as a file can have, is shown and kept.
+attempt(`
+  var hairXfs = new AscCommonExcel.CellXfs();
+  hairXfs.asc_setBorderSide(Asc.c_oAscBorderOptions.Left, Asc.c_oAscBorderStyles.Hair, color(0, 0, 255));
+  api.asc_addCellStyle('Hairline', hairXfs);
+  var hairDialog = openDialog(true, 'Hairline', api.asc_getCellStyleXfs('Hairline'));
+  var hairLeft = sideControls(hairDialog, 'Left');
+  var hairShown = [lineName(hairLeft.combo.getValue()), hairLeft.combo.data[hairLeft.combo.data.length - 1].displayValue];
+  chooseLine(hairDialog, 'Top', 'Thin');
+  modifyFromDialog(hairDialog, 'Hairline');
+`);
+same('border sides, a line not in the list: shown as another style', attempt('hairShown'), ['Hair', 'Other style']);
+same('border sides, a line not in the list: kept when another side changes', attempt("styleSides('Hairline')"), ['Top=Thin:000000', 'Bottom=None', 'Left=Hair:0000ff', 'Right=None']);
+run = openDialogEditor(attempt('api.asc_nativeGetFile()'));
+same('border sides, reopen: the style and B1 keep the four sides', attempt("[styleSides('Frame'), cellSides('B1')]"), [frameModified, frameModified]);
+
+// --- Update a style from the selection (#75) ---
+// The toolbar opens the Modify dialog of the style with the active cell's format
+// (asc_getCellInfo().asc_getXfs(), the cell's xfs cloned) as valuesXfs.
+run(`
+  function cellValues(ref) { return ws().getRange2(ref).getXfs(false).clone(); }
+  function openUpdateDialog(name, ref) { return openDialog(true, name, api.asc_getCellStyleXfs(name), cellValues(ref)); }
+  function fontOf(xfs) { return [xfs.getFont2().getName(), xfs.getFont2().getScheme()]; }
+  function setCellSide(ref, side, style, c) {
+    var sideXfs = new AscCommonExcel.CellXfs();
+    sideXfs.border = ws().getRange2(ref).getXfs(false).border;
+    sideXfs.asc_setBorderSide(Asc.c_oAscBorderOptions[side], Asc.c_oAscBorderStyles[style], c);
+    ws().getRange2(ref).setBorder(sideXfs.border);
+  }
+`);
+// C5 uses Frame and has a format of its own on top: bold, yellow fill, 0.0% and a green bottom line.
+// It is away from B1: a border set by hand also changes the side a neighbour shares.
+attempt(`
+  ws().getRange2('C5').setValue('0.5');
+  select('C5'); api.asc_setCellStyle('Frame');
+  ws().getRange2('C5').setBold(true);
+  ws().getRange2('C5').setFillColor(AscCommonExcel.createRgbColor(255, 255, 0));
+  ws().getRange2('C5').setNumFormat('0.0%');
+  setCellSide('C5', 'Bottom', 'Thick', color(0, 255, 0));
+  var frameFontBefore = fontOf(api.asc_getCellStyleXfs('Frame'));
+  var pointsBeforeUpdate = historyPoints();
+  var updateDialog = openUpdateDialog('Frame', 'C5');
+  var updateShown = [updateDialog.btnBold.pressed, buttonHex(updateDialog.btnFillColor), updateDialog.format, shownSides(updateDialog)[1]];
+  var beforeOk = [historyPoints() - pointsBeforeUpdate, api.asc_getCellStyleXfs('Frame').getFont2().getBold()];
+  var updateResult = modifyFromDialog(updateDialog, 'Frame');
+  var frameUpdated = api.asc_getCellStyleXfs('Frame');
+`);
+const frameFromC5 = ['Top=Thick:ff0000', 'Bottom=Thick:00ff00', 'Left=Dotted:ff8000', 'Right=Dashed:000000'];
+same('update from the selection: the dialog shows the cell\'s format', attempt('updateShown'), [true, 'ffff00', '0.0%', 'Bottom=Thick:00ff00']);
+same('update from the selection: nothing is saved before OK', attempt('beforeOk'), [0, false]);
+same('update from the selection, OK: the style takes the cell\'s format', attempt("[updateResult, frameUpdated.getFont2().getBold(), frameUpdated.asc_getFillColor().asc_getB(), frameUpdated.getNum2().getFormat(), styleSides('Frame')]"), [No, true, 0, '0.0%', frameFromC5]);
+same('update from the selection, OK: one history point', attempt('historyPoints() - pointsBeforeUpdate'), 1);
+same('update from the selection, OK: the font the cell shares is not written', attempt('fontOf(frameUpdated)'), attempt('frameFontBefore'));
+same('update from the selection, OK: B1, with the style only, follows', attempt("[describe('B1').bold, describe('B1').fill, describe('B1').num, cellSides('B1')]"), [true, '255,255,0', '0.0%', frameFromC5]);
+attempt('AscCommon.History.Undo();');
+same('update from the selection, undo: the style and B1 are back', attempt("[api.asc_getCellStyleXfs('Frame').getFont2().getBold(), describe('B1').bold, cellSides('B1')]"), [false, false, frameModified]);
+attempt('AscCommon.History.Redo();');
+
+// The cell does not need to have the style: D9 is plain with italic text.
+attempt(`
+  ws().getRange2('D9').setValue('1');
+  ws().getRange2('D9').setItalic(true);
+  var plainUpdate = modifyFromDialog(openUpdateDialog('Good', 'D9'), 'Good');
+  var goodAfter = api.asc_getCellStyleXfs('Good');
+`);
+const noSides = ['Top=None', 'Bottom=None', 'Left=None', 'Right=None'];
+same('update from a cell without the style: the style takes its format, D9 keeps no style', attempt("[plainUpdate, goodAfter.getFont2().getItalic(), !!goodAfter.getFill2().notEmpty(), styleSides('Good'), describe('D9').style]"), [No, true, false, noSides, 'Normal']);
+same('update from a cell without the style: A2, with Good, follows', attempt("[describe('A2').italic, !!cellXfs('A2').getFill2().notEmpty(), cellSides('A2')]"), [true, false, noSides]);
+run = openDialogEditor(attempt('api.asc_nativeGetFile()'));
+same('update from the selection, reopen: Frame keeps the cell\'s format', attempt("(function (x) { return [x.getFont2().getBold(), x.getNum2().getFormat(), styleSides('Frame')]; })(api.asc_getCellStyleXfs('Frame'))"), [true, '0.0%', frameFromC5]);
+
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed} passed, ${failed} failed`);
 if (failed > 0) {
-  console.log('Are the sdkjs patches applied? node scripts/apply-patches.mjs apply --only sdkjs');
+  console.log('Are the sdkjs and web-apps patches applied? node scripts/apply-patches.mjs apply');
   process.exit(1);
 }

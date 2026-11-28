@@ -116,12 +116,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # Only sdkjs: the scripts read three of its files with patches/sdkjs applied.
-      - name: Fetch the sdkjs submodule
-        run: git submodule update --init --depth 1 src/sdkjs
+      # The scripts read sdkjs files with patches/sdkjs applied; the cell style
+      # tests also open the cell style dialog of web-apps with its patches.
+      - name: Fetch the sdkjs and web-apps submodules
+        run: git submodule update --init --depth 1 src/sdkjs src/web-apps
 
-      - name: Apply the sdkjs patches
-        run: node scripts/apply-patches.mjs apply --only sdkjs
+      - name: Apply the sdkjs and web-apps patches
+        run: node scripts/apply-patches.mjs apply --only sdkjs,web-apps
 
       - name: Custom function library tests
         run: node scripts/test-sdkjs-custom-functions.mjs
