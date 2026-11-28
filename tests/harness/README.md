@@ -13,9 +13,9 @@ credentials.
 
 Needs: `xvfb`, `openbox`, `xdotool`, `wmctrl`, `x11-utils`, `imagemagick`
 (screenshots), `unzip`, `python3` (input generators and the inspector
-client), `dbus-run-session`, `pdftotext` from `poppler-utils` (the
-`pdf-text` check), and `sudo -n apt-get` when it has to install a package.
-The cases that ask
+client), `dbus-run-session`, `pdftotext` and `pdffonts` from `poppler-utils`
+and `mutool` from `mupdf-tools` (the `pdf-text` and `pdf-structure` checks),
+and `sudo -n apt-get` when it has to install a package. The cases that ask
 the page for its state also need `ci/eo-inspect.py` of this repository, two
 folders above this one; `HARNESS_INSPECT` names it when the folder was
 copied without it.
@@ -28,7 +28,7 @@ copied without it.
 ./run.sh all --deb some.deb           # all cases, installing some.deb if needed
 ./run.sh txt-emoji --control          # one case, judged by its control_expect
 ./restore.sh ~/harness-backup         # put the user state back, checked by sha256
-./selftest.sh                         # the probes, without the app
+./selftest.sh                         # the probes and the PDF checks, without the app
 ```
 
 `run.sh CASE|all [--deb FILE] [--control] [--screenshots] [--keep-display] [--out DIR]`. It
@@ -61,9 +61,11 @@ A job fails when run.sh exits 1 or 2. Every job has `result.json` in the
 artifact `harness-linux-<arch>-result-<attempt>` (`<arch>` is `x86_64` or
 `aarch64`), unless the harness could not run. A failed job also has
 `harness-linux-<arch>-diagnostics-<attempt>`: `apt.log` and, per case, the
-`app.log`, `app-restart.log`, `exported.txt` and `screen.png` it has. The job
-installs `poppler-utils` for `pdftotext`, and the log of the harness step
-says which `pdftotext` the `pdf-text` cases used.
+`app.log`, `app-restart.log`, `exported.txt`, `exported-state.txt`,
+`state.txt`, `probe.err` and `screen.png` it has. The job installs
+`poppler-utils` for `pdftotext` and `pdffonts` and `mupdf-tools` for
+`mutool`, and the log of the harness step says which of them the `pdf-text`
+and `pdf-structure` cases used.
 
 The jobs are red today: `docx-xlsx-content` opens instead of being refused
 because of a known defect of the app (see [Cases](#cases)).
@@ -279,9 +281,9 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `action` | `open`, `open-save` (Ctrl+S), `open-edit-save`, `open-export-pdf` or `edit-kill-recover`; on Linux also `open-probe` and `refused-probe` (see [The state of the page](#the-state-of-the-page-linux)) |
 | `keys_before`, `type`, `keys_after` | for `open-edit-save` and `edit-kill-recover`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
 | `button` | optional, for the same actions: the label of a button of the page, pressed after the click and before `keys_before`. macOS finds it by its accessible name through System Events. Linux, which has no accessibility bus on the runner, and Windows, where UI Automation does not find the buttons of the page in WebView2, press it with the keys `button_keys` in `lib.sh` and `Get-ButtonKeys` in `win/lib.ps1` give for that label |
-| `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match`; for `open-export-pdf`, `pdf-text` |
+| `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match`; for `open-export-pdf`, `pdf-text` or, on Linux, `pdf-structure` |
 | `expected_generate`, `expected_sha256` | for `expected-bytes`: the generator of the file the save must write, and optionally its sha256 |
-| `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain; for `pdf-text`: `REGEX`, an extended regex a line of the PDF's text must contain; for a `probe`: `REGEX`, an extended regex a line of the state must contain, and the case needs at least one |
+| `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain; for `pdf-text`: `REGEX`, an extended regex a line of the PDF's text must contain; for `pdf-structure` and for a `probe`: `REGEX`, an extended regex a line of the state must contain. A case judged by a state needs at least one |
 | `probe`, `do`, `do_after_restart`, `probe_seconds` | on Linux: what the case asks the page (see [The state of the page](#the-state-of-the-page-linux)) |
 | `platforms` | optional: the systems the case is for, among `linux`, `windows` and `macos`, separated by spaces. Without it the case is for every system. On another system the case is skipped: `"ok": true`, `"observed": "skipped"`, `"skipped": true`, with the reason in `detail`, and the app is not started |
 | `expect` | the outcome that makes the case ok |
@@ -332,6 +334,9 @@ Outcomes:
   does not have. `do-failed`: the function of `do` or `do_after_restart`
   threw, or did not answer `OK`. `no-inspector`: no `ci/eo-inspect.py`.
   `recovery-not-opened`: Recover was pressed and no editor said it was ready.
+- `exported-as-expected`, `exported-missing-content` (`pdf-structure`) as for
+  `pdf-text`; `no-pdffonts`, `no-mutool`: the tool is not there;
+  `pdf-check-failed`: a tool could not read the PDF.
 - `skipped`: the case is not for this system (`platforms`).
 - `open-timeout`, `launch-failed`, `no-input`, `bad-case-file`.
 
@@ -432,6 +437,34 @@ start-screen.js            start=shown                      or hidden behind an 
 | `sheet-style-border.js NAME SIDE STYLE RRGGBB` | for `do`: gives one side of a cell style a line and a colour, as the cell style dialog does |
 | `start-click.js recover\|discard` | for `do_after_restart`: presses that button of the first recovered document |
 
+### The structure of a PDF (Linux)
+
+`check = "pdf-structure"` judges an exported PDF by lines of text made from
+three tools, kept next to the PDF as `exported-state.txt`:
+
+```
+font=Liberation Sans type=CID TrueType embedded=yes subset=yes unicode=yes
+fonts=1
+fonts.not-embedded=0
+glyphs=18
+notdef=0
+text=Symbols: ☺ → ✓
+```
+
+- `font=` lines and their two counts come from `pdffonts`; the six letters
+  that tag a subset are left out of the name.
+- `glyphs=` and `notdef=` come from `mutool trace`: how many glyphs the
+  pages draw and how many of them are glyph 0, the box a font draws for a
+  character it does not have (`.notdef`). A `notdef.font=NAME COUNT` line
+  follows for each font with one. `pdftotext` does not tell such a glyph: it
+  gives the character the PDF says the glyph stands for.
+- `text=` lines are the text `pdftotext` reads. x2t leaves out of the PDF,
+  glyph and text, a character no font of the system has, so a symbol that
+  must be there needs its `text=` match.
+
+`mutool` names glyph 0 `.notdef`, or `0` in a font without glyph names; a
+font that gives glyph 0 another name is not counted.
+
 ## Cases
 
 A TXT or CSV case that saves first changes the document: `Z` typed at the end
@@ -476,6 +509,7 @@ outcome of a build with the fix.
 | `docx-recover` | DOCX with two paragraphs | after typing and a kill, the next start gets the document to offer for recovery |
 | `docx-recover-text` (Linux) | the DOCX of `docx-recover` | after typing, a kill and Recover pressed on the start screen, the editor holds the typed text after the text of the file |
 | `docx-refused-start` (Linux) | the DOCX of `docx-truncated-zip` | refused with the open error dialog; with the dialog closed the start screen is shown, takes clicks, holds no editor and offers nothing to recover |
+| `docx-symbols-export-pdf` (Linux) | DOCX in Liberation Sans with U+263A, U+2192, U+2713 and two emoji (`gen/mkdocxsymbols.py`) | the exported PDF embeds Liberation Sans as a subset that maps to Unicode, leaves no font out, has no glyph 0 and has U+263A and U+2192 in its text |
 | `docx-toc-fields` (Linux) | DOCX with a table of contents, two numbered headings in sections numbered in roman and arabic, and a caption `STYLEREF 1 \s`-`SEQ` (`gen/mkdocxtoc.py`) | after the fields are updated the headings are numbered 1 and 2, the second is on page 1 and the caption reads `Figure 2-1`. Today: the contents give the page of the first heading as `2`, not `ii` |
 | `docx-truncated-zip` | the first half of a DOCX: a ZIP without its central directory | refused with the open error dialog, file unchanged |
 | `docx-xlsx-content` | `.docx` that is an XLSX | refused with the open error dialog, file unchanged |

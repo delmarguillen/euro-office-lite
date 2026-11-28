@@ -1,0 +1,27 @@
+# Open a DOCX in Liberation Sans with symbols and emoji and export it to PDF.
+# The case is judged by the structure of the PDF, not only by its text: the
+# font of the text is embedded as a subset and maps to Unicode, no font is
+# left out of the file, no glyph is glyph 0 (the box a font draws for a
+# character it does not have), and the text has the white smiling face and
+# the arrow, which Liberation Sans has.
+# The check mark (U+2713) and the emoji (U+1F600, U+1F44D) are in the
+# document and are not judged today: the app brings no font for them, and
+# x2t leaves out of the PDF, glyph and text, a character no font of the
+# system draws. With the branch feat/112-symbol-glyphs merged, add:
+#   match_7 = '^text=Symbols: ☺ → ✓$'
+#   match_8 = '^text=Emoji: 😀 👍$'
+description = "DOCX with symbols: the exported PDF embeds its fonts, has no glyph 0 and has the symbols of the text font"
+generate = "mkdocxsymbols.py"
+input = "symbols.docx"
+input_sha256 = "188f14ce0192b9b343d055a39ad7bacff09f26f2ea122d50c73acf3de59c886a"
+platforms = "linux"
+action = "open-export-pdf"
+check = "pdf-structure"
+match_1 = '^font=Liberation Sans type=CID TrueType embedded=yes subset=yes unicode=yes$'
+match_2 = '^fonts\.not-embedded=0$'
+match_3 = '^glyphs=[1-9][0-9]+$'
+match_4 = '^notdef=0$'
+match_5 = '^text=Symbols: ☺ →'
+match_6 = '^text=Emoji:'
+expect = "exported-as-expected"
+screenshot = "on-failure"

@@ -365,6 +365,115 @@ check_pdf_text() {
   note "not found: $missing"
 }
 
+# --- the structure of an exported PDF ----------------------------------------------
+
+# pdf_fonts PDF: a "font=NAME type=T embedded=E subset=S unicode=U" line per
+# row of the table of pdffonts, without the tag of a subset in the name.
+# Fails when a row does not read.
+pdf_fonts() {
+  local row
+  # A row is read from its right end: a name can hold spaces.
+  local kind='(Type [0-9]C?|TrueType)( \(OT\))?'
+  # After the name and the type: the encoding, the three flags and the two
+  # numbers of the object.
+  local rest=' +[^ ]+ +(yes|no) +(yes|no) +(yes|no) +[0-9]+ +[0-9]+ *$'
+  local cid_row="^(.*[^ ]) +(CID $kind)$rest" plain_row="^(.*[^ ]) +($kind)$rest"
+  while IFS= read -r row; do
+    # The longer type first: "CID TrueType" also ends in "TrueType".
+    [[ $row =~ $cid_row ]] || [[ $row =~ $plain_row ]] || return 1
+    echo "font=${BASH_REMATCH[1]} type=${BASH_REMATCH[2]} embedded=${BASH_REMATCH[5]} subset=${BASH_REMATCH[6]} unicode=${BASH_REMATCH[7]}"
+  done < <(pdffonts "$1" 2>/dev/null | tail -n +3) | sed -E 's/^font=[A-Z]{6}\+/font=/'
+  [ "${PIPESTATUS[0]}" -eq 0 ]
+}
+
+# pdf_glyphs TRACE: glyphs=N, notdef=N and a "notdef.font=NAME N" per font,
+# from what `mutool trace` lists. Glyph 0 is the box a font draws for a
+# character it does not have: mutool names it .notdef, or 0 without names.
+pdf_glyphs() {
+  awk '
+    /<span / {
+      font = $0
+      sub(/.*font="/, "", font)
+      sub(/".*/, "", font)
+      sub(/^[A-Z][A-Z][A-Z][A-Z][A-Z][A-Z]\+/, "", font)
+    }
+    /<g / {
+      glyphs++
+      if ($0 ~ /glyph="(\.notdef|0)"/) { notdef++; where[font]++ }
+    }
+    END {
+      print "glyphs=" glyphs + 0
+      print "notdef=" notdef + 0
+      for (font in where) print "notdef.font=" font " " where[font]
+    }
+  ' "$1"
+}
+
+# The tool the pdf-structure check lacks, or nothing.
+pdf_structure_missing_tool() {
+  local tool
+  for tool in pdftotext pdffonts mutool; do
+    command -v "$tool" >/dev/null && continue
+    echo "$tool"
+    return
+  done
+}
+
+# pdf_state PDF OUT: writes to OUT what the PDF holds, as lines of text: its
+# fonts and two counts of them, its glyph counts and each line of its text as
+# "text=LINE". Fails, with a note, when a tool cannot read the PDF.
+pdf_state() {
+  local pdf=$1 out=$2 text=${1%.pdf}.txt trace=${1%.pdf}.trace
+  if ! pdf_fonts "$pdf" > "$out"; then
+    note "pdffonts: its table of fonts does not read"
+    return 1
+  fi
+  # grep -c counts the font lines before its own line is added.
+  echo "fonts=$(grep -c '^font=' "$out")" >> "$out"
+  echo "fonts.not-embedded=$(grep -c '^font=.* embedded=no ' "$out")" >> "$out"
+  if ! mutool trace "$pdf" > "$trace" 2>"$trace.err"; then
+    note "mutool trace: $(head -1 "$trace.err")"
+    return 1
+  fi
+  pdf_glyphs "$trace" >> "$out"
+  rm -f "$trace" "$trace.err"
+  pdftotext -q -enc UTF-8 "$pdf" "$text" || { note "pdftotext failed"; return 1; }
+  grep -v '^[[:space:]]*$' "$text" | sed 's/^/text=/' >> "$out"
+}
+
+# pdf-structure: every match_N of the case is an extended regex a line of the
+# state of the PDF must contain (pdf_state). The state stays next to the PDF,
+# as exported-state.txt.
+check_pdf_structure() {
+  local pdf=$1 state=${1%.pdf}-state.txt tool missing
+  note "exported $(wc -c < "$pdf") bytes"
+  if [ "$(head -c 5 "$pdf")" != "%PDF-" ]; then
+    OBSERVED=exported-not-pdf
+    return
+  fi
+  tool=$(pdf_structure_missing_tool)
+  if [ -n "$tool" ]; then
+    OBSERVED=no-$tool
+    return
+  fi
+  if ! has_matches; then
+    OBSERVED=bad-case-file
+    note "pdf-structure needs a match_N"
+    return
+  fi
+  if ! pdf_state "$pdf" "$state"; then
+    OBSERVED=pdf-check-failed
+    return
+  fi
+  missing=$(state_missing "$state")
+  if [ -z "$missing" ]; then
+    OBSERVED=exported-as-expected
+    return
+  fi
+  OBSERVED=exported-missing-content
+  note "not found: $missing"
+}
+
 # Says in the log which pdftotext the pdf-text check uses, or that there is none.
 log_pdftotext() {
   local tool version
@@ -377,12 +486,28 @@ log_pdftotext() {
   log "pdftotext: $tool ($version)"
 }
 
+# The same for the two other tools of the pdf-structure check.
+log_pdf_structure_tools() {
+  local tool
+  if tool=$(command -v pdffonts); then
+    log "pdffonts: $tool ($(pdffonts -v 2>&1 | head -1))"
+  else
+    log "pdffonts: none found; pdf-structure cases end in no-pdffonts"
+  fi
+  if tool=$(command -v mutool); then
+    log "mutool: $tool ($(mutool -v 2>&1 | head -1))"
+  else
+    log "mutool: none found; pdf-structure cases end in no-mutool"
+  fi
+}
+
 export_pdf() {
   local pid=$1 pdf log_file=$3
   pdf=$(export_file "$2")
   save_as_pdf "$pid" "$pdf" "$log_file" || return 0
   case $(case_value check) in
     pdf-text) check_pdf_text "$pdf" ;;
+    pdf-structure) check_pdf_structure "$pdf" ;;
     *) OBSERVED=exported; note "no check for this case" ;;
   esac
 }
@@ -813,6 +938,7 @@ main() {
   [ -n "$DEB" ] && ensure_installed "$DEB"
   check_app_installed
   log_pdftotext
+  log_pdf_structure_tools
   $KEEP_DISPLAY || trap stop_display EXIT
   start_display
   local name

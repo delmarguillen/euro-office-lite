@@ -1,9 +1,7 @@
 #!/bin/bash
-# selftest.sh: checks the parts of run.sh that ask the page for its state, on
-# any system with bash 4 and python3. It does not start the app: a stand-in
-# for ci/eo-inspect.py answers what a file says, or runs the expression in
-# node against a page made of a few objects. The checks that need node are
-# skipped when it is not there.
+# selftest.sh: checks, without the app, the parts of run.sh that ask the page
+# for its state and read the structure of a PDF. Needs bash 4 and python3;
+# a check that needs node, pdffonts, mutool or pdftotext is skipped without it.
 # Exit status: 0 every check passed, 1 otherwise.
 
 HARNESS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -142,11 +140,12 @@ test_probes_parse() {
   done
 }
 
-# Every case with a probe is for Linux alone, and names a probe that exists.
+# Every case with a probe or the pdf-structure check is for Linux alone, and
+# names a probe that exists.
 test_probe_cases_are_for_linux() {
   local file
   for file in "$HARNESS"/cases/*.toml; do
-    grep -Eq '^(probe|do|do_after_restart) = ' "$file" || continue
+    grep -Eq '^(probe|do|do_after_restart) = |^check = "pdf-structure"' "$file" || continue
     grep -q '^platforms = "linux"$' "$file" || { echo "     $file: not for linux alone"; return 1; }
     probe_files_exist "$file" || return 1
   done
@@ -265,6 +264,89 @@ EOF
   grep -qx 'family.EOLite Emoji=missing' "$T/case/state.txt"
 }
 
+# --- the structure of a PDF ----------------------------------------------------------
+
+# A one-page PDF in Helvetica, which it does not embed, with the text
+# "A", the character 1, for which Helvetica has no glyph, and "B".
+make_pdf() {
+  python3 - "$1" <<'EOF'
+import sys
+
+content = b'BT /F1 12 Tf 72 720 Td (A\001B) Tj ET'
+objects = [
+    b'<< /Type /Catalog /Pages 2 0 R >>',
+    b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    b'<< /Length %d >>\nstream\n%s\nendstream' % (len(content), content),
+    b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+]
+body = b'%PDF-1.4\n'
+offsets = []
+for number, text in enumerate(objects, 1):
+    offsets.append(len(body))
+    body += b'%d 0 obj\n%s\nendobj\n' % (number, text)
+table = b'xref\n0 6\n0000000000 65535 f \n' + b''.join(b'%010d 00000 n \n' % offset for offset in offsets)
+trailer = b'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n' % len(body)
+with open(sys.argv[1], 'wb') as out:
+    out.write(body + table + trailer)
+EOF
+}
+
+pdf_outcome() {
+  check_pdf_structure "$1"
+  echo "$OBSERVED | $DETAIL"
+}
+
+test_pdf_state() {
+  local pdf=$T/glyphs.pdf
+  make_pdf "$pdf" || return 1
+  in_run_sh pdf_state "$pdf" "$T/pdf-state.txt" || return 1
+  printf '%s\n' 'font=Helvetica type=Type 1 embedded=no subset=no unicode=no' 'fonts=1' 'fonts.not-embedded=1' \
+    'glyphs=3' 'notdef=1' 'notdef.font=Helvetica 1' 'text=AB' > "$T/pdf-wanted.txt"
+  diff "$T/pdf-wanted.txt" "$T/pdf-state.txt"
+}
+
+# The text of that PDF is "AB": only its structure tells the glyph 0.
+test_pdf_structure_outcomes() {
+  local pdf=$T/glyphs.pdf outcome
+  make_pdf "$pdf" || return 1
+  outcome=$(CASE_MATCH_1='^text=AB$' CASE_MATCH_2='^glyphs=3$' in_run_sh pdf_outcome "$pdf")
+  [ "$outcome" = "exported-as-expected | exported $(wc -c < "$pdf") bytes" ] || return 1
+  outcome=$(CASE_MATCH_1='^notdef=0$' CASE_MATCH_2='^fonts\.not-embedded=0$' in_run_sh pdf_outcome "$pdf")
+  [[ $outcome == "exported-missing-content | "*'not found: ^notdef=0$, ^fonts\.not-embedded=0$' ]] || return 1
+  outcome=$(in_run_sh pdf_outcome "$pdf")
+  [[ $outcome == "bad-case-file | "*"pdf-structure needs a match_N" ]] || return 1
+  echo 'PK not a pdf' > "$T/not.pdf"
+  outcome=$(CASE_MATCH_1='^notdef=0$' in_run_sh pdf_outcome "$T/not.pdf")
+  [[ $outcome == "exported-not-pdf | "* ]]
+}
+
+# The table of pdffonts, with a name that has spaces and each kind of type.
+test_pdf_font_table() {
+  mkdir -p "$T/bin"
+  cat > "$T/bin/pdffonts" <<'EOF'
+#!/bin/bash
+cat <<'TABLE'
+name                                 type              encoding         emb sub uni object ID
+------------------------------------ ----------------- ---------------- --- --- --- ---------
+BAAAAA+Liberation Sans               CID TrueType      Identity-H       yes yes yes     12  0
+CAAAAA+Unifont Upper                 CID Type 0C       Identity-H       yes yes yes     30  0
+A Font With A Name Longer Than Its Column TrueType          WinAnsi          no  no  no       7  0
+[none]                               Type 3            Custom           yes no  no       9  0
+TABLE
+EOF
+  chmod +x "$T/bin/pdffonts"
+  PATH=$T/bin:$PATH in_run_sh pdf_fonts any.pdf > "$T/fonts.txt" || return 1
+  printf '%s\n' 'font=Liberation Sans type=CID TrueType embedded=yes subset=yes unicode=yes' \
+    'font=Unifont Upper type=CID Type 0C embedded=yes subset=yes unicode=yes' \
+    'font=A Font With A Name Longer Than Its Column type=TrueType embedded=no subset=no unicode=no' \
+    'font=[none] type=Type 3 embedded=yes subset=no unicode=no' > "$T/fonts-wanted.txt"
+  diff "$T/fonts-wanted.txt" "$T/fonts.txt" || return 1
+  # A row that does not read fails the whole table.
+  echo 'echo; echo; echo "not a row of the table"' > "$T/bin/pdffonts"
+  ! PATH=$T/bin:$PATH in_run_sh pdf_fonts any.pdf >/dev/null
+}
+
 make_fake_inspector
 
 check "every script parses" test_syntax
@@ -282,6 +364,9 @@ check "a do that throws: do-failed with its reason" test_do_error_fails
 check "a do the inspector never ran: probe-failed" test_do_without_page_is_a_probe_failure
 check_with node "a probe on a page without what it reads says what is missing" test_probe_names_what_is_missing
 check_with node "fonts.js: families, picks and drawn" test_fonts_probe
+check_with "pdffonts mutool pdftotext" "the state of a PDF: fonts, glyph 0 and text" test_pdf_state
+check_with "pdffonts mutool pdftotext" "pdf-structure: its outcomes" test_pdf_structure_outcomes
+check "the table of pdffonts reads from its right end" test_pdf_font_table
 
 echo "$PASSED passed, $FAILED failed, $SKIPPED skipped"
 [ "$FAILED" -eq 0 ]
