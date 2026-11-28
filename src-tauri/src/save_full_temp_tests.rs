@@ -84,7 +84,7 @@ impl Setup {
     }
 
     // One save of the open document to `dest`, as save_editor_bin does it.
-    fn save(&self, dest: &Path) -> Saved {
+    fn save(&self, dest: &Path, first_check: FirstCheck) -> Saved {
         let instance = self.instance();
         let text_options = text_options_for(dest);
         let mut x2t = String::from("not run");
@@ -96,7 +96,7 @@ impl Setup {
         let reshape = |staged: &Path| reshape_text(staged, text_options);
         let staging = instance.join("save_output");
         let space = SaveSpace {
-            needed: needed_for_save(&instance, detect_format(dest)),
+            needed: first_check.needed(&instance, dest),
             volume: &crate::converter::volume_of,
         };
         let saved = crate::save_target::convert_and_place(&staging, dest, &space, convert, reshape);
@@ -120,6 +120,24 @@ impl Setup {
             &|_| {},
             None,
         )
+    }
+}
+
+// The room a save asks for before x2t runs.
+#[derive(Clone, Copy)]
+enum FirstCheck {
+    AsTheApp,
+    // As if the document needed more than was measured: only what x2t leaves
+    // can stop the save.
+    Off,
+}
+
+impl FirstCheck {
+    fn needed(self, instance: &Path, dest: &Path) -> u64 {
+        match self {
+            FirstCheck::AsTheApp => needed_for_save(instance, detect_format(dest)),
+            FirstCheck::Off => 0,
+        }
     }
 }
 
@@ -294,9 +312,11 @@ fn outcome(saved: &Saved, dest: &Path, whole: &Path) -> Outcome {
 }
 
 // The free space tried: the small amounts a full disk leaves, steps up to
-// twice what the save uses, and every 8 KiB around what it uses.
-fn free_space_steps(used: u64) -> Vec<u64> {
-    let mut steps = vec![0, 4 * KIB, 64 * KIB, 256 * KIB];
+// twice what the save uses, every 8 KiB around what it uses, and the first
+// whole block count with the room the app asks for, with one block less.
+fn free_space_steps(used: u64, needed: u64) -> Vec<u64> {
+    let room = needed.next_multiple_of(4 * KIB);
+    let mut steps = vec![0, 4 * KIB, 64 * KIB, 256 * KIB, room - 4 * KIB, room];
     let coarse = (used / 16).max(64 * KIB) / (4 * KIB) * (4 * KIB);
     steps.extend((512 * KIB..used * 2).step_by(coarse as usize));
     let around = used.saturating_sub(128 * KIB)..used + 128 * KIB;
@@ -311,31 +331,35 @@ struct Row {
     // x2t's exit and what the save left, as the table prints them.
     what: String,
     outcome: Outcome,
+    // Whether the disk had the room the app asks for.
+    had_room: bool,
 }
 
 // Saves the open document to `name` once for each amount of free space and
 // prints what happened. Returns the rows.
-fn save_with_little_room(setup: &Setup, name: &str) -> Vec<Row> {
+fn save_with_little_room(setup: &Setup, name: &str, first_check: FirstCheck) -> Vec<Row> {
     let user = user_dir("sweep");
     let whole = user_dir("whole").join(name);
     setup.forget_earlier_saves();
     let _ = std::fs::remove_file(setup.filler());
     let before = setup.free();
-    setup.save(&whole).result.expect("the save with room failed");
+    setup.save(&whole, first_check).result.expect("the save with room failed");
     let used = before - setup.free();
-    println!("\n{}: {} bytes, {} bytes of the disk used with room", name, file_len(&whole), used);
+    let needed = FirstCheck::AsTheApp.needed(&setup.instance(), &whole);
+    println!("\n{}: {} bytes, {} bytes of the disk used, {} asked for", name, file_len(&whole), used, needed);
 
     let dest = user.join(name);
     let mut rows = Vec::new();
-    for free in free_space_steps(used) {
+    for free in free_space_steps(used, needed) {
         std::fs::write(&dest, OLD).unwrap();
         setup.forget_earlier_saves();
         setup.leave_free(free);
-        let saved = setup.save(&dest);
+        let saved = setup.save(&dest, first_check);
         let outcome = outcome(&saved, &dest, &whole);
         let error = saved.result.err().unwrap_or_default();
         let what = format!("x2t: {:<8} {:?} {}", short(&saved.x2t), outcome, short(&error));
-        rows.push(Row { free, what, outcome });
+        let had_room = free >= needed;
+        rows.push(Row { free, what, outcome, had_room });
     }
     print_ranges(&rows);
     let _ = std::fs::remove_file(setup.filler());
@@ -368,27 +392,56 @@ fn names_to_save(setup: &Setup, names: &[&'static str]) -> Vec<&'static str> {
     names.iter().copied().filter(|name| with_pdf || !name.ends_with(".pdf")).collect()
 }
 
-// With too little room x2t still exits 0 and leaves a truncated file. The
-// destination must then stay as it was.
-#[test]
-#[ignore]
-fn real_x2t_save_with_a_nearly_full_disk_never_places_a_truncated_file() {
-    let setup = Setup::from_env();
+const LITTLE_ROOM_SAVES: [&str; 5] = ["notes.txt", "report.docx", "report.odt", "report.rtf", "report.pdf"];
+
+// A long text open in the instance folder.
+fn open_long_text(setup: &Setup) {
     let user = user_dir("source");
     let source = user.join("long.txt");
     std::fs::write(&source, long_text()).unwrap();
     setup.open(&source, "<m_nCsvTxtEncoding>46</m_nCsvTxtEncoding>\n");
+    let _ = std::fs::remove_dir_all(&user);
+}
 
-    let mut truncated = Vec::new();
-    for name in names_to_save(&setup, &["notes.txt", "report.docx", "report.odt", "report.rtf", "report.pdf"]) {
-        for row in save_with_little_room(&setup, name) {
-            if !matches!(row.outcome, Outcome::RefusedUntouched | Outcome::Whole) {
-                truncated.push(format!("{} with {} bytes free: {:?}", name, row.free, row.outcome));
+// With too little room x2t still exits 0 and leaves a truncated file. The
+// destination must then stay as it was, and with the room the app asks for the
+// save must write the whole document.
+#[test]
+#[ignore]
+fn real_x2t_save_with_a_nearly_full_disk_never_places_a_truncated_file() {
+    let setup = Setup::from_env();
+    open_long_text(&setup);
+
+    let mut wrong = Vec::new();
+    for name in names_to_save(&setup, &LITTLE_ROOM_SAVES) {
+        for row in save_with_little_room(&setup, name, FirstCheck::AsTheApp) {
+            let replaced = !matches!(row.outcome, Outcome::RefusedUntouched | Outcome::Whole);
+            let refused_with_room = row.had_room && row.outcome != Outcome::Whole;
+            if replaced || refused_with_room {
+                wrong.push(format!("{} with {} bytes free: {:?}", name, row.free, row.outcome));
             }
         }
     }
-    let _ = std::fs::remove_dir_all(&user);
-    assert!(truncated.is_empty(), "the destination was replaced:\n{}", truncated.join("\n"));
+    assert!(wrong.is_empty(), "truncated files placed, or saves refused with room:\n{}", wrong.join("\n"));
+}
+
+// The same saves when x2t runs whatever room there is, as it would for a
+// document that needs more than the app asks for.
+#[test]
+#[ignore]
+fn real_x2t_save_that_ran_out_of_room_never_places_a_truncated_file() {
+    let setup = Setup::from_env();
+    open_long_text(&setup);
+
+    let mut replaced = Vec::new();
+    for name in names_to_save(&setup, &LITTLE_ROOM_SAVES) {
+        for row in save_with_little_room(&setup, name, FirstCheck::Off) {
+            if !matches!(row.outcome, Outcome::RefusedUntouched | Outcome::Whole) {
+                replaced.push(format!("{} with {} bytes free: {:?}", name, row.free, row.outcome));
+            }
+        }
+    }
+    assert!(replaced.is_empty(), "truncated files placed:\n{}", replaced.join("\n"));
 }
 
 // The documents of tests/corpus saved in each format with room to spare. The
@@ -412,7 +465,7 @@ fn real_x2t_save_with_room_writes_every_format() {
         setup.open(&corpus_file(source), &csv_options.unwrap_or_default());
         for name in names_to_save(&setup, names) {
             let dest = user.join(name);
-            let saved = setup.save(&dest);
+            let saved = setup.save(&dest, FirstCheck::AsTheApp);
             assert_eq!(saved.result, Ok(()), "{}", name);
             assert!(file_len(&dest) > 0, "{} is empty", name);
             println!("{}: {} bytes", name, file_len(&dest));
