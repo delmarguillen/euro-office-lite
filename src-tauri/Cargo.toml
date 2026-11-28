@@ -40,6 +40,12 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 # the touchpad pinch. Same version webkit2gtk resolves, so nothing new is pulled.
 gtk = "0.18"
 
+# rfd 0.16.0 plus a NULL check on gtk_file_chooser_get_filename, in
+# vendor/rfd/src/backend/gtk3/file_dialog. rfd 0.18.0 has the check but needs
+# gtk-sys 0.19, and gtk 0.18 links gtk-sys 0.18: only one may link gtk-3.
+[patch.crates-io]
+rfd = { path = "vendor/rfd" }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

@@ -475,6 +475,12 @@ fn asks_before_replacing(chosen: &Path, final_path: &Path) -> bool {
     needs_replace_confirmation(chosen, final_path, replace_target_exists(final_path))
 }
 
+// The NULL check of the rfd copy in vendor/rfd. That crate's tests do not run
+// with this one's, so the file is built here as well and its tests with it.
+#[cfg(test)]
+#[path = "../vendor/rfd/src/backend/gtk3/file_dialog/filename.rs"]
+mod rfd_filename;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -922,5 +928,22 @@ mod tests {
         assert!(!replace_target_exists(&dir.join("Missing.pdf")));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // One [[package]] entry of a Cargo.lock.
+    fn lock_package<'a>(lock: &'a str, name: &str) -> Option<&'a str> {
+        let wanted = format!("name = \"{name}\"");
+        lock.split("[[package]]")
+            .find(|entry| entry.lines().any(|line| line.trim() == wanted))
+    }
+
+    // rfd 0.16.0 as published reads the NULL the GTK file chooser returns
+    // when it accepts with no file. A package from crates.io has a "source"
+    // line in the lock; the copy in vendor/rfd has none.
+    #[test]
+    fn rfd_is_the_copy_in_vendor() {
+        let lock = include_str!("../Cargo.lock");
+        let rfd = lock_package(lock, "rfd").expect("rfd in Cargo.lock");
+        assert!(!rfd.contains("source = "), "{rfd}");
     }
 }
