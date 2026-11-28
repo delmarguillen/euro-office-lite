@@ -1370,9 +1370,23 @@ mod tests {
         (prepare_editor_input(&original, &work_dir, kind, options), work_dir)
     }
 
+    const TXT_OUTSIDE_THE_BMP: [&str; 2] = ["hello \u{1F600}\n", "\u{20000}\r\n"];
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn on_linux_a_txt_outside_the_bmp_opens_from_a_utf16_copy() {
+        for text in TXT_OUTSIDE_THE_BMP {
+            let (input, _) = text_editor_input("notes.txt", text.as_bytes());
+
+            let options = input.unwrap().options.unwrap();
+            assert_eq!(options.encoding, crate::text_import::ENCODING_UTF16_LE, "{:?}", text);
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn a_txt_x2t_would_read_without_its_text_is_not_valid_and_leaves_no_copy() {
-        for text in ["hello \u{1F600}\n", "\u{20000}\r\n"] {
+        for text in TXT_OUTSIDE_THE_BMP {
             let (refused, work_dir) = text_editor_input("notes.txt", text.as_bytes());
 
             assert_eq!(refused.err(), Some("This file is not a valid .txt".to_string()), "{:?}", text);

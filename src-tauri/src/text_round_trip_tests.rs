@@ -144,3 +144,51 @@ fn real_x2t_keeps_every_byte_of_a_utf16_txt_without_a_bom() {
         assert_saved_as_opened(&format!("{label} BE"), "a.txt", &utf16be(text));
     }
 }
+
+// Only Linux opens these: the x2t of Windows and of macOS has not been tried
+// with the UTF-16 copy (text_import::read_copy_format).
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore]
+fn real_x2t_keeps_every_byte_of_a_txt_outside_the_bmp() {
+    let emoji = "x\na \u{1F600} b\ny\n";
+    let extension_b = "\u{20000}\u{2A6D6} extension B\r\n\r\n";
+    let line = "Línea dentro del BMP con acentos y cirílico Привет.\n";
+    let long = format!("{}última línea {}\n", line.repeat(2000), '\u{1F600}');
+    let cases: [(&str, Vec<u8>); 8] = [
+        ("emoji in UTF-8", emoji.as_bytes().to_vec()),
+        ("emoji in UTF-8 with a BOM", with_bom(&[0xEF, 0xBB, 0xBF], emoji.as_bytes().to_vec())),
+        ("emoji in UTF-16 LE with a BOM", with_bom(&[0xFF, 0xFE], utf16le(emoji))),
+        ("emoji in UTF-16 BE with a BOM", with_bom(&[0xFE, 0xFF], utf16be(emoji))),
+        ("emoji in UTF-16 LE without a BOM", utf16le("a \u{1F600} b\r\nnext\r\n")),
+        ("CJK extension B", extension_b.as_bytes().to_vec()),
+        ("HTML with an emoji", "<html><body>\u{1F600}</body></html>\n".as_bytes().to_vec()),
+        ("emoji past the first 64 KiB", long.into_bytes()),
+    ];
+    for (label, content) in cases {
+        assert_saved_as_opened(label, "a.txt", &content);
+    }
+}
+
+// The copy text_import makes for Linux, read by the x2t of this system: what
+// to run on Windows and macOS before they open such a TXT too.
+#[test]
+#[ignore]
+fn real_x2t_reads_a_txt_outside_the_bmp_from_utf16_le_without_a_bom() {
+    let text = "x\na \u{1F600} b\n\u{20000} y";
+    let dir = fresh_dir();
+    let copy = dir.join("copy.txt");
+    std::fs::write(&copy, utf16le(text)).unwrap();
+    let options = crate::text_import::detect(&utf16le("ab"), true, TextKind::Txt);
+    assert_eq!(options.encoding, crate::text_import::ENCODING_UTF16_LE);
+
+    let editor_bin = dir.join("Editor.bin");
+    convert(&copy, &editor_bin, EDITOR_BIN, &dir, Some(options)).unwrap();
+    let written = dir.join("written.txt");
+    convert(&editor_bin, &written, detect_format(&written), &dir, Some(options)).unwrap();
+
+    let utf8 = TextOptions { encoding: crate::text_import::ENCODING_UTF8, crlf: false, trailing_breaks: 0, ..options };
+    let (rebuilt, _) = crate::text_import::rebuild_txt(&std::fs::read(&written).unwrap(), utf8);
+    assert_eq!(String::from_utf8(rebuilt).unwrap(), text);
+    let _ = std::fs::remove_dir_all(&dir);
+}
