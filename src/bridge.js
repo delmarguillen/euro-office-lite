@@ -772,6 +772,7 @@ var _UI_STRINGS = {
     saveElsewhereMsg: 'Could not save the file.\n\nThe file is open in another window. Nothing has been saved.',
     saveLockedMsg: 'Could not save the file.\n\nIt may be open in another program.',
     saveNoSpaceMsg: 'Could not save the file.\n\nThere is not enough free space on the disk.',
+    saveConverterMsg: 'Could not save the file.\n\nThe converter stopped before it finished. Try again.',
     pdfFontsErrorMsg: 'The PDF could not be created because the app could not prepare its fonts. Try again in a moment. If it keeps failing, restart Euro-Office Lite.',
     printError: 'Print failed', printErrorMsg: 'The document could not be printed. Please try again.',
     documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
@@ -784,6 +785,10 @@ var _UI_STRINGS = {
     noRecentFiles: 'No recent files yet', openFailed: 'Could not open file',
     openFailedMsg: 'The file could not be opened. It may have been moved, renamed or deleted.',
     openErrorMsg: 'The file could not be opened. It is not a valid document or it is damaged.',
+    openEmptyMsg: 'The file could not be opened. It is empty.',
+    openTextMsg: 'The file could not be opened. Its text cannot be read safely: it is not valid in its encoding, or it has NUL characters, as binary data and some UTF-16 files do. Saving it as UTF-8 in a text editor makes it readable.',
+    openTextOutsideBmpMsg: 'The file could not be opened. It has characters, such as emoji, that this version cannot read from a text file on this system without losing them.',
+    openConverterMsg: 'The file could not be opened. The converter stopped before it finished. The file may be fine: try again.',
     openingFile: 'Opening {name}…', preparingFonts: 'Preparing fonts…', creatingDocument: 'Creating document…',
     removeNoteSeparator: 'Note lines',
     noteSeparator: 'Note lines',
@@ -1349,19 +1354,33 @@ function _eoErrorStartsWith(error, cause) {
   return text.indexOf(cause) === 0;
 }
 
+// The message for the cause a failed conversion to the editor's format starts
+// with (converter.rs), or null when the backend names none.
+function _eoOpenErrorCause(error) {
+  if (_eoErrorStartsWith(error, 'text-not-readable')) return 'openTextMsg';
+  if (_eoErrorStartsWith(error, 'text-outside-bmp')) return 'openTextOutsideBmpMsg';
+  if (_eoErrorStartsWith(error, 'empty-file')) return 'openEmptyMsg';
+  if (_eoErrorStartsWith(error, 'x2t-stopped')) return 'openConverterMsg';
+  return null;
+}
+
+function _eoShowOpenFailure(messageKey) {
+  return window.__TAURI__.dialog.message(
+    _t(messageKey),
+    { title: _t('openFailed'), kind: 'error' }
+  );
+}
+
 // One dialog for every failed open. The Rust side already refuses a file the
 // converter cannot read, but the reason only reached js-debug.log: the user saw
 // the start screen come back and nothing else (Issue #38). The raw error stays
-// in the log, the user gets a translated, generic message.
+// in the log, the user gets a translated message: the cause when the backend
+// names one, a generic one otherwise.
 // `error` is what the open command rejected with. A file open in another
 // window is not damaged, so it gets its own message.
 function _eoShowOpenError(error) {
   if (_eoIsOpenElsewhere(error)) return _eoAfterOpenFailure(_eoShowOpenElsewhere());
-  var told = window.__TAURI__.dialog.message(
-    _t('openErrorMsg'),
-    { title: _t('openFailed'), kind: 'error' }
-  );
-  return _eoAfterOpenFailure(told);
+  return _eoAfterOpenFailure(_eoShowOpenFailure(_eoOpenErrorCause(error) || 'openErrorMsg'));
 }
 window._eoShowOpenError = _eoShowOpenError;
 
@@ -2585,6 +2604,7 @@ function _eoSaveErrorText(error) {
   if (_eoIsSaveDeniedError(error)) return _t('saveDeniedMsg');
   if (_eoIsSaveLockedError(error)) return _t('saveLockedMsg');
   if (_eoErrorStartsWith(error, 'save-no-space')) return _t('saveNoSpaceMsg');
+  if (_eoErrorStartsWith(error, 'x2t-stopped')) return _t('saveConverterMsg');
   return _t('saveErrorMsg');
 }
 
@@ -3765,7 +3785,15 @@ window.AscDesktopEditor = {
         b64 = btoa(binary);
       }
 
-      await invoke('write_editor_bin', { data: b64 });
+      // The backend could not take the document, for example with the disk
+      // of its temp folder full: nothing was saved, and the dialog says so.
+      try {
+        await invoke('write_editor_bin', { data: b64 });
+      } catch(writeErr) {
+        window._eoLog('[EO] Save failed: Editor.bin not written: ' + writeErr);
+        await _eoFailSave(ref, writeErr, wasModified);
+        return;
+      }
 
       var current = await invoke('current_document');
       var currentName = current ? current.name : null;
