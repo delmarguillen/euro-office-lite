@@ -1424,6 +1424,15 @@ function _eoOpeningEnded() {
   return new Promise(function(resolve) { _eoOpeningWaiters.push(resolve); });
 }
 
+// A file to open here waits for the open in progress: two at once in one window
+// can leave the backend and the editor with different files.
+async function _eoWaitForOpenInProgress(file) {
+  while (_eoIsOpening()) {
+    window._eoLog('[OPEN] waiting for the open in progress: ' + file.name);
+    await _eoOpeningEnded();
+  }
+}
+
 function _eoWakeOpeningWaiters() {
   var waiters = _eoOpeningWaiters;
   _eoOpeningWaiters = [];
@@ -1675,7 +1684,7 @@ async function _eoPickDocument() {
 async function _eoEditPdf() {
   var file = await invoke('pick_pdf', { pdfLabel: 'PDF', all: _t('all') });
   if (!file) return;
-  await _eoOpenGranted(file);
+  await window.AscDesktopEditor.LocalFileOpen(file);
 }
 window._eoEditPdf = _eoEditPdf;
 
@@ -1719,6 +1728,13 @@ function _eoShowNewWindowError() {
   );
 }
 
+// A file opens in this window only with no document in it and none on its
+// way: otherwise in a new one.
+function _eoOpensHere() {
+  if (window.AscDesktopEditor._currentDocType) return false;
+  return !_eoLeavingForMarkdown;
+}
+
 // The editor's recent list names entries by path. The backend's own list
 // gives the token for that path.
 async function _eoOpenRecent(path) {
@@ -1746,11 +1762,16 @@ function _eoIsMarkdownPath(name) {
 }
 window._eoIsMarkdownPath = _eoIsMarkdownPath;
 
+// Set once this page is going to the Markdown page, which shows no opening
+// indicator: from then on nothing opens here (_eoOpensHere).
+var _eoLeavingForMarkdown = false;
+
 // What the Markdown page is to open goes in its address, one key and value,
 // which the page reads and takes out at once (markdown.js, takePending). Not
 // in localStorage: on WebKitGTK, with another process of the app open, the
 // page did not see what the start screen had just written there.
 function _eoGoToMarkdownPage(key, value) {
+  _eoLeavingForMarkdown = true;
   window.location.href = EO_MARKDOWN_PAGE + '?' + key + '=' + encodeURIComponent(value);
 }
 
@@ -3662,12 +3683,15 @@ window.AscDesktopEditor = {
   // `file` is { token, name } from the backend; without it, the open dialog.
   LocalFileOpen: async function(file) {
     // One open at a time: Ctrl+O stays live while the indicator is up.
-    if (_eoIsOpening()) return;
+    if (!file && _eoIsOpening()) return;
     if (!file) file = await _eoPickDocument();
     if (!file || !file.token) return;
+    // Another open may have started meanwhile, during the dialog (a file the
+    // Finder hands over): this one waits, then goes where it would have gone.
+    await _eoWaitForOpenInProgress(file);
 
     // The open document stays as it is, saved or not.
-    if (window.AscDesktopEditor._currentDocType) {
+    if (!_eoOpensHere()) {
       await _eoOpenInNewWindow(file);
       return;
     }
@@ -4449,7 +4473,9 @@ async function _eoNewFromTemplate() {
   if (_eoIsOpening()) return;
   var file = await invoke('pick_template', { templates: _t('templates') });
   if (!file) return;
-  await _eoCreateFromTemplate(file);
+  // As for a template the system hands over: here, or in a new window if a
+  // document was opened during the dialog.
+  await window.AscDesktopEditor.LocalFileOpen({ token: file.token, name: file.name, newDocument: true });
 }
 window._eoNewFromTemplate = _eoNewFromTemplate;
 
@@ -4477,14 +4503,12 @@ async function _eoDrainPendingOpens() {
   }
 }
 
-// False when nothing was waiting.
+// False when nothing was waiting or the page is going to the Markdown page,
+// which takes what is still waiting when it loads.
 async function _eoOpenNextPending() {
+  if (_eoLeavingForMarkdown) return false;
   var file = await invoke('take_pending_open_file');
   if (!file) return false;
-  while (_eoIsOpening()) {
-    window._eoLog('[OPEN] waiting for the open in progress: ' + file.name);
-    await _eoOpeningEnded();
-  }
   await window.AscDesktopEditor.LocalFileOpen(file);
   return true;
 }

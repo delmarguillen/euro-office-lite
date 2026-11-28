@@ -23,6 +23,9 @@ async function clickEditPdf(picked) {
   bridge.run(`
     var __editors = [];
     window._openEditor = function(docType) { __editors.push(docType); };
+    // The start screen's open in this window, where LocalFileOpen hands the
+    // file over (editor-patches.js, _openPath, without its error dialogs).
+    window._eoOpenPath = function(file) { return _eoOpenWithEditor(file, _eoOpenPhases.begin()); };
   `);
   await bridge.run('_eoEditPdf()');
   await sleep(50);
