@@ -22,6 +22,8 @@ on:
       - 'scripts/sdkjs-word-test-harness.mjs'
       - 'scripts/spell-languages.mjs'
       - 'src/bridge.js'
+      - 'src/editor-patches.js'
+      - 'scripts/test-printer-linux.sh'
       - '.github/workflows/tests.yml'
   pull_request:
     paths:
@@ -39,6 +41,8 @@ on:
       - 'scripts/sdkjs-word-test-harness.mjs'
       - 'scripts/spell-languages.mjs'
       - 'src/bridge.js'
+      - 'src/editor-patches.js'
+      - 'scripts/test-printer-linux.sh'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -68,10 +72,14 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            libssl-dev
+            libssl-dev \
+            libcups2-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: CUPS backend tests (no printer required)
+        run: bash scripts/test-printer-linux.sh
 
       # The corpus crate includes src-tauri/src/x2t_task.rs and text_import.rs
       # by path: building it here fails as soon as either file needs Tauri or

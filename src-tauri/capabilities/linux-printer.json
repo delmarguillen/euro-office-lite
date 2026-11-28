@@ -1,0 +1,7 @@
+{
+  "identifier": "linux-printer",
+  "description": "Read available CUPS printers on Linux",
+  "windows": ["main"],
+  "platforms": ["linux"],
+  "permissions": ["allow-get-printers"]
+}

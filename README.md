@@ -26,7 +26,7 @@ Lightweight desktop office suite built on Tauri v2 and Euro-Office editors. **No
 | [Linux ARM64](#linux) | .deb | ~84 MB |
 | [Linux x64](#linux) | Flatpak | ~89 MB |
 
-> **Alpha**: This project is in early development. Core features work (create, open, edit, save, PDF export), but expect rough edges. Printing sends the document to a printer on Windows and opens it in the system PDF viewer on macOS and Linux.
+> **Alpha**: This project is in early development. Core features work (create, open, edit, save, PDF export), but expect rough edges. Printing sends the document to the selected printer on Windows and Linux. Without a selected printer, or on macOS, it opens the system PDF viewer.
 
 ## Installing
 
@@ -155,12 +155,13 @@ User <-> Tauri webview <-> sdkjs/web-apps (editor UI)
                         <-> bridge.js (desktop bridge shim)
                         <-> Rust backend <-> x2t (format conversion)
                                          <-> tauri-plugin-printer-v2 (Windows printing)
+                                         <-> CUPS (Linux printing)
 ```
 
 - **sdkjs / web-apps**: Editor frontend (submodules, do not modify)
 - **bridge.js**: Implements the `AscDesktopEditor` API that sdkjs expects from a desktop host
 - **x2t**: Converts between DOCX/XLSX/PPTX and Editor.bin (sdkjs internal format)
-- **Printing**: Generates PDF via x2t + DoctRenderer. On Windows, sends to printer via bundled SumatraPDF. On macOS and Linux, opens the PDF in the system viewer
+- **Printing**: Generates PDF via x2t + DoctRenderer. On Windows, sends to printer via bundled SumatraPDF; on Linux, submits it through CUPS. On macOS, opens the PDF in the system viewer
 
 ### CI/CD
 

@@ -1,6 +1,6 @@
 {
   "identifier": "windows-printer",
-  "description": "Printer capabilities (Windows only)",
+  "description": "Read available printers on Windows",
   "windows": ["main"],
   "platforms": ["windows"],
   "permissions": [

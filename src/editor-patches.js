@@ -977,7 +977,7 @@
           var printSetupInterval = setInterval(function() {
             if (printSetupDone) return;
             try {
-              var apps = [win.DE, win.SSE, win.PE];
+              var apps = [win.DE, win.SSE, win.PE, win.PDFE];
               for (var ai = 0; ai < apps.length; ai++) {
                 var app = apps[ai];
                 if (!app || !app.getController) continue;
@@ -990,8 +990,10 @@
                       lm.leftMenu.showMenu = function(tag) {
                         if (tag === 'file:printpreview') {
                           var isWindows = navigator.platform && navigator.platform.indexOf('Win') !== -1;
-                          if (isWindows) {
-                            window.__TAURI__.core.invoke('plugin:printer|get_printers').then(function(rawJson) {
+                          var isLinux = navigator.platform && navigator.platform.indexOf('Linux') !== -1;
+                          if (isWindows || isLinux) {
+                            var printerCommand = isWindows ? 'plugin:printer|get_printers' : 'get_printers';
+                            window.__TAURI__.core.invoke(printerCommand).then(function(rawJson) {
                               try {
                                 var pluginPrinters = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
                                 if (!Array.isArray(pluginPrinters)) pluginPrinters = [pluginPrinters];
@@ -1014,10 +1016,10 @@
                                   win.on_native_message('printer:config', configJson);
                                 }
                               } catch(pe) {
-                                window._eoLog('[EO] Print: error parsing plugin printers: ' + pe);
+                                window._eoLog('[EO] Print: error parsing printers: ' + pe);
                               }
                             }).catch(function(err) {
-                              window._eoLog('[EO] Print: plugin get_printers error: ' + err);
+                              window._eoLog('[EO] Print: get_printers error: ' + err);
                             });
                           } else {
                             window._eoLog('[EO] Print: native printer plugin unavailable; using PDF viewer fallback');
