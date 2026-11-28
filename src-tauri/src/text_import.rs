@@ -211,6 +211,8 @@ fn detect_encoding(head: &[u8], complete: bool, kind: TextKind) -> (u32, bool, &
 // ASCII character. Those NULs are high bytes, so they sit at one parity: odd
 // offsets in LE, even in BE. The other parity only has the NUL low bytes of
 // characters such as U+4E00 or U+0100.
+// None when the NULs fit single-byte text as well: such a TXT is then refused
+// for its NUL (refuse_nul) instead of opened as text it may not hold.
 fn utf16_without_bom(head: &[u8], complete: bool) -> Option<u32> {
     if complete && head.len() % 2 != 0 {
         return None;
@@ -231,7 +233,40 @@ fn utf16_without_bom(head: &[u8], complete: bool) -> Option<u32> {
     if high_nuls * 8 < units.len() {
         return None;
     }
+    if has_whitespace_of_the_other_byte_order(&units) {
+        return None;
+    }
+    // Single-byte text with a NUL after some characters fits UTF-16 as well.
+    // The ASCII words of UTF-16 text put those NULs in consecutive characters;
+    // NUL-terminated strings and records do not.
+    if reads_as_bytes_with_nuls(head) && !high_nuls_come_in_runs(&units) {
+        return None;
+    }
     is_utf16_text(&units, complete).then_some(encoding)
+}
+
+// A line break or a space of the other byte order: U+0A00 is not assigned,
+// and U+0D00 and U+2000 are rare. The NULs of text made of characters such as
+// U+4E00 sit at the parity of the other order.
+fn has_whitespace_of_the_other_byte_order(units: &[u16]) -> bool {
+    units.iter().any(|unit| matches!(unit, 0x0A00 | 0x0D00 | 0x2000))
+}
+
+// Whether most characters with a NUL high byte have another one next to them.
+fn high_nuls_come_in_runs(units: &[u16]) -> bool {
+    let has_high_nul = |i: usize| units.get(i).is_some_and(|&unit| unit < 0x100);
+    let with_high_nul = (0..units.len()).filter(|&i| has_high_nul(i));
+    let in_a_run = |&i: &usize| (i > 0 && has_high_nul(i - 1)) || has_high_nul(i + 1);
+    let (in_runs, alone): (Vec<usize>, Vec<usize>) = with_high_nul.partition(in_a_run);
+    in_runs.len() > alone.len()
+}
+
+// No control byte but NUL, tab and line breaks, as in single-byte text with
+// NULs. UTF-16 in Cyrillic, Greek or Hebrew has a control byte (04, 03, 05)
+// in every letter.
+fn reads_as_bytes_with_nuls(head: &[u8]) -> bool {
+    head.iter()
+        .all(|&byte| byte >= 0x20 || matches!(byte, 0 | b'\t' | b'\n' | b'\r'))
 }
 
 // Valid UTF-16 with no control character but tab and line breaks: binary data
@@ -2151,6 +2186,66 @@ mod tests {
     }
 
     // ---- NUL characters ----
+
+    // NUL patterns that fit UTF-16 and single-byte text alike.
+    #[test]
+    fn a_doubtful_nul_pattern_is_not_taken_for_utf16() {
+        let cjk_lines_le = utf16le("一一一\n");
+        let cjk_spaces_be = utf16be("\u{3000}\u{3000}\u{3000} \u{3000}");
+        let short_cjk = utf16le("中文字幕\n");
+        let cases: [(&str, &[u8]); 10] = [
+            ("text and one NUL", b"hello world\0"),
+            ("words and one NUL", b"abc def ghi\0"),
+            ("NUL-terminated records of 3", b"abc\0def\0ghi\0jkl\0"),
+            ("NUL-terminated records of 7", b"abcdefg\0hijklmn\0opqrstu\0vwxyz12\0"),
+            ("NUL-terminated records of 15", b"abcdefghijklmno\0pqrstuvwxyz12345\0"),
+            ("NUL-terminated records of 3 and 1", b"abc\0d\0efg\0hij\0"),
+            ("windows-1252 records", b"a\xF1o\0ni\xF1o\0"),
+            ("UTF-16 LE that reads as BE with U+0A00", &cjk_lines_le),
+            ("UTF-16 BE that reads as LE with U+2000", &cjk_spaces_be),
+            ("UTF-16 with one NUL in five characters", &short_cjk),
+        ];
+        for (case, bytes) in cases {
+            let encoding = txt_encoding(bytes);
+            assert!(!matches!(encoding, ENCODING_UTF16_LE | ENCODING_UTF16_BE), "{}: {}", case, encoding);
+        }
+    }
+
+    #[test]
+    fn a_txt_with_a_doubtful_nul_pattern_is_refused_for_its_nul() {
+        let (dir, temp) = read_copy_dirs("doubtful-nul");
+        let cases: [(&str, Vec<u8>, usize); 4] = [
+            ("text-with-nul.txt", b"hello world\0".to_vec(), 11),
+            ("words.txt", b"abc def ghi\0".to_vec(), 11),
+            ("records.txt", b"abc\0def\0ghi\0jkl\0".to_vec(), 3),
+            ("cjk-lines.txt", utf16le("一一一\n"), 0),
+        ];
+        for (name, bytes, unit) in cases {
+            let source = dir.join(name);
+            std::fs::write(&source, &bytes).unwrap();
+            let error = try_prepared(&source, &temp).unwrap_err();
+            assert_eq!(error.to_string(), format!("NUL character at code unit {}", unit), "{}", name);
+        }
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0, "no copy left behind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // UTF-16 the stricter rules still take: a NUL in most characters, or
+    // control bytes no single-byte text has.
+    #[test]
+    fn utf16_without_bom_with_other_scripts_is_still_detected() {
+        let texts = [
+            "一二三 中文 text\nかな カナ\n",
+            "中文 text\n",
+            "Ελληνικά και Кириллица\n",
+            "שלום עולם\n",
+            "日本語、テスト。\r\n",
+        ];
+        for text in texts {
+            assert_eq!(txt_encoding(&utf16le(text)), ENCODING_UTF16_LE, "{:?}", text);
+            assert_eq!(txt_encoding(&utf16be(text)), ENCODING_UTF16_BE, "{:?}", text);
+        }
+    }
 
     #[test]
     fn a_txt_with_a_nul_is_refused_instead_of_cut_by_x2t() {
