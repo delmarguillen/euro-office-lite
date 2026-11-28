@@ -1524,7 +1524,15 @@
       // The list may have been on screen longer than its tokens last.
       var fresh = await window.__TAURI__.core.invoke('recent_files_state').catch(function() { return null; });
       var listed = fresh && fresh.files.filter(function(entry) { return entry.path === file.path; })[0];
-      if (await _openPath(listed || file, true)) return;
+      // Another open may have started during the request, or ended with a
+      // document here: LocalFileOpen waits for it or opens a new window.
+      var busy = window._eoIsOpening() || !window._eoOpensHere();
+      if (busy && listed) {
+        window.AscDesktopEditor.LocalFileOpen(listed);
+        return;
+      }
+      // Busy and no longer listed: not opened here, only the message below.
+      if (!busy && await _openPath(listed || file, true)) return;
       var state = null;
       try {
         state = await window.__TAURI__.core.invoke('recent_files_state');
