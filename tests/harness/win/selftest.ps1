@@ -86,7 +86,7 @@ function Test-Scripts {
 
 function Test-CaseFiles {
     $names = @(Get-SelectedCases 'all')
-    Assert-Equal 'number of cases' $names.Count 37
+    Assert-Equal 'number of cases' $names.Count 38
     foreach ($name in $names) {
         $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
         $complete = ($null -ne $case) -and (Get-CaseValue $case 'input') -and (Get-CaseValue $case 'generate') -and (Get-CaseValue $case 'expect')
@@ -463,6 +463,13 @@ function Save-FakeDocument {
         New-Zip $Fake.File @{ 'content.xml' = $cell + '<text:span>Harness ' + $format + ' text' + $Fake.Typed + '</text:span>' }
         return
     }
+    if ($name -eq 'styles.xlsx') {
+        # The cells and the styles of the input, kept as a fixed build keeps them.
+        $sheet = Read-ZipPart $Fake.File 'xl/worksheets/sheet1.xml'
+        $styles = Read-ZipPart $Fake.File 'xl/styles.xml'
+        New-Zip $Fake.File @{ 'xl/worksheets/sheet1.xml' = $sheet; 'xl/styles.xml' = $styles; 'xl/sharedStrings.xml' = '<t>Harness styled text</t><t>' + $Fake.Typed + '</t>' }
+        return
+    }
     $row = '<row r="1"><c r="A1"><v>1234.5</v></c><c r="B1" s="1">  <v>1234.5</v></c><c r="C1" s="2"><v>46086</v></c></row>'
     New-Zip $Fake.File @{ 'xl/worksheets/sheet1.xml' = $row; 'xl/sharedStrings.xml' = '<t>' + $Fake.Typed + '</t>' }
 }
@@ -516,7 +523,7 @@ function Test-FullRun([string]$inputs) {
         $wantedNotOk = 'docx-export-pdf=no-pdftotext xlsx-export-pdf=no-pdftotext'
     }
     Assert-Equal 'all: exit status' $status $wantedStatus
-    Assert-Equal 'all: cases in result.json' @($result.cases).Count 37
+    Assert-Equal 'all: cases in result.json' @($result.cases).Count 38
     $export = Join-Path (Join-Path $options.Out 'docx-export-pdf') 'exported.pdf'
     Assert-Equal 'all: the export of a case is a PDF' (Test-PdfHeader $export) $true
     Assert-Equal 'all: cases not ok' ($notOk -join ' ') $wantedNotOk
