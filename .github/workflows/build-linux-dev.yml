@@ -270,6 +270,14 @@ jobs:
           name: deb-${{ matrix.target }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
 
+      # After the upload, so a .deb over its budget can still be downloaded.
+      - name: Check the .deb size budget
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          DEB=$(find "src-tauri/target/$TARGET/release/bundle/deb" -maxdepth 1 -name '*.deb' -print -quit)
+          node scripts/check-budget.mjs size "deb-$TARGET" "$DEB"
+
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

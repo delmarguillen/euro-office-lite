@@ -463,6 +463,14 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
 
+      # After the upload, so a .dmg over its budget can still be downloaded.
+      - name: Check the .dmg size budget
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          DMG=$(find "src-tauri/target/$TARGET/release/bundle/dmg" -maxdepth 1 -name '*.dmg' -print -quit)
+          node scripts/check-budget.mjs size "dmg-$TARGET" "$DMG"
+
       - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

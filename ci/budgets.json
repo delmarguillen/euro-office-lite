@@ -1,0 +1,10 @@
+{
+  "size_bytes": {
+    "deb-x86_64-unknown-linux-gnu": 111700000,
+    "deb-aarch64-unknown-linux-gnu": 106800000,
+    "dmg-aarch64-apple-darwin": 144100000,
+    "dmg-x86_64-apple-darwin": 151100000,
+    "installer-x86_64-pc-windows-msvc": 108600000,
+    "installer-aarch64-pc-windows-msvc": 108400000
+  }
+}

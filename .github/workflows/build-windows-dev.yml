@@ -153,6 +153,15 @@ jobs:
           name: installer-${{ matrix.target }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
 
+      # After the upload, so an installer over its budget can still be downloaded.
+      - name: Check the installer size budget
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          EXE=$(find "src-tauri/target/$TARGET/release/bundle/nsis" -maxdepth 1 -name '*.exe' -print -quit)
+          node scripts/check-budget.mjs size "installer-$TARGET" "$EXE"
+
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
