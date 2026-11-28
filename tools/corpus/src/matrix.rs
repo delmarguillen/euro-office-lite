@@ -603,6 +603,7 @@ pub fn environment(columns: &[Column]) -> String {
             "Font cache (total / bundled / system)",
             Box::new(|l: &Loaded| format!("{} / {} / {}", env_cell(l, "fonts.total"), env_cell(l, "fonts.bundled"), env_cell(l, "fonts.system"))),
         ),
+        ("Fallback fonts scanned", Box::new(|l: &Loaded| env_cell(l, "fonts.fallback"))),
         ("Liberation and Carlito", Box::new(|l: &Loaded| env_cell(l, "fonts.check"))),
         ("AllFonts.js sha256", Box::new(|l: &Loaded| short(env_raw(l, "allfonts.sha256")))),
         ("app.application", Box::new(move |l: &Loaded| app(l, "app.application"))),

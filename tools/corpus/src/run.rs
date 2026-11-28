@@ -107,6 +107,15 @@ fn copy_into(source: &Path, dir: &Path) -> Result<(), Infra> {
         .map_err(|e| Infra(format!("cannot copy {}: {}", source.display(), e)))
 }
 
+// The font cache lists the app's fallback fonts by their path inside it, so
+// the two runs of a build, which share the install root and not --work, get
+// the same font cache only if they build it in a folder named after the root.
+fn font_cache_dir(install_root: &Path) -> PathBuf {
+    let root = install_root.to_string_lossy();
+    let name = format!("eol-corpus-fonts-{}", &sha256::hex(root.as_bytes())[..16]);
+    std::env::temp_dir().join(name)
+}
+
 // Once per run: the install layout, both x2t, and the font cache built by the
 // app's own scan, with the list of fonts it found.
 pub fn prepare(args: &RunArgs, log: &Log) -> Result<Prepared, Infra> {
@@ -119,7 +128,7 @@ pub fn prepare(args: &RunArgs, log: &Log) -> Result<Prepared, Infra> {
         .map_err(|e| Infra(format!("{} under {}", e, layout.binaries_dir.display())))?;
     let pdf_x2t = x2t_info(&pdf_x2t_path, &layout.binaries_dir)?;
 
-    let fontdata = args.work.join("fontdata");
+    let fontdata = font_cache_dir(&args.install_root);
     let _ = std::fs::remove_dir_all(&fontdata);
     std::fs::create_dir_all(&fontdata)
         .map_err(|e| Infra(format!("cannot create {}: {}", fontdata.display(), e)))?;
@@ -162,6 +171,7 @@ pub fn prepare(args: &RunArgs, log: &Log) -> Result<Prepared, Infra> {
     }
     check_table.write(&args.out.join("fonts-check.tsv")).map_err(Infra)?;
     let bundled = fonts.rows.iter().filter(|row| row[2] == "bundled").count();
+    let fallback = fonts.rows.iter().filter(|row| row[2] == "fallback").count();
 
     let path = |p: &Path| p.to_string_lossy().to_string();
     let mut env: Vec<(String, String)> = vec![
@@ -187,7 +197,8 @@ pub fn prepare(args: &RunArgs, log: &Log) -> Result<Prepared, Infra> {
     env.push(("font_selection.sha256".into(), selection_sha));
     env.push(("fonts.total".into(), list.files.len().to_string()));
     env.push(("fonts.bundled".into(), bundled.to_string()));
-    env.push(("fonts.system".into(), (list.files.len() - bundled).to_string()));
+    env.push(("fonts.fallback".into(), fallback.to_string()));
+    env.push(("fonts.system".into(), (list.files.len() - bundled - fallback).to_string()));
     env.push(("fonts.check".into(), allfonts::check_summary(&checks)));
     for var in ["LANG", "LC_ALL", "TZ"] {
         env.push((var.into(), std::env::var(var).unwrap_or_default()));
@@ -706,6 +717,16 @@ fn extension(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // corpus.yml gives each of its two runs the same install root and another
+    // --work; the folder must not follow --work.
+    #[test]
+    fn the_font_cache_folder_follows_only_the_install_root() {
+        let folder = font_cache_dir(Path::new("/tmp/eol-root"));
+        assert_eq!(folder, font_cache_dir(Path::new("/tmp/eol-root")));
+        assert_ne!(folder, font_cache_dir(Path::new("/tmp/eol-root-2")));
+        assert_eq!(folder.parent(), Some(std::env::temp_dir().as_path()));
+    }
 
     #[test]
     fn the_version_line_is_found_or_left_unknown() {

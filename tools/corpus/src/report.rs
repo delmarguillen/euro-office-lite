@@ -733,9 +733,10 @@ fn summary(table: &Table, entries: &[Entry], env: &dyn Fn(&str) -> String, failu
     s.push_str(&format!("- PDF x2t: {} ({}), same file: {}\n", shown("pdf_x2t.version"), shown("pdf_x2t.path"), shown("x2t_same_file")));
     s.push_str(&architecture_line(env));
     s.push_str(&format!(
-        "- Font cache: {} fonts, {} bundled, {} system; Liberation and Carlito: {}\n",
+        "- Font cache: {} fonts, {} bundled, {} fallback, {} system; Liberation and Carlito: {}\n",
         shown("fonts.total"),
         shown("fonts.bundled"),
+        shown("fonts.fallback"),
         shown("fonts.system"),
         shown("fonts.check")
     ));
