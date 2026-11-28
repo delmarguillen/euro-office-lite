@@ -771,6 +771,7 @@ var _UI_STRINGS = {
     saveDeniedMsg: 'Could not save the file.\n\nYou do not have permission to write there, or the file is read-only.',
     saveElsewhereMsg: 'Could not save the file.\n\nThe file is open in another window. Nothing has been saved.',
     saveLockedMsg: 'Could not save the file.\n\nIt may be open in another program.',
+    saveNoSpaceMsg: 'Could not save the file.\n\nThere is not enough free space on the disk.',
     pdfFontsErrorMsg: 'The PDF could not be created because the app could not prepare its fonts. Try again in a moment. If it keeps failing, restart Euro-Office Lite.',
     printError: 'Print failed', printErrorMsg: 'The document could not be printed. Please try again.',
     documents: 'Documents', all: 'All', plainText: 'Plain text', user: 'User', language: 'Language',
@@ -1339,6 +1340,13 @@ function _eoShowSavedName(savedName) {
       } catch(te) {}
     }
   } catch(te) {}
+}
+
+// Whether the backend's error starts with `cause`, the name it gives a failure
+// it could tell apart.
+function _eoErrorStartsWith(error, cause) {
+  var text = (error && error.message) || String(error);
+  return text.indexOf(cause) === 0;
 }
 
 // One dialog for every failed open. The Rust side already refuses a file the
@@ -2576,6 +2584,7 @@ function _eoSaveErrorText(error) {
   if (_eoIsOpenElsewhere(error)) return _t('saveElsewhereMsg');
   if (_eoIsSaveDeniedError(error)) return _t('saveDeniedMsg');
   if (_eoIsSaveLockedError(error)) return _t('saveLockedMsg');
+  if (_eoErrorStartsWith(error, 'save-no-space')) return _t('saveNoSpaceMsg');
   return _t('saveErrorMsg');
 }
 
