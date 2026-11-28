@@ -1,6 +1,6 @@
 // Writing a saved file to where the user asked for it.
 
-use crate::save_space::SaveSpace;
+use crate::save_space::{is_out_of_space, no_space_error, SaveSpace};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Write};
@@ -305,24 +305,16 @@ fn save_error(dest: &Path, error: std::io::Error) -> String {
         return denied(dest, &error.to_string());
     }
     if is_out_of_space(&error) {
-        return no_space(dest, &error);
+        return no_space_error(dest, &error.to_string());
     }
     format!("could not write {}: {}", dest.display(), error)
-}
-
-fn is_out_of_space(error: &std::io::Error) -> bool {
-    matches!(error.kind(), ErrorKind::StorageFull | ErrorKind::QuotaExceeded)
-}
-
-fn no_space(path: &Path, error: &std::io::Error) -> String {
-    format!("{}: {}: {}", SAVE_NO_SPACE_ERROR, path.display(), error)
 }
 
 // The error of a failed write of one of the save's own files in the instance
 // folder, such as Editor.bin.
 pub fn work_file_error(path: &Path, error: std::io::Error) -> String {
     if is_out_of_space(&error) {
-        return no_space(path, &error);
+        return no_space_error(path, &error.to_string());
     }
     error.to_string()
 }
