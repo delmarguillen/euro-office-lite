@@ -19,6 +19,9 @@ name: Harness (Windows)
 # keeps the foreground, so no key or click reached the app. run.ps1 gets
 # -ClearDesktop and ends the process of that screen before the cases; its
 # standard error says what it ended and what has the foreground afterwards.
+# The Start menu is open there too (actions/runner-images#14069), and its
+# search box keeps the foreground once that screen is gone: -ClearDesktop
+# closes it with Escape, and the standard error says so.
 #
 # result.json is uploaded on every run; the output of run.ps1, the app logs
 # and the screenshots only when the job fails.
@@ -134,7 +137,8 @@ jobs:
           # run.ps1 drives the app on the desktop and writes its progress with
           # [Console]::Error: it runs as a child process with both streams in
           # files, and its exit status is the step's. The runner is thrown
-          # away after the job: -ClearDesktop may end the first sign-in screens.
+          # away after the job: -ClearDesktop may end the first sign-in screens
+          # and close the Start menu.
           $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" all -Installer "{1}" -Inputs "{2}" -Out "{3}" -ClearDesktop' -f $script, $installer, $inputs, $out
           $child = Start-Process powershell -ArgumentList $arguments -PassThru `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
