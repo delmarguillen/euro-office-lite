@@ -57,6 +57,9 @@ recover_entries() { find "$CONFIG_DIR/recover" -mindepth 1 -maxdepth 1 2>/dev/nu
 
 display_ready() { x xdpyinfo >/dev/null 2>&1; }
 
+# A window manager names itself on the root window of the display it manages.
+has_window_manager() { x xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q 'window id'; }
+
 # Pids of the display processes this run started, for stop_display.
 STARTED_XVFB=""
 STARTED_OPENBOX=""
@@ -67,10 +70,12 @@ start_display() {
     STARTED_XVFB=$!
     wait_for 10 display_ready || die "Xvfb did not start on $HARNESS_DISPLAY"
   fi
-  pgrep -x openbox >/dev/null && return 0
+  # Asked of this display: an openbox of another display, or one that is
+  # still ending with the display of the run before, manages no window here.
+  has_window_manager && return 0
   DISPLAY=$HARNESS_DISPLAY setsid nohup openbox >/dev/null 2>&1 </dev/null &
   STARTED_OPENBOX=$!
-  sleep 1
+  wait_for 10 has_window_manager || die "openbox did not start on $HARNESS_DISPLAY"
 }
 
 # Stops only what start_display started; a display that was already there stays.
