@@ -112,6 +112,7 @@ Each window of the app writes its own log, `js-debug-<number>-<number>.log`. The
 
 - **Windows**: `%TEMP%\euro-office-lite\`
 - **macOS / Linux**: `/tmp/euro-office-lite-<user id>/` (`id -u` shows your user id)
+- **Flatpak**: `~/.var/app/org.eurooffice.Lite/cache/org.euro-office.lite/tmp/`
 
 ## Building from source
 
