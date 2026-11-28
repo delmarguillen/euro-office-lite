@@ -491,7 +491,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(window_state::plugin());
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     {
         builder = builder.plugin(tauri_plugin_printer_v2::init());
     }

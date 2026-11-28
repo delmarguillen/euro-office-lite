@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-custom-print-pdf"
+description = "Enables the custom_print_pdf command without any pre-configured scope."
+commands.allow = ["custom_print_pdf"]
+
+[[permission]]
+identifier = "deny-custom-print-pdf"
+description = "Denies the custom_print_pdf command without any pre-configured scope."
+commands.deny = ["custom_print_pdf"]

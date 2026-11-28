@@ -1,0 +1,5 @@
+[default]
+description = "Default permissions for the plugin"
+permissions = ["allow-create-temp-file", "allow-remove-temp-file", "allow-get-printers", "allow-get-printers-by-name", 
+"allow-print-pdf", "allow-get-jobs", "allow-get-jobs-by-id", "allow-resume-job", 
+"allow-restart-job", "allow-pause-job", "allow-remove-job", "allow-print-pdf-from-url"]

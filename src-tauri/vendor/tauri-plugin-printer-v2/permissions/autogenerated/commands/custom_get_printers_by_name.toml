@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-custom-get-printers-by-name"
+description = "Enables the custom_get_printers_by_name command without any pre-configured scope."
+commands.allow = ["custom_get_printers_by_name"]
+
+[[permission]]
+identifier = "deny-custom-get-printers-by-name"
+description = "Denies the custom_get_printers_by_name command without any pre-configured scope."
+commands.deny = ["custom_get_printers_by_name"]

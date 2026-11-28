@@ -3546,11 +3546,10 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-printer-v2"
 version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d7390d2a37bfe17331b2f5f775f204f304657804819a6b96579fd567d5712be"
 dependencies = [
  "base64 0.22.1",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-plugin",
  "tempfile",

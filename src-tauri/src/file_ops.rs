@@ -1143,7 +1143,8 @@ pub fn open_pdf_viewer(state: State<'_, AppState>) -> Result<String, String> {
     Ok("ok".to_string())
 }
 
-// Printer names in the list the printer plugin reads from Windows: Get-Printer
+// Printer names in the list the printer plugin reads (Windows returns
+// Get-Printer objects; Linux returns CUPS destinations)
 // as JSON, one object for a single printer and an array for several.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn printer_names(listed: &str) -> Vec<String> {
@@ -1160,7 +1161,7 @@ pub(crate) fn printer_names(listed: &str) -> Vec<String> {
         .collect()
 }
 
-// A printer is only printed to when Windows lists it under exactly that name.
+// A printer is only printed to when the plugin lists exactly that name.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn listed_printer(requested: &str, names: &[String]) -> Result<String, String> {
     names
@@ -1170,7 +1171,7 @@ pub(crate) fn listed_printer(requested: &str, names: &[String]) -> Result<String
         .ok_or_else(|| "Not a listed printer".to_string())
 }
 
-// Prints the PDF the last print wrote on a printer Windows lists.
+// Prints the PDF the last print wrote on a listed printer.
 #[tauri::command]
 pub async fn print_to_printer(
     app: tauri::AppHandle,
@@ -1228,9 +1229,20 @@ async fn send_to_printer(app: tauri::AppHandle, printer: &str, pdf: &Path) -> Re
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+async fn send_to_printer(_app: tauri::AppHandle, printer: &str, pdf: &Path) -> Result<(), String> {
+    let printer = printer.to_string();
+    let pdf = pdf.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        tauri_plugin_printer_v2::linux::print_pdf(&printer, &pdf).map(|_| ())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 async fn send_to_printer(_app: tauri::AppHandle, _printer: &str, _pdf: &Path) -> Result<(), String> {
-    Err("Printing to a named printer is only available on Windows".to_string())
+    Err("Printing to a named printer is only available on Windows and Linux".to_string())
 }
 
 // The open document, as a token that reopens it. None until it is saved.
