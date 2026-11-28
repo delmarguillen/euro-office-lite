@@ -270,6 +270,7 @@ function loadOpenEditor(page) {
   page.bridge.sandbox.startScreen = page.elements['start-screen'];
   page.bridge.run(`
     function _prepareSystemFonts() { return Promise.resolve(''); }
+    function _prepareBundledFonts() { return Promise.resolve(); }
     function _fileTypeFor() { return 'docx'; }
     function _log() {}
   ` + patches.slice(start, end + 6) + '\nwindow.__openEditor = openEditor;');
