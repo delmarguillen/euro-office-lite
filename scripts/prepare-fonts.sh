@@ -10,7 +10,7 @@ FONTS_DIR="$PROJECT_ROOT/src/fonts"
 ALLFONTS_PATH="$PROJECT_ROOT/src/sdkjs/common/AllFonts.js"
 TEMP_DIR="${TMPDIR:-/tmp}/euro-office-fonts"
 
-LIBERATION_URL="https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz"
+LIBERATION_URL="https://github.com/delmarguillen/euro-office-lite/releases/download/dependencies/liberation-fonts-ttf-2.1.5.tar.gz"
 # Carlito 1.104; a commit, not a branch, so the fonts cannot change under us.
 CARLITO_URL_BASE="https://github.com/googlefonts/carlito/raw/3a810cab78ebd6e2e4eed42af9e8453c4f9b850a/fonts/ttf"
 
