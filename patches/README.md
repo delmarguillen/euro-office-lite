@@ -33,6 +33,7 @@ usually means upstream already has the change: remove that patch from here.
 | `web-apps/0006-pdfeditor-es-redact-censurar.patch` | own |
 | `web-apps/0007-spreadsheet-cell-styles-edit.patch` | own, needs `sdkjs/0004-cell-styles-edit.patch` |
 | `web-apps/0008-remove-smart-picker.patch` | own, removes the Nextcloud Smart Picker button and "Ask Nextcloud Assistant" menu entry in the three editors |
+| `web-apps/0009-menu-search-before-first-show.patch` | own, a menu with type-ahead search ignores a letter key that reaches it before its first show |
 | `sdkjs/0001-document-custom-functions-follow-macros.patch` | own |
 | `sdkjs/0002-speech-text-as-plain-text.patch` | own |
 | `sdkjs/0003-pdf-no-document-javascript.patch` | own |

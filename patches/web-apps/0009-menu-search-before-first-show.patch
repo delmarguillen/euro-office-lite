@@ -1,0 +1,24 @@
+Origin: own (a letter key that reaches a menu with type-ahead search before its first show is ignored: the search state does not exist yet and reading it threw)
+
+diff --git a/apps/common/main/lib/component/Menu.js b/apps/common/main/lib/component/Menu.js
+index 0d97f08b..11529ff2 100644
+--- a/apps/common/main/lib/component/Menu.js
++++ b/apps/common/main/lib/component/Menu.js
+@@ -467,7 +467,7 @@ define([
+                 } else if (e.keyCode == Common.UI.Keys.ESC)  {
+ //                    Common.NotificationCenter.trigger('menu:afterkeydown', e);
+ //                    return false;
+-                } else if (this.search && e.keyCode > 64 && e.keyCode < 91 && e.key){
++                } else if (this.search && this._search && e.keyCode > 64 && e.keyCode < 91 && e.key){
+                     var me = this;
+                     clearTimeout(this._search.timer);
+                     this._search.timer = setTimeout(function () { me._search = {}; }, 1000);
+@@ -1140,7 +1140,7 @@ define([
+             } else if (e.keyCode == Common.UI.Keys.ESC)  {
+ //                    Common.NotificationCenter.trigger('menu:afterkeydown', e);
+ //                    return false;
+-            } else if (this.search && e.keyCode > 64 && e.keyCode < 91 && e.key){
++            } else if (this.search && this._search && e.keyCode > 64 && e.keyCode < 91 && e.key){
+                 var me = this;
+                 clearTimeout(this._search.timer);
+                 this._search.timer = setTimeout(function () { me._search = {}; }, 1000);
