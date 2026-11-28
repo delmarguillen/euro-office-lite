@@ -26,6 +26,7 @@ on:
       - 'scripts/measure-open.mjs'
       - 'ci/budgets.json'
       - 'src/bridge.js'
+      - 'src/font-patches.js'
       - '.github/workflows/tests.yml'
   pull_request:
     paths:
@@ -47,6 +48,7 @@ on:
       - 'scripts/measure-open.mjs'
       - 'ci/budgets.json'
       - 'src/bridge.js'
+      - 'src/font-patches.js'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 

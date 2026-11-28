@@ -15,6 +15,34 @@
       return p && /^\/\?\/[A-Za-z]:\//.test(p) ? p.substring(3) : p;
     }
 
+    // The ascdesktop address of the folder of the bundled fonts, binaries/fonts.
+    // Empty until _prepareBundledFonts has the folder from the backend.
+    var _bundledFontsBase = '';
+    var _bundledFontsPromise = null;
+
+    function _encodePath(p) {
+      return p.split('/').map(encodeURIComponent).join('/');
+    }
+
+    function _prepareBundledFonts() {
+      if (_bundledFontsPromise) return _bundledFontsPromise;
+      _bundledFontsPromise = window.__TAURI__.core.invoke('bundled_fonts_dir').then(function(dir) {
+        _bundledFontsBase = window._eoAscProtoBase + 'abs/' + _encodePath(dir) + '/';
+      }).catch(function(e) {
+        _log('[EO] bundled_fonts_dir failed: ' + (e.message || e));
+      });
+      return _bundledFontsPromise;
+    }
+
+    // Where a font file is read from: AllFonts.js names a system font by its
+    // absolute path and a bundled font by its file name.
+    function _fontUrl(fontId) {
+      var id = _normalizeAbsolutePath(fontId);
+      if (_isAbsolutePath(id)) return window._eoAscProtoBase + 'abs/' + id;
+      return _bundledFontsBase + encodeURIComponent(id);
+    }
+    window._eoFontUrl = _fontUrl;
+
     function _patchLoadFontAsync(win) {
       win.AscFonts.CFontFileLoader.prototype.LoadFontAsync = function(basePath, callback) {
         this.callback = callback;
@@ -23,11 +51,7 @@
         this.Status = 2;
         var xhr = new XMLHttpRequest();
         xhr.fontFile = this;
-        var fontId = _normalizeAbsolutePath(this.Id);
-        var url = _isAbsolutePath(fontId)
-          ? window._eoAscProtoBase + 'abs/' + fontId
-          : '/fonts/' + this.Id;
-        xhr.open('GET', url, true);
+        xhr.open('GET', _fontUrl(this.Id), true);
         xhr.responseType = 'arraybuffer';
 
         xhr.onload = function() {
@@ -61,11 +85,7 @@
         if (!fontId) continue;
         try {
           var xhr = new XMLHttpRequest();
-          var normalizedFontId = _normalizeAbsolutePath(fontId);
-          var furl = _isAbsolutePath(normalizedFontId)
-            ? window._eoAscProtoBase + 'abs/' + normalizedFontId
-            : '/fonts/' + fontId;
-          xhr.open('GET', furl, false);
+          xhr.open('GET', _fontUrl(fontId), false);
           xhr.overrideMimeType('text/plain; charset=x-user-defined');
           xhr.send(null);
           if (xhr.status === 200) {

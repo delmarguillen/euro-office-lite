@@ -432,6 +432,8 @@ for (const moduleName of ['word', 'cell', 'slide']) {
 }
 
 for (const forbidden of [
+  // The fonts ship once, in binaries/fonts; the page reads them from there.
+  'fonts',
   'sdkjs/develop',
   ...unusedFrontendFiles,
   'web-apps/vendor/less',

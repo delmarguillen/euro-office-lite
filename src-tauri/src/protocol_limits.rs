@@ -273,16 +273,20 @@ pub fn is_bundled_font(requested: &str, bundled_fonts: &Path) -> bool {
     file.starts_with(&folder) && file.is_file()
 }
 
-// Unless the cache is ready, the list on disk is old or incomplete and the
-// JS gets the bundled list instead: only the bundled fonts are served.
+// A bundled font is served in every state: the page reads it from its folder
+// whenever it holds the bundled list. Unless the cache is ready, the list on
+// disk is old or incomplete, and no other font is served.
 pub fn may_serve_font(
     all_fonts_js: &Path,
     requested: &str,
     bundled_only: bool,
     bundled_fonts: &Path,
 ) -> bool {
+    if is_bundled_font(requested, bundled_fonts) {
+        return true;
+    }
     if bundled_only {
-        return is_bundled_font(requested, bundled_fonts);
+        return false;
     }
     is_generated_font(all_fonts_js, requested)
 }
@@ -726,17 +730,20 @@ mod tests {
         assert!(may_serve_font(&dirs.all_fonts, &bundled, bundled_only, &dirs.bundled));
     }
 
+    // The new list does not name the bundled font, and it is served anyway.
     #[test]
-    fn once_fonts_are_ready_only_the_new_list_is_served() {
+    fn once_fonts_are_ready_the_new_list_and_the_bundled_fonts_are_served() {
         let _turn = FONT_LIST_TESTS.lock().unwrap_or_else(|p| p.into_inner());
         let dirs = font_dirs("ready", &[]);
         let other_path = dirs.base.join("other").join("Other.ttf");
         write_all_fonts(&dirs.all_fonts, &[&other_path]);
         forget_font_list();
         let bundled = text(&dirs.bundled.join("Bundled.ttf"));
+        let escaping = text(&dirs.bundled.join("..").join("..").join("AllFonts.js"));
 
         assert!(may_serve_font(&dirs.all_fonts, &text(&other_path), false, &dirs.bundled));
-        assert!(!may_serve_font(&dirs.all_fonts, &bundled, false, &dirs.bundled));
+        assert!(may_serve_font(&dirs.all_fonts, &bundled, false, &dirs.bundled));
+        assert!(!may_serve_font(&dirs.all_fonts, &escaping, false, &dirs.bundled));
     }
 
     #[test]

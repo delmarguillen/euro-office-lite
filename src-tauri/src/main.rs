@@ -588,6 +588,7 @@ fn main() {
             file_ops::print_to_printer,
             file_ops::convert_for_insert,
             file_ops::get_system_fonts,
+            file_ops::bundled_fonts_dir,
             file_ops::fonts_status,
             bridge::set_window_title,
             bridge::set_document_modified,

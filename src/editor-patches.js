@@ -1045,10 +1045,7 @@
               _installFontThumbnailFallback(win);
               if (win.AscFonts && win.AscFonts.CFontFileLoader) {
                 if (!fontPatched) {
-                  var currentFn = String(win.AscFonts.CFontFileLoader.prototype.LoadFontAsync);
-                  if (currentFn.indexOf('/fonts/') === -1 || currentFn.indexOf('ascdesktop://') !== -1) {
-                    _patchLoadFontAsync(win);
-                  }
+                  _patchLoadFontAsync(win);
                   fontPatched = true;
                 }
                 if (!fontsPreloaded && win.AscFonts.g_font_files && win.AscFonts.g_font_files.length > 0) {
@@ -1187,6 +1184,7 @@
       // before the iframe is created so injection does not race LoadDocumentFonts.
       await window._eoWaitForFonts();
       await _prepareSystemFonts();
+      await _prepareBundledFonts();
       // The conversion failed meanwhile: no editor for a document that is not coming.
       if (awaited && awaited.state === 'failed') return;
       window._eoOpenPhases.mark('fonts');

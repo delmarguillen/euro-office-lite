@@ -407,9 +407,8 @@ await copyRequired(
 await cp(path.join(projectRoot, 'src', 'markdown'), path.join(outputRoot, 'markdown'), {
   recursive: true,
 });
-await cp(path.join(projectRoot, 'src', 'fonts'), path.join(outputRoot, 'fonts'), {
-  recursive: true,
-});
+// src/fonts is not staged: the app ships its fonts once, in binaries/fonts,
+// and the page reads them from there (font-patches.js).
 await copyDictionaries();
 // grunt compiles sdkjs's language table into the bundles and copies no file
 // with it, so the start screen gets the codes in a file of their own.

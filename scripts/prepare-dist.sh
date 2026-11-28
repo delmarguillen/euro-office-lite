@@ -105,8 +105,8 @@ copy_single_file "$SRC/editor-patches.js"    "$DIST/editor-patches.js"    "edito
 # --- Markdown page and its libraries ---
 copy_tree "$SRC/markdown" "$DIST/markdown" "src/markdown"
 
-# --- Fonts ---
-copy_tree "$SRC/fonts" "$DIST/fonts" "src/fonts"
+# src/fonts is not staged: the app ships its fonts once, in binaries/fonts,
+# and the page reads them from there (font-patches.js).
 
 # The patches in patches/ are in the submodule trees only while their files
 # are copied, and come back out on any exit.

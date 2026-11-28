@@ -1509,6 +1509,14 @@ pub fn get_system_fonts(state: State<'_, AppState>) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("Cannot read AllFonts.js: {}", e))
 }
 
+// The folder of the bundled fonts, with forward slashes: the page reads each
+// of them from there through the abs/ route of the ascdesktop protocol.
+#[tauri::command]
+pub fn bundled_fonts_dir(app: tauri::AppHandle) -> String {
+    let dir = crate::bundled_fonts_dir(&app);
+    crate::protocol_limits::font_path_key(&dir.to_string_lossy())
+}
+
 // Case-insensitive on Windows only, even though the default macOS filesystem is
 // case-insensitive too. Both paths compared here come from the same source (the
 // path the document was opened from, and the destination the save writes), so

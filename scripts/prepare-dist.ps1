@@ -109,8 +109,8 @@ Copy-SingleFile "$src\editor-patches.js"    "$dist\editor-patches.js"    "editor
 # --- Markdown page and its libraries ---
 Copy-Tree "$src\markdown" "$dist\markdown" @() "src/markdown"
 
-# --- Fonts ---
-Copy-Tree "$src\fonts" "$dist\fonts" @() "src/fonts"
+# src/fonts is not staged: the app ships its fonts once, in binaries/fonts,
+# and the page reads them from there (font-patches.js).
 
 # The patches in patches/ are in the submodule trees only while their files
 # are copied; the trap takes them back out when a copy fails.

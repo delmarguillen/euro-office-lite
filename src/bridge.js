@@ -4251,10 +4251,7 @@ window.AscDesktopEditor = {
         fontId = fontId.substring(3);
       }
       var xhr = new XMLHttpRequest();
-      var isAbs = fontId && fontId.length > 2 &&
-        ((fontId[0] === '/' && fontId[1] !== '/') || (fontId[1] === ':'));
-      var url = isAbs ? ASC_PROTO_BASE + 'abs/' + fontId : '/fonts/' + fontId;
-      xhr.open('GET', url, false);
+      xhr.open('GET', window._eoFontUrl(fontId), false);
       xhr.responseType = 'arraybuffer';
       xhr.send(null);
       if (xhr.status === 200) {

@@ -25,6 +25,7 @@ const APP_COMMANDS: &[&str] = &[
     "print_to_printer",
     "convert_for_insert",
     "get_system_fonts",
+    "bundled_fonts_dir",
     "fonts_status",
     "set_window_title",
     "set_document_modified",

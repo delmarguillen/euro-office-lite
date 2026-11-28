@@ -54,7 +54,19 @@ check_no_sdk_bundles_in_binaries() {
     echo "binaries/: no sdk-all*.js"
 }
 
+# The page and x2t read the bundled fonts from binaries/fonts; the frontend
+# inside the app binary has no copy of them.
+check_bundled_fonts() {
+    local count
+    count=$(grep -cE "^$APP_DIR/binaries/fonts/[^/]+\.ttf$" <<< "$PATHS" || true)
+    if [ "$count" -eq 0 ]; then
+        fail "no .ttf in $APP_DIR/binaries/fonts"
+    fi
+    echo "binaries/fonts: $count .ttf"
+}
+
 PATHS=$(deb_paths)
 check_single_x2t
 check_x2t_is_executable
 check_no_sdk_bundles_in_binaries
+check_bundled_fonts
