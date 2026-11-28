@@ -78,20 +78,34 @@ pub async fn convert_file(
     let _ = std::fs::remove_file(&params_path);
 
     let result = run.map_err(|error| {
-        let message = error.to_string();
+        let message = x2t_stopped_error(&error.to_string());
         crate::temp_layout::append_log(&format!("[X2T] {}", message));
         message
     })?;
 
     if result.status.success() {
-        Ok("ok".to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        let code = result.status.code().unwrap_or(-1);
-        Err(format!(
-            "x2t conversion failed (exit code {}): {}",
-            code, stderr
-        ))
+        return Ok("ok".to_string());
+    }
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    Err(conversion_error(result.status.code(), &stderr))
+}
+
+// Start of the error of an x2t run that ended without x2t's own verdict on the
+// document: it did not start, ran out of time or was killed. The bridge has a
+// message for it (_eoIsConverterStopped).
+pub const X2T_STOPPED_ERROR: &str = "x2t-stopped";
+
+fn x2t_stopped_error(detail: &str) -> String {
+    format!("{}: {}", X2T_STOPPED_ERROR, detail)
+}
+
+// x2t ends with a small code of its own (80 to 96). A killed x2t has no code
+// on Linux and macOS; one that crashed on Windows has a negative one.
+fn conversion_error(code: Option<i32>, stderr: &str) -> String {
+    match code {
+        None => x2t_stopped_error("x2t was killed by a signal"),
+        Some(code) if code < 0 => x2t_stopped_error(&format!("x2t crashed with code {:#X}", code)),
+        Some(code) => format!("x2t conversion failed (exit code {}): {}", code, stderr),
     }
 }
 
@@ -1427,6 +1441,17 @@ mod tests {
             assert_eq!(refused.err(), Some(EMPTY_FILE_ERROR.to_string()), "{name}");
             assert_eq!(files_in(&work_dir), 0, "{name}");
         }
+    }
+
+    #[test]
+    fn an_x2t_that_gave_no_verdict_is_reported_as_stopped() {
+        let killed = conversion_error(None, "");
+        assert_eq!(killed, "x2t-stopped: x2t was killed by a signal");
+        // STATUS_ACCESS_VIOLATION, as Windows reports a crash.
+        let crashed = conversion_error(Some(0xC0000005u32 as i32), "");
+        assert_eq!(crashed, "x2t-stopped: x2t crashed with code 0xC0000005");
+        let refused = conversion_error(Some(88), "detail");
+        assert_eq!(refused, "x2t conversion failed (exit code 88): detail");
     }
 
     #[test]
