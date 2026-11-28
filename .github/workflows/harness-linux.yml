@@ -10,10 +10,11 @@ name: Harness (Linux)
 # refused because of a defect of the app, not of the harness. The case is run
 # as it is; the jobs stay red until the app is fixed.
 #
-# The log of the harness step says which pdftotext the pdf-text cases used.
+# The log of the harness step says which pdftotext, pdffonts and mutool the
+# pdf-text and pdf-structure cases used.
 #
-# result.json is uploaded on every run; the package install log, the app logs
-# and the screenshots only when the job fails.
+# result.json is uploaded on every run; the package install log, the app logs,
+# the states the cases read and the screenshots only when the job fails.
 
 on:
   workflow_dispatch:
@@ -82,7 +83,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            xvfb openbox xdotool wmctrl x11-utils imagemagick unzip python3 dbus poppler-utils
+            xvfb openbox xdotool wmctrl x11-utils imagemagick unzip python3 dbus poppler-utils mupdf-tools
 
       - name: Run the harness
         # Below the job timeout, so the upload steps still run.
@@ -119,6 +120,9 @@ jobs:
             ${{ runner.temp }}/harness/*/app.log
             ${{ runner.temp }}/harness/*/app-restart.log
             ${{ runner.temp }}/harness/*/exported.txt
+            ${{ runner.temp }}/harness/*/exported-state.txt
+            ${{ runner.temp }}/harness/*/state.txt
+            ${{ runner.temp }}/harness/*/probe.err
             ${{ runner.temp }}/harness/*/screen.png
           if-no-files-found: warn
           retention-days: 7
