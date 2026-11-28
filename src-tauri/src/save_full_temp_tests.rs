@@ -177,11 +177,13 @@ fn text_options_for(dest: &Path) -> Option<TextOptions> {
     Some(TextOptions { encoding: ENCODING_UTF8, delimiter, bom: false, crlf: false, trailing_breaks: 1 })
 }
 
-fn reshape_text(staged: &Path, text_options: Option<TextOptions>) {
+// What finish_text_save does, without the log.
+fn reshape_text(staged: &Path, text_options: Option<TextOptions>) -> Result<(), String> {
     let (Some(options), Some(kind)) = (text_options, TextKind::for_path(staged)) else {
-        return;
+        return Ok(());
     };
-    let _ = finish_saved_text(staged, kind, options);
+    let reshaped = finish_saved_text(staged, kind, options);
+    crate::file_ops::text_save_outcome(staged, reshaped).1
 }
 
 fn clear_dir(dir: &Path) {

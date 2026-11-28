@@ -946,30 +946,49 @@ fn text_options_for_save(state: &AppState, dest: &Path) -> Option<crate::text_im
 // x2t does not write CSV and TXT back the way they were read (BOM, line
 // endings, final breaks, and for TXT the encoding), so the saved file is put
 // back into the original's shape, in the instance folder before it is placed.
-// x2t's output is complete by now, so a failure here is only logged.
+// x2t's output is complete by now, so a failure here is only logged, except
+// on a full disk: the file would be placed with x2t's encoding and line ends.
 fn finish_text_save(
     state: &AppState,
     saved: &Path,
     text_options: Option<crate::text_import::TextOptions>,
-) {
+) -> Result<(), String> {
     let (Some(options), Some(kind)) = (text_options, crate::text_import::TextKind::for_path(saved))
     else {
-        return;
+        return Ok(());
     };
-    match crate::text_import::finish_saved_text(saved, kind, options) {
-        Ok(0) => {}
-        Ok(unmappable) => log_event(
-            state,
-            &format!(
-                "[SAVE] {} characters windows-1252 cannot hold were written as '?'",
-                unmappable
-            ),
-        ),
-        Err(e) => log_event(
-            state,
-            &format!("[SAVE] could not restore the original text format: {}", e),
-        ),
+    let reshaped = crate::text_import::finish_saved_text(saved, kind, options);
+    let (message, result) = text_save_outcome(saved, reshaped);
+    if let Some(message) = message {
+        log_event(state, &message);
     }
+    result
+}
+
+// What goes to the log after the saved text was put back into shape, and
+// whether the save goes on.
+pub(crate) fn text_save_outcome(
+    saved: &Path,
+    reshaped: std::io::Result<usize>,
+) -> (Option<String>, Result<(), String>) {
+    let error = match reshaped {
+        Ok(0) => return (None, Ok(())),
+        Ok(unmappable) => return (Some(unmappable_message(unmappable)), Ok(())),
+        Err(error) => error,
+    };
+    let message = format!("[SAVE] could not restore the original text format: {}", error);
+    if !crate::save_space::is_out_of_space(&error) {
+        return (Some(message), Ok(()));
+    }
+    let refused = crate::save_space::no_space_error(saved, &error.to_string());
+    (Some(message), Err(refused))
+}
+
+fn unmappable_message(unmappable: usize) -> String {
+    format!(
+        "[SAVE] {} characters windows-1252 cannot hold were written as '?'",
+        unmappable
+    )
 }
 
 #[tauri::command]
@@ -2333,6 +2352,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_text_put_back_into_shape_goes_on_without_a_log_line() {
+        let (message, result) = text_save_outcome(Path::new("/tmp/notes.txt"), Ok(0));
+
+        assert_eq!((message, result), (None, Ok(())));
+    }
+
+    #[test]
+    fn characters_the_encoding_cannot_hold_are_logged_and_the_save_goes_on() {
+        let (message, result) = text_save_outcome(Path::new("/tmp/notes.txt"), Ok(3));
+
+        assert!(message.unwrap().contains("3 characters"));
+        assert_eq!(result, Ok(()));
+    }
+
+    // The staged file is still as x2t wrote it: UTF-8 with a BOM.
+    #[test]
+    fn a_text_not_put_back_into_shape_for_lack_of_space_fails_the_save() {
+        let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
+
+        let (message, result) = text_save_outcome(Path::new("/tmp/notes.txt"), Err(full));
+
+        assert!(message.unwrap().contains("could not restore the original text format"));
+        let error = result.unwrap_err();
+        assert!(error.starts_with("save-no-space: /tmp/notes.txt: "), "{}", error);
+    }
+
+    #[test]
+    fn any_other_failure_to_put_a_text_back_into_shape_is_only_logged() {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+
+        let (message, result) = text_save_outcome(Path::new("/tmp/notes.txt"), Err(missing));
+
+        assert!(message.unwrap().contains("could not restore the original text format"));
+        assert_eq!(result, Ok(()));
     }
 
     #[test]

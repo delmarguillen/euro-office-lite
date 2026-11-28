@@ -108,15 +108,15 @@ fn replace_beside(
 // with no temp file of its own, so pointing it at `dest` could leave the user's
 // file truncated. `reshape` runs on the staged file before it is placed. `dest`
 // changes only when the disk of `staging_dir` had the room `space` asks for,
-// and `convert` succeeded without filling it and wrote the whole file
-// (non-empty, unless may_be_empty). Each save stages in a subfolder of its
-// own, removed either way.
+// `convert` succeeded without filling it and wrote the whole file (non-empty,
+// unless may_be_empty), and `reshape` succeeded. Each save stages in a
+// subfolder of its own, removed either way.
 pub async fn convert_and_place<Convert, Converted>(
     staging_dir: &Path,
     dest: &Path,
     space: &SaveSpace<'_>,
     convert: Convert,
-    reshape: impl FnOnce(&Path),
+    reshape: impl FnOnce(&Path) -> Result<(), String>,
 ) -> Result<(), String>
 where
     Convert: FnOnce(PathBuf) -> Converted,
@@ -135,10 +135,8 @@ where
         .and_then(|_| space.check_not_filled(&folder.dir))
         .and_then(|_| check_written(&staged))
         .and_then(|_| crate::staged_output::check_whole(&staged))
-        .and_then(|_| {
-            reshape(&staged);
-            write_beside_and_rename(&staged, dest)
-        })
+        .and_then(|_| reshape(&staged))
+        .and_then(|_| write_beside_and_rename(&staged, dest))
 }
 
 // x2t can exit 0 without writing anything.
@@ -843,7 +841,7 @@ mod tests {
             instance: &Path,
             dest: &Path,
             x2t: impl FnOnce(&Path) -> Result<String, String>,
-            reshape: impl FnOnce(&Path),
+            reshape: impl FnOnce(&Path) -> Result<(), String>,
         ) -> Result<(), String> {
             let space = SaveSpace { needed: 1000, volume: &disk_with(u64::MAX) };
             run_on(instance, dest, &space, x2t, reshape)
@@ -854,7 +852,7 @@ mod tests {
             dest: &Path,
             space: &SaveSpace<'_>,
             x2t: impl FnOnce(&Path) -> Result<String, String>,
-            reshape: impl FnOnce(&Path),
+            reshape: impl FnOnce(&Path) -> Result<(), String>,
         ) -> Result<(), String> {
             let staging = instance.join("save_output");
             let convert = |output: PathBuf| async move { x2t(&output) };
@@ -862,7 +860,9 @@ mod tests {
             tauri::async_runtime::block_on(saved)
         }
 
-        fn no_reshape(_: &Path) {}
+        fn no_reshape(_: &Path) -> Result<(), String> {
+            Ok(())
+        }
 
         fn half_then_crash(output: &Path) -> Result<String, String> {
             std::fs::write(output, &NEW[..6]).unwrap();
@@ -1115,6 +1115,22 @@ mod tests {
             }
         }
 
+        // The text is still as x2t wrote it, in UTF-8 with a BOM.
+        #[test]
+        fn a_text_that_could_not_be_reshaped_is_an_error_and_dest_is_unchanged() {
+            let (user, instance, dest) = user_and_instance("no-reshape", "notes.txt");
+            let x2t = writes("\u{FEFF}caf\u{e9}\n".as_bytes().to_vec());
+            let reshape = |_: &Path| Err("save-no-space: no room for the copy".to_string());
+
+            let error = run(&instance, &dest, x2t, reshape).unwrap_err();
+
+            assert_eq!(error, "save-no-space: no room for the copy");
+            assert_eq!(std::fs::read(&dest).unwrap(), OLD);
+            assert_eq!(names_in(&user), vec!["notes.txt"]);
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
         // What a save killed by a power cut left in the staging folder, x2t's
         // asc… scratch folder and another save's subfolder among it, goes on
         // the next save.
@@ -1230,6 +1246,7 @@ mod tests {
             let reshape = |staged: &Path| {
                 dest_while_reshaping = std::fs::read(&dest).unwrap();
                 finish_saved_text(staged, TextKind::Txt, options).unwrap();
+                Ok(())
             };
 
             run(&instance, &dest, x2t, reshape).unwrap();
