@@ -1384,15 +1384,8 @@ function _eoOpeningEnded() {
   return new Promise(function(resolve) { _eoOpeningWaiters.push(resolve); });
 }
 
-// A file to open here waits for the open in progress: two at once in one window
-// can leave the backend and the editor with different files.
-async function _eoWaitForOpenInProgress(file) {
-  while (_eoIsOpening()) {
-    window._eoLog('[OPEN] waiting for the open in progress: ' + file.name);
-    await _eoOpeningEnded();
-  }
-}
-
+// Wakes every waiter at once. The first to open here sets the indicator before
+// the next one looks at it (LocalFileOpen), so that one waits again.
 function _eoWakeOpeningWaiters() {
   var waiters = _eoOpeningWaiters;
   _eoOpeningWaiters = [];
@@ -3609,7 +3602,14 @@ window.AscDesktopEditor = {
     if (!file || !file.token) return;
     // Another open may have started meanwhile, during the dialog (a file the
     // Finder hands over): this one waits, then goes where it would have gone.
-    await _eoWaitForOpenInProgress(file);
+    // Two at once in one window can leave the backend and the editor with
+    // different files. No await between this check and the open below: each
+    // open sets the indicator (or the Markdown mark) before its own first
+    // await, so the next waiter woken with this one sees it and waits again.
+    while (_eoIsOpening()) {
+      window._eoLog('[OPEN] waiting for the open in progress: ' + file.name);
+      await _eoOpeningEnded();
+    }
 
     // The open document stays as it is, saved or not.
     if (!_eoOpensHere()) {
