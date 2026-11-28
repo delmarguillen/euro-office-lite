@@ -12,7 +12,7 @@ Linux additions are intentionally limited to what Euro-Office Lite needs:
 No Linux implementation is provided for HTML/URL printing, job management, or the plugin's unrestricted webview PDF commands. Euro-Office Lite exposes only printer discovery to the webview; printing goes through its existing backend
 command, which validates the app-generated PDF. Copies, page ranges, and other native print options are not newly implemented; the app currently passes only the selected printer to that command. CUPS destination defaults apply except for the explicit `print-scaling=none` job option.
 
-Build dependency: CUPS 2 development files (`libcups2-dev` on Debian/Ubuntu, `libcups` on Arch). Runtime: the CUPS client library and an accessible configured CUPS scheduler; the app does not install or configure printers. Flatpak needs `--socket=cups` and libcups in its runtime. The standard GNOME runtime supplies the library.
+Build dependency: CUPS 2 development files (`libcups2-dev` on Debian/Ubuntu, `libcups` on Arch). Runtime: the CUPS client library and an accessible configured CUPS scheduler; the app does not install or configure printers. Flatpak needs `--socket=cups` and libcups in its runtime. Network printer discovery additionally needs `--system-talk-name=org.freedesktop.Avahi`; the CUPS socket alone only provides configured queues. The standard GNOME runtime supplies the library.
 
 Run `bash scripts/test-printer-linux.sh` from the repository root for backend tests that do not submit real print jobs. The bridge tests cover discovery, selection, fallback, and submission errors separately.
 

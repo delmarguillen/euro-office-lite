@@ -16,6 +16,7 @@ finish-args:
   - --filesystem=/run/media:ro
   - --unshare=network
   - --talk-name=org.freedesktop.portal.*
+  - --system-talk-name=org.freedesktop.Avahi
 
 modules:
   - name: euro-office-lite
