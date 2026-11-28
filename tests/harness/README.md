@@ -63,6 +63,14 @@ says which `pdftotext` the `pdf-text` cases used.
 The jobs are red today: `docx-xlsx-content` opens instead of being refused
 because of a known defect of the app (see [Cases](#cases)).
 
+After the cases, each job measures the median time they took to open their
+document, from the request to `document_ready` as `scripts/measure-open.mjs`
+counts it, and `scripts/check-budget.mjs` compares it with `open_ms` in
+`ci/budgets.json`. A job over its budget fails. Only `harness-linux-aarch64`
+has a budget: the same builds measured between 2.7 s and 3.7 s on the x86_64
+runners and between 3.1 s and 3.2 s on the aarch64 ones. The x86_64 job
+prints its measure and passes.
+
 The workflow needs nothing from a test machine: it installs the package with
 `--deb` (the runner has `sudo` without a password), writes to a folder under
 `$RUNNER_TEMP` with `--out`, and skips backup.sh and restore.sh because the

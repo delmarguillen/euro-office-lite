@@ -12,6 +12,10 @@ name: Harness (Linux)
 #
 # The log of the harness step says which pdftotext the pdf-text cases used.
 #
+# After the cases, the median time they took to open their document is checked
+# against the budget ci/budgets.json has for the architecture
+# (scripts/check-budget.mjs); a job over it is red too.
+#
 # result.json is uploaded on every run; the package install log, the app logs
 # and the screenshots only when the job fails.
 
@@ -98,6 +102,21 @@ jobs:
           dpkg-deb -f "$DEB" Package Version Architecture
           echo "::endgroup::"
           bash tests/harness/run.sh all --deb "$DEB" --out "$RUNNER_TEMP/harness"
+
+      - name: Setup Node.js
+        if: ${{ !cancelled() }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+
+      # The median open of the cases, against open_ms in ci/budgets.json.
+      # Only aarch64 has a budget there: the x86_64 runners differ too much
+      # from one job to the next. Without a budget the step prints the measure.
+      - name: Check the open time budget
+        if: ${{ !cancelled() }}
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: node scripts/check-budget.mjs open "harness-linux-$ARCH" "$RUNNER_TEMP/harness"
 
       - name: Upload result.json
         if: always()

@@ -1,8 +1,12 @@
 // Fails a CI job when a measure is over the budget ci/budgets.json gives it.
 //
 //   node scripts/check-budget.mjs size <key> <installer file>
+//   node scripts/check-budget.mjs open <key> <harness output folder>
 //
 // size  the bytes of the installer, against size_bytes.<key>.
+// open  the median time of the complete opens in <folder>/*/app.log, in
+//       milliseconds from the request to document_ready as
+//       scripts/measure-open.mjs counts it, against open_ms.<key>.
 //
 // A budget is the largest value that passes. A key the file does not have is
 // measured, printed and passes. To move a budget, change its number in
@@ -10,9 +14,10 @@
 //
 // Exit status: 0 within the budget or no budget for the key, 1 over the
 // budget, 2 the measure could not be taken.
-import { readFile, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { measureOpen, median, parseLog } from './measure-open.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 export const BUDGETS_FILE = path.join(scriptDir, '..', 'ci', 'budgets.json');
@@ -21,12 +26,40 @@ export const BUDGETS_FILE = path.join(scriptDir, '..', 'ci', 'budgets.json');
 // the unit of its numbers.
 const KINDS = {
   size: { section: 'size_bytes', unit: 'bytes', measure: installerBytes },
+  open: { section: 'open_ms', unit: 'ms', measure: medianOpenMs },
 };
 
 async function installerBytes(file) {
   const info = await stat(file);
   if (!info.isFile()) throw new Error(`${file} is not a file`);
   return info.size;
+}
+
+// The app log of every harness case: <folder>/<case>/app.log.
+async function caseLogs(folder) {
+  const entries = await readdir(folder, { withFileTypes: true });
+  const logs = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const logPath = path.join(folder, entry.name, 'app.log');
+    const text = await readFile(logPath, 'utf8').catch(() => null);
+    if (text !== null) logs.push({ name: entry.name, text });
+  }
+  return logs;
+}
+
+export function completeOpenTotals(logs) {
+  return logs
+    .flatMap(({ name, text }) => parseLog(text, name))
+    .map(measureOpen)
+    .filter((row) => row.status === 'ok')
+    .map((row) => row.total);
+}
+
+async function medianOpenMs(folder) {
+  const totals = completeOpenTotals(await caseLogs(folder));
+  if (!totals.length) throw new Error(`no complete open in ${folder}/*/app.log`);
+  return Math.round(median(totals));
 }
 
 // The budget of a key, or null when the file has none for it.
@@ -65,7 +98,7 @@ export async function check(kind, key, target, budgets) {
 async function main(args) {
   const [kind, key, target] = args;
   if (!KINDS[kind] || !key || !target) {
-    console.error('usage: node scripts/check-budget.mjs size <key> <file>');
+    console.error('usage: node scripts/check-budget.mjs size|open <key> <file or folder>');
     return 2;
   }
   let result;

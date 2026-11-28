@@ -6,5 +6,8 @@
     "dmg-x86_64-apple-darwin": 151100000,
     "installer-x86_64-pc-windows-msvc": 108600000,
     "installer-aarch64-pc-windows-msvc": 108400000
+  },
+  "open_ms": {
+    "harness-linux-aarch64": 3500
   }
 }
