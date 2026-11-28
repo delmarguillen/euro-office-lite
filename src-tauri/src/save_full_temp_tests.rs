@@ -6,6 +6,7 @@
 // to the binaries folder, as in an installed app.
 // Run: EO_X2T_BINARIES=/path/binaries EO_SMALL_DISK=/mnt/small \
 //      cargo test -- --ignored --nocapture --test-threads=1 real_x2t_save
+use crate::save_space::{needed_for_save, SaveSpace};
 use crate::template_round_trip_tests::x2t_in;
 use crate::text_import::{finish_saved_text, TextKind, TextOptions, ENCODING_UTF8};
 use crate::x2t_task::{
@@ -94,7 +95,11 @@ impl Setup {
         };
         let reshape = |staged: &Path| reshape_text(staged, text_options);
         let staging = instance.join("save_output");
-        let saved = crate::save_target::convert_and_place(&staging, dest, convert, reshape);
+        let space = SaveSpace {
+            needed: needed_for_save(&instance, detect_format(dest)),
+            volume: &crate::converter::volume_of,
+        };
+        let saved = crate::save_target::convert_and_place(&staging, dest, &space, convert, reshape);
         let result = tauri::async_runtime::block_on(saved);
         Saved { x2t, result }
     }

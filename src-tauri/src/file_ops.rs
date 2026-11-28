@@ -742,7 +742,11 @@ async fn save_editor_bin(
     };
     let reshape = |staged: &Path| finish_text_save(state, staged, text_options);
     let staging_dir = save_staging_dir(&state.temp_dir);
-    crate::save_target::convert_and_place(&staging_dir, dest, convert, reshape).await
+    let space = crate::save_space::SaveSpace {
+        needed: crate::save_space::needed_for_save(&state.temp_dir, format_to),
+        volume: &super::converter::volume_of,
+    };
+    crate::save_target::convert_and_place(&staging_dir, dest, &space, convert, reshape).await
 }
 
 fn save_staging_dir(temp_dir: &Path) -> PathBuf {

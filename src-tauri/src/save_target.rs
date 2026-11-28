@@ -1,5 +1,6 @@
 // Writing a saved file to where the user asked for it.
 
+use crate::save_space::SaveSpace;
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Write};
@@ -11,6 +12,10 @@ use std::sync::{Mutex, MutexGuard};
 /// read-only file, or a folder it cannot write to), so the frontend can say why
 /// instead of showing a generic error.
 pub const SAVE_DENIED_ERROR: &str = "save-denied";
+
+/// Start of the error a save returns when a disk has no room for what it
+/// writes there.
+pub const SAVE_NO_SPACE_ERROR: &str = "save-no-space";
 
 /// Start of the error a save returns when another program holds the
 /// destination open without sharing write access (Windows only).
@@ -102,11 +107,14 @@ fn replace_beside(
 // result at `dest` with write_beside_and_rename. x2t writes its output in place
 // with no temp file of its own, so pointing it at `dest` could leave the user's
 // file truncated. `reshape` runs on the staged file before it is placed. `dest`
-// changes only when `convert` succeeded and wrote the file (non-empty, unless
-// may_be_empty). Each save stages in a subfolder of its own, removed either way.
+// changes only when the disk of `staging_dir` had the room `space` asks for,
+// and `convert` succeeded without filling it and wrote the file (non-empty,
+// unless may_be_empty). Each save stages in a subfolder of its own, removed
+// either way.
 pub async fn convert_and_place<Convert, Converted>(
     staging_dir: &Path,
     dest: &Path,
+    space: &SaveSpace<'_>,
     convert: Convert,
     reshape: impl FnOnce(&Path),
 ) -> Result<(), String>
@@ -118,11 +126,13 @@ where
         return Err(format!("not a file name: {}", dest.display()));
     };
     let folder = StagingFolder::claim(staging_dir)?;
+    space.check_room(&folder.dir)?;
     // Same name and extension as `dest`: x2t and the text reshaping both go by
     // the extension.
     let staged = folder.dir.join(name);
     let converted = convert(staged.clone()).await;
     converted
+        .and_then(|_| space.check_not_filled(&folder.dir))
         .and_then(|_| check_written(&staged))
         .and_then(|_| {
             reshape(&staged);
@@ -808,7 +818,9 @@ mod tests {
     // commands hand it to x2t.
     mod convert_and_place {
         use super::*;
+        use crate::save_space::tests::{disk_with, unknown_disk};
         use crate::text_import::{finish_saved_text, TextKind, TextOptions, ENCODING_WINDOWS_1252};
+        use std::sync::atomic::AtomicU64;
 
         const OLD: &[u8] = b"PK\x03\x04 old document";
         const NEW: &[u8] = b"PK\x03\x04 new document";
@@ -823,15 +835,28 @@ mod tests {
             (user, instance, dest)
         }
 
+        // A save on a disk with room to spare.
         fn run(
             instance: &Path,
             dest: &Path,
             x2t: impl FnOnce(&Path) -> Result<String, String>,
             reshape: impl FnOnce(&Path),
         ) -> Result<(), String> {
+            let space = SaveSpace { needed: 1000, volume: &disk_with(u64::MAX) };
+            run_on(instance, dest, &space, x2t, reshape)
+        }
+
+        fn run_on(
+            instance: &Path,
+            dest: &Path,
+            space: &SaveSpace<'_>,
+            x2t: impl FnOnce(&Path) -> Result<String, String>,
+            reshape: impl FnOnce(&Path),
+        ) -> Result<(), String> {
             let staging = instance.join("save_output");
             let convert = |output: PathBuf| async move { x2t(&output) };
-            tauri::async_runtime::block_on(convert_and_place(&staging, dest, convert, reshape))
+            let saved = convert_and_place(&staging, dest, space, convert, reshape);
+            tauri::async_runtime::block_on(saved)
         }
 
         fn no_reshape(_: &Path) {}
@@ -960,6 +985,86 @@ mod tests {
 
             assert!(error.contains("did not write"), "{}", error);
             assert_eq!(std::fs::read(&dest).unwrap(), OLD);
+            clean_up(&[&user, &instance]);
+        }
+
+        #[test]
+        fn a_disk_without_room_refuses_the_save_before_x2t_runs() {
+            let (user, instance, dest) = user_and_instance("no-room", "doc.docx");
+            let space = SaveSpace { needed: 1000, volume: &disk_with(999) };
+            let mut x2t_ran = false;
+            let x2t = |output: &Path| {
+                x2t_ran = true;
+                writes_new(output)
+            };
+
+            let error = run_on(&instance, &dest, &space, x2t, no_reshape).unwrap_err();
+
+            assert!(error.starts_with(SAVE_NO_SPACE_ERROR), "{}", error);
+            assert!(!x2t_ran);
+            assert_eq!(std::fs::read(&dest).unwrap(), OLD);
+            assert_eq!(names_in(&user), vec!["doc.docx"]);
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
+        // A disk with room until `x2t` runs, and none once it has: what x2t
+        // leaves on a disk it filled.
+        fn save_on_a_disk_x2t_fills(
+            instance: &Path,
+            dest: &Path,
+            x2t: impl FnOnce(&Path) -> Result<String, String>,
+        ) -> Result<(), String> {
+            let free = AtomicU64::new(u64::MAX);
+            let disk = |_: &Path| Some(crate::converter::Volume { device: 1, free: free.load(Ordering::Relaxed) });
+            let space = SaveSpace { needed: 1000, volume: &disk };
+            let fills_the_disk = |output: &Path| {
+                free.store(0, Ordering::Relaxed);
+                x2t(output)
+            };
+            run_on(instance, dest, &space, fills_the_disk, no_reshape)
+        }
+
+        // x2t exits 0 with the first blocks of the text written.
+        #[test]
+        fn a_txt_cut_short_by_a_full_disk_is_an_error_and_dest_is_unchanged() {
+            let (user, instance, dest) = user_and_instance("full-txt", "notes.txt");
+            let writes_the_start = |output: &Path| {
+                std::fs::write(output, b"first line of many\n").unwrap();
+                Ok("ok".to_string())
+            };
+
+            let error = save_on_a_disk_x2t_fills(&instance, &dest, writes_the_start).unwrap_err();
+
+            assert!(error.starts_with(SAVE_NO_SPACE_ERROR), "{}", error);
+            assert_eq!(std::fs::read(&dest).unwrap(), OLD);
+            assert_eq!(names_in(&user), vec!["notes.txt"]);
+            assert!(names_in(&instance).is_empty(), "{:?}", names_in(&instance));
+            clean_up(&[&user, &instance]);
+        }
+
+        // On a full disk x2t writes a TXT of 0 bytes, which an empty document
+        // also gives.
+        #[test]
+        fn an_empty_txt_from_a_full_disk_is_an_error_and_dest_is_unchanged() {
+            let (user, instance, dest) = user_and_instance("full-empty-txt", "notes.txt");
+
+            let error = save_on_a_disk_x2t_fills(&instance, &dest, writes_0_bytes).unwrap_err();
+
+            assert!(error.starts_with(SAVE_NO_SPACE_ERROR), "{}", error);
+            assert_eq!(std::fs::read(&dest).unwrap(), OLD);
+            clean_up(&[&user, &instance]);
+        }
+
+        // Windows, where the free space is not read.
+        #[test]
+        fn a_disk_whose_free_space_cannot_be_told_takes_the_save() {
+            let (user, instance, dest) = user_and_instance("unknown-disk", "doc.docx");
+            let space = SaveSpace { needed: u64::MAX, volume: &unknown_disk };
+
+            run_on(&instance, &dest, &space, writes_new, no_reshape).unwrap();
+
+            assert_eq!(std::fs::read(&dest).unwrap(), NEW);
             clean_up(&[&user, &instance]);
         }
 
