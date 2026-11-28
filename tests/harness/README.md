@@ -486,12 +486,10 @@ writes in place the formats of `SAVE_IN_PLACE_EXTENSIONS`
 `.docx` and the converter reads this one as a spreadsheet, so the open is not
 refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 
-Four cases are written with the result of today, and are ok with it:
-`docx-toc-fields`, `docx-fonts-glyphs` and `xlsx-cell-style-border-side`,
-whose fixes are in branches that are not merged, and `ods-column-width`, a
-known defect with no fix yet. Each fails when its fix arrives, and the
-comment of its file says what to change then. Their `control_expect` is the
-outcome of a build with the fix.
+One case is written with the result of today, and is ok with it:
+`ods-column-width`, a known defect with no fix yet. It fails when its fix
+arrives, and the comment of its file says what to change then. Its
+`control_expect` is the outcome of a build with the fix.
 
 | case | input | ok when |
 |---|---|---|

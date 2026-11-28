@@ -5,11 +5,9 @@
 # character it does not have), and the text has the white smiling face and
 # the arrow, which Liberation Sans has.
 # The check mark (U+2713) and the emoji (U+1F600, U+1F44D) are in the
-# document and are not judged today: the app brings no font for them, and
-# x2t leaves out of the PDF, glyph and text, a character no font of the
-# system draws. With the branch feat/112-symbol-glyphs merged, add:
-#   match_7 = '^text=Symbols: ☺ → ✓$'
-#   match_8 = '^text=Emoji: 😀 👍$'
+# document too: the app brings a font for them, so they are in the text
+# of the PDF. A build without it leaves them out, glyph and text, and
+# match_7 and match_8 fail, which is what control_expect holds.
 description = "DOCX with symbols: the exported PDF embeds its fonts, has no glyph 0 and has the symbols of the text font"
 generate = "mkdocxsymbols.py"
 input = "symbols.docx"
@@ -23,5 +21,8 @@ match_3 = '^glyphs=[1-9][0-9]+$'
 match_4 = '^notdef=0$'
 match_5 = '^text=Symbols: ☺ →'
 match_6 = '^text=Emoji:'
+match_7 = '^text=Symbols: ☺ → ✓$'
+match_8 = '^text=Emoji: 😀 👍$'
 expect = "exported-as-expected"
+control_expect = "exported-missing-content"
 screenshot = "on-failure"

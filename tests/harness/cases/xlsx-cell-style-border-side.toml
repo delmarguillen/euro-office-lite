@@ -3,14 +3,10 @@
 # dialog uses for one side (no keys), then ask the editor for the cells: B1,
 # which has that style, gets the new left side and keeps its thin red bottom
 # and its empty top, and C1, of another style, keeps its thin blue sides.
-# Today the editor cannot set one side of a cell style: it has no
-# asc_setBorderSide, the `do` says so and the case ends in do-failed, which
-# is its result of today. The branch feat/109-cell-style-borders adds it.
-# When it is merged this case fails; then swap the two values:
-#   expect = "state-as-expected"
-#   control_expect = "do-failed"
-# Until then control_expect is what a build with the branch gives.
-description = "XLSX with cell styles: set the left border of a style with its line and colour; today the editor has no way to set one side"
+# The editor sets one side of a cell style with asc_setBorderSide. A build
+# without it has no such function, the `do` says so and the case ends in
+# do-failed, which is what control_expect holds.
+description = "XLSX with cell styles: set the left border of a style with its line and colour"
 generate = "mkxlsxstyles.py"
 input = "styles.xlsx"
 input_sha256 = "1e2e85487fb2f613a2509b45ce8a2d1ef894f0446d581578fa8ebaf1d7134a74"
@@ -24,6 +20,6 @@ match_3 = '^B1\.border\.bottom=Thin FF0000$'
 match_4 = '^B1\.border\.top=none$'
 match_5 = '^B1\.border\.right=none$'
 match_6 = '^C1\.border\.left=Thin 0000FF$'
-expect = "do-failed"
-control_expect = "state-as-expected"
+expect = "state-as-expected"
+control_expect = "do-failed"
 screenshot = "on-failure"
