@@ -1,0 +1,33 @@
+# Open a DOCX and ask the editor which fonts it has and which font it takes
+# for a character the font of the text does not have. The families of the
+# package must be listed on every system. The families of the system change
+# from one machine to another, so the case names none of them: it asks that
+# the letter A, the white smiling face and the arrow, which Liberation Sans
+# has, get a font ("drawn=no" is an empty box on screen).
+# Today the app brings no font for the check mark (U+2713) or for an emoji
+# (U+1F44D): they are drawn only where the system has a font for them, and
+# EOLite Emoji is not among the families (family.EOLite Emoji=missing).
+# The branch feat/112-symbol-glyphs adds that family. When it is merged this
+# case fails on match_8; then:
+#   match_8 = '^family\.EOLite Emoji=listed$'
+#   match_9 = '^drawn\.U\+2713=yes$'
+#   match_10 = '^drawn\.U\+1F44D=yes$'
+# and control_expect stays, as what a build without the branch gives.
+# Until then control_expect is what a build with the branch gives.
+description = "DOCX: the editor lists the fonts of the package and draws A, U+263A and U+2192; EOLite Emoji is not listed yet"
+generate = "mkdocx.py 1"
+input = "paragraph.docx"
+platforms = "linux"
+action = "open-probe"
+probe = "fonts.js U+0041 U+263A U+2192 U+2713 U+1F44D family:EOLite+Emoji"
+match_1 = '^font=Liberation Sans$'
+match_2 = '^font=Liberation Serif$'
+match_3 = '^font=Liberation Mono$'
+match_4 = '^font=Carlito$'
+match_5 = '^drawn\.U\+41=yes$'
+match_6 = '^drawn\.U\+263A=yes$'
+match_7 = '^drawn\.U\+2192=yes$'
+match_8 = '^family\.EOLite Emoji=missing$'
+expect = "state-as-expected"
+control_expect = "state-mismatch"
+screenshot = "on-failure"

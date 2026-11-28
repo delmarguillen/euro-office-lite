@@ -12,9 +12,13 @@ example with `scp -r`) and run it over SSH; it holds no host names or
 credentials.
 
 Needs: `xvfb`, `openbox`, `xdotool`, `wmctrl`, `x11-utils`, `imagemagick`
-(screenshots), `unzip`, `python3` (input generators), `dbus-run-session`,
-`pdftotext` from `poppler-utils` (the `pdf-text` check), and
-`sudo -n apt-get` when it has to install a package.
+(screenshots), `unzip`, `python3` (input generators and the inspector
+client), `dbus-run-session`, `pdftotext` from `poppler-utils` (the
+`pdf-text` check), and `sudo -n apt-get` when it has to install a package.
+The cases that ask
+the page for its state also need `ci/eo-inspect.py` of this repository, two
+folders above this one; `HARNESS_INSPECT` names it when the folder was
+copied without it.
 
 ## Use
 
@@ -24,6 +28,7 @@ Needs: `xvfb`, `openbox`, `xdotool`, `wmctrl`, `x11-utils`, `imagemagick`
 ./run.sh all --deb some.deb           # all cases, installing some.deb if needed
 ./run.sh txt-emoji --control          # one case, judged by its control_expect
 ./restore.sh ~/harness-backup         # put the user state back, checked by sha256
+./selftest.sh                         # the probes, without the app
 ```
 
 `run.sh CASE|all [--deb FILE] [--control] [--screenshots] [--keep-display] [--out DIR]`. It
@@ -271,15 +276,16 @@ literally) per line, `#` comments. No other TOML syntax and no escapes.
 | `generate` | `SCRIPT ARGS`: runs `python3 gen/SCRIPT OUT ARGS` to make the input |
 | `input` | file name of the input |
 | `input_sha256` | optional: the generated input must have this sha256. Left out for the deflated ZIPs of `mkdocx.py` and `mkxlsx.py`, whose bytes depend on the zlib of the Python that writes them |
-| `action` | `open`, `open-save` (Ctrl+S), `open-edit-save`, `open-export-pdf` or `edit-kill-recover` |
+| `action` | `open`, `open-save` (Ctrl+S), `open-edit-save`, `open-export-pdf` or `edit-kill-recover`; on Linux also `open-probe` and `refused-probe` (see [The state of the page](#the-state-of-the-page-linux)) |
 | `keys_before`, `type`, `keys_after` | for `open-edit-save` and `edit-kill-recover`: `xdotool key` list, text typed, `xdotool key` list, after a click in the middle of the window |
 | `button` | optional, for the same actions: the label of a button of the page, pressed after the click and before `keys_before`. macOS finds it by its accessible name through System Events. Linux, which has no accessibility bus on the runner, and Windows, where UI Automation does not find the buttons of the page in WebView2, press it with the keys `button_keys` in `lib.sh` and `Get-ButtonKeys` in `win/lib.ps1` give for that label |
 | `check` | how a saved file is judged: `same-text`, `expected-bytes` or `zip-match`; for `open-export-pdf`, `pdf-text` |
 | `expected_generate`, `expected_sha256` | for `expected-bytes`: the generator of the file the save must write, and optionally its sha256 |
-| `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain; for `pdf-text`: `REGEX`, an extended regex a line of the PDF's text must contain |
+| `match_N` | for `zip-match`: `PART REGEX`, an extended regex the zip part must contain; for `pdf-text`: `REGEX`, an extended regex a line of the PDF's text must contain; for a `probe`: `REGEX`, an extended regex a line of the state must contain, and the case needs at least one |
+| `probe`, `do`, `do_after_restart`, `probe_seconds` | on Linux: what the case asks the page (see [The state of the page](#the-state-of-the-page-linux)) |
 | `platforms` | optional: the systems the case is for, among `linux`, `windows` and `macos`, separated by spaces. Without it the case is for every system. On another system the case is skipped: `"ok": true`, `"observed": "skipped"`, `"skipped": true`, with the reason in `detail`, and the app is not started |
 | `expect` | the outcome that makes the case ok |
-| `control_expect` | optional: the outcome with `--control`, for a build without the fix |
+| `control_expect` | optional: the outcome with `--control`, for a build without the fix. A case written with the result of today, because its fix is in a branch that is not merged, has there the outcome of a build with the fix, and its comment says what to change when the branch is merged |
 | `screenshot` | `on-failure` or `always` |
 
 A case waits up to 120 s for the app log to say how the open went. Ready:
@@ -319,6 +325,14 @@ Outcomes:
   least 1, or not. `recovery-not-started`: the log of the first start has no
   `[RECOVER] begin session=`. `recovery-not-written`: the changes file of
   that session was still empty 30 s after the edit.
+- `state-as-expected`, `state-mismatch` (a `probe`): every `match_N` is in a
+  line of what the probe answered, or not; `detail` names those not found.
+  `probe-failed`: the inspector named no page, or the probe threw; `detail`
+  has the reason, for instance a name of sdkjs the probe reads and the page
+  does not have. `do-failed`: the function of `do` or `do_after_restart`
+  threw, or did not answer `OK`. `no-inspector`: no `ci/eo-inspect.py`.
+  `recovery-not-opened`: Recover was pressed and no editor said it was ready.
+- `skipped`: the case is not for this system (`platforms`).
 - `open-timeout`, `launch-failed`, `no-input`, `bad-case-file`.
 
 ### Export to PDF
@@ -338,9 +352,85 @@ config folder of the app has content and its sha256 holds for two seconds.
 It kills the app (`kill -9`, `Stop-Process -Force`) and starts it again with
 no document; the log of that second start is `app-restart.log`. The case is
 judged by the `[RECOVER] candidates=N` line the start screen leaves there.
-It does not press Recover, so it does not show that the typed text comes
-back. The second app is closed and the recovery folder is emptied, as after
-every case.
+Without a `probe` it does not press Recover, so it does not show that the
+typed text comes back; with one, on Linux, it does (see below). The second
+app is closed and the recovery folder is emptied, as after every case.
+
+### The state of the page (Linux)
+
+A case with a `probe` asks the page of the app what it holds, through the
+remote inspector of WebKitGTK: the app is started with
+`WEBKIT_INSPECTOR_SERVER` and `WEBKIT_INSPECTOR_HTTP_SERVER` on the loopback
+interface (ports `$HARNESS_INSPECT_SOCKET_PORT` and `$HARNESS_INSPECT_PORT`,
+2999 and 3000 by default), and `evaluate.py` evaluates JavaScript in its
+page with the protocol code of `ci/eo-inspect.py`. The app needs no change
+for it, and only a case with a `probe` is started that way. The case is
+judged by lines of text the page gives, not by the bytes of a saved file and
+not by a screenshot. Windows and macOS have no such channel: these cases
+have `platforms = "linux"`.
+
+| key | meaning |
+|---|---|
+| `probe` | `FILE ARGS`: `probes/FILE` holds one JavaScript function, called with the arguments, the editor (`Asc.editor` of the frame the page names `frameEditor`, or null), its window and `need`; it answers lines of text, by convention `key=value`. The last answer stays in the folder of the case as `state.txt` |
+| `do` | optional, for `open-probe`: a function of `probes/` called before the probe, to act on the editor through its API instead of the keyboard; it must answer a text that starts with `OK` |
+| `do_after_restart` | for `edit-kill-recover`: the same, on the start screen of the app started after the kill |
+| `probe_seconds` | optional: how long the probe is asked again until every `match_N` is there (30 by default); the editor settles a moment after it says it is ready |
+
+- `open-probe`: the document opens; then the keys of the case, if it has
+  any, its `do`, and the probe.
+- `refused-probe`: the open is refused with its dialog and the file is as it
+  was, as for `rejected-with-dialog`; the dialog is closed and the probe
+  says what the page shows. A document that opens ends in `opens`.
+- `edit-kill-recover` with a `probe`: once the start screen has the document
+  to offer, `do_after_restart` presses Recover, the case waits for the
+  editor and the probe asks it for the document.
+
+A probe reads names of sdkjs that are not a public API. It takes each of
+them with `need(ROOT, "a.b")`, which throws an error that names the first
+name that is not there: on another sdkjs the case ends in `probe-failed`
+with that name, it does not pass with less to compare. A case with a
+`probe` saves nothing, so its window gets 5 s to close, not 20, before the
+harness ends the app (`app close: forced` in `detail`): a document a `do`
+changed or Recover brought back asks before it closes.
+
+The lines each probe answers:
+
+```
+sheet-cells.js B1          B1.text=0.25
+                           B1.style=Totals
+                           B1.font=Arial 14 bold            family, size, bold, italic, underline
+                           B1.format=0.00
+                           B1.fill=FFFF00                   or none
+                           B1.border.bottom=Thin FF0000     left, top, right, bottom; or none
+                           col.B.px=64                      at 100 % zoom
+                           col.B.mm=16.93
+fonts.js U+263A family:X   fonts=44
+                           font=Liberation Sans             one line per family
+                           pick.U+263A=DejaVu Sans          or none
+                           drawn.U+263A=yes                 no: a box on screen
+                           family.X=listed                  or missing; a + in the name is a space
+word-text.js               pages=3
+                           text=1 Preface heading           one line per paragraph; a tab reads " | "
+start-screen.js            start=shown                      or hidden behind an editor
+                           start.inert=false                true while an open keeps it from clicks
+                           opening=idle                     or active
+                           editor=none                      or open
+                           create=word cell slide           the editors its buttons create
+                           open.button=enabled              or disabled
+                           recover=hidden                   or shown
+                           recover.items=0
+                           recover.item=NAME                one line per document offered
+```
+
+| probe | answers |
+|---|---|
+| `sheet-cells.js REF...` | for each cell: text, cell style, font, number format, fill, the border of each side with style and colour; for its column: width in px and mm |
+| `fonts.js U+XXXX... family:NAME...` | the font families the editor has, the family it takes for each code point (`none`, `drawn=no`: a box on screen) and whether each family asked for is listed |
+| `word-text.js` | pages of the document and its text, with the numbers of numbered paragraphs and the results of the fields |
+| `start-screen.js` | whether the start screen is shown and takes clicks, whether something is opening, whether the page holds an editor, and the documents offered for recovery |
+| `word-update-fields.js` | for `do`: updates every field of the document |
+| `sheet-style-border.js NAME SIDE STYLE RRGGBB` | for `do`: gives one side of a cell style a line and a colour, as the cell style dialog does |
+| `start-click.js recover\|discard` | for `do_after_restart`: presses that button of the first recovered document |
 
 ## Cases
 
@@ -363,6 +453,13 @@ writes in place the formats of `SAVE_IN_PLACE_EXTENSIONS`
 `.docx` and the converter reads this one as a spreadsheet, so the open is not
 refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 
+Four cases are written with the result of today, and are ok with it:
+`docx-toc-fields`, `docx-fonts-glyphs` and `xlsx-cell-style-border-side`,
+whose fixes are in branches that are not merged, and `ods-column-width`, a
+known defect with no fix yet. Each fails when its fix arrives, and the
+comment of its file says what to change then. Their `control_expect` is the
+outcome of a build with the fix.
+
 | case | input | ok when |
 |---|---|---|
 | `csv-bmp` | UTF-8 CSV, every character inside the BMP | saved with the `Z`, byte for byte |
@@ -374,8 +471,12 @@ refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 | `docx-edit-save` | DOCX with three paragraphs | the saved XML has the typed word and the paragraphs |
 | `docx-encrypted` | `.docx` that is a CFB with the `EncryptionInfo` and `EncryptedPackage` streams of a document with a password; the streams hold filler | refused with the open error dialog, file unchanged |
 | `docx-export-pdf` | DOCX with one paragraph | the text of the exported PDF has the paragraph |
+| `docx-fonts-glyphs` (Linux) | the DOCX of `docx-export-pdf` | the editor lists Liberation Sans, Serif and Mono and Carlito, and has a font for A, U+263A and U+2192. Today: EOLite Emoji is not among its families |
 | `docx-plain-text` | `.docx` that holds plain text | refused with the open error dialog, file unchanged |
 | `docx-recover` | DOCX with two paragraphs | after typing and a kill, the next start gets the document to offer for recovery |
+| `docx-recover-text` (Linux) | the DOCX of `docx-recover` | after typing, a kill and Recover pressed on the start screen, the editor holds the typed text after the text of the file |
+| `docx-refused-start` (Linux) | the DOCX of `docx-truncated-zip` | refused with the open error dialog; with the dialog closed the start screen is shown, takes clicks, holds no editor and offers nothing to recover |
+| `docx-toc-fields` (Linux) | DOCX with a table of contents, two numbered headings in sections numbered in roman and arabic, and a caption `STYLEREF 1 \s`-`SEQ` (`gen/mkdocxtoc.py`) | after the fields are updated the headings are numbered 1 and 2, the second is on page 1 and the caption reads `Figure 2-1`. Today: the contents give the page of the first heading as `2`, not `ii` |
 | `docx-truncated-zip` | the first half of a DOCX: a ZIP without its central directory | refused with the open error dialog, file unchanged |
 | `docx-xlsx-content` | `.docx` that is an XLSX | refused with the open error dialog, file unchanged |
 | `dotx-open` | DOTX template with one paragraph | opens |
@@ -386,6 +487,7 @@ refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 | `md-utf8` | UTF-8 Markdown, no BOM | saved with the `Z`, byte for byte |
 | `md-utf8-bom` | the same Markdown with a UTF-8 BOM | saved with the `Z`, BOM kept |
 | `odp-open` | ODP with one page covered by a text box | the saved `content.xml` has the typed word and the text |
+| `ods-column-width` (Linux) | ODS with the column widths and the font name LibreOffice writes (`gen/mkodscols.py`) | the cells read back. Today: the font keeps the apostrophes of `'Liberation Sans'`, and the columns, 85, 132 and 189 px wide in LibreOffice, come out wider |
 | `ods-open` | ODS with a number in A1 and a text in B1 | after typing in A2, row 1 keeps its values |
 | `odt-open` | ODT with one paragraph | the saved `content.xml` has the typed word and the paragraph |
 | `potx-open` | POTX template with one slide | opens |
@@ -400,6 +502,8 @@ refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 | `txt-utf16be-nobom` | UTF-16 BE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
 | `txt-utf16le-nobom` | UTF-16 LE TXT, no BOM, CRLF | saved with the `Z`, encoding, no BOM and CRLF kept |
 | `xlsx-cell-style-roundtrip` | XLSX with a new cell style, a changed predefined one, a changed copy of a predefined one and an unchanged predefined one (`gen/mkxlsxstyles.py`) | after typing in A3, `styles.xml` keeps the four styles with their fonts, borders, number format and alignment, and row 1 keeps its values |
+| `xlsx-cell-style-border-side` (Linux) | the same XLSX | the left side of the style Totals gets a medium green line, and its cell keeps its other sides. Today: the editor cannot set one side of a cell style (`do-failed`) |
+| `xlsx-cell-style-state` (Linux) | the same XLSX | the editor holds each cell style with its font, number format, fill and the border of each side with its style and colour |
 | `xlsx-export-pdf` | the XLSX of `xlsx-save` | the text of the exported PDF has 1234.5 as `#,##0.00` shows it, with the separators of any locale |
 | `xlsx-save` | XLSX with a number, a formatted number and a date | after typing in A2, row 1 keeps its values |
 | `xltx-open` | XLTX template with a number and a text | opens |
@@ -421,4 +525,4 @@ refused and `run.sh all` and `run.ps1 all` exit 1. The case stays as it is.
 ```
 
 `screenshot` is the screenshot path relative to the folder of `result.json`,
-or `null`.
+or `null`. A skipped case also has `"skipped": true`.

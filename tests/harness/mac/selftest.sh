@@ -198,7 +198,7 @@ test_cases_parse_and_map() {
       [ -z "$reason" ] || { echo "$f: $reason"; exit 1; }
       n=$(( n + 1 ))
     done
-    echo "     $n cases read, none skipped"
+    echo "     $n cases read, none skipped for its keys"
     [ "$n" -gt 0 ]
   )
 }
@@ -265,6 +265,16 @@ test_skip_other_platform() {
     CASE[platforms]="windows macos"
     [ "$(platform_skip_reason)" = "the case is for windows macos" ]
   )
+}
+
+# The whole run of a case for Linux: skipped, ok, and the app is not started.
+test_linux_case_is_skipped() {
+  : > "$FAKE_LOG"
+  run_mac docx-toc-fields --out "$T/run-skip" || return 1
+  [ "$(result_value "$T/run-skip" docx-toc-fields observed)" = skipped ] || return 1
+  [ "$(result_value "$T/run-skip" docx-toc-fields detail)" = "skipped on macOS: the case is for linux" ] || return 1
+  ! grep -q '^open ' "$FAKE_LOG" || return 1
+  [ ! -e "$T/run-skip/docx-toc-fields" ]
 }
 
 test_follower() {
@@ -453,6 +463,7 @@ check "System Events clicks when the mouse click cannot be made" test_click_fall
 check "a button that is not there is noted" test_missing_button_is_noted
 check "Linux presses Edit with its keys, then keys_before" test_linux_button_keys
 check "install from .dmg, open, quit" test_install_and_open
+check "a case for Linux is skipped by mac/run.sh without starting the app" test_linux_case_is_skipped
 check "a failed codesign --verify stops the run" test_bad_signature_stops
 check "a refused file with a dialog" test_rejection_with_dialog
 check "a failed case gets a screenshot and exit 1" test_failure_takes_screenshot

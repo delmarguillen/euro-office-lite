@@ -86,7 +86,7 @@ function Test-Scripts {
 
 function Test-CaseFiles {
     $names = @(Get-SelectedCases 'all')
-    Assert-Equal 'number of cases' $names.Count 38
+    Assert-Equal 'number of cases' $names.Count 45
     foreach ($name in $names) {
         $case = Read-CaseFile (Join-Path (Join-Path $HarnessDir 'cases') ($name + '.toml'))
         $complete = ($null -ne $case) -and (Get-CaseValue $case 'input') -and (Get-CaseValue $case 'generate') -and (Get-CaseValue $case 'expect')
@@ -532,7 +532,11 @@ function Test-FullRun([string]$inputs) {
         $wantedNotOk = 'docx-export-pdf=no-pdftotext xlsx-export-pdf=no-pdftotext'
     }
     Assert-Equal 'all: exit status' $status $wantedStatus
-    Assert-Equal 'all: cases in result.json' @($result.cases).Count 38
+    Assert-Equal 'all: cases in result.json' @($result.cases).Count 45
+    # The cases that ask the page for its state are for Linux.
+    $skipped = @($result.cases | Where-Object { $_.observed -eq 'skipped' } | ForEach-Object { $_.case })
+    Assert-Equal 'all: cases skipped on Windows' ($skipped -join ' ') 'docx-fonts-glyphs docx-recover-text docx-refused-start docx-toc-fields ods-column-width xlsx-cell-style-border-side xlsx-cell-style-state'
+    Assert-Equal 'all: a skipped case has no folder' (Test-Path -LiteralPath (Join-Path $options.Out 'docx-toc-fields')) $false
     $export = Join-Path (Join-Path $options.Out 'docx-export-pdf') 'exported.pdf'
     Assert-Equal 'all: the export of a case is a PDF' (Test-PdfHeader $export) $true
     Assert-Equal 'all: cases not ok' ($notOk -join ' ') $wantedNotOk

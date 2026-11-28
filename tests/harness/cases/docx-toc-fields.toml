@@ -1,0 +1,30 @@
+# Open a DOCX whose fields hold stale results, update every field through the
+# API of the editor (no keys) and ask the editor for the text of the
+# document: the table of contents, the numbers of the headings and a caption
+# numbered by chapter.
+# The first heading is on page ii of a section numbered in lower-case roman
+# numbers, the second on page 1 of a section numbered in arabic numbers; the
+# caption is STYLEREF 1 \s, a hyphen and SEQ Figure \s 1.
+# Today the table of contents gives the page of the first heading as 2, not
+# ii, and match_2 holds that result. The branch feat/110-toc-roman-captions
+# writes ii. When it is merged this case fails on match_2; then:
+#   match_2 = '^text=1 Preface heading ii$'
+# and control_expect stays, as what a build without the branch gives.
+# Until then control_expect is what a build with the branch gives.
+description = "DOCX with a table of contents, numbered headings and a chapter caption: after updating the fields the contents read 2 (ii once fixed) and 1, and the caption 2-1"
+generate = "mkdocxtoc.py"
+input = "contents.docx"
+input_sha256 = "36d9e6a5bf8a73f15510c8486bb791cafcc11d1819f97533a520f708a758e791"
+platforms = "linux"
+action = "open-probe"
+do = "word-update-fields.js"
+probe = "word-text.js"
+match_1 = '^pages=3$'
+match_2 = '^text=1 Preface heading 2$'
+match_3 = '^text=2 Main heading 1$'
+match_4 = '^text=1 \| Preface heading$'
+match_5 = '^text=2 \| Main heading$'
+match_6 = '^text=Figure 2-1$'
+expect = "state-as-expected"
+control_expect = "state-mismatch"
+screenshot = "on-failure"

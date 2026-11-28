@@ -1,0 +1,34 @@
+# Open an ODS as LibreOffice writes it and ask the editor how wide it draws
+# each column and in which font. Column A is the default column of LibreOffice
+# Calc, 0.889in (2.258 cm): 85 px at 96 dpi and 100 % zoom; B is 1.378in
+# (132 px) and C 5cm (189 px). LibreOffice names the font of the cells between
+# apostrophes (fo:font-family="'Liberation Sans'").
+# The width is a number the editor holds, not a measure taken on a
+# screenshot.
+# Known defect, with no fix in a branch yet: the editor keeps the apostrophes
+# in the name of the font, which is then no font it has, and the columns come
+# out wider (94, 148 and 215 px where this was written). match_3 holds the
+# name as it is today (a dot stands for each apostrophe); the widths are in state.txt and are not judged, since
+# they follow the font that stands in. When the defect is fixed this case
+# fails on match_3; then:
+#   match_3 = '^A1\.font=Liberation Sans 10$'
+#   match_4 = '^col\.A\.px=85$'
+#   match_5 = '^col\.B\.px=132$'
+#   match_6 = '^col\.C\.px=189$'
+# and control_expect stays, as what a build without the fix gives.
+description = "ODS with LibreOffice column widths and font: the cells read back; the font keeps its apostrophes today (known defect)"
+generate = "mkodscols.py"
+input = "columns.ods"
+input_sha256 = "87407f0c46a80c64ae4c01f7fed4004b7a0436dba009a8a412f5521db69257bf"
+platforms = "linux"
+action = "open-probe"
+probe = "sheet-cells.js A1 B1 C1"
+match_1 = '^A1\.text=1234\.5$'
+match_2 = '^B1\.text=Harness ODS columns$'
+match_3 = '^A1\.font=.Liberation Sans. 10$'
+match_4 = '^col\.A\.px=[0-9]+$'
+match_5 = '^col\.B\.px=[0-9]+$'
+match_6 = '^col\.C\.px=[0-9]+$'
+expect = "state-as-expected"
+control_expect = "state-mismatch"
+screenshot = "on-failure"

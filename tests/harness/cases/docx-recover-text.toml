@@ -1,0 +1,18 @@
+# Open a DOCX, type a word, wait until the app has recorded the change, kill
+# the app and start it again with no document, as docx-recover does. Then
+# press Recover on the start screen, through the page and not with the mouse,
+# and ask the editor for its text: the typed word is back, after the text the
+# file had.
+description = "DOCX: type, kill the app, start it again and press Recover; the editor holds the typed text"
+generate = "mkdocx.py 2"
+input = "recover.docx"
+platforms = "linux"
+action = "edit-kill-recover"
+keys_before = "ctrl+End"
+type = " Harness75recover"
+do_after_restart = "start-click.js recover"
+probe = "word-text.js"
+match_1 = '^text=Paragraph 0: the quick brown fox jumps over the lazy dog\.$'
+match_2 = '^text=Paragraph 1: the quick brown fox jumps over the lazy dog\. Harness75recover$'
+expect = "state-as-expected"
+screenshot = "on-failure"

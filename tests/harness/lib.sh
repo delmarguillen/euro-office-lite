@@ -10,6 +10,10 @@ HARNESS_DISPLAY=${HARNESS_DISPLAY:-:99}
 # detail of a skipped case shows.
 HARNESS_PLATFORM=linux
 PLATFORM_LABEL=Linux
+# The remote inspector of WebKitGTK, for the cases that ask the page for its
+# state: the port that lists the page and the one of the socket.
+HARNESS_INSPECT_PORT=${HARNESS_INSPECT_PORT:-3000}
+HARNESS_INSPECT_SOCKET_PORT=${HARNESS_INSPECT_SOCKET_PORT:-2999}
 
 log() { echo "[harness] $*" >&2; }
 die() { log "$*"; exit 2; }
@@ -202,6 +206,17 @@ type_save_path() {
   send_keys Return
 }
 
+# Extra environment of the next launch_app: run.sh fills it for a case that
+# needs the inspector, and empties it for the others.
+LAUNCH_ENV=()
+
+# inspector_env: the two variables that make WebKitGTK serve its remote
+# inspector on the loopback interface. The app needs no change for it.
+inspector_env() {
+  echo "WEBKIT_INSPECTOR_SERVER=127.0.0.1:$HARNESS_INSPECT_SOCKET_PORT"
+  echo "WEBKIT_INSPECTOR_HTTP_SERVER=127.0.0.1:$HARNESS_INSPECT_PORT"
+}
+
 # launch_app FILE LOG: starts the app on FILE and prints its pid once it has a window.
 # With an empty FILE the app starts on its start screen, with no document.
 # Its own session bus: the desktop portal of a systemd user session without
@@ -212,6 +227,7 @@ launch_app() {
   (
     cd "$(dirname "$file")" || exit 1
     env -u WAYLAND_DISPLAY DISPLAY="$HARNESS_DISPLAY" GDK_BACKEND=x11 XDG_SESSION_TYPE=x11 \
+      "${LAUNCH_ENV[@]}" \
       setsid nohup dbus-run-session -- "$APP_BIN" ${file:+"$file"} >"$out" 2>&1 </dev/null &
   )
   for (( i = 0; i < 120; i++ )); do
@@ -253,12 +269,13 @@ dismiss_dialogs() {
   done < <(dialogs_of "$1")
 }
 
-# close_app PID: prints closed, forced (SIGTERM) or killed (SIGKILL).
+# close_app PID [SECONDS]: prints closed, forced (SIGTERM) or killed (SIGKILL).
+# SECONDS is how long the window gets to close by itself, 20 by default.
 close_app() {
   local pid=$1 w
   w=$(main_window "$pid")
   [ -n "$w" ] && x wmctrl -i -c "$w"
-  wait_for 20 process_gone "$pid" && { echo closed; return 0; }
+  wait_for "${2:-20}" process_gone "$pid" && { echo closed; return 0; }
   kill "$pid" 2>/dev/null
   wait_for 10 process_gone "$pid" && { echo forced; return 0; }
   kill -9 "$pid" 2>/dev/null

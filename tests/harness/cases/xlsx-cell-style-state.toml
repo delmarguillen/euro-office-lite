@@ -1,0 +1,36 @@
+# Open the XLSX of xlsx-cell-style-roundtrip and ask the editor what it holds:
+# the style of each cell, its font, number format, fill and the border of each
+# side with its style and colour. Nothing is typed and nothing is saved: the
+# case shows what the editor read, where the round trip only shows what it
+# wrote back.
+description = "XLSX with cell styles: the editor holds each style with its font, format, fill and the border of each side"
+generate = "mkxlsxstyles.py"
+input = "styles.xlsx"
+input_sha256 = "1e2e85487fb2f613a2509b45ce8a2d1ef894f0446d581578fa8ebaf1d7134a74"
+platforms = "linux"
+action = "open-probe"
+probe = "sheet-cells.js A1 B1 C1 D1 E1"
+match_1 = '^A1\.style=Normal$'
+match_2 = '^B1\.style=Totals$'
+match_3 = '^B1\.font=Arial 14 bold$'
+match_4 = '^B1\.format=0\.00$'
+match_5 = '^B1\.fill=FFFF00$'
+match_6 = '^B1\.border\.bottom=Thin FF0000$'
+match_7 = '^B1\.border\.top=none$'
+match_8 = '^C1\.style=Good$'
+match_9 = '^C1\.font=Courier New 12 italic$'
+match_10 = '^C1\.format=#,##0\.000$'
+match_11 = '^C1\.border\.left=Thin 0000FF$'
+match_12 = '^C1\.border\.right=Thin 0000FF$'
+match_13 = '^D1\.style=Bad 2$'
+match_14 = '^D1\.font=Times New Roman 11 underline$'
+match_15 = '^D1\.text=25%$'
+match_16 = '^D1\.border\.top=Medium 9C0006$'
+match_17 = '^D1\.border\.bottom=Medium 9C0006$'
+match_18 = '^D1\.border\.left=none$'
+match_19 = '^E1\.style=Neutral$'
+match_20 = '^E1\.fill=FFEB9C$'
+match_21 = '^A1\.fill=none$'
+match_22 = '^A1\.border\.bottom=none$'
+expect = "state-as-expected"
+screenshot = "on-failure"

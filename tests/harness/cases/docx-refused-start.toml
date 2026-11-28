@@ -1,0 +1,20 @@
+# The DOCX cut in half of docx-truncated-zip is refused with the open error
+# dialog. With the dialog closed, ask the page what it shows: the start
+# screen is back and takes clicks, nothing is still opening, no editor was
+# left behind and nothing is offered for recovery.
+description = "DOCX cut in half: refused, and with the dialog closed the start screen is back and usable"
+generate = "mkooxml.py docx-truncated"
+input = "truncated.docx"
+input_sha256 = "b04ea5349d6eb1867d6d0f121b8f19e86736cdb1a71cd21d246d9650b59cd284"
+platforms = "linux"
+action = "refused-probe"
+probe = "start-screen.js"
+match_1 = '^start=shown$'
+match_2 = '^start\.inert=false$'
+match_3 = '^opening=idle$'
+match_4 = '^editor=none$'
+match_5 = '^create=word cell slide$'
+match_6 = '^open\.button=enabled$'
+match_7 = '^recover\.items=0$'
+expect = "state-as-expected"
+screenshot = "on-failure"

@@ -16,6 +16,8 @@ CONTROL=false
 ALWAYS_SHOOT=false
 KEEP_DISPLAY=false
 OUT=""
+# The script that speaks to the remote inspector, for evaluate.py.
+HARNESS_INSPECT=${HARNESS_INSPECT:-$HERE/../../ci/eo-inspect.py}
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -433,8 +435,204 @@ kill_and_recover() {
   wait_for 60 has_recovery_candidates "$restart_log" || return 0
   offered=$(recovery_candidates "$restart_log")
   note "log: [RECOVER] candidates=$offered"
-  [ "$offered" -ge 1 ] && OBSERVED=recovery-offered
-  return 0
+  [ "$offered" -ge 1 ] || return 0
+  OBSERVED=recovery-offered
+  [ -n "$(case_value probe)" ] || return 0
+  recover_and_probe "$dir" "$restart_log"
+}
+
+# --- the state of the page, asked through the inspector ------------------------------
+
+# probe_expression FILE ARG...: the JavaScript that calls the function of FILE
+# with (ARGS, editor, its window, need) and gives its lines as text. need
+# throws naming what the page lacks, so a probe fails and does not answer less.
+probe_expression() {
+  local file=$1 args="" a
+  shift
+  for a in "$@"; do
+    args="${args:+$args, }$(json_str "$a")"
+  done
+  cat <<'EOF_PROBE_HEAD'
+(function () {
+  function need(root, path) {
+    if (root === null || root === undefined) throw new Error("no editor in the page");
+    var names = path.split("."), value = root, i;
+    for (i = 0; i < names.length; i++) {
+      if (value === null || value === undefined || !(names[i] in Object(value))) {
+        throw new Error("no " + names.slice(0, i + 1).join(".") + " in the page: this probe was written for another sdkjs");
+      }
+      value = value[names[i]];
+    }
+    return value;
+  }
+  try {
+    var frame = document.querySelector('iframe[name="frameEditor"]');
+    var win = frame ? frame.contentWindow : null;
+    var editor = win && win.Asc && win.Asc.editor ? win.Asc.editor : null;
+    var out = (
+EOF_PROBE_HEAD
+  cat "$file"
+  echo "    )([$args], editor, win, need);"
+  cat <<'EOF_PROBE_TAIL'
+    return typeof out === "string" ? out : out.join("\n");
+  } catch (e) {
+    return "PROBE-ERROR " + (e && e.message ? e.message : e);
+  }
+})()
+EOF_PROBE_TAIL
+}
+
+# evaluate_js FILE: runs the expression in FILE in the page of the app and
+# prints its value. Fails when the inspector does not answer.
+evaluate_js() {
+  python3 -I "$HERE/evaluate.py" "$HARNESS_INSPECT" "$HARNESS_INSPECT_PORT" "$1"
+}
+
+case_has_edit() {
+  [ -n "$(case_value keys_before)$(case_value type)$(case_value keys_after)$(case_value button)" ]
+}
+
+# write_probe SPEC OUT: SPEC is "FILE ARGS", FILE a function in probes/.
+write_probe() {
+  local name args
+  read -r name args <<< "$1"
+  [ -f "$HERE/probes/$name" ] || { note "no probe probes/$name"; return 1; }
+  # shellcheck disable=SC2086 # probe arguments are words
+  probe_expression "$HERE/probes/$name" $args > "$2"
+}
+
+# The match_N of the case that no line of the state has.
+state_missing() {
+  local state=$1 pattern missing=""
+  while IFS= read -r pattern; do
+    grep -Eq -- "$pattern" "$state" && continue
+    missing="${missing:+$missing, }$pattern"
+  done < <(case_matches)
+  echo "$missing"
+}
+
+# A case judged by lines of text with no match_N would be ok whatever they say.
+has_matches() { [ -n "$(case_matches)" ]; }
+
+inspector_available() {
+  [ -f "$HARNESS_INSPECT" ] && return 0
+  OBSERVED=no-inspector
+  note "no $HARNESS_INSPECT"
+  return 1
+}
+
+# The first line of what the last evaluation said went wrong: the error of
+# the function, or that of the inspector.
+probe_error() {
+  local answer=$1 errors=$2 line
+  line=$(grep -m1 '^PROBE-ERROR' "$answer" 2>/dev/null)
+  [ -n "$line" ] || line=$(head -1 "$errors" 2>/dev/null)
+  echo "${line:-no answer}"
+}
+
+# Seconds a `do` is tried again: while the inspector names no page, which it
+# does a moment after the window is there, and while the function throws
+# because what it acts on is not in the page yet.
+DO_SECONDS=30
+DO_ERROR_SECONDS=10
+
+# run_do KEY DIR: evaluates the function the case names in KEY (`do`,
+# `do_after_restart`), which must answer a text that starts with OK. A
+# function that throws has not acted, so it can be tried again.
+run_do() {
+  local key=$1 dir=$2 spec answer="" started=$SECONDS limit=$DO_SECONDS
+  spec=$(case_value "$key")
+  [ -n "$spec" ] || return 0
+  inspector_available || return 1
+  write_probe "$spec" "$dir/$key.js" || { OBSERVED=do-failed; return 1; }
+  while true; do
+    answer=$(evaluate_js "$dir/$key.js" 2>"$dir/probe.err")
+    [[ $answer == OK* ]] && break
+    echo "$answer" > "$dir/$key.txt"
+    [ -n "$answer" ] && limit=$DO_ERROR_SECONDS
+    [ $(( SECONDS - started )) -ge "$limit" ] && break
+    sleep 1
+  done
+  if [[ $answer == OK* ]]; then
+    note "$key: $answer"
+    return 0
+  fi
+  # The function answered and did not act, or the inspector never ran it.
+  OBSERVED=do-failed
+  [ -n "$answer" ] || OBSERVED=probe-failed
+  note "$key: $(probe_error "$dir/$key.txt" "$dir/probe.err")"
+  return 1
+}
+
+# probe_page DIR: evaluates the probe of the case until every match_N is in a
+# line of what it answers, for probe_seconds at most (30 by default). The
+# last answer stays in DIR/state.txt.
+probe_page() {
+  local dir=$1 state=$1/state.txt seconds missing="" answered=false started=$SECONDS
+  inspector_available || return 0
+  if ! has_matches; then
+    OBSERVED=bad-case-file
+    note "a probe needs a match_N"
+    return
+  fi
+  write_probe "$(case_value probe)" "$dir/probe.js" || { OBSERVED=probe-failed; return; }
+  seconds=$(case_value probe_seconds)
+  while true; do
+    if evaluate_js "$dir/probe.js" > "$state.new" 2>"$dir/probe.err" && ! grep -q '^PROBE-ERROR' "$state.new"; then
+      answered=true
+      mv "$state.new" "$state"
+      missing=$(state_missing "$state")
+      [ -z "$missing" ] && break
+    fi
+    [ $(( SECONDS - started )) -ge "${seconds:-30}" ] && break
+    sleep 1
+  done
+  if ! $answered; then
+    OBSERVED=probe-failed
+    note "probe: $(probe_error "$state.new" "$dir/probe.err")"
+    return
+  fi
+  note "state: $(wc -l < "$state") lines"
+  if [ -z "$missing" ]; then
+    OBSERVED=state-as-expected
+    return
+  fi
+  OBSERVED=state-mismatch
+  note "not found: $missing"
+}
+
+# open-probe on a document that opened: the keys of the case, its `do`, then
+# the probe.
+probe_document() {
+  local pid=$1 dir=$2
+  case_has_edit && edit_document "$pid"
+  run_do "do" "$dir" || return 0
+  probe_page "$dir"
+}
+
+# refused-probe: the open was refused with its dialog and the file is as it
+# was. With the dialog closed, the probe says what the page shows.
+probe_after_rejection() {
+  local pid=$1 dir=$2
+  [ "$(case_value action)" = refused-probe ] || return 0
+  [ "$OBSERVED" = rejected-with-dialog ] || return 0
+  dismiss_dialogs "$pid"
+  probe_page "$dir"
+}
+
+# edit-kill-recover with a probe: `do_after_restart` presses Recover on the
+# start screen, the document opens in its editor and the probe asks for it.
+recover_and_probe() {
+  local dir=$1 restart_log=$2
+  run_do do_after_restart "$dir" || return 0
+  if [ "$(wait_open "$restart_log" 120)" != ready ]; then
+    OBSERVED=recovery-not-opened
+    note "log: $(grep -m1 -E '\[RECOVER\] load|\[OPEN\] failed' "$restart_log" || echo 'no [RECOVER] load line')"
+    return
+  fi
+  # The recorded changes are applied after the editor says it is ready.
+  sleep 3
+  probe_page "$dir"
 }
 
 observe_open_document() {
@@ -451,6 +649,14 @@ observe_open_document() {
     export_pdf "$pid" "$doc" "$log_file"
     return
   fi
+  if [ "$action" = open-probe ]; then
+    probe_document "$pid" "$(dirname "$doc")"
+    return
+  fi
+  if [ "$action" = refused-probe ]; then
+    OBSERVED=opens
+    return
+  fi
   if [ "$action" = edit-kill-recover ]; then
     kill_and_recover "$pid" "$(dirname "$doc")" "$log_file"
     return
@@ -463,6 +669,14 @@ observe_open_document() {
     expected-bytes) check_expected_bytes "$doc" "$source" ;;
     *) OBSERVED=saved; note "no check for this case" ;;
   esac
+}
+
+# Seconds the window of the case gets to close by itself. A case with a probe
+# saves nothing, and a document its probe selected in or its `do` changed asks
+# before it closes: a longer wait would not close it.
+close_wait() {
+  [ -n "$(case_value probe)" ] && { echo 5; return; }
+  echo 20
 }
 
 wants_screenshot() {
@@ -526,13 +740,19 @@ run_case() {
   fi
   cp "$source" "$doc"
   sha_before=$(sha256_of "$doc")
+  # Only a case with a probe starts the app with its inspector open.
+  LAUNCH_ENV=()
+  [ -n "$(case_value probe)" ] && mapfile -t LAUNCH_ENV < <(inspector_env)
   if ! pid=$(launch_app "$doc" "$dir/app.log"); then
     OBSERVED=launch-failed
     pid=$(app_pids | head -1)
   else
     state=$(wait_open "$dir/app.log" 120)
     case $state in
-      failed) observe_rejection "$pid" "$doc" "$sha_before" "$dir/app.log" ;;
+      failed)
+        observe_rejection "$pid" "$doc" "$sha_before" "$dir/app.log"
+        probe_after_rejection "$pid" "$dir"
+        ;;
       ready) observe_open_document "$pid" "$doc" "$source" "$sha_before" "$dir/app.log" ;;
       *) OBSERVED=open-timeout ;;
     esac
@@ -548,7 +768,7 @@ run_case() {
   if [ -n "$pid" ]; then
     dismiss_dialogs "$pid"
     local closed
-    closed=$(close_app "$pid")
+    closed=$(close_app "$pid" "$(close_wait)")
     [ "$closed" = closed ] || note "app close: $closed"
   fi
   clear_new_recovery
