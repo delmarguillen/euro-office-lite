@@ -90,6 +90,10 @@ keeps the foreground, and every case that needs a key or a click ended in
 the cases, and the output of run.ps1 says which process it was and what has
 the foreground afterwards. A step before the harness also sets the policy
 `DisablePrivacyExperience`, so the screen is not launched a second time.
+The Start menu is open on that runner too, and its search box (`SearchHost`)
+keeps the foreground once the privacy screen is gone: `-ClearDesktop` closes
+it with Escape, before the cases and again whenever it has the foreground
+when a window is about to be brought forward.
 Every job has `result.json` in the artifact
 `harness-windows-<arch>-result-<attempt>`, unless the harness could not run.
 A failed job also has `harness-windows-<arch>-diagnostics-<attempt>`: the
@@ -146,8 +150,12 @@ case ok, 1 some case failed, 2 the harness could not run.
   the cases it ends the processes whose window covers the whole screen and
   belongs to a first sign-in screen of Windows: a program named in
   `$FirstRunHosts` (`win/lib.ps1`), or the window with the foreground when its
-  program is in `%WINDIR%\SystemApps` or `%WINDIR%\System32\oobe`. Without
-  the switch run.ps1 ends nothing.
+  program is in `%WINDIR%\SystemApps` or `%WINDIR%\System32\oobe`. It also
+  closes the Start menu or the Search panel (`$ShellPanelHosts`) when it has
+  the foreground, before the cases and each time a window is about to be
+  brought to the foreground: Escape up to three times, and then the end of
+  its process. Escape is sent only when the panel has the foreground. Without
+  the switch run.ps1 ends nothing and closes nothing.
 - Inputs: `gen/mkinputs.py DIR` writes the input of every case to
   `DIR\CASE\` and stops when a file does not have the sha256 its case gives.
   On a machine without Python, run it elsewhere and copy `DIR` over;
