@@ -10,7 +10,7 @@ pub async fn convert_file(
     app: &AppHandle,
     input: &str,
     output: &str,
-    _format_from: i32,
+    format_from: i32,
     format_to: i32,
     temp_dir: &str,
     text_options: Option<crate::text_import::TextOptions>,
@@ -42,17 +42,23 @@ pub async fn convert_file(
 
     let params_path = params_path(std::path::Path::new(temp_dir), "convert");
 
-    let xml = convert_params_xml(
-        input,
-        output,
+    // Only set for CSV and TXT: x2t will not read them without an encoding
+    // and, for CSV, a delimiter (exit 89), and writes with these too.
+    let mut extra = text_options
+        .map(|options| options.xml_elements())
+        .unwrap_or_default();
+    // The generation this process holds until it ends, the one its editor
+    // reads; before it is ready, and for a spreadsheet, x2t scans the system
+    // fonts as before.
+    let font_dir = app.state::<crate::file_ops::AppState>().fonts.generation_dir();
+    log_editor_bin_fonts(format_from, format_to, font_dir.as_deref());
+    extra.push_str(&x2t_task::editor_bin_font_dir_xml(
+        format_from,
         format_to,
-        temp_dir,
-        // Only set for CSV and TXT: x2t will not read them without an encoding
-        // and, for CSV, a delimiter (exit 89), and writes with these too.
-        &text_options
-            .map(|options| options.xml_elements())
-            .unwrap_or_default(),
-    );
+        font_dir.as_deref(),
+    ));
+
+    let xml = convert_params_xml(input, output, format_to, temp_dir, &extra);
     write_file(&params_path, &xml)?;
 
     // The std command keeps what the shell plugin set up: the path of x2t and,
@@ -174,6 +180,25 @@ fn x2t_command(
 
 fn log_pdf(msg: &str) {
     crate::temp_layout::append_log(&format!("[PDF] {}", msg));
+}
+
+fn log_editor_bin_fonts(format_from: i32, format_to: i32, font_dir: Option<&std::path::Path>) {
+    if format_to != x2t_task::EDITOR_BIN_FORMAT {
+        return;
+    }
+    let source = editor_bin_fonts_source(format_from, font_dir);
+    crate::temp_layout::append_log(&format!("[X2T] Editor.bin fonts={}", source));
+}
+
+// The same choice as x2t_task::editor_bin_font_dir_xml, in words.
+fn editor_bin_fonts_source(format_from: i32, font_dir: Option<&std::path::Path>) -> &'static str {
+    if x2t_task::is_spreadsheet_format(format_from) {
+        return "system fonts (spreadsheet)";
+    }
+    if font_dir.is_none() {
+        return "system fonts (no font cache yet)";
+    }
+    "font cache"
 }
 
 // Without the font cache x2t still exits 0 but the PDF loses its text: the font
@@ -498,6 +523,7 @@ fn check_container_content(
     }
     if opens_if_it_starts_like_a_zip(path, &content.head)
         && crate::package_relationships::relationships_are_allowed(path, content)
+        && crate::package_family::matches_extension(path, content)
     {
         return Ok(PackageFilters::Applied);
     }
@@ -642,6 +668,208 @@ mod tests {
             content_check("linked.docx", &bytes),
             Err("This file is not a valid .docx".to_string())
         );
+    }
+
+    fn zip_of(parts: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, content) in parts {
+            writer.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            writer.write_all(content).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    // The extensions that take a ZIP, by the editor the window opens for them.
+    const WORD_EXTENSIONS: [&str; 7] = ["docx", "docm", "dotx", "dotm", "odt", "ott", "doc"];
+    const CELL_EXTENSIONS: [&str; 8] = ["xlsx", "xlsm", "xltx", "xltm", "xlsb", "ods", "ots", "xls"];
+    const SLIDE_EXTENSIONS: [&str; 9] = ["pptx", "pptm", "potx", "potm", "ppsx", "ppsm", "odp", "otp", "ppt"];
+
+    const ZIP_FAMILIES: [&[&str]; 3] = [&WORD_EXTENSIONS, &CELL_EXTENSIONS, &SLIDE_EXTENSIONS];
+
+    fn zip_extensions() -> Vec<&'static str> {
+        ZIP_FAMILIES.concat()
+    }
+
+    // The extensions of the editor that opens `ext`.
+    fn family_of(ext: &str) -> &'static [&'static str] {
+        ZIP_FAMILIES.into_iter().find(|family| family.contains(&ext)).unwrap()
+    }
+
+    // The package passes under every extension of `family` and is not valid
+    // under any other extension that takes a ZIP.
+    fn assert_opens_only_under(family: &[&str], package: &[u8], what: &str) {
+        for ext in zip_extensions() {
+            let name = format!("renamed.{ext}");
+            let expected = match family.contains(&ext) {
+                true => Ok(()),
+                false => Err(not_valid_error(std::path::Path::new(&name))),
+            };
+            assert_eq!(content_check(&name, package), expected, "{what} as {name}");
+        }
+    }
+
+    const CONTENT_TYPES: &str = "[Content_Types].xml";
+    const OOXML: &str = "application/vnd.openxmlformats-officedocument.";
+    const XLSX_MAIN: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+    const DOCX_MAIN: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
+
+    fn content_types(main_types: &[&str]) -> Vec<u8> {
+        let overrides: String = main_types
+            .iter()
+            .map(|main_type| format!("<Override PartName=\"/main.xml\" ContentType=\"{main_type}\"/>"))
+            .collect();
+        format!("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">{overrides}</Types>").into_bytes()
+    }
+
+    // An OOXML package as x2t tells one: [Content_Types].xml with the content
+    // type of the main part.
+    fn ooxml_package(main_type: &str) -> Vec<u8> {
+        zip_with(CONTENT_TYPES, &content_types(&[main_type]))
+    }
+
+    // An ODF package as x2t tells one: the mimetype part.
+    fn odf_package(mimetype: &str) -> Vec<u8> {
+        zip_with("mimetype", mimetype.as_bytes())
+    }
+
+    // The harness case docx-xlsx-content.
+    #[test]
+    fn a_workbook_named_docx_is_refused_before_x2t_and_leaves_no_copy() {
+        let workbook = ooxml_package(XLSX_MAIN);
+        let (original, work_dir) = original_and_work_dir("sheet-inside.docx", &workbook);
+
+        let refused = prepare_editor_input(&original, &work_dir, None, None);
+
+        assert_eq!(refused.err(), Some("This file is not a valid .docx".to_string()));
+        assert_eq!(files_in(&work_dir), 0);
+        assert_eq!(content_check("sheet-inside.xlsx", &workbook), Ok(()));
+    }
+
+    #[test]
+    fn an_ooxml_package_opens_only_under_the_extensions_of_its_editor() {
+        let word = ["wordprocessingml.document", "wordprocessingml.template"];
+        let cell = ["spreadsheetml.sheet", "spreadsheetml.template"];
+        let slide = ["presentationml.presentation", "presentationml.slideshow", "presentationml.template"];
+        for (family, kinds) in [(&WORD_EXTENSIONS[..], &word[..]), (&CELL_EXTENSIONS[..], &cell[..]), (&SLIDE_EXTENSIONS[..], &slide[..])] {
+            for kind in kinds {
+                let main_type = format!("{OOXML}{kind}.main+xml");
+                assert_opens_only_under(family, &ooxml_package(&main_type), &main_type);
+            }
+        }
+    }
+
+    #[test]
+    fn an_ooxml_package_with_macros_or_a_form_opens_only_under_the_extensions_of_its_editor() {
+        let word = [
+            "application/vnd.ms-word.document.macroEnabled.main+xml",
+            "application/vnd.ms-word.template.macroEnabledTemplate.main+xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document.oform",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document.docxf",
+        ];
+        let cell = [
+            "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+            "application/vnd.ms-excel.template.macroEnabled.main+xml",
+            "application/vnd.ms-excel.sheet.binary.macroEnabled.main",
+        ];
+        let slide = [
+            "application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml",
+            "application/vnd.ms-powerpoint.slideshow.macroEnabled.main+xml",
+            "application/vnd.ms-powerpoint.template.macroEnabled.main+xml",
+        ];
+        for (family, main_types) in [(&WORD_EXTENSIONS[..], &word[..]), (&CELL_EXTENSIONS[..], &cell[..]), (&SLIDE_EXTENSIONS[..], &slide[..])] {
+            for main_type in main_types {
+                assert_opens_only_under(family, &ooxml_package(main_type), main_type);
+            }
+        }
+    }
+
+    #[test]
+    fn an_odf_package_opens_only_under_the_extensions_of_its_editor() {
+        for (family, kind) in [(&WORD_EXTENSIONS[..], "text"), (&CELL_EXTENSIONS[..], "spreadsheet"), (&SLIDE_EXTENSIONS[..], "presentation")] {
+            for suffix in ["", "-template"] {
+                let mimetype = format!("application/vnd.oasis.opendocument.{kind}{suffix}");
+                assert_opens_only_under(family, &odf_package(&mimetype), &mimetype);
+            }
+        }
+    }
+
+    // x2t converts a drawing as a presentation and an EPUB as a text document.
+    #[test]
+    fn a_package_with_another_mimetype_x2t_looks_for_opens_only_under_the_extensions_of_its_editor() {
+        let mimetypes = [
+            (&WORD_EXTENSIONS[..], "application/vnd.sun.xml.writer"),
+            (&CELL_EXTENSIONS[..], "application/vnd.sun.xml.calc"),
+            (&SLIDE_EXTENSIONS[..], "application/vnd.sun.xml.impress"),
+            (&SLIDE_EXTENSIONS[..], "application/vnd.oasis.opendocument.graphics"),
+            (&WORD_EXTENSIONS[..], "application/epub+zip"),
+        ];
+        for (family, mimetype) in mimetypes {
+            assert_opens_only_under(family, &odf_package(mimetype), mimetype);
+        }
+    }
+
+    // The files of a folder of the repository that are a ZIP under an
+    // extension that takes one, each with its content.
+    fn packages_in(folder: &str) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(folder);
+        let files = std::fs::read_dir(&folder).unwrap().map(|entry| entry.unwrap().path());
+        files
+            .filter(|file| zip_extensions().contains(&extension_of(file)))
+            .map(|file| (file.clone(), std::fs::read(&file).unwrap()))
+            .filter(|(_, content)| content.starts_with(b"PK\x03\x04"))
+            .collect()
+    }
+
+    fn extension_of(file: &std::path::Path) -> &str {
+        file.extension().and_then(|ext| ext.to_str()).unwrap_or_default()
+    }
+
+    // The documents LibreOffice exported for the corpus and the blank ones a
+    // new document starts from.
+    #[test]
+    fn the_documents_of_the_repository_open_only_under_the_extensions_of_their_editor() {
+        let documents = [packages_in("../tests/corpus"), packages_in("templates")].concat();
+        assert!(documents.len() >= 19, "{}", documents.len());
+        for (document, content) in documents {
+            let family = family_of(extension_of(&document));
+            assert_opens_only_under(family, &content, &document.display().to_string());
+        }
+    }
+
+    // x2t converts as its extension says a package whose [Content_Types].xml
+    // and mimetype tell it nothing.
+    #[test]
+    fn a_package_is_of_another_editor_only_by_the_parts_x2t_tells_it_from() {
+        let untold: [(&str, Vec<u8>); 5] = [
+            ("the main part alone", zip_with("xl/workbook.xml", b"<workbook/>")),
+            ("a content type x2t does not look for", ooxml_package("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+            ("the part under a name in lower case", zip_with("[content_types].xml", &content_types(&[XLSX_MAIN]))),
+            ("a mimetype x2t does not look for", odf_package("application/vnd.oasis.opendocument.chart")),
+            ("a mimetype part in a folder", zip_with("sub/mimetype", b"application/vnd.oasis.opendocument.spreadsheet")),
+        ];
+        for (what, package) in untold {
+            assert_eq!(content_check("untold.docx", &package), Ok(()), "{what}");
+        }
+        assert_eq!(
+            content_check("told.docx", &ooxml_package(XLSX_MAIN)),
+            Err("This file is not a valid .docx".to_string())
+        );
+    }
+
+    // x2t reads mimetype only when [Content_Types].xml names no main part it
+    // looks for, and looks for the main parts of Word before those of Excel.
+    #[test]
+    fn the_editor_of_a_package_is_the_one_x2t_finds_first() {
+        let text_mimetype: &[u8] = b"application/vnd.oasis.opendocument.text";
+        let sheet_mimetype: &[u8] = b"application/vnd.oasis.opendocument.spreadsheet";
+        let workbook_with_a_text_mimetype = zip_of(&[(CONTENT_TYPES, &content_types(&[XLSX_MAIN])), ("mimetype", text_mimetype)]);
+        let sheet_with_other_content_types = zip_of(&[(CONTENT_TYPES, &content_types(&["application/xml"])), ("mimetype", sheet_mimetype)]);
+        let workbook_and_document = zip_with(CONTENT_TYPES, &content_types(&[XLSX_MAIN, DOCX_MAIN]));
+
+        assert_opens_only_under(&CELL_EXTENSIONS, &workbook_with_a_text_mimetype, "content types before mimetype");
+        assert_opens_only_under(&CELL_EXTENSIONS, &sheet_with_other_content_types, "mimetype after content types");
+        assert_opens_only_under(&WORD_EXTENSIONS, &workbook_and_document, "Word before Excel");
     }
 
     const ENCRYPTED_DOCX: &[u8] = include_bytes!("../../tests/fixtures/encrypted-test.docx");

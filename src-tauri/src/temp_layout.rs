@@ -321,11 +321,12 @@ fn marker_text(version: &str, sources: &str) -> String {
     format!("{}\n{}", version, sources)
 }
 
-// One line for the binaries folder, then one per font folder. The folder
-// limit is shared by all of them.
+// One line for the binaries folder, one for the fallback fonts built into
+// the app, then one per font folder. The folder limit is shared by all of them.
 pub fn font_sources_text(binaries_dir: &Path, font_dirs: &[PathBuf]) -> String {
     let binaries = std::fs::canonicalize(binaries_dir).unwrap_or_else(|_| binaries_dir.to_path_buf());
     let mut text = format!("binaries\t{}\n", binaries.display());
+    text.push_str(&format!("fallback\t{}\n", crate::x2t_task::fallback_fonts::fingerprint()));
     let mut budget = FINGERPRINT_MAX_DIRS;
     for dir in font_dirs {
         text.push_str(&font_dir_fingerprint(dir, &mut budget));
@@ -487,9 +488,9 @@ fn adopt_generation(root: &Path, expected: &str) -> Option<FontGeneration> {
 }
 
 // x2t's scan always writes both files and the PDF export uses both, so a
-// generation missing either is incomplete. One whose marker differs does not
-// count either: the scan can change with the bundled x2t and fonts, and with
-// the fonts installed.
+// generation missing either is incomplete; so is one that lost a fallback
+// font its list names. One whose marker differs does not count either: the
+// scan can change with the bundled x2t and fonts, and with the fonts installed.
 fn generation_ready(dir: &Path, expected: &str) -> bool {
     let Ok(marker) = std::fs::read(dir.join(FONTS_MARKER)) else {
         return false;
@@ -501,6 +502,9 @@ fn generation_ready(dir: &Path, expected: &str) -> bool {
         return false;
     }
     if !is_nonempty(&dir.join("font_selection.bin")) {
+        return false;
+    }
+    if !crate::x2t_task::fallback_fonts::listed_are_present(dir) {
         return false;
     }
     !(cfg!(target_os = "windows") && has_extended_paths(dir))
@@ -767,7 +771,7 @@ const PORTAL_HOST_PATH: &std::ffi::CStr = c"user.document-portal.host-path";
 // Where the document portal is mounted in this sandbox. None outside Flatpak.
 #[cfg(target_os = "linux")]
 fn document_portal() -> Option<PathBuf> {
-    if !Path::new("/.flatpak-info").exists() {
+    if !in_flatpak() {
         return None;
     }
     // Flatpak mounts the portal at /run/flatpak/doc and links this path to
@@ -1344,6 +1348,9 @@ pub struct RootChoice {
     pub path: PathBuf,
     // Why the preferred folder was not used, for the log.
     pub note: Option<String>,
+    // Why the folder first in line is where it is, for the log. None when
+    // the order is the usual one.
+    pub why: Option<&'static str>,
 }
 
 // %TEMP% is already per user on Windows.
@@ -1352,6 +1359,7 @@ pub fn temp_root(_identifier: &str) -> Result<RootChoice, String> {
     Ok(RootChoice {
         path: std::env::temp_dir().join("euro-office-lite"),
         note: None,
+        why: None,
     })
 }
 
@@ -1361,6 +1369,7 @@ pub fn temp_root(_identifier: &str) -> Result<RootChoice, String> {
 // cache folder in the user's home is next, which also keeps the font cache
 // across restarts. After that, a folder made new for this start: first in the
 // user's cache folder, then in the temp folder. Err when none can be had.
+// Inside a Flatpak the order of the first two can change (first_choice).
 #[cfg(unix)]
 pub fn temp_root(identifier: &str) -> Result<RootChoice, String> {
     let uid = unsafe { libc::getuid() };
@@ -1369,16 +1378,9 @@ pub fn temp_root(identifier: &str) -> Result<RootChoice, String> {
     #[cfg(not(target_os = "macos"))]
     let shared_tmp = std::env::temp_dir();
 
-    let mut candidates = vec![shared_tmp.join(format!("euro-office-lite-{}", uid))];
-    let mut fresh_in = Vec::new();
-    if let Some(cache) = user_cache_dir() {
-        let app_cache = cache.join(identifier);
-        candidates.push(app_cache.join("tmp"));
-        fresh_in.push(app_cache);
-    }
-    fresh_in.push(shared_tmp);
+    let app_cache = user_cache_dir().map(|cache| cache.join(identifier));
     let counter = std::sync::atomic::AtomicU32::new(0);
-    choose_root(&candidates, &fresh_in, uid, || {
+    choose_temp_root(&shared_tmp, uid, app_cache.as_deref(), in_flatpak(), || {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_nanos())
@@ -1391,6 +1393,148 @@ pub fn temp_root(identifier: &str) -> Result<RootChoice, String> {
             counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         )
     })
+}
+
+// temp_root apart from the environment, so tests can run it on folders of
+// their own.
+#[cfg(unix)]
+fn choose_temp_root(
+    shared_tmp: &Path,
+    uid: u32,
+    app_cache: Option<&Path>,
+    in_flatpak: bool,
+    fresh_name: impl Fn() -> String,
+) -> Result<RootChoice, String> {
+    let in_tmp = tmp_root_in(shared_tmp, uid);
+    let first = first_choice(in_flatpak, || tmp_root_in_use(&in_tmp, uid));
+    let roots = root_candidates(shared_tmp, uid, app_cache, first);
+    let mut choice = choose_root(&roots.candidates, &roots.fresh_in, uid, fresh_name)?;
+    if roots.candidates.first() == Some(&choice.path) {
+        choice.why = roots.why_first;
+    }
+    Ok(choice)
+}
+
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn tmp_root_in(shared_tmp: &Path, uid: u32) -> PathBuf {
+    shared_tmp.join(format!("euro-office-lite-{}", uid))
+}
+
+// Which folder goes first in line.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FirstChoice {
+    // Outside a Flatpak.
+    TempFolder,
+    // Inside a Flatpak, while an instance is alive in its temp folder.
+    TempFolderInUse,
+    // Inside a Flatpak, with none alive there.
+    AppCache,
+}
+
+// Inside a Flatpak the temp folder belongs to the sandbox and is emptied when
+// the app's last process ends, but recovering a crashed document needs that
+// instance's folder afterwards: there the cache comes first. While an
+// instance of any version is alive in the temp folder, the new one joins it
+// instead: instances only see each other's open files and images in the
+// root they share. `tmp_root_in_use` is only asked inside a Flatpak.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn first_choice(in_flatpak: bool, tmp_root_in_use: impl FnOnce() -> bool) -> FirstChoice {
+    if !in_flatpak {
+        return FirstChoice::TempFolder;
+    }
+    if tmp_root_in_use() {
+        return FirstChoice::TempFolderInUse;
+    }
+    FirstChoice::AppCache
+}
+
+// What temp_root tries: each of `candidates` in order, then a folder made new
+// in one of `fresh_in`. `why_first` explains the first candidate, for the log.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+struct RootCandidates {
+    candidates: Vec<PathBuf>,
+    fresh_in: Vec<PathBuf>,
+    why_first: Option<&'static str>,
+}
+
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+const WHY_IN_USE: &str = "a live instance is there";
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+const WHY_APP_CACHE: &str = "app cache inside the Flatpak";
+
+// `app_cache` is the app's folder in the user's cache, None when there is no
+// cache folder. The temp folder stays behind the cache, so the app still
+// starts when the cache cannot be used.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn root_candidates(
+    shared_tmp: &Path,
+    uid: u32,
+    app_cache: Option<&Path>,
+    first: FirstChoice,
+) -> RootCandidates {
+    let in_tmp = tmp_root_in(shared_tmp, uid);
+    let why_tmp = (first == FirstChoice::TempFolderInUse).then_some(WHY_IN_USE);
+    let Some(app_cache) = app_cache else {
+        return RootCandidates {
+            candidates: vec![in_tmp],
+            fresh_in: vec![shared_tmp.to_path_buf()],
+            why_first: why_tmp,
+        };
+    };
+    let in_cache = app_cache.join("tmp");
+    let fresh_in = vec![app_cache.to_path_buf(), shared_tmp.to_path_buf()];
+    if first == FirstChoice::AppCache {
+        return RootCandidates {
+            candidates: vec![in_cache, in_tmp],
+            fresh_in,
+            why_first: Some(WHY_APP_CACHE),
+        };
+    }
+    RootCandidates {
+        candidates: vec![in_tmp, in_cache],
+        fresh_in,
+        why_first: why_tmp,
+    }
+}
+
+// Only a folder temp_root would take is looked into.
+#[cfg(unix)]
+fn tmp_root_in_use(root: &Path, uid: u32) -> bool {
+    if check_private_dir(root, uid).is_err() {
+        return false;
+    }
+    has_live_instance(root)
+}
+
+// Whether an instance of any version holds its lock in `root`: the check
+// instance_alive makes. It only looks, so where no one is, nothing is created
+// or left behind.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn has_live_instance(root: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(root.join(INSTANCES_DIR)) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| is_locked(&entry.path().join(INSTANCE_LOCK)))
+}
+
+// Flatpak creates this file at the root of every sandbox it starts. The file
+// is checked rather than FLATPAK_ID: only Flatpak puts it there, while a
+// variable comes with whatever environment the app was started from.
+#[cfg(unix)]
+const FLATPAK_INFO: &str = "/.flatpak-info";
+
+#[cfg(unix)]
+fn in_flatpak() -> bool {
+    is_flatpak_sandbox(Path::new(FLATPAK_INFO))
+}
+
+// Apart from the real path, so tests can point it at a folder of their own.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn is_flatpak_sandbox(info_file: &Path) -> bool {
+    info_file.exists()
 }
 
 // Where Tauri's app_cache_dir lives, worked out before Tauri is up.
@@ -1583,6 +1727,7 @@ pub fn choose_font_root(
         Ok(()) => RootChoice {
             path: preferred.to_path_buf(),
             note: None,
+            why: None,
         },
         Err(reason) => font_root_fallback(temp_root, format!("{}: {}", preferred.display(), reason)),
     }
@@ -1592,6 +1737,7 @@ fn font_root_fallback(temp_root: &Path, reason: String) -> RootChoice {
     RootChoice {
         path: temp_root.to_path_buf(),
         note: Some(reason),
+        why: None,
     }
 }
 
@@ -1634,6 +1780,7 @@ pub fn choose_root(
                 return Ok(RootChoice {
                     path: candidate.clone(),
                     note: (!reasons.is_empty()).then(|| reasons.join("; ")),
+                    why: None,
                 })
             }
             Err(reason) => reasons.push(format!("{}: {}", candidate.display(), reason)),
@@ -1656,6 +1803,7 @@ pub fn choose_root(
                     return Ok(RootChoice {
                         path,
                         note: Some(reasons.join("; ")),
+                        why: None,
                     });
                 }
                 Err(reason) => last_error = reason,

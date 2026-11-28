@@ -1,0 +1,108 @@
+Origin: own
+
+diff --git a/word/Editor/Numbering/Num.js b/word/Editor/Numbering/Num.js
+index 0eb09a0cd1..6eacc632cf 100644
+--- a/word/Editor/Numbering/Num.js
++++ b/word/Editor/Numbering/Num.js
+@@ -744,6 +744,51 @@ CNum.prototype.GetText = function(nLvl, oNumInfo, bWithoutLastLvlText, oLang)
+ 
+ 	return sResult;
+ };
++/**
++ * The numbering text of the level without the text before its first number and after its last one:
++ * "Chapter %1." gives "1", "%1.%2." gives "1.2"
++ * @param nLvl {number} 0..8
++ * @param oNumInfo
++ * @param [oLang] {AscCommonWord.CLang}
++ * @returns {string}
++ */
++CNum.prototype.GetTextWithoutAffixes = function(nLvl, oNumInfo, oLang)
++{
++	var oLvl    = this.GetLvl(nLvl);
++	var arrText = oLvl.GetLvlText();
++
++	var nFirst = -1, nLast = -1;
++	for (var Index = 0; Index < arrText.length; Index++)
++	{
++		if (numbering_lvltext_Num === arrText[Index].Type)
++		{
++			if (-1 === nFirst)
++				nFirst = Index;
++
++			nLast = Index;
++		}
++	}
++
++	var sResult = "";
++	if (-1 === nFirst)
++		return sResult;
++
++	for (Index = nFirst; Index <= nLast; Index++)
++	{
++		if (numbering_lvltext_Text === arrText[Index].Type)
++		{
++			sResult += arrText[Index].Value;
++		}
++		else if (numbering_lvltext_Num === arrText[Index].Type)
++		{
++			var nCurLvl = arrText[Index].Value;
++			if (nCurLvl < oNumInfo.length)
++				sResult += this.private_GetNumberedLvlText(nCurLvl, oNumInfo[nCurLvl], oLvl.IsLegalStyle(), oLang);
++		}
++	}
++
++	return sResult;
++};
+ /**
+  * Обрабатываем окончание загрузки изменений
+  * @param oData
+diff --git a/word/Editor/Paragraph.js b/word/Editor/Paragraph.js
+index 8954529678..eae2d8419d 100644
+--- a/word/Editor/Paragraph.js
++++ b/word/Editor/Paragraph.js
+@@ -1943,6 +1943,24 @@ Paragraph.prototype.GetNumberingText = function(bWithoutLvlText)
+ 	var oNumInfo   = oParent.CalculateNumberingValues(this, oNumPr);
+ 	return oNumbering.GetText(oNumPr.NumId, oNumPr.Lvl, oNumInfo, bWithoutLvlText, this.GetNumberingTextPr().Lang);
+ };
++/**
++ * The numbering text of the paragraph without the text around its numbers ("Chapter 1." gives "1")
++ * @returns {string}
++ */
++Paragraph.prototype.GetNumberingTextWithoutAffixes = function()
++{
++	var oParent = this.GetParent();
++	var oNumPr  = this.GetNumPr();
++
++	if (!oNumPr || !oParent || -1 === this.GetIndex())
++		return "";
++
++	var oNum = oParent.GetNumbering().GetNum(oNumPr.NumId);
++	if (!oNum)
++		return "";
++
++	return oNum.GetTextWithoutAffixes(oNumPr.Lvl, oParent.CalculateNumberingValues(this, oNumPr), this.GetNumberingTextPr().Lang);
++};
+ /**
+  * Получаем рассчитанное значение нумерации для данного параграфа вместе с суффиксом
+  * @returns {string}
+diff --git a/word/Editor/Paragraph/ComplexFieldInstruction.js b/word/Editor/Paragraph/ComplexFieldInstruction.js
+index ae50920e8d..a77be42800 100644
+--- a/word/Editor/Paragraph/ComplexFieldInstruction.js
++++ b/word/Editor/Paragraph/ComplexFieldInstruction.js
+@@ -1131,7 +1131,15 @@ CFieldInstructionSTYLEREF.prototype.GetText = function()
+ 							{
+ 								if(oParagraph.IsNumberedNumbering())
+ 								{
+-									sRet += oParagraph.GetNumberingText(true);
++									// \s, which AddCaption writes for the chapter number, and \t give the number alone
++									if(this.S || this.T)
++									{
++										sRet += oParagraph.GetNumberingTextWithoutAffixes();
++									}
++									else
++									{
++										sRet += oParagraph.GetNumberingText(true);
++									}
+ 								}
+ 								else
+ 								{

@@ -1,7 +1,7 @@
 Origin: own
 
 diff --git a/apps/spreadsheeteditor/main/app/controller/Toolbar.js b/apps/spreadsheeteditor/main/app/controller/Toolbar.js
-index c3be91bd4f..800d5dee14 100644
+index c3be91bd4f..a5df9bce3b 100644
 --- a/apps/spreadsheeteditor/main/app/controller/Toolbar.js
 +++ b/apps/spreadsheeteditor/main/app/controller/Toolbar.js
 @@ -476,6 +476,7 @@ define([
@@ -12,7 +12,7 @@ index c3be91bd4f..800d5dee14 100644
                  toolbar.cmbNumberFormat.on('selected',                      _.bind(this.onNumberFormatSelect, this));
                  toolbar.cmbNumberFormat.on('show:before',                   _.bind(this.onNumberFormatOpenBefore, this, true));
                  if (toolbar.cmbNumberFormat.cmpEl)
-@@ -2257,6 +2258,107 @@ define([
+@@ -2257,6 +2258,118 @@ define([
              }
          },
  
@@ -26,7 +26,12 @@ index c3be91bd4f..800d5dee14 100644
 +            menu.styleName = name;
 +            menu.styleCaption = record.get('tip') || name;
 +            // Cells without formatting draw with the workbook defaults, so Normal is not editable.
-+            menu.items[0].setDisabled(name === 'Normal');
++            var isNormal = name === 'Normal';
++            _.each(menu.items, function(item) {
++                if (item.value === 'modify' || item.value === 'update') {
++                    item.setDisabled(isNormal);
++                }
++            });
 +
 +            var menuContainer = this.toolbar.$el.find('#menu-cell-style-container');
 +            if (!menu.rendered) {
@@ -61,6 +66,7 @@ index c3be91bd4f..800d5dee14 100644
 +            this.cellStyleMenu = new Common.UI.Menu({
 +                items: [
 +                    {caption: this.textModifyStyle, value: 'modify'},
++                    {caption: this.textUpdateStyleFromSelection, value: 'update'},
 +                    {caption: this.textDuplicateStyle, value: 'duplicate'},
 +                    {caption: this.textNewStyleFromSelection, value: 'selection'}
 +                ]
@@ -76,6 +82,9 @@ index c3be91bd4f..800d5dee14 100644
 +            var name = menu.styleName;
 +            if (item.value === 'modify') {
 +                this.openCellStyleDialog(true, name, this.api.asc_getCellStyleXfs(name));
++            } else if (item.value === 'update') {
++                // The Modify dialog of this style, showing the active cell's format: nothing is saved before OK.
++                this.openCellStyleDialog(true, name, this.api.asc_getCellStyleXfs(name), undefined, this.api.asc_getCellInfo().asc_getXfs());
 +            } else if (item.value === 'duplicate') {
 +                this.openCellStyleDialog(false, this.getFreeCellStyleName(menu.styleCaption), this.api.asc_getCellStyleXfs(name), name);
 +            } else if (item.value === 'selection') {
@@ -95,7 +104,8 @@ index c3be91bd4f..800d5dee14 100644
 +        },
 +
 +        // sourceName: the style a copy is made from, so the copy applies what it applies.
-+        openCellStyleDialog: function(isModify, name, xfs, sourceName) {
++        // valuesXfs: a format the dialog shows in place of the style's, to update the style from it.
++        openCellStyleDialog: function(isModify, name, xfs, sourceName, valuesXfs) {
 +            var me = this;
 +            var langId = me.api.asc_getLocale() || 0x0409;
 +            (new SSE.Views.CellStyleDialog({
@@ -105,6 +115,7 @@ index c3be91bd4f..800d5dee14 100644
 +                isModify: isModify,
 +                name: name,
 +                xfs: xfs,
++                valuesXfs: valuesXfs,
 +                handler: function(result, settings) {
 +                    if (result === 'ok' && settings) {
 +                        var error = isModify ? me.api.asc_modifyCellStyle(name, settings.xfs) : me.api.asc_addCellStyle(settings.name, settings.xfs, sourceName);
@@ -120,7 +131,7 @@ index c3be91bd4f..800d5dee14 100644
          onShowBeforeCondFormat: function(cmp, id) {
              if (cmp.mnuDataBars.menu.items.length>0) // menu is inited
                  return;
-@@ -5304,7 +5406,8 @@ define([
+@@ -5304,7 +5417,8 @@ define([
              }
          },
  
@@ -130,7 +141,7 @@ index c3be91bd4f..800d5dee14 100644
              var me = this;
              if (_.isUndefined(me.fontStore)) {
                  me.fontStore = new Common.Collections.Fonts();
-@@ -5317,10 +5420,14 @@ define([
+@@ -5317,10 +5431,14 @@ define([
                  });
                  me.fontStore.add(arr);
              }
@@ -146,7 +157,7 @@ index c3be91bd4f..800d5dee14 100644
                  pageSetup: pageSetup,
                  handler: function(dlg, result) {
                      if (result === 'ok') {
-@@ -5750,6 +5857,12 @@ define([
+@@ -5750,6 +5868,13 @@ define([
              Common.UI.TooltipManager.closeTip('rtlDirection');
              Common.UI.TooltipManager.closeTip('cellFormat');
              Common.UI.TooltipManager.closeTip('solver');
@@ -156,16 +167,17 @@ index c3be91bd4f..800d5dee14 100644
 +        textModifyStyle: 'Modify',
 +        textDuplicateStyle: 'Duplicate',
 +        textNewStyleFromSelection: 'New style from selection',
++        textUpdateStyleFromSelection: 'Update from selection',
 +        textNewStyleName: 'Style',
 +        textCellStyleError: 'The cell style could not be saved.'
      }, SSE.Controllers.Toolbar || {}));
  });
 diff --git a/apps/spreadsheeteditor/main/app/view/CellStyleDialog.js b/apps/spreadsheeteditor/main/app/view/CellStyleDialog.js
 new file mode 100644
-index 0000000000..4272e65c7d
+index 0000000000..d9e206a774
 --- /dev/null
 +++ b/apps/spreadsheeteditor/main/app/view/CellStyleDialog.js
-@@ -0,0 +1,441 @@
+@@ -0,0 +1,537 @@
 +/*
 + * (c) Copyright Ascensio System SIA 2010-2024
 + *
@@ -193,9 +205,12 @@ index 0000000000..4272e65c7d
 +/**
 + *  CellStyleDialog.js
 + *
-+ *  Edits a cell style: name, font, colors, borders, alignment and number format.
++ *  Edits a cell style: name, font, colors, the line style and color of each border side,
++ *  alignment and number format.
 + *  Returns the name and an Asc.asc_CellXfs; only the fields the user changed are
 + *  set on that xfs, the rest stays as the style (or the selection) had it.
++ *  With valuesXfs the controls start with that format (the active cell's), and
++ *  what differs from the style counts as changed.
 + */
 +
 +define([
@@ -235,7 +250,10 @@ index 0000000000..4272e65c7d
 +                                    '<div id="cell-style-fill-color" style="display: inline-block;"></div>',
 +                                '</td></tr>',
 +                                '<tr><td colspan="2"><label class="input-label">' + me.textBorders + '</label></td></tr>',
-+                                '<tr><td colspan="2" class="padding-small"><div id="cell-style-borders"></div></td></tr>',
++                                me.getBorderSideRow('top', me.textBorderTop),
++                                me.getBorderSideRow('bottom', me.textBorderBottom),
++                                me.getBorderSideRow('left', me.textBorderLeft),
++                                me.getBorderSideRow('right', me.textBorderRight),
 +                                '<tr>',
 +                                    '<td style="width: 50%;"><label class="input-label">' + me.textHorizontal + '</label></td>',
 +                                    '<td><label class="input-label">' + me.textVertical + '</label></td>',
@@ -260,6 +278,7 @@ index 0000000000..4272e65c7d
 +            this.langId   = options.langId;
 +            this.name     = options.name;
 +            this.xfs      = options.xfs;
++            this.valuesXfs = options.valuesXfs;
 +
 +            this.options.handler = function(result, settings) {
 +                if (result === 'ok' && !this.isNameValid()) {
@@ -316,21 +335,12 @@ index 0000000000..4272e65c7d
 +            this.btnTextColor = this.createColorButton('#cell-style-text-color', 'btn-fontcolor', this.textColor, false);
 +            this.btnFillColor = this.createColorButton('#cell-style-fill-color', 'btn-paracolor', this.textFill, true);
 +
-+            this.cmbBorders = new Common.UI.ComboBox({
-+                el          : $('#cell-style-borders'),
-+                cls         : 'input-group-nr',
-+                style       : 'width: 100%;',
-+                menuStyle   : 'min-width: 100%;',
-+                editable    : false,
-+                data        : [
-+                    {value: 'keep',      displayValue: this.textBordersKeep},
-+                    {value: 'none',      displayValue: this.textBordersNone},
-+                    {value: 'outline',   displayValue: this.textBordersOutline},
-+                    {value: 'bottom',    displayValue: this.textBordersBottom},
-+                    {value: 'topbottom', displayValue: this.textBordersTopBottom}
-+                ]
-+            });
-+            this.cmbBorders.setValue('keep');
++            this.borderSides = [
++                this.createBorderSide(Asc.c_oAscBorderOptions.Top, 'top'),
++                this.createBorderSide(Asc.c_oAscBorderOptions.Bottom, 'bottom'),
++                this.createBorderSide(Asc.c_oAscBorderOptions.Left, 'left'),
++                this.createBorderSide(Asc.c_oAscBorderOptions.Right, 'right')
++            ];
 +
 +            // ComboBox values cannot be null: -1 stands for the general alignment.
 +            this.cmbHorAlign = new Common.UI.ComboBox({
@@ -411,10 +421,74 @@ index 0000000000..4272e65c7d
 +            return button;
 +        },
 +
++        // One row per side: its caption, its line style and its color.
++        getBorderSideRow: function(id, caption) {
++            return '<tr><td colspan="2" class="padding-small">' +
++                '<label style="display: inline-block; vertical-align: middle; width: 80px;">' + caption + '</label>' +
++                '<div id="cell-style-border-' + id + '" style="display: inline-block; vertical-align: middle;"></div>' +
++                '<div id="cell-style-border-' + id + '-color" style="display: inline-block; vertical-align: middle; margin: 0 4px;"></div>' +
++                '</td></tr>';
++        },
++
++        createBorderSide: function(side, id) {
++            var combo = new Common.UI.ComboBox({
++                el          : $('#cell-style-border-' + id),
++                cls         : 'input-group-nr',
++                style       : 'width: 150px;',
++                menuStyle   : 'min-width: 150px;',
++                editable    : false,
++                data        : this.getBorderStyles()
++            });
++            var button = this.createColorButton('#cell-style-border-' + id + '-color', 'btn-border-out', this.textBorderColor, false);
++            // A color is picked to be seen: a side without a line gets a thin one.
++            button.on('color:select', function() {
++                if (combo.getValue() === Asc.c_oAscBorderStyles.None) {
++                    combo.setValue(Asc.c_oAscBorderStyles.Thin);
++                }
++            });
++            return {side: side, combo: combo, button: button};
++        },
++
++        // The line styles the dialog offers. A style from a file can have another one: it is listed too.
++        getBorderStyles: function(currentStyle) {
++            var styles = Asc.c_oAscBorderStyles;
++            var data = [
++                {value: styles.None,   displayValue: this.textBorderNone},
++                {value: styles.Thin,   displayValue: this.textBorderThin},
++                {value: styles.Medium, displayValue: this.textBorderMedium},
++                {value: styles.Thick,  displayValue: this.textBorderThick},
++                {value: styles.Dotted, displayValue: this.textBorderDotted},
++                {value: styles.Dashed, displayValue: this.textBorderDashed},
++                {value: styles.Double, displayValue: this.textBorderDouble}
++            ];
++            var isListed = _.some(data, function(item) {
++                return item.value === currentStyle;
++            });
++            if (currentStyle !== undefined && !isListed) {
++                data.push({value: currentStyle, displayValue: this.textBorderOther});
++            }
++            return data;
++        },
++
++        setBorderSideValues: function(xfs) {
++            var me = this;
++            _.each(this.borderSides, function(item) {
++                var border = xfs.asc_getBorderSide(item.side);
++                var style = border.asc_getStyle();
++                item.combo.setData(me.getBorderStyles(style));
++                item.combo.setValue(style);
++                me.setButtonColor(item.button, border.asc_getColor());
++            });
++        },
++
 +        getFocusedComponents: function() {
++            var borderControls = [];
++            _.each(this.borderSides, function(item) {
++                borderControls.push(item.combo, item.button);
++            });
 +            return [this.txtName, this.cmbFont, this.cmbFontSize, this.btnBold, this.btnItalic, this.btnUnderline,
-+                this.btnTextColor, this.btnFillColor, this.cmbBorders, this.cmbHorAlign, this.cmbVertAlign, this.chWrap,
-+                this.btnFormat].concat(this.getFooterButtons());
++                this.btnTextColor, this.btnFillColor].concat(borderControls, [this.cmbHorAlign, this.cmbVertAlign, this.chWrap,
++                this.btnFormat], this.getFooterButtons());
 +        },
 +
 +        getDefaultFocusableComponent: function () {
@@ -422,10 +496,19 @@ index 0000000000..4272e65c7d
 +        },
 +
 +        afterRender: function() {
-+            var xfs = this.xfs;
 +            this.cmbFont.fillFonts(this.fontStore);
 +            this.txtName.setValue(this.name);
++            this.setControlValues(this.xfs);
++            this.initial = this.getControlValues();
++            if (!this.valuesXfs) {
++                return;
++            }
++            var styleColors = this.getButtonColors();
++            this.setControlValues(this.valuesXfs);
++            this.markChangedColors(styleColors);
++        },
 +
++        setControlValues: function(xfs) {
 +            this.fontName = xfs.asc_getFontName();
 +            this.cmbFont.setValue(this.fontName);
 +            this.cmbFontSize.setValue(xfs.asc_getFontSize());
@@ -435,6 +518,7 @@ index 0000000000..4272e65c7d
 +
 +            this.setButtonColor(this.btnTextColor, xfs.asc_getFontColor());
 +            this.setButtonColor(this.btnFillColor, xfs.asc_getFillColor());
++            this.setBorderSideValues(xfs);
 +
 +            var horAlign = xfs.asc_getHorAlign();
 +            this.cmbHorAlign.setValue(horAlign === null || horAlign === undefined ? -1 : horAlign);
@@ -444,8 +528,25 @@ index 0000000000..4272e65c7d
 +            this.format = xfs.asc_getNumFormat();
 +            this.formatInfo = xfs.asc_getNumFormatInfo();
 +            this.txtFormat.setValue(this.format);
++        },
 +
-+            this.initial = this.getControlValues();
++        getColorButtons: function() {
++            return [this.btnTextColor, this.btnFillColor].concat(_.pluck(this.borderSides, 'button'));
++        },
++
++        // The color each button shows, comparable with ===.
++        getButtonColors: function() {
++            return _.map(this.getColorButtons(), function(button) {
++                return JSON.stringify(button.currentColor);
++            });
++        },
++
++        // A color the buttons show now that differs from the style's is written on OK, as one the user picked.
++        markChangedColors: function(styleColors) {
++            var colors = this.getButtonColors();
++            _.each(this.getColorButtons(), function(button, index) {
++                button.isColorChanged = colors[index] !== styleColors[index];
++            });
 +        },
 +
 +        // Same color handling as the conditional formatting dialog (FormatRulesEditDlg).
@@ -477,7 +578,10 @@ index 0000000000..4272e65c7d
 +                horAlign: this.cmbHorAlign.getValue(),
 +                vertAlign: this.cmbVertAlign.getValue(),
 +                wrap: this.chWrap.getValue() === 'checked',
-+                format: this.format
++                format: this.format,
++                borderStyles: _.map(this.borderSides, function(item) {
++                    return item.combo.getValue();
++                })
 +            };
 +        },
 +
@@ -510,20 +614,19 @@ index 0000000000..4272e65c7d
 +            return false;
 +        },
 +
-+        getBorders: function(type) {
-+            var line = new Asc.asc_CBorder(Asc.c_oAscBorderStyles.Thin, Common.Utils.ThemeColor.getRgbColor('000000'));
-+            var borders = [];
-+            if (type === 'outline' || type === 'topbottom') {
-+                borders[Asc.c_oAscBorderOptions.Top] = line;
-+            }
-+            if (type === 'outline' || type === 'bottom' || type === 'topbottom') {
-+                borders[Asc.c_oAscBorderOptions.Bottom] = line;
-+            }
-+            if (type === 'outline') {
-+                borders[Asc.c_oAscBorderOptions.Left] = line;
-+                borders[Asc.c_oAscBorderOptions.Right] = line;
-+            }
-+            return borders;
++        // A side the dialog did not change is not written; an untouched color stays as the style has it.
++        // The color of a side without a line, before and after, draws nothing.
++        setChangedBorderSides: function(xfs, initialStyles, currentStyles) {
++            _.each(this.borderSides, function(item, index) {
++                var style = currentStyles[index];
++                var isColorChanged = !!item.button.isColorChanged;
++                var isStyleChanged = style !== initialStyles[index];
++                if (!isStyleChanged && (!isColorChanged || style === Asc.c_oAscBorderStyles.None)) {
++                    return;
++                }
++                var color = isColorChanged ? Common.Utils.ThemeColor.getRgbColor(item.button.currentColor) : null;
++                xfs.asc_setBorderSide(item.side, style, color);
++            });
 +        },
 +
 +        // Sets on the xfs only what changed in the dialog.
@@ -554,10 +657,7 @@ index 0000000000..4272e65c7d
 +                var fill = this.btnFillColor.currentColor;
 +                xfs.asc_setFillColor(fill === 'transparent' ? null : Common.Utils.ThemeColor.getRgbColor(fill));
 +            }
-+            var borders = this.cmbBorders.getValue();
-+            if (borders !== 'keep') {
-+                xfs.asc_setBorder(this.getBorders(borders));
-+            }
++            this.setChangedBorderSides(xfs, initial.borderStyles, current.borderStyles);
 +            if (current.horAlign !== initial.horAlign) {
 +                xfs.asc_setHorAlign(current.horAlign === -1 ? null : current.horAlign);
 +            }
@@ -584,11 +684,19 @@ index 0000000000..4272e65c7d
 +        textColor: 'Text color',
 +        textFill: 'Fill color',
 +        textBorders: 'Borders',
-+        textBordersKeep: 'Keep current borders',
-+        textBordersNone: 'No borders',
-+        textBordersOutline: 'Outline',
-+        textBordersBottom: 'Bottom',
-+        textBordersTopBottom: 'Top and bottom',
++        textBorderTop: 'Top',
++        textBorderBottom: 'Bottom',
++        textBorderLeft: 'Left',
++        textBorderRight: 'Right',
++        textBorderColor: 'Border color',
++        textBorderNone: 'None',
++        textBorderThin: 'Thin',
++        textBorderMedium: 'Medium',
++        textBorderThick: 'Thick',
++        textBorderDotted: 'Dotted',
++        textBorderDashed: 'Dashed',
++        textBorderDouble: 'Double',
++        textBorderOther: 'Other style',
 +        textHorizontal: 'Horizontal alignment',
 +        textVertical: 'Vertical alignment',
 +        textGeneral: 'General',
@@ -632,7 +740,7 @@ index fbfc52054d..255f919359 100644
      'spreadsheeteditor/main/app/view/FormatRulesManagerDlg',
      'spreadsheeteditor/main/app/view/MacroDialog',
 diff --git a/apps/spreadsheeteditor/main/locale/en.json b/apps/spreadsheeteditor/main/locale/en.json
-index 16e04a045e..37d2ead72a 100644
+index 16e04a045e..2e9a7d112e 100644
 --- a/apps/spreadsheeteditor/main/locale/en.json
 +++ b/apps/spreadsheeteditor/main/locale/en.json
 @@ -2070,7 +2070,9 @@
@@ -655,17 +763,33 @@ index 16e04a045e..37d2ead72a 100644
    "SSE.Controllers.Toolbar.textOperator": "Operators",
    "SSE.Controllers.Toolbar.textPasteSpecial": "Paste special",
    "SSE.Controllers.Toolbar.textPivot": "Pivot Table",
-@@ -2599,6 +2604,37 @@
+@@ -2090,6 +2095,7 @@
+   "SSE.Controllers.Toolbar.textScript": "Scripts",
+   "SSE.Controllers.Toolbar.textShapes": "Shapes",
+   "SSE.Controllers.Toolbar.textSymbols": "Symbols",
++  "SSE.Controllers.Toolbar.textUpdateStyleFromSelection": "Update from selection",
+   "SSE.Controllers.Toolbar.textWarning": "Warning",
+   "SSE.Controllers.Toolbar.txtAccent_Accent": "Acute",
+   "SSE.Controllers.Toolbar.txtAccent_ArrowD": "Right-left arrow above",
+@@ -2599,6 +2605,45 @@
    "SSE.Views.CellSettings.tipRemoveGradientPoint": "Remove gradient point",
    "SSE.Views.CellSettings.tipRight": "Set outer right border only",
    "SSE.Views.CellSettings.tipTop": "Set outer top border only",
 +  "SSE.Views.CellStyleDialog.textBold": "Bold",
++  "SSE.Views.CellStyleDialog.textBorderBottom": "Bottom",
++  "SSE.Views.CellStyleDialog.textBorderColor": "Border color",
++  "SSE.Views.CellStyleDialog.textBorderDashed": "Dashed",
++  "SSE.Views.CellStyleDialog.textBorderDotted": "Dotted",
++  "SSE.Views.CellStyleDialog.textBorderDouble": "Double",
++  "SSE.Views.CellStyleDialog.textBorderLeft": "Left",
++  "SSE.Views.CellStyleDialog.textBorderMedium": "Medium",
++  "SSE.Views.CellStyleDialog.textBorderNone": "None",
++  "SSE.Views.CellStyleDialog.textBorderOther": "Other style",
++  "SSE.Views.CellStyleDialog.textBorderRight": "Right",
++  "SSE.Views.CellStyleDialog.textBorderThick": "Thick",
++  "SSE.Views.CellStyleDialog.textBorderThin": "Thin",
++  "SSE.Views.CellStyleDialog.textBorderTop": "Top",
 +  "SSE.Views.CellStyleDialog.textBorders": "Borders",
-+  "SSE.Views.CellStyleDialog.textBordersBottom": "Bottom",
-+  "SSE.Views.CellStyleDialog.textBordersKeep": "Keep current borders",
-+  "SSE.Views.CellStyleDialog.textBordersNone": "No borders",
-+  "SSE.Views.CellStyleDialog.textBordersOutline": "Outline",
-+  "SSE.Views.CellStyleDialog.textBordersTopBottom": "Top and bottom",
 +  "SSE.Views.CellStyleDialog.textBottom": "Bottom",
 +  "SSE.Views.CellStyleDialog.textCenter": "Center",
 +  "SSE.Views.CellStyleDialog.textChange": "Change...",
@@ -694,7 +818,7 @@ index 16e04a045e..37d2ead72a 100644
    "SSE.Views.ChartDataDialog.errorInvalidReference": "The reference is not valid. Reference must be to an open sheet.",
    "SSE.Views.ChartDataDialog.errorMaxPoints": "The maximum number of points in series per chart is 4096.",
 diff --git a/apps/spreadsheeteditor/main/locale/es.json b/apps/spreadsheeteditor/main/locale/es.json
-index b0cb01c660..b1a927514c 100644
+index b0cb01c660..274fa49359 100644
 --- a/apps/spreadsheeteditor/main/locale/es.json
 +++ b/apps/spreadsheeteditor/main/locale/es.json
 @@ -2064,7 +2064,9 @@
@@ -717,17 +841,33 @@ index b0cb01c660..b1a927514c 100644
    "SSE.Controllers.Toolbar.textOperator": "Operadores",
    "SSE.Controllers.Toolbar.textPivot": "Tabla dinámica",
    "SSE.Controllers.Toolbar.textRadical": "Radicales",
-@@ -2568,6 +2573,37 @@
+@@ -2083,6 +2088,7 @@
+   "SSE.Controllers.Toolbar.textScript": "Índices",
+   "SSE.Controllers.Toolbar.textShapes": "Formas",
+   "SSE.Controllers.Toolbar.textSymbols": "Símbolos",
++  "SSE.Controllers.Toolbar.textUpdateStyleFromSelection": "Actualizar desde la selección",
+   "SSE.Controllers.Toolbar.textWarning": "Aviso",
+   "SSE.Controllers.Toolbar.txtAccent_Accent": "Agudo",
+   "SSE.Controllers.Toolbar.txtAccent_ArrowD": "Flecha derecha-izquierda superior",
+@@ -2568,6 +2574,45 @@
    "SSE.Views.CellSettings.tipRemoveGradientPoint": "Eliminar gradiente de punto",
    "SSE.Views.CellSettings.tipRight": "Establecer solo borde exterior derecho",
    "SSE.Views.CellSettings.tipTop": "Establecer solo borde exterior superior",
 +  "SSE.Views.CellStyleDialog.textBold": "Negrita",
++  "SSE.Views.CellStyleDialog.textBorderBottom": "Inferior",
++  "SSE.Views.CellStyleDialog.textBorderColor": "Color del borde",
++  "SSE.Views.CellStyleDialog.textBorderDashed": "Discontinuo",
++  "SSE.Views.CellStyleDialog.textBorderDotted": "Punteado",
++  "SSE.Views.CellStyleDialog.textBorderDouble": "Doble",
++  "SSE.Views.CellStyleDialog.textBorderLeft": "Izquierdo",
++  "SSE.Views.CellStyleDialog.textBorderMedium": "Medio",
++  "SSE.Views.CellStyleDialog.textBorderNone": "Ninguno",
++  "SSE.Views.CellStyleDialog.textBorderOther": "Otro estilo",
++  "SSE.Views.CellStyleDialog.textBorderRight": "Derecho",
++  "SSE.Views.CellStyleDialog.textBorderThick": "Grueso",
++  "SSE.Views.CellStyleDialog.textBorderThin": "Fino",
++  "SSE.Views.CellStyleDialog.textBorderTop": "Superior",
 +  "SSE.Views.CellStyleDialog.textBorders": "Bordes",
-+  "SSE.Views.CellStyleDialog.textBordersBottom": "Inferior",
-+  "SSE.Views.CellStyleDialog.textBordersKeep": "Mantener los bordes actuales",
-+  "SSE.Views.CellStyleDialog.textBordersNone": "Sin bordes",
-+  "SSE.Views.CellStyleDialog.textBordersOutline": "Contorno",
-+  "SSE.Views.CellStyleDialog.textBordersTopBottom": "Superior e inferior",
 +  "SSE.Views.CellStyleDialog.textBottom": "Inferior",
 +  "SSE.Views.CellStyleDialog.textCenter": "Centro",
 +  "SSE.Views.CellStyleDialog.textChange": "Cambiar...",

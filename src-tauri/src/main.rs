@@ -19,6 +19,7 @@ mod new_window;
 mod note_separator;
 mod odf_links;
 mod open_phases;
+mod package_family;
 mod package_relationships;
 mod path_grants;
 mod pending_open;
@@ -31,11 +32,12 @@ mod temp_layout;
 #[cfg(test)]
 mod template_round_trip_tests;
 mod text_import;
+mod title_bar_setting;
 mod window_state;
 mod x2t_task;
 
 use file_ops::AppState;
-use launch_args::TitleBar;
+use launch_args::{TitleBar, TitleBarSource};
 use std::sync::Mutex;
 use tauri::utils::config::WindowConfig;
 use tauri::{Emitter, Manager};
@@ -88,22 +90,21 @@ fn start_instance(root: &std::path::Path) -> temp_layout::Instance {
 // gtk_init: running it here, before tauri does, gives the answer tao will get
 // (its own gtk::init then returns at once) while the window does not exist yet.
 #[cfg(target_os = "linux")]
-fn wayland_title_bar(requested: TitleBar) -> TitleBar {
+fn wayland_title_bar(requested: TitleBar, source: TitleBarSource) -> TitleBar {
     use gtk::prelude::*;
     if requested == TitleBar::Default {
         return requested;
     }
+    let asked = format!("title bar mode={:?} source={}", requested, source.as_str());
     if let Err(e) = gtk::init() {
-        log_startup(&format!(
-            "WARNING: title bar option ignored, GTK did not start: {e}"
-        ));
+        log_startup(&format!("WARNING: {asked} ignored, GTK did not start: {e}"));
         return TitleBar::Default;
     }
     let wayland = gtk::gdk::Display::default()
         .map(|display| display.backend().is_wayland())
         .unwrap_or(false);
     if !wayland {
-        log_startup("title bar option ignored: it only applies on Wayland");
+        log_startup(&format!("{asked} ignored: it only applies on Wayland"));
         return TitleBar::Default;
     }
     requested
@@ -114,7 +115,7 @@ fn wayland_title_bar(requested: TitleBar) -> TitleBar {
 // Straight on the GTK window, which is what tao's set_decorations and show end
 // up calling, so the order is fixed and the window is shown before setup goes on.
 #[cfg(target_os = "linux")]
-fn apply_title_bar(app: &tauri::App, mode: TitleBar) {
+fn apply_title_bar(app: &tauri::App, mode: TitleBar, source: TitleBarSource) {
     use gtk::prelude::*;
     if mode == TitleBar::Default {
         return;
@@ -144,9 +145,20 @@ fn apply_title_bar(app: &tauri::App, mode: TitleBar) {
     let realized_before_show = gtk_window.is_realized();
     gtk_window.show_all();
     log_startup(&format!(
-        "title bar mode={:?}{} realized_before_show={}",
-        mode, note, realized_before_show
+        "title bar mode={:?}{} realized_before_show={} source={}",
+        mode,
+        note,
+        realized_before_show,
+        source.as_str()
     ));
+}
+
+// What the settings screen needs to know about this start (title_bar_setting.rs).
+fn title_bar_startup(app: &tauri::App, source: TitleBarSource) -> title_bar_setting::Startup {
+    let wayland = app
+        .get_webview_window(window_state::MAIN_WINDOW)
+        .is_some_and(|window| on_wayland(&window));
+    title_bar_setting::Startup { wayland, source }
 }
 
 // GTK is already up here: tao started it to build the window.
@@ -393,6 +405,9 @@ fn main() {
             note
         ));
     }
+    if let Some(why) = root_choice.why {
+        log_startup(&format!("temp root: {} ({})", temp_root.display(), why));
+    }
     if let Some(note) = &font_choice.note {
         log_startup(&format!(
             "WARNING: font cache kept in the temp folder {}: {}",
@@ -435,18 +450,26 @@ fn main() {
 
     let launch = launch_args::parse_launch_args(std::env::args().skip(1));
     let new_window = launch.new_window;
-    let (title_bar, notes) = launch_args::resolve_title_bar(
+    // The choice saved in Configuración; only Linux keeps one.
+    let saved_title_bar = title_bar_setting::load(&context.config().identifier);
+    if let Some(problem) = saved_title_bar.problem {
+        log_startup(&format!("WARNING: title bar setting ignored: {problem}"));
+    }
+    let resolved = launch_args::resolve_title_bar(
         &launch,
         std::env::var(launch_args::TITLE_BAR_ENV).ok().as_deref(),
+        saved_title_bar.setting.mode(),
     );
-    for note in &notes {
+    for note in &resolved.notes {
         log_startup(note);
     }
+    let title_bar = resolved.mode;
+    let title_bar_source = resolved.source;
     // GTK picks client- or server-side decorations when it realizes the window,
     // and tao realizes a visible window while building it, before setup runs:
     // build it hidden and let setup apply the mode and show it.
     #[cfg(target_os = "linux")]
-    let title_bar = wayland_title_bar(title_bar);
+    let title_bar = wayland_title_bar(title_bar, title_bar_source);
     // Hidden also lets the window state plugin restore size and position before
     // the window is on screen; setup shows it. Linux keeps the default mode
     // visible: tao's Wayland header sits in a GTK event box whose input window,
@@ -465,7 +488,11 @@ fn main() {
     let main_window_config = take_main_window_config(&mut context.config_mut().app.windows);
     #[cfg(not(target_os = "linux"))]
     if title_bar != TitleBar::Default {
-        log_startup("title bar option ignored: it only applies on Linux Wayland");
+        log_startup(&format!(
+            "title bar mode={:?} source={} ignored: it only applies on Linux Wayland",
+            title_bar,
+            title_bar_source.as_str()
+        ));
     }
 
     let file_to_open: Option<std::path::PathBuf> = {
@@ -577,6 +604,8 @@ fn main() {
             recent::clear_recent_files,
             dmabuf_default::dmabuf_setting_state,
             dmabuf_default::set_dmabuf_setting,
+            title_bar_setting::title_bar_setting_state,
+            title_bar_setting::set_title_bar_setting,
             default_folders::default_folders_state,
             default_folders::pick_default_folder,
             default_folders::clear_default_folder,
@@ -926,9 +955,10 @@ fn main() {
             }
             // First, so a hidden window is shown as early as the default one.
             #[cfg(target_os = "linux")]
-            apply_title_bar(app, title_bar);
+            apply_title_bar(app, title_bar, title_bar_source);
             #[cfg(not(target_os = "linux"))]
             show_main_window(app);
+            app.manage(title_bar_startup(app, title_bar_source));
 
             let resource_dir = app.path().resource_dir().unwrap_or_default();
             let binaries_dir = resource_dir.join("binaries");

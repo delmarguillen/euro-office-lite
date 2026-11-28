@@ -1,0 +1,44 @@
+Origin: own
+
+diff --git a/word/Editor/Paragraph/ComplexField.js b/word/Editor/Paragraph/ComplexField.js
+index 89a43fc611..4ab26743ff 100644
+--- a/word/Editor/Paragraph/ComplexField.js
++++ b/word/Editor/Paragraph/ComplexField.js
+@@ -1201,7 +1201,7 @@ CComplexField.prototype.private_UpdateTOC = function()
+ 				oPageRefRun.AddToContent(-1, new ParaFieldChar(fldchartype_Begin, this.LogicDocument));
+ 				oPageRefRun.AddInstrText("PAGEREF " + sBookmarkName + " \\h");
+ 				oPageRefRun.AddToContent(-1, new ParaFieldChar(fldchartype_Separate, this.LogicDocument));
+-				oPageRefRun.AddText("" + this.LogicDocument.Get_SectionPageNumInfo2(oSrcParagraph.GetFirstNonEmptyPageAbsolute()).CurPage);
++				oPageRefRun.AddText(this.private_GetPageNumText(oSrcParagraph.GetFirstNonEmptyPageAbsolute()));
+ 				oPageRefRun.AddToContent(-1, new ParaFieldChar(fldchartype_End, this.LogicDocument));
+ 				oContainer.Add_ToContent(nContainerPos + 1, oPageRefRun);
+ 			}
+@@ -1289,12 +1289,27 @@ CComplexField.prototype.private_CalculatePAGEREF = function()
+ 		}
+ 		else
+ 		{
+-			sValue = (this.LogicDocument.Get_SectionPageNumInfo2(oStartBookmark.GetPage()).CurPage) + "";
++			sValue = this.private_GetPageNumText(oStartBookmark.GetPage());
+ 		}
+ 	}
+ 
+ 	return sValue;
+ };
++/**
++ * The number of the page in the number format of its section (w:pgNumType w:fmt), as the PAGE field shows it
++ * @param nPageAbs {number}
++ * @returns {string}
++ */
++CComplexField.prototype.private_GetPageNumText = function(nPageAbs)
++{
++	var oPageNumInfo = this.LogicDocument.Get_SectionPageNumInfo2(nPageAbs);
++	var oSectPr      = oPageNumInfo.Invalid ? null : this.LogicDocument.GetSections().GetSectPrByIndex(oPageNumInfo.SectIndex);
++	var nNumFormat   = oSectPr ? oSectPr.GetPageNumFormat() : Asc.c_oAscNumberingFormat.Decimal;
++	var sResult      = AscCommon.IntToNumberFormat(oPageNumInfo.CurPage, nNumFormat, {isFromField : true, isSkipFractPart : true});
++
++	// A format gives no text for a number it cannot show (0 in roman)
++	return "" === sResult ? "" + oPageNumInfo.CurPage : sResult;
++};
+ CComplexField.prototype.private_UpdateNUMPAGES = function()
+ {
+ 	this.LogicDocument.AddText("" + this.private_CalculateNUMPAGES());

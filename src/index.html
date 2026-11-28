@@ -131,6 +131,15 @@
     }
     #placeholder.active { display: block; }
 
+    /* An editor created while its document is converted loads behind a copy
+       of the page background, the start screen above it as it was. */
+    body.editor-behind::before {
+      content: ""; position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 1;
+      background: inherit;
+    }
+    body.editor-behind .start { position: relative; z-index: 2; }
+    body.editor-behind iframe[name="frameEditor"] { position: absolute; left: 0; top: 0; }
+
     /* Full window so it also catches clicks meant for the start screen. */
     #opening {
       position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 1000;
@@ -366,12 +375,23 @@
           <p class="settings-note" data-i18n="dmabufRestart">Applies after restarting the app.</p>
           <p class="settings-note" id="dmabuf-env" data-i18n="dmabufEnvSet" hidden>This app was started with WEBKIT_DISABLE_DMABUF_RENDERER set. That value is used and this setting is ignored.</p>
         </div>
+        <div class="settings-section" id="title-bar-section" hidden>
+          <label class="settings-label" for="title-bar-select" data-i18n="titleBarSetting">Title bar</label>
+          <select id="title-bar-select">
+            <option value="app" data-i18n="titleBarApp">From the app</option>
+            <option value="system" data-i18n="titleBarSystem">From the system</option>
+            <option value="none" data-i18n="titleBarNone">None</option>
+          </select>
+          <p class="settings-note" data-i18n="titleBarRestart">Applies after restarting the app.</p>
+          <p class="settings-note" id="title-bar-gnome" data-i18n="titleBarGnome" hidden>On GNOME, the window may not move when you drag it with this option.</p>
+          <p class="settings-note" id="title-bar-override" data-i18n="titleBarOverride" hidden>This app was started with --system-title-bar, --no-title-bar or EURO_OFFICE_LITE_TITLE_BAR. That choice is used and this setting is ignored.</p>
+        </div>
       </div>
     </div>
     <div class="start-inner">
       <div class="brand">
         <h1 aria-label="EOLite">EO<span class="wordmark-lite">Lite</span></h1>
-        <p class="version">v0.18.4-alpha</p>
+        <p class="version">v0.18.5-alpha</p>
         <div class="brand-rule" aria-hidden="true"></div>
       </div>
 

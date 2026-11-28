@@ -2,8 +2,9 @@
 // and a click outside close it, opening a document closes it, focus moves to
 // the first control and back to the gear, and the three controls inside keep
 // working. The two folder settings ask the backend to choose or clear a folder
-// and show the path it answers. Also checks index.html: the controls sit only
-// inside the panel.
+// and show the path it answers. The hardware acceleration and title bar
+// sections show only where the backend says they apply. Also checks
+// index.html: the controls sit only inside the panel.
 //
 // Run: node scripts/test-bridge-start-settings.mjs [path/to/bridge.js]
 import { readFile } from 'node:fs/promises';
@@ -121,6 +122,16 @@ function buildStartScreen() {
   const dmabufSelect = new FakeElement(doc, 'select', 'dmabuf-select', dmabufSection);
   const dmabufEnv = new FakeElement(doc, 'p', 'dmabuf-env', dmabufSection);
   dmabufEnv.hidden = true;
+  const titleBarSection = new FakeElement(doc, 'div', 'title-bar-section', panel);
+  titleBarSection.hidden = true;
+  const titleBar = {
+    section: titleBarSection,
+    select: new FakeElement(doc, 'select', 'title-bar-select', titleBarSection),
+    gnome: new FakeElement(doc, 'p', 'title-bar-gnome', titleBarSection),
+    override: new FakeElement(doc, 'p', 'title-bar-override', titleBarSection),
+  };
+  titleBar.gnome.hidden = true;
+  titleBar.override.hidden = true;
   const folders = {};
   for (const kind of ['documents', 'templates']) {
     const section = new FakeElement(doc, 'div', '', panel);
@@ -136,7 +147,10 @@ function buildStartScreen() {
   const heading = new FakeElement(doc, 'h1', '', content);
   const opening = new FakeElement(doc, 'div', 'opening', doc.body);
   new FakeElement(doc, 'p', 'opening-text', opening);
-  return { doc, toggle, panel, select, addLanguage, remember, folders, newDocument, heading, dmabufSection, dmabufSelect, dmabufEnv };
+  return {
+    doc, toggle, panel, select, addLanguage, remember, folders, newDocument, heading,
+    dmabufSection, dmabufSelect, dmabufEnv, titleBar,
+  };
 }
 
 const NO_FOLDERS = { documents: null, templates: null };
@@ -335,6 +349,88 @@ async function setupDmabuf({ state, setFails = false }) {
     env.bridge.logs.some((line) => line.includes('Hardware acceleration setting not stored: read-only folder')));
 }
 
+// Linux on Wayland only: who draws the title bar.
+const WAYLAND = { supported: true, setting: 'app', overridden: false, gnomeNote: false };
+
+// gnome: the backend shows the GNOME note while the system's bar is chosen.
+async function setupTitleBar({ state, gnome = false, setFails = false }) {
+  const calls = [];
+  const bridge = await loadBridge({
+    invoke: {
+      title_bar_setting_state: () => state,
+      set_title_bar_setting: (args) => {
+        calls.push(args);
+        if (setFails) throw new Error('read-only folder');
+        return { ...state, setting: args.setting, gnomeNote: gnome && args.setting === 'system' };
+      },
+    },
+  });
+  const screen = buildStartScreen();
+  bridge.sandbox.document = screen.doc;
+  bridge.sandbox.__options = { onLanguageChange: () => {}, onRecentChange: () => {} };
+  bridge.run('_eoInitStartSettings(window.__options)');
+  await settle();
+  await settle();
+  return { bridge, ...screen, calls };
+}
+
+async function chooseTitleBar(env, value) {
+  env.titleBar.select.value = value;
+  dispatch(env.doc, env.titleBar.select, 'change');
+  await settle();
+  await settle();
+}
+
+{
+  const env = await setupTitleBar({ state: { ...WAYLAND, supported: false } });
+  check(results, 'without Wayland the title bar section stays hidden', env.titleBar.section.hidden);
+}
+{
+  const env = await setupTitleBar({ state: null });
+  check(results, 'without an answer from the backend the title bar section stays hidden',
+    env.titleBar.section.hidden);
+}
+{
+  const env = await setupTitleBar({ state: { ...WAYLAND, setting: 'none' } });
+  check(results, 'on Wayland the title bar section is shown', !env.titleBar.section.hidden);
+  check(results, '... and selects the saved choice', env.titleBar.select.value === 'none');
+  check(results, '... with both notes hidden', env.titleBar.gnome.hidden && env.titleBar.override.hidden);
+}
+{
+  const env = await setupTitleBar({ state: { ...WAYLAND, overridden: true } });
+  check(results, 'a title bar option or variable at start shows the note that it wins',
+    !env.titleBar.override.hidden && env.titleBar.gnome.hidden);
+}
+{
+  const env = await setupTitleBar({ state: { ...WAYLAND, setting: 'system', gnomeNote: true } });
+  check(results, 'the system bar saved on GNOME shows the GNOME note',
+    !env.titleBar.gnome.hidden && env.titleBar.override.hidden);
+}
+{
+  const env = await setupTitleBar({ state: WAYLAND });
+  await chooseTitleBar(env, 'none');
+  check(results, 'a title bar change is stored with its value',
+    env.calls.length === 1 && env.calls[0].setting === 'none', JSON.stringify(env.calls));
+  check(results, '... and the new choice stays selected', env.titleBar.select.value === 'none');
+  check(results, '... without the GNOME note', env.titleBar.gnome.hidden);
+}
+{
+  const env = await setupTitleBar({ state: WAYLAND, gnome: true });
+  await chooseTitleBar(env, 'system');
+  check(results, 'choosing the system bar on GNOME shows the GNOME note', !env.titleBar.gnome.hidden);
+  await chooseTitleBar(env, 'app');
+  check(results, '... and going back to the app bar hides it',
+    env.titleBar.gnome.hidden && env.calls.length === 2);
+}
+{
+  const env = await setupTitleBar({ state: { ...WAYLAND, setting: 'system', gnomeNote: true }, setFails: true });
+  await chooseTitleBar(env, 'none');
+  check(results, 'a failed title bar change goes back to the saved choice', env.titleBar.select.value === 'system');
+  check(results, '... keeps the notes as they were', !env.titleBar.gnome.hidden && env.titleBar.override.hidden);
+  check(results, '... and is logged',
+    env.bridge.logs.some((line) => line.includes('Title bar setting not stored: read-only folder')));
+}
+
 // The folders the file dialogs start in.
 const DOCS = '/home/u/Documents/Work';
 const TEMPLATES = '/home/u/Templates';
@@ -517,6 +613,8 @@ function failingStorage(bridge, method) {
     ['en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'uk', 'zh', 'ja'].reduce(function(out, lang) {
       ['settings', 'interfaceLanguage', 'spellCheck', 'addLanguage', 'recentFiles', 'rememberRecent',
        'dmabufSetting', 'dmabufAuto', 'dmabufOn', 'dmabufOff', 'dmabufRestart', 'dmabufEnvSet',
+       'titleBarSetting', 'titleBarApp', 'titleBarSystem', 'titleBarNone', 'titleBarRestart',
+       'titleBarGnome', 'titleBarOverride',
        'documentsFolder', 'templatesFolder', 'chooseFolder', 'resetFolder', 'folderNotSet'].forEach(function(key) {
         if (!_UI_STRINGS[lang][key]) out.push(lang + '.' + key);
       });
@@ -551,7 +649,9 @@ function failingStorage(bridge, method) {
 
   const folderIds = ['documents', 'templates'].flatMap(
     (kind) => ['path', 'choose', 'reset'].map((part) => `${kind}-folder-${part}`));
-  for (const id of ['lang-select', 'add-language', 'recent-remember', 'dmabuf-select', 'dmabuf-env', ...folderIds]) {
+  const titleBarIds = ['title-bar-select', 'title-bar-gnome', 'title-bar-override'];
+  for (const id of ['lang-select', 'add-language', 'recent-remember', 'dmabuf-select', 'dmabuf-env',
+    ...titleBarIds, ...folderIds]) {
     check(results, `#${id} is inside the panel and nowhere else`,
       count(inside, `id="${id}"`) === 1 && count(outside, `id="${id}"`) === 0);
   }
@@ -573,6 +673,16 @@ function failingStorage(bridge, method) {
     && /id="settings-toggle"[^>]*aria-label="Settings"/.test(html));
   check(results, 'the hardware acceleration section starts hidden',
     /id="dmabuf-section"[^>]*\bhidden\b/.test(html));
+  check(results, 'the title bar section starts hidden',
+    /id="title-bar-section"[^>]*\bhidden\b/.test(html));
+  for (const id of ['title-bar-gnome', 'title-bar-override']) {
+    check(results, `#${id} starts hidden`, new RegExp(`id="${id}"[^>]*\\bhidden\\b`).test(html));
+  }
+  const titleBar = elementSpan(html, 'id="title-bar-section"');
+  const titleBarValues = [...html.slice(titleBar.start, titleBar.end).matchAll(/<option value="([^"]+)"/g)]
+    .map((match) => match[1]);
+  check(results, 'the title bar list offers the values the backend stores',
+    titleBarValues.join(',') === 'app,system,none', titleBarValues.join(','));
   check(results, 'the old top right language selector is gone', !html.includes('lang-selector'));
 }
 
